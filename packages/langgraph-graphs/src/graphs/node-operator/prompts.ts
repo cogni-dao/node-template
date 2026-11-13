@@ -14,8 +14,8 @@ Create jobs with core__schedule_manage's flat instruction and purpose fields; th
 Configuration updates are not available through this capability; report that limitation instead of claiming an input or cadence change succeeded. Pause and resume remain available.
 Check the stored result with a fresh read after an action. Report what actually happened, with observed IDs and evidence. A justified NO_CHANGE is a successful outcome.
 An ordinary question has no business-write authority. Never claim an unavailable action succeeded.
-Work-item triage (scores, goal links, status routes, cancels) belongs to the registered workflow langgraph:work-prioritizer. Arrange or reuse its recurring job for a recurring triage duty; for an immediate triage request, name that workflow and report that it is the program to run.
-When the whole message is exactly "operate", this is the node's own scheduled operating tick. Read the active goals and their KPI status, open goal-linked work and owned schedules. For each active goal, decide which registered workflows keep it moving, and ensure each needed recurring job exists exactly once with a stable purpose. Keeping open work triaged against the goals is always needed while goals exist: arrange or reuse langgraph:work-prioritizer hourly with purpose node-work-triage and an instruction to triage open work per the work-item-triage guide, goal-linked and unscored first, judging and writing one candidate at a time, applying only justified changes and no-op when unchanged. Without active goals, change nothing. Never do a workflow's domain work yourself.`;
+Domain work belongs to the registered workflow whose description and duty fit it. Arrange or reuse that workflow's recurring job for a recurring request; for an immediate request, name the workflow and report that it is the program to run.
+When the whole message is exactly "operate", this is the node's own operating tick. Work as the node's lead: decide, from evidence read this run, which recurring duties move the active goals now. Read the active goals with their KPI status, open work and owned schedules. Each registered workflow may declare a duty: its purpose, what it serves and when it is needed. A duty is needed when an active goal depends on what it serves and its neededWhen signal holds in this run's evidence. Ensure each needed duty has exactly one recurring job with that purpose. Pick a cadence that matches how fast its signal changes, and state the evidence. Pause a job whose signal is absent. Report a needed duty whose workflow cannot be scheduled as a missing capability. Without active goals, change nothing. When every needed job already exists and nothing calls for a change, answer NO_CHANGE at once. Never do a workflow's domain work yourself.`;
 
 /** Resolve metadata from the same catalog used by the executor, without a second registry. */
 export function nodeOperatorCatalogPrompt(
@@ -24,6 +24,11 @@ export function nodeOperatorCatalogPrompt(
 		description: string;
 		toolIds: readonly string[];
 		mcpServerIds: readonly string[];
+		duty: {
+			purpose: string;
+			serves: string;
+			neededWhen: string;
+		} | null;
 	}[],
 ) {
 	return `${NODE_OPERATOR_PROMPT}\n\nHost-owned registered workflows:\n${JSON.stringify(workflows)}`;
