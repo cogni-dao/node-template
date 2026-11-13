@@ -43,6 +43,25 @@ export * from "./progress.js";
 export const SERVES_SCAN_MAX = 200;
 /** Definitions one goal read opens at once; reads stay bounded and keep their order. The service pool bounds the real parallelism. */
 
+/** Definition pages (of 50) one refresh tick may load when its revision changes. */
+const REFRESH_PAGES_MAX = 20;
+/**
+ * Maintenance (expired leases, attempt retention) runs on due ticks; an idle
+ * tick runs it only when this long has passed, so hourly nodes never pay it idle.
+ */
+const MAINTENANCE_MS = 60 * 60_000;
+/**
+ * How long a definitions revision token is trusted before refresh reads it again.
+ * A definition edit is picked up within this window; ticks inside it read nothing.
+ */
+const REVISION_TTL_MS = 5 * 60_000;
+/** Failed and unavailable attempts older than this are pruned; ok readings stay. */
+const ATTEMPT_RETENTION_MS = 30 * 86_400_000;
+/** Attempts one maintenance pass deletes at most. */
+const PRUNE_LIMIT = 500;
+function dueKey(metricId: string, definitionHash: string): string {
+	return `${metricId}\u0000${definitionHash}`;
+}
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 function canonical(value: unknown): string {
@@ -232,6 +251,31 @@ export function createMetricService(deps: {
 	}): void;
 }) {
 	const { definitions, observations, registry, now, scope } = deps;
+	/** Refresh's in-memory clock; see `refreshDue`. Lives as long as this service. */
+	let clock: {
+		revision: string | null;
+		series: Array<{ d: MetricDefinition; hash: string; key: string }>;
+		/** True when more definitions exist than one reload may hold. */
+		truncated: boolean;
+		nextDue: Map<string, number>;
+		sweptAt: number;
+		prunedAt: number;
+		/** When the revision token was last read; a reload resets it. */
+		checkedAt: number;
+		/** A background token read found a change (or failed): reload next tick. */
+		stale: boolean;
+	} | null = null;
+	/** The single in-flight background revision read started by an idle tick. */
+	let recheck: Promise<void> | null = null;
+	/** Due-time view of the clock at `atMs`; pure, no IO. */
+	function dueNow(atMs: number) {
+		const state = clock;
+		if (!state) return null;
+		const dueAt = (key: string) => state.nextDue.get(key) ?? 0;
+		return state.series
+			.filter((x) => x.d.spec.cadenceSeconds && dueAt(x.key) <= atMs)
+			.sort((a, b) => dueAt(a.key) - dueAt(b.key));
+	}
 	async function authorize(action: MetricAction, definition: MetricDefinition) {
 		let allowed: boolean;
 		try {
@@ -1527,86 +1571,231 @@ export function createMetricService(deps: {
 			return series(id, metricDefinitionHash(d), unit, input, false);
 		},
 		now,
+		/**
+		 * The tick summary when a tick would do no work at all: definitions loaded,
+		 * revision trusted, nothing due and no maintenance due. Pure and in memory,
+		 * so a caller can answer an idle tick before any dispatch bookkeeping.
+		 * Null means "run refreshDue".
+		 */
+		idleTick(): {
+			scanned: number;
+			due: 0;
+			truncated: boolean;
+			pruned: 0;
+			pruneFailed: false;
+			observations: MetricObservation[];
+		} | null {
+			const atMs = now().getTime();
+			const state = clock;
+			if (
+				!state ||
+				state.revision === null ||
+				state.stale ||
+				atMs - state.sweptAt >= MAINTENANCE_MS ||
+				(dueNow(atMs)?.length ?? 1) > 0
+			)
+				return null;
+			// An expired token is re-read off the tick's path: one query, in the
+			// background. A change or failure marks the clock stale, and the next
+			// tick takes the full path and reloads.
+			if (atMs - state.checkedAt >= REVISION_TTL_MS && !recheck) {
+				const known = state.revision;
+				recheck = Promise.race([
+					Promise.resolve().then(() => definitions.revision?.() ?? null),
+					new Promise<never>((_, reject) => {
+						const timer = setTimeout(
+							() => reject(new Error("revision_timeout")),
+							10_000,
+						);
+						timer.unref?.();
+					}),
+				])
+					.then(
+						(revision) => {
+							if (clock !== state) return;
+							if (revision !== null && revision === known)
+								state.checkedAt = now().getTime();
+							else state.stale = true;
+						},
+						() => {
+							if (clock === state) state.stale = true;
+						},
+					)
+					.finally(() => {
+						recheck = null;
+					})
+					.catch(() => {});
+			}
+			return {
+				scanned: state.series.length,
+				due: 0,
+				truncated: state.truncated,
+				pruned: 0,
+				pruneFailed: false,
+				observations: [],
+			};
+		},
+		/**
+		 * One scheduler tick, evaluated like a Prometheus rule group. Definitions are
+		 * config: reloaded in full only when `definitions.revision()` changes. Each
+		 * series keeps its next due time in memory, so an idle tick reads one revision
+		 * token and nothing else. Due series still re-read their slot's attempts, so a
+		 * stale or early due time costs one query, never a missed or duplicate slot.
+		 */
 		async refreshDue() {
 			const started = now();
-			await observations.expireLeases();
-			let cursor = await observations.cursor();
-			const results: MetricObservation[] = [];
-			let scanned = 0;
-			let wrapped = false;
-			while (scanned < 20 && now().getTime() - started.getTime() < 25000) {
-				let page = await definitions.list(1, cursor ?? undefined);
-				if (!page.items.length) {
-					if (wrapped || !cursor) break;
-					cursor = null;
-					wrapped = true;
-					page = await definitions.list(1);
+			const startMs = started.getTime();
+			const trusted =
+				clock !== null &&
+				clock.revision !== null &&
+				!clock.stale &&
+				startMs - clock.checkedAt < REVISION_TTL_MS;
+			let revision: string | null = trusted ? (clock?.revision ?? null) : null;
+			if (!trusted) {
+				try {
+					revision = (await definitions.revision?.()) ?? null;
+				} catch {
+					revision = null;
 				}
-				const d = page.items[0];
-				if (!d) break;
-				cursor = d.id;
-				scanned++;
-				const cadence = d.spec.cadenceSeconds;
-				if (cadence) {
-					const at = new Date(
-						Math.floor(started.getTime() / (cadence * 1000)) * cadence * 1000,
-					).toISOString();
+				// Trust a matching token for another window; a changed token is
+				// trusted only after its reload succeeds below.
+				if (clock && revision !== null && revision === clock.revision) {
+					// A matching token means the loaded definitions are current.
+					clock.checkedAt = startMs;
+					clock.stale = false;
+				}
+				// A change or failed read stays stale until a reload succeeds.
+				else if (clock) clock.stale = true;
+			}
+			if (!clock || revision === null || revision !== clock.revision) {
+				const loaded: MetricDefinition[] = [];
+				let after: string | null = null;
+				for (let page = 0; page < REFRESH_PAGES_MAX; page++) {
+					const p = await definitions.list(50, after ?? undefined);
+					loaded.push(...p.items);
+					after = p.nextCursor;
+					if (!after) break;
+				}
+				const series = loaded.map((d) => {
 					const hash = metricDefinitionHash(d);
-					const attempts = await observations.scheduledAttempts(d.id, hash, at);
-					const last = attempts[0];
-					const succeeded = attempts.some((a) => a.status === "ok");
-					const eligible =
-						!last ||
-						last.status === "pending" ||
-						(attempts.length < 4 &&
-							now().getTime() -
-								Date.parse(last.observedAt ?? last.window.end) >=
-								60000 * 2 ** (attempts.length - 1));
-					if (!succeeded && eligible) {
-						const attempt =
-							last?.status === "pending"
-								? attempts.length - 1
-								: attempts.length;
-						// Only interval calculators measure the slot itself. One window
-						// keeps one observation, so a retry ends attempt ms after the slot.
-						// Snapshot calculators keep measuring now (a backdated snapshot 422s).
-						let historical = false;
-						try {
-							historical = !!registry.get(d.spec.calculatorId)
-								.historicalWindows;
-						} catch {
-							historical = false;
-						}
-						try {
-							results.push(
-								await service.compute(
-									d.id,
-									{
-										requestKey: `scheduled/${hash}/${at}/${attempt}`,
-										...(historical
-											? {
-													evaluationAt: new Date(
-														Date.parse(at) + attempt,
-													).toISOString(),
-												}
-											: {}),
-									},
-									{ scheduledFor: at },
-								),
-							);
-						} catch (e) {
-							if (
-								!(e instanceof MetricError) ||
-								![404, 409, 422].includes(e.status)
-							)
-								throw e;
-						}
+					return { d, hash, key: dueKey(d.id, hash) };
+				});
+				const nextDue = new Map<string, number>();
+				for (const { key } of series) {
+					const kept = clock?.nextDue.get(key);
+					if (kept !== undefined) nextDue.set(key, kept);
+				}
+				clock = {
+					revision,
+					series,
+					truncated: after !== null,
+					nextDue,
+					sweptAt: clock?.sweptAt ?? 0,
+					prunedAt: clock?.prunedAt ?? 0,
+					checkedAt: startMs,
+					stale: false,
+				};
+			}
+			const state = clock;
+			const due = dueNow(startMs) ?? [];
+			const results: MetricObservation[] = [];
+			let pruned = 0;
+			let pruneFailed = false;
+			const summary = (dueCount: number) => ({
+				scanned: state.series.length,
+				due: dueCount,
+				truncated: state.truncated,
+				pruned,
+				pruneFailed,
+				observations: results,
+			});
+			// Due computes need expired leases cleared first. An idle tick runs
+			// maintenance only on a slow clock, so a crashed live compute still settles.
+			if (due.length || startMs - state.sweptAt >= MAINTENANCE_MS) {
+				await observations.expireLeases();
+				state.sweptAt = startMs;
+				if (
+					observations.pruneAttempts &&
+					startMs - state.prunedAt >= MAINTENANCE_MS
+				) {
+					// Retention never blocks measurement: a failure backs off an hour.
+					state.prunedAt = startMs;
+					try {
+						pruned = await observations.pruneAttempts(
+							new Date(startMs - ATTEMPT_RETENTION_MS).toISOString(),
+							PRUNE_LIMIT,
+						);
+					} catch {
+						pruneFailed = true;
 					}
 				}
-				await observations.advanceCursor(cursor);
-				if (!page.nextCursor) break;
 			}
-			return { scanned, observations: results };
+			if (!due.length) return summary(0);
+			let examined = 0;
+			for (const { d, hash, key } of due) {
+				if (examined >= 20 || now().getTime() - startMs >= 25000) break;
+				examined++;
+				const cadenceMs = (d.spec.cadenceSeconds as number) * 1000;
+				const slotMs = Math.floor(startMs / cadenceMs) * cadenceMs;
+				const at = new Date(slotMs).toISOString();
+				const attempts = await observations.scheduledAttempts(d.id, hash, at);
+				const last = attempts[0];
+				const succeeded = attempts.some((a) => a.status === "ok");
+				const lastAt = (o: MetricObservation) =>
+					Date.parse(o.observedAt ?? o.window.end);
+				const eligible =
+					!last ||
+					last.status === "pending" ||
+					(attempts.length < 4 &&
+						now().getTime() - lastAt(last) >= 60000 * 2 ** (attempts.length - 1));
+				// Default: this slot is settled (succeeded or out of attempts).
+				let next = slotMs + cadenceMs;
+				if (!succeeded && eligible) {
+					const attempt =
+						last?.status === "pending" ? attempts.length - 1 : attempts.length;
+					// Only interval calculators measure the slot itself. One window
+					// keeps one observation, so a retry ends attempt ms after the slot.
+					// Snapshot calculators keep measuring now (a backdated snapshot 422s).
+					let historical = false;
+					try {
+						historical = !!registry.get(d.spec.calculatorId).historicalWindows;
+					} catch {
+						historical = false;
+					}
+					try {
+						const result = await service.compute(
+							d.id,
+							{
+								requestKey: `scheduled/${hash}/${at}/${attempt}`,
+								...(historical
+									? {
+											evaluationAt: new Date(
+												Date.parse(at) + attempt,
+											).toISOString(),
+										}
+									: {}),
+							},
+							{ scheduledFor: at },
+						);
+						results.push(result);
+						if (result.status === "pending") next = startMs + 60000;
+						else if (result.status !== "ok" && attempt + 1 < 4)
+							next = lastAt(result) + 60000 * 2 ** attempt;
+					} catch (e) {
+						if (
+							!(e instanceof MetricError) ||
+							![404, 409, 422].includes(e.status)
+						)
+							throw e;
+						if (e.status === 409) next = startMs + 60000;
+					}
+				} else if (!succeeded && last && attempts.length < 4) {
+					// Not yet eligible: wait out the same backoff the predicate uses.
+					next = lastAt(last) + 60000 * 2 ** (attempts.length - 1);
+				}
+				state.nextDue.set(key, next);
+			}
+			return summary(due.length);
 		},
 	};
 	return service;

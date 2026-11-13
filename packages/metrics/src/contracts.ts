@@ -354,6 +354,12 @@ export interface MetricDefinitionsPort {
 		after?: string,
 		signal?: AbortSignal,
 	): Promise<{ items: MetricDefinition[]; nextCursor: string | null }>;
+	/**
+	 * One cheap token that changes whenever any definition may have changed, such as
+	 * the store's HEAD commit. Refresh reloads definitions only when it changes; null
+	 * or absent means "unknown", and refresh reloads every tick.
+	 */
+	revision?(signal?: AbortSignal): Promise<string | null>;
 }
 /** Authorized immutable series shape supplied before due-evidence selection. */
 export interface DueEvidenceConstraints {
@@ -451,6 +457,14 @@ export interface MetricObservationsPort {
 		slot: string,
 	): Promise<MetricObservation[]>;
 	expireLeases(): Promise<void>;
+	/**
+	 * Delete up to `limit` failed or unavailable scheduled attempts whose slot
+	 * ended before `before`, and return how many went. The scheduler never
+	 * revisits an ended slot, so its request receipts are never replayed. Ok
+	 * readings (latest, history, pinned baselines) and live-compute attempts are
+	 * never pruned. Absent means no retention.
+	 */
+	pruneAttempts?(before: string, limit: number): Promise<number>;
 	cursor(): Promise<string | null>;
 	advanceCursor(id: string): Promise<void>;
 }
