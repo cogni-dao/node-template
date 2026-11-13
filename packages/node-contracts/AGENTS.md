@@ -76,3 +76,4 @@ All require `Authorization: Bearer ${SCHEDULER_API_TOKEN}`.
 
 - Extracted from `apps/operator/src/contracts/` (task.0248 Phase 1)
 - `ChatMessage` exported from `ai.completions.v1.contract` (OpenAI-compatible format); chat contract's `ChatMessage` excluded from barrel to avoid TS2308
+- `work.items.get.v1` (0.4.0, task.0118): the single-item read is additive. `WORK_ITEM_INCLUDES` (`["links"]`) is the allowed `?include=` list; `output` is the one `WorkItemDtoSchema`, so each `moves` entry may carry `metric`, `kpi`, `goal` or `context: "unavailable"`, and `links` appears only with `include=links`.

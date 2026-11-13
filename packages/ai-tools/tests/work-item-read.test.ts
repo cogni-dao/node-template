@@ -40,6 +40,46 @@ function reader(current: WorkItemInfo) {
   });
 }
 
+describe("single-item envelope (task.0118)", () => {
+  it("reads through the capability's envelope read when present, passing includeLinks", async () => {
+    const read = async (id: string, options?: { includeLinks?: boolean }) =>
+      id === item.id
+        ? { ...item, ...(options?.includeLinks ? { links: { items: [], nextCursor: null } } : {}) }
+        : null;
+    const calls: unknown[] = [];
+    const capability: WorkItemCapability = {
+      query: async () => {
+        throw new Error("query must not be used when read exists");
+      },
+      read: async (id, options) => {
+        calls.push(options);
+        return read(id, options);
+      },
+      transitionStatus: async () => {
+        throw new Error("unexpected write");
+      },
+      patch: async () => {
+        throw new Error("unexpected write");
+      },
+    };
+    const impl = createWorkItemReadImplementation({ workItemCapability: capability });
+    expect((await impl.execute({ id: item.id })).item).not.toHaveProperty("links");
+    expect((await impl.execute({ id: item.id, includeLinks: true })).item?.links).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect(calls).toEqual([{ includeLinks: false }, { includeLinks: true }]);
+    expect((await impl.execute({ id: "task.missing" })).item).toBeNull();
+  });
+
+  it("describes the chain and links so agents call read for them, and the query tool points here", () => {
+    expect(workItemReadContract.description).toContain("`kpi`");
+    expect(workItemReadContract.description).toContain("context: \"unavailable\"");
+    expect(workItemReadContract.description).toContain("includeLinks");
+    expect(workItemReadContract.inputSchema.safeParse({ id: "task.1", includeLinks: true }).success).toBe(true);
+  });
+});
+
 describe("full work item read", () => {
   it("returns complete long outcomes and exact revisions, or fails when oversized", async () => {
     const result = await reader(item).execute({ id: item.id });

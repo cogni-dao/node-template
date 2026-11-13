@@ -18,6 +18,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { WorkItemDtoSchema, WorkItemSummarySchema } from "../src/contracts.js";
+import { composeItemEnvelope } from "../src/envelope.js";
 import { DoltgresWorkItemAdapter } from "../src/adapters/doltgres/adapter.js";
 import { independentReadPool, makeFakeDoltgresSql } from "./adapters/fake-doltgres-sql.js";
 import {
@@ -604,5 +605,106 @@ describe("bounded summary assessment", () => {
     });
     expect(out[1]).toEqual({ id: "task.2" });
     expect(assess).toHaveBeenCalledOnce();
+  });
+});
+
+describe("single-item move context (task.0118)", () => {
+  const chainRead = <T extends { id: string; moves?: WorkItemMove[] | undefined }>(
+    item: T,
+    readings: MoveReadingPort | undefined,
+    options: { deadline?: number } = {},
+  ) => composeItemEnvelope(item, { readings }, options);
+  const move = { metricId: "m", direction: "up" as const, baselineObservationId: OBS_1 };
+  const item = { id: "task.1", moves: [move, { ...move, metricId: "gone" }] };
+  const chain = {
+    metric: { id: "m", title: "M", unit: "items", display: "progress" as const },
+    kpi: {
+      metricId: "k",
+      title: "K",
+      comparator: "gte" as const,
+      target: { value: 10, unit: "items" },
+      status: "behind",
+    },
+    goal: { id: "goal-x", title: "Goal X" },
+  };
+  const port = (context?: MoveReadingPort["context"]): MoveReadingPort => ({
+    observation: async () => reading(1),
+    latest: async () => reading(2),
+    batch: async (moves) => moves.map(() => ({ baseline: reading(1), current: reading(2) })),
+    assess: () => "as_declared",
+    ...(context ? { context } : {}),
+  });
+
+  it("adds the chain to a resolved move and marks an unresolved one unavailable, beside the readings", async () => {
+    const context = vi.fn(async () => new Map([["m", chain]]));
+    const out = await chainRead(item, port(context));
+    expect(out.moves?.[0]).toMatchObject({ ...chain, moved: "as_declared", baseline: reading(1) });
+    expect(out.moves?.[1]).toMatchObject({ metricId: "gone", context: "unavailable" });
+    expect(out.moves?.[1]).not.toHaveProperty("kpi");
+    expect(out.moves?.[1]).not.toHaveProperty("goal");
+    expect(context).toHaveBeenCalledOnce();
+    expect(context.mock.calls[0]?.[0]).toEqual(["m", "gone"]);
+  });
+
+  it("marks every move unavailable when the resolution fails, times out or has no port, and keeps the readings", async () => {
+    for (const readings of [
+      port(async () => {
+        throw new Error("goals down");
+      }),
+      port(),
+      undefined,
+    ]) {
+      const out = await chainRead(item, readings);
+      for (const entry of out.moves ?? []) {
+        expect(entry.context).toBe("unavailable");
+        expect(entry).not.toHaveProperty("metric");
+        expect(entry).not.toHaveProperty("kpi");
+      }
+    }
+    const hung = await chainRead(item, port(() => new Promise(() => undefined)), {
+      deadline: Date.now() + 20,
+    });
+    expect(hung.moves?.map((entry) => entry.context)).toEqual(["unavailable", "unavailable"]);
+  });
+
+  it("leaves an item without moves untouched and never calls the port", async () => {
+    const context = vi.fn();
+    expect(await chainRead({ id: "task.2" }, port(context))).toEqual({ id: "task.2" });
+    expect(await chainRead({ id: "task.3", moves: [] }, port(context))).toEqual({
+      id: "task.3",
+      moves: [],
+    });
+    expect(context).not.toHaveBeenCalled();
+  });
+
+  it("the chain and links schemas are optional and additive on the one DTO", () => {
+    const base = {
+      id: "task.1",
+      type: "task",
+      title: "t",
+      status: "needs_triage",
+      assignees: [],
+      externalRefs: [],
+      labels: [],
+      specRefs: [],
+      revision: 1,
+      deployVerified: false,
+      createdAt: "x",
+      updatedAt: "x",
+    };
+    expect(WorkItemDtoSchema.safeParse(base).success).toBe(true);
+    const parsed = WorkItemDtoSchema.parse({
+      ...base,
+      moves: [{ metricId: "m", direction: "up", baselineObservationId: null, ...chain }],
+      links: { items: [], nextCursor: null, unavailable: true },
+    });
+    expect(parsed.moves?.[0]).toMatchObject(chain);
+    expect(parsed.links).toEqual({ items: [], nextCursor: null, unavailable: true });
+    expect(
+      WorkItemDtoSchema.safeParse({
+        ...base,
+        moves: [{ metricId: "m", direction: "up", baselineObservationId: null, context: "ok" }],
+      }).success,
+    ).toBe(false);
   });
 });

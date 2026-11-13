@@ -29,12 +29,14 @@ import {
 	type MetricObservation,
 	type MetricObservationsPort,
 	type MetricScope,
+	type MetricServes,
 	MetricSpecSchema,
 	type MetricView,
 } from "./contracts.js";
 
 export * from "./assess.js";
 export * from "./contracts.js";
+export * from "./chain.js";
 export * from "./progress.js";
 
 /** Definitions one goal read scans for `serves`; a cut is reported as `truncated`. */
@@ -193,6 +195,14 @@ export function metricLatest(view: MetricView): MetricLatest {
 		observedAt: good?.observedAt ?? null,
 		reason: attempt && attempt.status !== "ok" ? attempt.reason : null,
 	};
+}
+/** A metric definition as a work item shows it: identity, unit, display and the KPI it serves. */
+export interface MetricSummary {
+	id: string;
+	title: string;
+	unit: string;
+	display?: MetricDisplay;
+	serves?: MetricServes;
 }
 /** One metric listed by the goal read. */
 export interface ServingRow {
@@ -921,6 +931,50 @@ export function createMetricService(deps: {
 		},
 		async read(id: string): Promise<MetricView> {
 			return service.viewOf(await definitionFor(id, "read"));
+		},
+		/**
+		 * One summary per readable definition of `ids`, from ONE definitions read: no
+		 * observation, history or KPI read. An unknown, deprecated, unreadable or
+		 * calculator-less id is absent; an authority outage throws.
+		 */
+		async describe(
+			ids: readonly string[],
+			signal?: AbortSignal,
+		): Promise<MetricSummary[]> {
+			if (!ids.length) return [];
+			if (ids.length > 300) throw new MetricError("too_many_metrics", 400);
+			if (!definitions.getMany) throw new MetricError("batch_unavailable", 503);
+			const found = await definitions.getMany([...new Set(ids)], signal);
+			const out: MetricSummary[] = [];
+			for (const d of found) {
+				signal?.throwIfAborted();
+				try {
+					await authorize("read", d);
+				} catch (error) {
+					if (error instanceof MetricError && error.status === 404) continue;
+					throw error;
+				}
+				try {
+					const calculator = registry.get(d.spec.calculatorId);
+					const shape = calculatorShape(calculator, d.spec.params);
+					const fallback =
+						calculator.displayFor?.(d.spec.params) ?? calculator.display;
+					const display =
+						d.display && displayFits(d.display, shape.unit)
+							? d.display
+							: fallback;
+					out.push({
+						id: d.id,
+						title: d.title,
+						unit: shape.unit,
+						...(display ? { display } : {}),
+						...(d.serves ? { serves: d.serves } : {}),
+					});
+				} catch {
+					// A calculator this node does not register: the summary is absent, never guessed.
+				}
+			}
+			return out;
 		},
 		/** One authorized definition's view: newest attempt, last good reading and band assessment. */
 		async viewOf(d: MetricDefinition): Promise<MetricView> {

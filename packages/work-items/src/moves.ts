@@ -12,6 +12,7 @@
  *   - NULL_BASELINE_READS_UNKNOWN: with no observation to pin, the baseline stays `null` and the read says `unknown` (reason `no_baseline`), never zero.
  *   - BASELINE_FAILURE_IS_ITS_OWN_ERROR: a baseline reader that fails or runs past the deadline is `MetricBaselineUnavailableError` (503 `metric_baseline_unavailable`); a resolver failure stays `EntryResolverUnavailableError`.
  *   - READ_IS_BOUNDED: judging an item looks up at most one baseline and one latest reading per move, within one deadline; a failed lookup reads `unknown`.
+ *   - CHAIN_NEVER_GUESSED (task.0118): the single-item read (`composeItemEnvelope`, envelope.ts) also asks `MoveReadingPort.context` for each move's metric, KPI and goal within the same deadline; an unresolved id, a failure, a timeout or no port marks the move `context: "unavailable"` and adds none of the three. A list or summary read never resolves it.
  * Side-effects: none (the ports it calls do I/O)
  * Links: hub metric-foundation-design ("Metrics serve KPIs; work moves metrics"), packages/work-items/src/cites.ts
  * @public
@@ -22,6 +23,12 @@ import {
   EntryUnresolvedError,
   type EntryResolver,
 } from "./cites.js";
+import type {
+  MoveGoalContextSchema,
+  MoveKpiContextSchema,
+  MoveMetricContextSchema,
+} from "./contracts.js";
+import type { z } from "zod";
 
 export const MOVES_MAX = 3;
 export const MOVE_METRIC_ID_MAX = 40;
@@ -119,6 +126,11 @@ export interface MoveReadingPort {
   ): Promise<MoveReading | null>;
   /** The latest attempt, including failed or stale attempts, or null if absent. */
   latest(metricId: string, signal: AbortSignal): Promise<MoveReading | null>;
+  /**
+   * The metric → KPI → goal chain of each id (task.0118). An id the port cannot resolve is
+   * absent from the map. Throws when the whole resolution is unavailable.
+   */
+  context?(metricIds: readonly string[], signal: AbortSignal): Promise<ReadonlyMap<string, MoveContext>>;
 }
 
 export type MovedState = "as_declared" | "against" | "flat" | "unknown" | null;
@@ -550,4 +562,101 @@ export async function judgeMoveSummaries<T extends { moves?: WorkItemMove[] | un
     if (cancel) options.signal?.removeEventListener("abort", cancel);
   }
   return result;
+}
+
+/**
+ * The metric a move names and the goal KPI it serves, resolved once by the port (task.0118).
+ * `kpi` and `goal` are absent when the metric serves no KPI that an active goal binds.
+ */
+export type MoveContext = {
+  readonly metric: z.infer<typeof MoveMetricContextSchema>;
+  readonly kpi?: z.infer<typeof MoveKpiContextSchema> | undefined;
+  readonly goal?: z.infer<typeof MoveGoalContextSchema> | undefined;
+};
+
+export type MoveBounds = number | { readonly signal?: AbortSignal; readonly deadline?: number };
+
+/** A bounded read ran past its deadline or was cancelled. */
+export class BoundedReadUnavailableError extends Error {
+  constructor(reason: "deadline" | "aborted") {
+    super(`bounded read unavailable: ${reason}`);
+    this.name = "BoundedReadUnavailableError";
+  }
+}
+
+/**
+ * Run one read inside the shared bounds: the caller's signal, the caller's deadline and the
+ * MOVES_DEADLINE_MS ceiling. A hung port cannot hold the caller: at the deadline the task's signal
+ * aborts and this rejects with `BoundedReadUnavailableError`. The task's own error passes through.
+ */
+export async function runBounded<T>(
+  task: (signal: AbortSignal) => Promise<T>,
+  bounds: MoveBounds = {},
+): Promise<T> {
+  const options = typeof bounds === "number" ? { deadline: Date.now() + bounds } : bounds;
+  const deadlineMs = Math.min(
+    MOVES_DEADLINE_MS,
+    options.deadline === undefined ? MOVES_DEADLINE_MS : options.deadline - Date.now(),
+  );
+  if (deadlineMs <= 0) throw new BoundedReadUnavailableError("deadline");
+  if (options.signal?.aborted) throw new BoundedReadUnavailableError("aborted");
+  const controller = new AbortController();
+  let abort: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => task(controller.signal)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new BoundedReadUnavailableError("deadline"));
+        }, deadlineMs);
+        // A cancelled request ends the wait now, not at the deadline.
+        abort = () => {
+          controller.abort();
+          reject(new BoundedReadUnavailableError("aborted"));
+        };
+        options.signal?.addEventListener("abort", abort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (abort) options.signal?.removeEventListener("abort", abort);
+  }
+}
+
+/**
+ * Resolve `metricIds` through `readings.context` within one deadline. `undefined` means the
+ * resolution is unavailable (no port, a failure, or the deadline): the caller marks every move
+ * `context: "unavailable"` and never invents a chain. `onError` receives the failure, if any.
+ */
+export async function readMoveContext(
+  metricIds: readonly string[],
+  readings: MoveReadingPort | undefined,
+  bounds: MoveBounds = {},
+  onError?: (error: unknown) => void,
+): Promise<ReadonlyMap<string, MoveContext> | undefined> {
+  const context = readings?.context;
+  if (!context || !metricIds.length) return undefined;
+  try {
+    return await runBounded((signal) => context.call(readings, [...new Set(metricIds)], signal), bounds);
+  } catch (error) {
+    onError?.(error);
+    return undefined;
+  }
+}
+
+/** Add each move's resolved context, or the explicit `unavailable` marker when it did not resolve. */
+export function withMoveContext<T extends { moves?: readonly { readonly metricId: string }[] | undefined }>(
+  item: T,
+  context: ReadonlyMap<string, MoveContext> | undefined,
+): T {
+  if (!item.moves?.length) return item;
+  return {
+    ...item,
+    moves: item.moves.map((move) => {
+      const resolved = context?.get(move.metricId);
+      return resolved ? { ...move, ...resolved } : { ...move, context: "unavailable" as const };
+    }),
+  };
 }

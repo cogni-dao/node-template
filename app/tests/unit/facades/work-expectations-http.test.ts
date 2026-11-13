@@ -113,7 +113,10 @@ describe("authenticated work metric projection", () => {
     const detail = await getWorkItem(item.id);
     const table = await listWorkSummaries({});
     const board = await listWorkBoardColumns({}, ["needs_implement"], 20);
-    expect(detail?.moves).toEqual(table.items[0]?.moves);
+    // Detail adds the KPI chain (task.0118); with no goals reader here it reads unavailable. Everything else is the shared projection.
+    expect(detail?.moves?.map(({ context, ...move }) => ({ context, move }))).toEqual(
+      table.items[0]?.moves?.map((move) => ({ context: "unavailable", move })),
+    );
     expect(board.columns[0]?.items[0]?.moves).toEqual(table.items[0]?.moves);
     expect(detail?.moves?.[0]).toMatchObject({ baselineObservationId: baselineId, moved: "unknown", baseline: { value: 2, unit: "count" }, current: { viewState: "error" } });
     expect(workReadBatch).toHaveBeenCalledTimes(3);

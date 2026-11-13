@@ -363,5 +363,74 @@ describe("createWorkItemCapability", () => {
       const [item] = await capability([withMoves], undefined).query({ ids: ["task.5001"] });
       expect(item?.moves?.[0]).toMatchObject({ moved: "unknown" });
     });
+
+    // task.0118: `read` is the single-item envelope; query and queryPage never resolve the chain.
+    describe("read (single-item envelope)", () => {
+      const goalsPort = {
+        listActiveGoals: vi.fn().mockResolvedValue([
+          {
+            id: "goal-1",
+            title: "Goal one",
+            evaluateAt: null,
+            kpiBindings: [{ metricId: "m-1", comparator: "gte", target: { value: 5, unit: "items" } }],
+          },
+        ]),
+      };
+      const chainService = (service: ReturnType<typeof metrics>) => ({
+        ...service,
+        describe: vi.fn().mockResolvedValue([{ id: "m-1", title: "Metric one", unit: "items", display: "volume" }]),
+        kpi: vi.fn().mockResolvedValue({ viewState: "ok", assessment: { status: "on_track" } }),
+      });
+      const build = (service: unknown, readLinks?: (id: string) => Promise<never>) =>
+        createWorkItemCapability({
+          workItemQuery: {} as WorkItemQueryPort,
+          workItemCommand: {} as WorkItemCommandPort,
+          backlogReader: {
+            list: vi.fn().mockResolvedValue({ items: [withMoves], pageInfo: { endCursor: null, hasMore: false } }),
+          } as unknown as Pick<WorkItemQueryPort, "list">,
+          moveReadings: createMoveMetricPorts(() => service as never, () => goalsPort as never).readings,
+          ...(readLinks ? { links: { firstPage: readLinks } } : {}),
+        });
+
+      it("adds readings, the chain and (on request) links; query does not", async () => {
+        const service = chainService(metrics(1, 3));
+        const readLinks = vi.fn().mockResolvedValue({ items: [], nextCursor: "n1" });
+        const cap = build(service, readLinks);
+        const read = await cap.read?.("task.5001", { includeLinks: true });
+        expect(read?.moves?.[0]).toMatchObject({
+          moved: "as_declared",
+          metric: { id: "m-1", title: "Metric one", unit: "items" },
+          kpi: { metricId: "m-1", comparator: "gte", status: "on_track" },
+          goal: { id: "goal-1", title: "Goal one" },
+        });
+        expect(read?.links).toEqual({ items: [], nextCursor: "n1" });
+        const [queried] = await cap.query({ ids: ["task.5001"], limit: 1 });
+        expect(queried?.moves?.[0]).not.toHaveProperty("kpi");
+        expect(queried).not.toHaveProperty("links");
+        expect(service.describe).toHaveBeenCalledOnce();
+      });
+
+      it("reads links as unavailable when no links reader is wired, and omits them unless asked", async () => {
+        const service = chainService(metrics(1, 3));
+        const cap = build(service);
+        expect((await cap.read?.("task.5001", { includeLinks: true }))?.links).toEqual({
+          items: [],
+          nextCursor: null,
+          unavailable: true,
+        });
+        expect(await cap.read?.("task.5001")).not.toHaveProperty("links");
+        expect(await cap.read?.("task.9999")).toBeNull();
+      });
+
+      it("marks the chain unavailable, never absent-as-empty, when the metrics service cannot describe", async () => {
+        const service = {
+          ...metrics(1, 3),
+          describe: vi.fn().mockRejectedValue(new Error("definitions down")),
+        };
+        const read = await build(service).read?.("task.5001");
+        expect(read?.moves?.[0]).toMatchObject({ moved: "as_declared", context: "unavailable" });
+        expect(read?.moves?.[0]).not.toHaveProperty("kpi");
+      });
+    });
   });
 });

@@ -10,14 +10,21 @@
  *   - FRESH_BASELINE: pin only a fresh successful latest attempt; preserve failures in the read projection.
  *   - DEPRECATED_IS_NOT_MISSING: `metric_not_found` (unknown or deprecated definition) throws `MoveMetricGoneError` so a read shows `metric_deprecated`; `observation_not_found` is a missing reading.
  *   - LATEST_ONLY: a read looks up the metric's latest reading and the one pinned baseline observation; no history is walked.
+ *   - CHAIN_FROM_CHEAP_READS (task.0118): `context` resolves metric → KPI → goal from `describe` (definitions) and the active goals' bindings; never the goal progress read.
  *   - ABSENT_SERVICE_IS_UNAVAILABLE: with no metrics service the pin throws (the write is refused, nothing written) and the read side answers `unknown`.
  * Side-effects: IO (metrics service reads)
  * Links: packages/work-items/src/moves.ts, hub metric-foundation-design
  * @internal
  */
 
-import { assessDirection, createWorkMetricReader, type MetricService } from "@cogni-dao/metrics";
+import {
+  assessDirection,
+  createWorkMetricReader,
+  type MetricService,
+  readMetricChains,
+} from "@cogni-dao/metrics";
 import { MetricError, type MetricObservation, type MetricView } from "@cogni-dao/metrics/contracts";
+import { createGoalSource, type GoalKnowledgeReader } from "@cogni-dao/metrics/knowledge";
 import {
   type MetricBaselinePort,
   MoveMetricGoneError,
@@ -30,7 +37,11 @@ const metricGone = (error: unknown): boolean =>
 
 const notFound = (error: unknown): boolean => error instanceof MetricError && error.status === 404;
 
-export function createMoveMetricPorts(getMetrics: () => MetricService | undefined): {
+export function createMoveMetricPorts(
+  getMetrics: () => MetricService | undefined,
+  /** Where the active goals live; without it a read cannot resolve the KPI chain (`context: "unavailable"`). */
+  getGoals?: () => GoalKnowledgeReader | undefined,
+): {
   baselines: MetricBaselinePort;
   readings: MoveReadingPort;
 } {
@@ -47,6 +58,23 @@ export function createMoveMetricPorts(getMetrics: () => MetricService | undefine
       },
     },
     readings: {
+      ...(getGoals
+        ? {
+            // CHAIN_FROM_CHEAP_READS (task.0118): metric definitions plus the active goals'
+            // bindings. Never the goal progress read, which is slow and can 503.
+            async context(metricIds: readonly string[], signal: AbortSignal) {
+              signal.throwIfAborted();
+              const goals = getGoals();
+              if (!goals) throw new Error("goals reader is not configured");
+              return readMetricChains({
+                metrics: service(),
+                goals: createGoalSource(goals, signal),
+                metricIds,
+                signal,
+              });
+            },
+          }
+        : {}),
       async batch(moves, signal) {
         signal.throwIfAborted();
         const result = await service().workReadBatch(moves.map(({ metricId, baselineObservationId }) => ({ metricId, baselineObservationId })), signal);

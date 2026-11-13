@@ -21,6 +21,7 @@
  *     so a caller `expectedRevision` there is refused, never silently dropped.
  *   - MOVES_READ_AT_READ_TIME (story.0033): a read that returns exactly one item (core__work_item_read) adds each move's baseline,
  *     current reading and verdict from `moveReadings`; a list read returns the stored moves only, so a page costs no metric lookup.
+ *   - ONE_ITEM_ENVELOPE (task.0118): `read` is the single-item envelope: it also adds each move's metric, KPI and goal (`moveReadings.context`) and, on request, the first page of citation links (`links`); both through the package's `composeItemEnvelope`; `query` and `queryPage` never do.
  * Side-effects: none (factory only)
  * Links: docs/spec/development-lifecycle.md
  * @internal
@@ -41,8 +42,9 @@ import type {
   WorkItemStatus,
   WorkItemType,
 } from "@cogni/work-items";
-import type { MoveReadingPort } from "@cogni/work-items";
+import type { EnvelopeDegradedEvent, ItemLinksPort, MoveReadingPort } from "@cogni/work-items";
 import {
+  composeItemEnvelope,
   judgeMoveSummaries,
   toWorkItemDto,
   toWorkItemId,
@@ -72,6 +74,10 @@ export interface WorkItemCapabilityDeps {
    */
   /** Reads the metrics a single item moves; absent means no metrics service (every move reads `unknown`). */
   readonly moveReadings?: MoveReadingPort | undefined;
+  /** First page of an item's citation links (`read` with `includeLinks`); absent reads `unavailable`. */
+  readonly links?: ItemLinksPort | undefined;
+  /** One event per degraded envelope part (chain or links). */
+  readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
     readonly principalId: string | (() => string);
@@ -135,6 +141,23 @@ export function createWorkItemCapability(
   }
 
   return {
+    /**
+     * THE single-item envelope (task.0118), the same shape `GET /api/v1/work/items/{id}` serves: the
+     * item with each move's readings, verdict and metric → KPI → goal chain, and with `includeLinks`
+     * the first page of citation links.
+     */
+    async read(id, options): Promise<WorkItemInfo | null> {
+      const result = await list({ ids: [id], limit: 1 });
+      const item = result.items.map(toWorkItemInfo).find((entry) => entry.id === id);
+      if (!item) return null;
+      // ONE_COMPOSITION: the same `composeItemEnvelope` the HTTP facade calls.
+      return composeItemEnvelope(
+        item,
+        { readings: deps.moveReadings, links: deps.links, log: deps.log },
+        { includeLinks: options?.includeLinks === true },
+      );
+    },
+
     async query(params): Promise<readonly WorkItemInfo[]> {
       const result = await list(params);
       return withMoveReadings(result.items.map(toWorkItemInfo));

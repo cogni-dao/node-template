@@ -92,6 +92,17 @@ export interface WorkItemCapability {
    */
   queryPage?(params: WorkItemQueryParams): Promise<WorkItemQueryPage>;
 
+  /**
+   * One item as the single-item envelope (task.0118), the same read `GET /api/v1/work/items/{id}`
+   * serves: each move carries its readings, verdict and metric → KPI → goal chain, and
+   * `includeLinks` adds the first page of citation links. `null` when absent. Optional: an
+   * implementation without it is read through `query` (moves without the chain).
+   */
+  read?(
+    id: string,
+    options?: { readonly includeLinks?: boolean },
+  ): Promise<WorkItemInfo | null>;
+
   /** Transition a work item to a new status. */
   transitionStatus(input: {
     id: string;
