@@ -30,6 +30,18 @@ export interface AgentAccessEndpoints {
   readonly roles: string;
 }
 
+/**
+ * The owner's "Your AIs" endpoints (all session-only, human plane): `mine` lists the AIs' asks and personal grants (GET) and turns one Off (DELETE); `ais` lists the person's AIs (GET) and
+ * makes a setup line (POST); `aisRevoke` ends an AI's keys (POST); `requests` is the by-id Approve or Deny (POST `<requests>/<id>`); `claims` reads and completes a claim (GET and POST `<claims>/<id>`).
+ */
+export interface OwnerAccessEndpoints {
+  readonly mine: string;
+  readonly ais: string;
+  readonly aisRevoke: string;
+  readonly requests: string;
+  readonly claims: string;
+}
+
 export type AgentAccessState =
   /** Nothing is shown while the first answer is pending. */
   | { readonly status: "loading" }

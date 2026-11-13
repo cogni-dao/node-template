@@ -55,6 +55,7 @@ export {
 export {
   type AgentAccessEndpoints,
   type AgentAccessState,
+  type OwnerAccessEndpoints,
   UNAVAILABLE_COPY,
   useAgentAccess,
   type UseAgentAccess,
