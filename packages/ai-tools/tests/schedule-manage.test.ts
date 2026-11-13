@@ -42,6 +42,20 @@ describe("core__schedule_manage", () => {
     });
   });
 
+  it("names the missing instruction on create instead of failing downstream", async () => {
+    const { tool, create } = setup();
+    await expect(
+      tool.execute({
+        action: "create",
+        graphId: "langgraph:work-prioritizer",
+        cron: "0 * * * *",
+        timezone: "UTC",
+        purpose: "node-work-triage",
+      }),
+    ).rejects.toThrow("instruction is required for action 'create'");
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("refuses create-only fields on other actions", async () => {
     const { tool, capability } = setup();
     await expect(

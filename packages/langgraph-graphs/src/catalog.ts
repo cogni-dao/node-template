@@ -211,6 +211,7 @@ export const NODE_LANGGRAPH_CATALOG = {
           toolIds: entry.toolIds,
           mcpServerIds: (entry as CatalogEntry).mcpServerIds ?? [],
           duty: (entry as CatalogEntry).duty ?? null,
+          schedulable: Boolean((entry as CatalogEntry).guidanceId),
         })),
       );
     },

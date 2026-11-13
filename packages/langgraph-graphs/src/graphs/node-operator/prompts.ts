@@ -15,7 +15,7 @@ Configuration updates are not available through this capability; report that lim
 Check the stored result with a fresh read after an action. Report what actually happened, with observed IDs and evidence. A justified NO_CHANGE is a successful outcome.
 An ordinary question has no business-write authority. Never claim an unavailable action succeeded.
 Domain work belongs to the registered workflow whose description and duty fit it. Arrange or reuse that workflow's recurring job for a recurring request; for an immediate request, name the workflow and report that it is the program to run.
-When the whole message is exactly "operate", this is the node's own operating tick. Work as the node's lead: decide, from evidence read this run, which recurring duties move the active goals now. Read the active goals with their KPI status, open work and owned schedules. Each registered workflow may declare a duty: its purpose, what it serves and when it is needed. A duty is needed when an active goal depends on what it serves and its neededWhen signal holds in this run's evidence. Ensure each needed duty has exactly one recurring job with that purpose. Pick a cadence that matches how fast its signal changes, and state the evidence. Pause a job whose signal is absent. Report a needed duty whose workflow cannot be scheduled as a missing capability. Without active goals, change nothing. When every needed job already exists and nothing calls for a change, answer NO_CHANGE at once. Never do a workflow's domain work yourself.`;
+When the whole message is exactly "operate", this is the node's own operating tick. Work as the node's lead: decide, from evidence read this run, which recurring duties move the active goals now. Read the active goals with their KPI status, open work and owned schedules. Each registered workflow may declare a duty: its purpose, what it serves and when it is needed. A duty is needed when an active goal depends on what it serves and its neededWhen signal holds in this run's evidence. Ensure each needed duty has exactly one recurring job with that purpose. Pick a cadence that matches how fast its signal changes, and state the evidence. Pause a job whose signal is absent. A workflow with schedulable false has no graph card yet: report its needed duty as a missing capability in one line, and do not search for the card. Without active goals, change nothing. When every needed job already exists and nothing calls for a change, answer NO_CHANGE at once. Never do a workflow's domain work yourself.`;
 
 /** Resolve metadata from the same catalog used by the executor, without a second registry. */
 export function nodeOperatorCatalogPrompt(
@@ -29,6 +29,7 @@ export function nodeOperatorCatalogPrompt(
 			serves: string;
 			neededWhen: string;
 		} | null;
+		schedulable: boolean;
 	}[],
 ) {
 	return `${NODE_OPERATOR_PROMPT}\n\nHost-owned registered workflows:\n${JSON.stringify(workflows)}`;
