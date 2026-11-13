@@ -229,7 +229,6 @@ export interface MetricSummary {
 	unit: string;
 	display?: MetricDisplay;
 	serves?: MetricServes;
-	brief?: MetricBrief;
 }
 /** One metric listed by the goal read. */
 export interface ServingRow {
@@ -935,7 +934,6 @@ export function createMetricService(deps: {
 						unit: shape.unit,
 						...(display ? { display } : {}),
 						...(d.serves ? { serves: d.serves } : {}),
-						...(d.brief ? { brief: d.brief } : {}),
 					});
 				} catch {
 					// A calculator this node does not register: the summary is absent, never guessed.
