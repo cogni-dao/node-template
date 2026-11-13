@@ -28,8 +28,13 @@ import {
   type StructuredToolInterface,
 } from "@langchain/core/tools";
 import { z } from "zod";
-import { ObservedMoves, type ObservedItem, type RunReceipts } from "./receipts";
-import { MAX_CHANGED_ITEMS_PER_RUN } from "./tools";
+import { type ObservedItem, ObservedMoves, type RunReceipts } from "./receipts";
+import {
+  EVIDENCE_ISSUE_MAX_CHARS,
+  EVIDENCE_ISSUES_MAX,
+  MAX_CHANGED_ITEMS_PER_RUN,
+  RECEIPT_ERROR_MAX_CHARS,
+} from "./tools";
 
 const ROUTES = new Set([
   "needs_research",
@@ -142,6 +147,61 @@ export function createTriageGuard(
         "reason_required",
         "state why in reason: one line that says why this change happens",
       );
+    // Report independent evidence defects together so one repair does not cost one model turn per axis.
+    const evidenceIssues: string[] = [];
+    let omittedIssues = 0;
+    const addEvidenceIssue = (issue: string) => {
+      if (evidenceIssues.length < EVIDENCE_ISSUES_MAX)
+        evidenceIssues.push(issue.slice(0, EVIDENCE_ISSUE_MAX_CHARS));
+      else omittedIssues++;
+    };
+    if (
+      set.moves !== undefined &&
+      (item.moves === undefined || !sameMoves(set.moves, item.moves))
+    ) {
+      if (!receipts.metricCatalogRead)
+        addEvidenceIssue(
+          "metric_catalog: read core__goal_progress or core__metric_list before declaring what metrics this work moves",
+        );
+      if (!set.moves.length && !receipts.metricCatalogComplete)
+        addEvidenceIssue(
+          "metric_catalog_incomplete: an unavailable or partial catalog cannot establish that no metric fits; read complete discovery before declaring []",
+        );
+      for (const move of set.moves) {
+        if (
+          item.moves?.some(
+            (stored) =>
+              stored.metricId === move.metricId &&
+              stored.direction === move.direction,
+          )
+        )
+          continue;
+        if (
+          !receipts.metricIds.has(move.metricId) ||
+          !receipts.guidance.has(move.metricId)
+        )
+          addEvidenceIssue(
+            `metric_not_read: discover ${move.metricId} in core__goal_progress or core__metric_list, then read its full body with core__knowledge_read`,
+          );
+      }
+      const goalScore =
+        set.scores === null
+          ? undefined
+          : (set.scores?.goal ?? item.scores?.goal);
+      if (
+        goalScore &&
+        goalScore.v >= EVIDENCE_FROM &&
+        set.moves.length &&
+        !set.moves.some(
+          (move) =>
+            receipts.sources.get(goalScore.ev ?? "")?.sourceId ===
+            move.metricId,
+        )
+      )
+        addEvidenceIssue(
+          "metric_goal_evidence: a goal score of 4 or 5 for a new metric declaration cites the metric body you read in ev",
+        );
+    }
     for (const [axis, score] of Object.entries(set.scores ?? {})) {
       const stored = item.scores?.[axis];
       if (score.v < EVIDENCE_FROM) continue;
@@ -160,12 +220,13 @@ export function createTriageGuard(
         score.ev === item.sourceUrl ||
         receipts.isItemPage(url, item.id)
       )
-        return reject(
-          "evidence",
-          `${axis} ${score.v} needs a source you read this run in ev; never the item's own page`,
+        addEvidenceIssue(
+          `evidence: ${axis} ${score.v} needs a source you read this run in ev; never the item's own page`,
         );
     }
-    return undefined;
+    return evidenceIssues.length
+      ? `guard_rejected: ${evidenceIssues.join("; ")}${omittedIssues ? `; ${omittedIssues} additional evidence defects omitted` : ""}`
+      : undefined;
   }
 
   /** True when the call would leave the item as it is. */
@@ -195,7 +256,13 @@ export function createTriageGuard(
     const stored = receipts.items.get(raw.id);
     const input: WorkItemUpdateInput =
       stored && raw.set.scores
-        ? { ...raw, set: { ...raw.set, scores: { ...stored.scores, ...raw.set.scores } } }
+        ? {
+            ...raw,
+            set: {
+              ...raw.set,
+              scores: { ...stored.scores, ...raw.set.scores },
+            },
+          }
         : raw;
     const missing = requiredGuidance.filter((id) => !receipts.guidance.has(id));
     if (missing.length)
@@ -204,7 +271,10 @@ export function createTriageGuard(
         `read these exact ids with core__knowledge_read first: ${missing.join(", ")}`,
       );
     if (receipts.goals.size === 0)
-      return reject("goals", "read the active goals with core__goal_list first");
+      return reject(
+        "goals",
+        "read the active goals with core__goal_list first",
+      );
     const item = receipts.items.get(input.id);
     if (!item)
       return reject(
@@ -238,7 +308,12 @@ export function createTriageGuard(
             ? result.content
             : JSON.stringify(result);
       // Success is the item the PATCH route returns; a failure is { success:false } or { error }.
-      let output: { id?: unknown; success?: unknown; error?: unknown; revision?: unknown } = {};
+      let output: {
+        id?: unknown;
+        success?: unknown;
+        error?: unknown;
+        revision?: unknown;
+      } = {};
       try {
         output = z
           .object({
@@ -295,6 +370,21 @@ export function createTriageGuard(
     name: WORK_ITEM_UPDATE_NAME,
     description: writer.description,
     schema: workItemUpdateContract.inputSchema,
-    func: run,
+    func: async (
+      input: WorkItemUpdateInput,
+      manager: unknown,
+      config: RunnableConfig,
+    ) => {
+      const result = await run(input, manager, config);
+      // Refusals happen before the host writer runs. Keep their facts in the same report receipts.
+      if (
+        result.startsWith("guard_rejected:") ||
+        result.startsWith("write_result_uncertain:")
+      )
+        receipts.recordTool(WORK_ITEM_UPDATE_NAME, input, {
+          error: result.slice(0, RECEIPT_ERROR_MAX_CHARS),
+        });
+      return result;
+    },
   }) as StructuredTool;
 }

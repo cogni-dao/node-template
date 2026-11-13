@@ -12,6 +12,8 @@ import {
   WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 
+export { WORK_ITEM_QUERY_MAX_LIMIT } from "@cogni/ai-tools";
+
 export { WORK_ITEM_READ_NAME };
 /** Measured goal reads (ai-tools createMetricTools); core__metric_compute writes, so it is not here. */
 export const METRIC_READ_TOOL_IDS = [
@@ -44,6 +46,11 @@ export const COGNI_DECIDE_TOOL_IDS = [
 ] as const;
 /** Triage guide: a run changes at most this many distinct items. */
 export const MAX_CHANGED_ITEMS_PER_RUN = 5;
+/** Max characters of one failed tool result echoed back in a receipt or completion report. */
+export const RECEIPT_ERROR_MAX_CHARS = 240;
+/** Evidence defects one rejection reports before counting the rest as omitted, and each one's max characters. */
+export const EVIDENCE_ISSUES_MAX = 12;
+export const EVIDENCE_ISSUE_MAX_CHARS = 300;
 export const OPEN_STATUSES = [
   "needs_triage",
   "needs_research",

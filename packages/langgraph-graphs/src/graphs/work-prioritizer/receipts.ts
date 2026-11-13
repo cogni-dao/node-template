@@ -6,6 +6,7 @@
  * A failed read records nothing. It never blocks a write to another item (no latch).
  */
 import { createHash } from "node:crypto";
+import { METRIC_TOOL_BUNDLE } from "@cogni/ai-tools";
 import {
   AIMessage,
   type BaseMessage,
@@ -59,6 +60,9 @@ export class RunReceipts {
   readonly items = new Map<string, ObservedItem>();
   readonly sources = new Map<string, ReadReceipt>();
   readonly guidance = new Set<string>();
+  readonly metricIds = new Set<string>();
+  metricCatalogRead = false;
+  metricCatalogComplete = false;
   readonly reportMessages: BaseMessage[] = [];
 
   constructor(private readonly origin: string) {}
@@ -125,6 +129,46 @@ export class RunReceipts {
   }
 
   observe(name: string, args: unknown, value: unknown) {
+    if (name === "core__goal_progress" || name === "core__metric_list") {
+      // Derive admissible facts from the canonical wire contract, never from item text.
+      const contract = METRIC_TOOL_BUNDLE.find(
+        (tool) => tool.contract.name === name,
+      )?.contract;
+      const parsed = contract?.outputSchema.safeParse(value);
+      if (parsed?.success) {
+        const object = (v: unknown): Record<string, unknown> | undefined =>
+          v && typeof v === "object" && !Array.isArray(v)
+            ? (v as Record<string, unknown>)
+            : undefined;
+        const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+        const add = (metric: unknown) => {
+          const id = object(metric)?.id;
+          if (typeof id === "string") this.metricIds.add(id);
+        };
+        const data = object(parsed.data);
+        if (name === "core__goal_progress" && data?.servedUnavailable) return;
+        for (const item of list(data?.items)) add(object(item)?.definition);
+        for (const goal of list(data?.goals))
+          for (const kpi of list(object(goal)?.kpis)) {
+            add(object(kpi)?.metric);
+            for (const served of list(object(kpi)?.served))
+              add(object(served)?.metric);
+          }
+        for (const metric of list(data?.unbound)) add(object(metric)?.metric);
+        for (const metric of list(data?.orphans)) {
+          const id = object(metric)?.metricId;
+          if (typeof id === "string") this.metricIds.add(id);
+        }
+        this.metricCatalogRead = true;
+        const input = object(args);
+        this.metricCatalogComplete ||=
+          name === "core__goal_progress"
+            ? Array.isArray(data?.unbound) &&
+              Array.isArray(data?.orphans) &&
+              data?.servedTruncated !== true
+            : !input?.after && !data?.nextCursor;
+      }
+    }
     if (name === "core__goal_list") {
       const parsed = z.object({ goals: z.array(Goal) }).safeParse(value);
       if (!parsed.success) return;

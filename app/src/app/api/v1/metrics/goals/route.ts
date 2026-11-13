@@ -13,12 +13,14 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
 	{ routeId: "metrics.goalsRead", auth: { mode: "required", getSessionUser } },
-	async (ctx, _request, user) => {
+	async (ctx, request, user) => {
 		const started = Date.now();
 		if (!user)
 			return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 		try {
-			const result = await metricHandlers().goals();
+			const result = await metricHandlers().goals(
+				new URL(request.url).searchParams,
+			);
 			if (result.ok) {
 				const data = result.body;
 				logEvent(ctx.log, EVENT_NAMES.GOALS_PROGRESS_READ, {

@@ -81,6 +81,10 @@ export type CreateGraphFn = ((opts: CreateGraphOptions) => CompiledGraph) & {
       toolCallId?: string,
     ) => void;
     onSkillReadFailure?: () => void;
+    /** Bounded program verification; the host permits only registered read-only tools. */
+    verifyEffects?: (readTool: ToolExecFn) => Promise<void>;
+    /** Program-owned completion text derived from actual observations, before final emission. */
+    projectAnswer?: (answer: string) => string;
     projectOutput?: (answer: string) => Record<string, unknown> | undefined;
     /** Ends a run that hit the step budget with a program-owned report; undefined keeps the error. */
     projectStepBudget?: () =>

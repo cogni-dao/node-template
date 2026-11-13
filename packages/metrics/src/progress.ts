@@ -18,6 +18,8 @@ import { assessKpi } from "./assess.js";
 import {
 	type GoalProgress,
 	type GoalsProgress,
+	type GoalsProgressReadInput,
+	GoalsProgressReadInputSchema,
 	GoalsProgressSchema,
 	type KpiBinding,
 	KpiBindingsSchema,
@@ -28,6 +30,30 @@ import {
 	type ServedMetric,
 } from "./contracts.js";
 import type { MetricService } from "./index.js";
+
+/** Shared HTTP/tool value bounds. Never recomputes or changes an assessment. */
+export function projectGoalsProgressHistory(
+	value: GoalsProgress,
+	input: GoalsProgressReadInput = {},
+): GoalsProgress {
+	const { history } = GoalsProgressReadInputSchema.parse(input);
+	return {
+		...value,
+		historyMode: history,
+		...(history === "none"
+			? {
+					goals: value.goals.map((goal) => ({
+						...goal,
+						kpis: goal.kpis.map((kpi) => ({
+							...kpi,
+							trend: null,
+							recent: null,
+						})),
+					})),
+				}
+			: {}),
+	};
+}
 
 export interface GoalSubject {
 	id: string;

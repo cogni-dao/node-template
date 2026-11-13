@@ -1,0 +1,47 @@
+{
+	"id": "clear-goal-linked-guidance-repair",
+	"source": {
+		"runId": "f15134bf-f268-4d1d-b57d-1ce2ca35b362",
+		"sourceSha": "fa547cc0f7fe174b6865bd9cf0e4fbbcb5e179d3",
+		"environment": "isolated local TEST data",
+		"threadSha256": "e4e68a008eabef0b6fb810478e941b40e1e825742b3c5f4101eaa5fd7b26231e"
+	},
+	"fixture": {
+		"type": "task",
+		"title": "[TEST] Remove inline revisions from readiness guidance",
+		"summary": "The existing atoms-no-inline-history metric identifies deep-readyz-design for a revision_tag marker. Refine the current guidance in place: remove the inline dated revision marker while preserving its readiness contract; keep change history in native history. This directly supports goal-knowledge-syntropy. The source reading is available through the normal local metric tool. Scope excludes authentication, identity and payments. No deadline or downstream dependency is asserted; expected effort is three complete agent cycles, including review and validation.",
+		"outcome": "Goal = Readiness guidance contains only current instructions.\nDone when = Its inline revision marker is absent, readiness semantics are preserved, and the registered atoms-no-inline-history metric recomputes from native source.",
+		"status": "needs_triage",
+		"scores": null,
+		"moves": [],
+		"labels": ["test-fixture", "sydney-ai-eval"]
+	},
+	"context": {
+		"activeGoal": "goal-knowledge-syntropy",
+		"metricId": "atoms-no-inline-history",
+		"metricValue": 96.15384615384616,
+		"metricTarget": 98,
+		"approach": "Remove an identified inline revision marker while preserving readiness semantics",
+		"expectedCycles": 3,
+		"deadlineEvidence": "explicitly none",
+		"dependencyEvidence": "explicitly none"
+	},
+	"rubric": {
+		"routing": "needs_implement for this clear bounded task, following the current guide",
+		"timeAndUnblocks": "Score independently from goal fit; explicit no pressure/dependency cannot justify inflation",
+		"goalAndMove": "Read canonical KPI and full metric body, justify goal score, declare atoms-no-inline-history up, retain server baseline",
+		"effect": "One combined justified update, preserving complete brief and existing labels; actual post-write readback",
+		"repeat": "Zero writes and complete stored item/revision unchanged; quiet repetition cannot repair the original wrong judgment",
+		"availability": "Missing inference or required evidence is unscorable, not a pass",
+		"agentReadiness": "Name the required human knowledge-merge gate and reflect it in readiness; reading policy is not an effect grant."
+	},
+	"observedFailure": {
+		"route": "needs_research",
+		"time": 3,
+		"unblocks": 2,
+		"moves": [],
+		"refusals": 3,
+		"durationSeconds": 118.663
+	},
+	"limits": "A sanitized regression input and rubric, not a model runner or CI behavior gate. Raw projected streams/threads remain private; do not replay mutations against production."
+}

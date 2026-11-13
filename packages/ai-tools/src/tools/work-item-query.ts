@@ -36,6 +36,9 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 // Schemas
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Max items one work-item query returns, and max ids one query fetches. */
+export const WORK_ITEM_QUERY_MAX_LIMIT = 50;
+
 export const WorkItemQueryInputSchema = z.object({
   sortBy: z
     .enum(WORK_ITEM_SORT_FIELDS)
@@ -114,12 +117,12 @@ export const WorkItemQueryInputSchema = z.object({
     .number()
     .int()
     .min(1)
-    .max(50)
+    .max(WORK_ITEM_QUERY_MAX_LIMIT)
     .optional()
     .describe("Max results to return (default 20, max 50)"),
   ids: z
     .array(z.string().min(1))
-    .max(50)
+    .max(WORK_ITEM_QUERY_MAX_LIMIT)
     .optional()
     .describe("Fetch exactly these work item ids"),
   cursor: z

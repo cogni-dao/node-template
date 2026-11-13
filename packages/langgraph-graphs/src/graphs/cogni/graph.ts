@@ -18,6 +18,7 @@ import {
 	skillsMetadataValue,
 } from "deepagents";
 import {
+	type AnyAgentMiddleware,
 	createMiddleware,
 	MiddlewareError,
 	modelRetryMiddleware,
@@ -68,6 +69,8 @@ export function createCogniProgram(
 		readonly disableCheckpointer?: boolean;
 		readonly guardedTools?: readonly StructuredTool[];
 		readonly profile?: AgentProfile;
+		/** Program-owned native middleware; never inherited by isolated readers. */
+		readonly programMiddleware?: readonly AnyAgentMiddleware[];
 	},
 ) {
 	if (opts.disableCheckpointer && opts.guardedTools?.length)
@@ -132,6 +135,7 @@ export function createCogniProgram(
 				profile,
 				children: [],
 				guardedTools: [],
+				programMiddleware: [],
 				disableCheckpointer: true,
 			}).withConfig({ recursionLimit: 30 }),
 		};
@@ -221,6 +225,7 @@ export function createCogniProgram(
 					}
 				},
 			}),
+			...(opts.programMiddleware ?? []),
 			...(opts.program
 				? [
 						createMiddleware({

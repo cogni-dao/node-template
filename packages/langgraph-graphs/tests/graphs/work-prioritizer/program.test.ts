@@ -11,12 +11,9 @@ import {
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
-  WORK_ITEM_UPDATE_NAME,
   getCurrentTimeContract,
-  goalListContract,
-  knowledgeReadContract,
   knowledgeSearchContract,
-  workItemQueryContract,
+  WORK_ITEM_UPDATE_NAME,
   workItemReadContract,
   workItemUpdateContract,
 } from "@cogni/ai-tools";
@@ -25,6 +22,10 @@ import { LANGGRAPH_CATALOG } from "../../../src/catalog";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../../src/inproc/types";
+import {
+  emptyTriageRead,
+  triageReadContracts,
+} from "../../helpers/triage-preflight";
 
 const name = (tool: unknown): string => {
   const t = tool as { name?: string; function?: { name?: string } };
@@ -72,12 +73,10 @@ describe("work-review program tool surface", () => {
       },
       createGraph: createMissionGraph,
       completionFn,
-      createToolExecFn: (): ToolExecFn => async () => ({ ok: true, value: {} }),
+      createToolExecFn: (): ToolExecFn => emptyTriageRead,
       toolContracts: [
-        goalListContract,
-        knowledgeReadContract,
+        ...triageReadContracts,
         knowledgeSearchContract,
-        workItemQueryContract,
         workItemReadContract,
         workItemUpdateContract,
         getCurrentTimeContract,
