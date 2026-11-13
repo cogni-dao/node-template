@@ -13,7 +13,7 @@
  *   - AGENTS_HOLD_NO_WALLET (a payout guard, not an authority rule): an agent user has no wallet binding, so today it fails `adminCheck`.
  *     Admin is any principal the DAO approves (AUTHORITY_IS_NOT_KIND); an approved AI identity is item I2, so none passes yet.
  *   - DECLARED_SCOPES_FROM_CONTRACTS: the scopes a role may name are exactly those the node's tool contracts declare.
- *   - TWO_DOORS: `authorizeRoute` (tool authority, `authorize()`) and `authorizeAccount` (account data, `authorizeAccount()`). A personal scope (kind `own` or
+ *   - TWO_DOORS: `authorizeRoute` (tool authority, `authorize()`) and `authorizeAccount` (account data, `authorizeAccount()`). A personal scope (kind
  *     `account`) is turned On and Off only by the person who owns the agent (`turnPersonalOn`, `turnPersonalOff`); `grantRole` (the admin) refuses it.
  *   - NO_SECRETS_IN_LOGS: `agent_tool.authz` carries ids, tool, decision and code only.
  * Side-effects: IO (service-role database reads and writes)

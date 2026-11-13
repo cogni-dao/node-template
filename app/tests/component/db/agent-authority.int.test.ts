@@ -226,9 +226,10 @@ describe("agent authority (real Postgres)", () => {
   });
 
   describe("account scope is out of scope", () => {
-    it("ships no account-grant table or SQL function", async () => {
+    it("ships no second account-grant table; the one grant row (agent_roles) carries personal grants, read by the agent_has_scope function (task.5465)", async () => {
       expect(await service`SELECT 1 FROM information_schema.tables WHERE table_name = 'agent_capability_grants'`).toHaveLength(0);
-      expect(await service`SELECT 1 FROM pg_proc WHERE proname IN ('agent_has_scope', 'agent_grant_has_scope')`).toHaveLength(0);
+      expect(await service`SELECT 1 FROM pg_proc WHERE proname = 'agent_grant_has_scope'`).toHaveLength(0);
+      expect(await service`SELECT 1 FROM pg_proc WHERE proname = 'agent_has_scope'`).toHaveLength(1);
     });
 
     it("denies an account tool with policy_denied even with a live role", async () => {

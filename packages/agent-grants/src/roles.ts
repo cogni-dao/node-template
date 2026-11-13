@@ -95,7 +95,7 @@ export async function requestAccess(
     declaredScopes: readonly string[];
     /** Scopes an outside agent can actually use: a route twin it can call. Any other ask is refused (`no_external_door`). */
     askableScopes: readonly string[];
-    /** scope -> its declared kind. A scope not listed is a node scope. Personal kinds (`own`, `account`) need an owned agent. */
+    /** scope -> its declared kind. A scope not listed is a node scope. A personal kind (`account` today) needs an owned agent. */
     scopeKinds?: Readonly<Record<string, ScopeKind>>;
   }
 ): Promise<{ state: "pending" | "granted"; created: boolean }> {
@@ -106,7 +106,8 @@ export async function requestAccess(
     throw new AgentRolesError("no_external_door", "no route an outside agent can call uses this scope");
   const kind = input.scopeKinds?.[input.scope] ?? "node";
   let resource: GrantResource = { kind: "node" };
-  if (kind === "own" || kind === "account") {
+  // Only `account` is personal in this release. `own` (for example schedule:manage) stays an admin's node row until the S2b step moves it.
+  if (kind === "account") {
     // The row's kind is the declaration's. An unowned agent (anonymous registration, or one that predates ownership) has no one to ask.
     const ownerUserId = await store.agentOwner(input.principalUserId);
     if (!ownerUserId) throw new AgentRolesError("needs_owner", "an agent with no owner cannot ask for a personal permission");
@@ -193,7 +194,7 @@ function personalKind(
   input: { scope: string; scopeKinds: Readonly<Record<string, ScopeKind>> }
 ): PersonalScopeKind {
   const kind = input.scopeKinds[input.scope];
-  if (kind === "own" || kind === "account") return kind;
+  if (kind === "account") return kind;
   throw new AgentRolesError("invalid_scope", "scope is not a personal permission");
 }
 

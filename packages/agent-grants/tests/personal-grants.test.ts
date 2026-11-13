@@ -70,6 +70,13 @@ describe("the ask: an owned agent asks, an unowned agent cannot", () => {
     await expect(ask(s, "ownerless")).rejects.toMatchObject({ code: "needs_owner" });
     expect(s.roles).toHaveLength(0);
   });
+  it("an own-kind scope (schedule:manage) is still an admin's node row: an unowned agent can ask it", async () => {
+    const s = world();
+    const kinds = { "schedule:manage": "own" } as const;
+    expect(await requestAccess(s, { principalUserId: "ownerless", scope: "schedule:manage", declaredScopes: ["schedule:manage"], askableScopes: ["schedule:manage"], scopeKinds: kinds })).toEqual({ state: "pending", created: true });
+    expect(s.roles[0]).toMatchObject({ kind: "node", owner: null });
+    await expect(grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: "schedule:manage", scopeKinds: kinds })).rejects.toMatchObject({ code: "invalid_scope" });
+  });
   it("a personal ask does not count toward the node-wide cap", async () => {
     const s = world();
     // the node-wide cap (MAX_PENDING_TOTAL) is full of node asks, yet a personal ask still lands
