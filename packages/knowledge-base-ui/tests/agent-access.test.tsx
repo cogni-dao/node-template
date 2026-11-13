@@ -191,7 +191,7 @@ describe("AgentAccessSection: an admin", () => {
     expect(who.querySelector("span")?.textContent).toBe("outside"); // the badge is the first thing in the cell
     // No proof of a binding: say so, still badged and quoted.
     const noBinding = within(screen.getByRole("switch", { name: /^prioritizer: Refresh numbers$/ }).closest("tr")!).getAllByRole("cell")[0]!;
-    expect(noBinding.textContent).toBe("outside\u201cprioritizer\u201dNo owner");
+    expect(noBinding.textContent).toBe("outside\u201cprioritizer\u201dNo linked account");
     // This node's own AI of the same name is plain: no badge, no quotes.
     const mineRow = screen.getAllByRole("switch", { name: /^node-ai: Save notes$/ })[0]!.closest("tr")!;
     const mineCell = within(mineRow).getAllByRole("cell")[0]!;

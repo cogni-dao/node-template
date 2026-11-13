@@ -36,29 +36,19 @@ export {
 } from "./same-door";
 export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildNodeAiView } from "./node-ai";
-export { buildYourAisView } from "./your-ais";
-export { ADMIN_PAGE_PATH, approvalPath, claimPath, OWNER_PAGE_PATH } from "./approval";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
   AgentRolesError,
-  decideAsOwner,
-  DELEGABLE_SCOPES,
   denyRequest,
-  grantPersonal,
   grantRole,
   listOwnAccess,
   MAX_PENDING_PER_AGENT,
-  MAX_PENDING_PER_OWNER,
   MAX_PENDING_TOTAL,
-  PERSONAL_GRANT_TTL_DAYS,
-  personalKindFor,
   type PrincipalRef,
   requestAccess,
   type RolesErrorCode,
   resolveInternalPrincipal,
-  revokePersonal,
   revokeRole,
-  type ScopeDeclaration,
 } from "./roles";
 export type {
   AdminCheck,
@@ -67,14 +57,9 @@ export type {
   AuthzDecision,
   AuthzEvent,
   DenialCode,
-  GrantResource,
   NodeAiAccessView,
   AccessSection,
   NodeAiPermissionView,
-  OwnRoleRow,
-  PersonalRow,
-  PersonalScopeKind,
-  RequestRecord,
   RoleRow,
   RoleState,
   RunIdentity,
@@ -82,6 +67,4 @@ export type {
   SubjectRequirement,
   ToolRequires,
   WithStore,
-  YourAiAccessView,
-  YourAiPermissionView,
 } from "./types";

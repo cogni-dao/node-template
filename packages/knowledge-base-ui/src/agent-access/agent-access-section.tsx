@@ -29,36 +29,16 @@ import type { AccessSection, NodeAiPermissionView } from "@cogni/agent-grants";
 
 import { cn } from "../cn.js";
 import { Skeleton } from "../ui/skeleton.js";
-import { HIGHLIGHT_CLASS, useScrollToHighlight } from "./highlight.js";
-import { OwnerAccessSection } from "./owner-access-section.js";
-import { Switch } from "./switch.js";
 import {
   type AgentAccessEndpoints,
-  type OwnerAccessEndpoints,
   UNAVAILABLE_COPY,
   useAgentAccess,
 } from "./use-agent-access.js";
 
 export interface AgentAccessSectionProps {
-  /** Admin endpoints (`{ roles }`) render the node-admin table; owner endpoints (`{ mine, ... }`) render the person's "Your AIs". One component, two planes. */
-  readonly endpoints: AgentAccessEndpoints | OwnerAccessEndpoints;
+  readonly endpoints: AgentAccessEndpoints;
   readonly className?: string;
-  /**
-   * The id from a deep link (`?request=<id>` or `?claim=<id>`). The row with that id is scrolled to and highlighted. A link to a row this session cannot see highlights nothing.
-   */
-  readonly highlightId?: string | undefined;
 }
-
-/** The same section on both pages. Admin passes the admin endpoints; the profile passes the owner endpoints. */
-export function AgentAccessSection(props: AgentAccessSectionProps) {
-  const { endpoints, ...rest } = props;
-  return "mine" in endpoints ? (
-    <OwnerAccessSection endpoints={endpoints} {...rest} />
-  ) : (
-    <AdminAccessSection endpoints={endpoints} {...rest} />
-  );
-}
-
 
 const keyOf = (row: NodeAiPermissionView) => `${row.principalUserId}|${row.scope}`;
 
@@ -66,18 +46,10 @@ const BLOCKS: ReadonlyArray<{ section: AccessSection; title: string }> = [
   { section: "pending", title: "Asks waiting" },
   { section: "node", title: "This node's AI" },
   { section: "outside", title: "Outside agents" },
-  // An owner turned these on for their own AI. An admin cannot approve one, only turn it Off (the kill switch).
-  { section: "personal", title: "Delegated by owners" },
 ];
 
-function AdminAccessSection({
-  endpoints,
-  className,
-  highlightId,
-}: AgentAccessSectionProps & { readonly endpoints: AgentAccessEndpoints }) {
+export function AgentAccessSection({ endpoints, className }: AgentAccessSectionProps) {
   const { state, busy, error, allow, remove, dismiss, reload } = useAgentAccess(endpoints);
-  const highlighted = state.status === "ready" && highlightId ? state.view.permissions.find((r) => r.requestId === highlightId) : undefined;
-  useScrollToHighlight(highlighted ? `ask-${highlighted.requestId}` : null, state.status === "ready");
 
   // No flash: nothing renders until the server confirms an admin view or a 503.
   if (state.status === "hidden" || state.status === "loading") return null;
@@ -142,12 +114,7 @@ function AdminAccessSection({
                       const key = keyOf(row);
                       const saving = busy === key;
                       return (
-                        <tr
-                          key={key}
-                          id={row.requestId ? `ask-${row.requestId}` : undefined}
-                          aria-busy={saving || undefined}
-                          className={row.requestId && row.requestId === highlightId ? HIGHLIGHT_CLASS : undefined}
-                        >
+                        <tr key={key} aria-busy={saving || undefined}>
                           <td className="py-2 pr-3 align-top text-foreground">
                             {row.outside ? (
                               // An outside agent chose its own name. The badge comes first, the name is quoted, and the proven
@@ -159,7 +126,7 @@ function AdminAccessSection({
                                 </span>
                                 <span>&ldquo;{row.who}&rdquo;</span>
                                 <div className="text-muted-foreground text-xs">
-                                  {row.hint ?? "No owner"}
+                                  {row.hint ?? "No linked account"}
                                 </div>
                               </>
                             ) : (
@@ -172,7 +139,7 @@ function AdminAccessSection({
                             <div className="text-muted-foreground text-xs">{row.description}</div>
                           </td>
                           <td className="whitespace-nowrap py-2 pr-3 align-top text-muted-foreground">
-                            {row.section === "pending" ? "—" : row.until ? (row.section === "personal" ? new Date(row.until).toLocaleDateString() : row.until) : "No end"}
+                            {row.section === "pending" ? "—" : (row.until ?? "No end")}
                           </td>
                           <td className="h-10 py-2 text-right align-top">
                             {saving ? (
@@ -219,5 +186,33 @@ function AdminAccessSection({
         </div>
       )}
     </section>
+  );
+}
+
+/** A small switch. `locked` ignores clicks while another row saves; it never dims the switch. */
+function Switch(props: { on: boolean; label: string; locked: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={props.on}
+      aria-label={props.label}
+      aria-disabled={props.locked || undefined}
+      onClick={() => {
+        if (!props.locked) props.onToggle();
+      }}
+      className={cn(
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        props.on ? "bg-primary" : "bg-input"
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none block h-4 w-4 rounded-full bg-background shadow transition-transform",
+          props.on ? "translate-x-4" : "translate-x-0.5"
+        )}
+      />
+    </button>
   );
 }

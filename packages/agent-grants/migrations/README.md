@@ -12,10 +12,3 @@ file, and it must not copy node-template's `DROP TABLE IF EXISTS ... CASCADE`, w
 4. Run `db:check`. The journal `when` must be greater than every earlier entry.
 
 The store needs a BYPASSRLS (service role) connection: the table has no policy, so the app role sees nothing.
-
-# agent_spawn_grants migration template
-
-`agent_spawn_grants.sql` is the shape a node applies for spawn-grant registration (`createPostgresSpawnStore`): one nullable `agent_principals.owner_user_id`
-column (expand-only; existing agents stay ownerless) and the `agent_spawn_grants` table. Same rules as above: add `agentSpawnGrants` and `ownerUserId` to the node's own
-schema package, run its `db:generate`, then append only the hand-written `FORCE ROW LEVEL SECURITY` line. It needs `agent_principals` and `agent_credentials` first.
-The store needs the same BYPASSRLS (service role) connection.
