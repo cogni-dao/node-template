@@ -141,7 +141,8 @@ describe("WorkMoveLinks (the item's Moves section)", () => {
     // Under the rows, the moved metric is the Metrics page's own card row; baseline and result ride in its hint slot.
     const card = container.querySelector('[data-kpi="k-ratio"]') as HTMLElement;
     expect(card).not.toBeNull();
-    expect(card).toHaveTextContent("Baseline 0.80 → 0.90 · as expected");
+    expect(card).not.toHaveTextContent(/Baseline/);
+    // Age uses the goals read's server clock, never the reading's own time (that would always say "just now").
     expect(within(card).getByRole("button", { expanded: false })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Affected metrics" })).toBeNull();
   });
@@ -158,7 +159,10 @@ describe("WorkMoveLinks (the item's Moves section)", () => {
       ]),
     );
     // A supporting metric is the same `data-metric` card /metrics draws.
-    expect(container.querySelector('[data-metric="m-created"]')).toHaveTextContent("Baseline 0.80 → 0.90 · flat");
+    const supporting = container.querySelector('[data-metric="m-created"]') as HTMLElement;
+    expect(supporting).not.toBeNull();
+    expect(supporting).not.toHaveTextContent(/Baseline/);
+    expect(supporting).not.toHaveTextContent("just now");
   });
 
   it("opens targets through the node's link component with the entity id", async () => {
@@ -192,7 +196,7 @@ describe("WorkMoveLinks (the item's Moves section)", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("when the goals read fails, places the metric from its own read: moves and serves rows, the card, and the label's goal", async () => {
+  it("when the goals read fails, shows the rows (serves from the metric's own read) and the label's goal, but no card without a server clock", async () => {
     const fetchMetric = vi.fn(async () => ({
       definition: { id: "m-created", title: "Created in 7 days", serves: { kpi: "k-ratio", role: "input" }, spec: { cadenceSeconds: 3600 } },
       lastGood: { id: "obs", value: 12, unit: "items", observedAt: "2026-11-02T09:55:00.000Z" },
@@ -212,7 +216,7 @@ describe("WorkMoveLinks (the item's Moves section)", () => {
         "outgoing goal goal-ai-work-converges",
       ]),
     );
-    await waitFor(() => expect(container.querySelector('[data-metric="m-created"]')).toHaveTextContent("Baseline 0.80 → 0.90 · as expected"));
+    expect(container.querySelector("[data-metric], [data-kpi]")).toBeNull();
     expect(container.textContent).not.toMatch(/unavailable/i);
   });
 

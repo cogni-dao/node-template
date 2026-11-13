@@ -7,11 +7,13 @@
  *   link rows (`CitationRow`, the row an entry's Links section draws) `→ [moves ↑] <metric>`,
  *   `→ [serves] <kpi>` and `→ [goal] <goal>`, then the moved metric itself as the one
  *   `MetricCard` row the Metrics page uses, whose mark follows the metric's display type and
- *   whose click opens the same `MetricChart`. The item's pinned baseline and result ride in
- *   the card's existing hint slot. An item that moves no metric says so.
- * Scope: Read-only client component. The metric subject comes from the cached goals read
- *   (`useGoalsProgress`, shared with the Metrics page); when that read is unavailable it comes
- *   from the metric's own read (`client.fetchMetric`), which also names the KPI it serves.
+ *   whose click opens the same `MetricChart`, exactly as /metrics draws it (no work-item text
+ *   in the card). An item that moves no metric says so.
+ * Scope: Read-only client component: GET reads only, it never computes or refreshes a metric
+ *   (the scheduler owns refresh). The card's subject and its server clock come from the cached
+ *   goals read (`useGoalsProgress`, shared with the Metrics page); when that read is unavailable
+ *   the rows still show, with `serves` from the metric's own read (`client.fetchMetric`), and no
+ *   card is drawn because ages and history windows need a server clock.
  * Invariants:
  *   - ONE_ROW_RENDERER: link rows are `CitationRow`; the measurement is `MetricCard`; no bespoke layout.
  *   - GOAL_IS_INHERITED: moved KPI's goal, else the serving KPI's goal, else the goal label.
@@ -35,12 +37,11 @@ import {
   CitationRow,
   DefaultCitationLink,
 } from "../citation-links.js";
-import { type WorkMetric, workMetricArrow, workMetricVerdict } from "../work-metrics.js";
+import { type WorkMetric, workMetricArrow } from "../work-metrics.js";
 import { useGoalsHost } from "./context.js";
 import { MetricCard } from "./metric-card.js";
 import { MetricChart } from "./metric-chart.js";
-import { kpiSubject, type MetricSubject, readSubject, rowSubject } from "./metric-subject.js";
-import { formatNumber } from "./presentation.js";
+import { kpiSubject, type MetricSubject, rowSubject } from "./metric-subject.js";
 import { useGoalsProgress } from "./use-goals-progress.js";
 import { goalIdFromLabels, locateMetric, type MoveChain } from "./work-goals.js";
 
@@ -78,27 +79,14 @@ export function moveRows(
   return rows;
 }
 
-type Reading = WorkMetric["baseline"];
-
-function readingNumber(reading: Reading, withUnit: boolean): string {
-  if (!reading || reading.value === null || reading.value === undefined) return "—";
-  const unit = withUnit && reading.unit && reading.unit !== "ratio" ? ` ${reading.unit}` : "";
-  return `${formatNumber(reading.value, reading.unit)}${unit}`;
-}
-
-/** "Baseline 8 items → 8 · flat": the item's pinned baseline, its latest reading and the result. */
-export function moveNote(move: WorkMetric): string {
-  return `Baseline ${readingNumber(move.baseline, true)} → ${readingNumber(move.current, false)} · ${workMetricVerdict(move)}`;
-}
-
 /** One moved metric: the Metrics page's `MetricCard` row, opening the same chart on click. */
-function MovedMetric({ subject, nowIso, note }: { readonly subject: MetricSubject; readonly nowIso: string; readonly note: string }) {
+function MovedMetric({ subject, nowIso }: { readonly subject: MetricSubject; readonly nowIso: string }) {
   const { hrefs } = useGoalsHost();
   const [open, setOpen] = useState(false);
   const chartId = useId();
   return (
     <div data-moved-metric={subject.id} className="space-y-2">
-      <MetricCard subject={subject} nowIso={nowIso} open={open} chartId={chartId} wrap variant="row" note={note} onToggle={() => setOpen(!open)} />
+      <MetricCard subject={subject} nowIso={nowIso} open={open} chartId={chartId} wrap variant="row" onToggle={() => setOpen(!open)} />
       {open && (
         <div id={chartId} className="pl-3">
           <MetricChart subject={subject} nowIso={nowIso} href={hrefs.metric(subject.id)} />
@@ -134,11 +122,10 @@ function MoveEntry({
     ? chain.kind === "kpi"
       ? kpiSubject(chain.kpi)
       : rowSubject(chain.row)
-    : read.data
-      ? readSubject(read.data, move.metricId)
-      : null;
-  // Windows and ages use a server clock: the goals read's, else the reading's own time.
-  const nowIso = goals.data?.asOf ?? read.data?.lastGood?.observedAt ?? move.current?.observedAt ?? null;
+    : null;
+  // Ages and history windows need a server clock: the goals read's `asOf`. Never a reading's own time
+  // (that makes every age "just now") and never the browser clock; without it no card is drawn.
+  const nowIso = goals.data?.asOf ?? null;
   return (
     <div className="flex flex-col gap-2">
       <div className={CITATION_LIST_CLASS}>
@@ -154,7 +141,7 @@ function MoveEntry({
           />
         ))}
       </div>
-      {subject && nowIso && <MovedMetric subject={subject} nowIso={nowIso} note={moveNote(move)} />}
+      {subject && nowIso && <MovedMetric subject={subject} nowIso={nowIso} />}
     </div>
   );
 }
