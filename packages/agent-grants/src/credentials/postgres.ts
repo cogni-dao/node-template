@@ -41,17 +41,13 @@ const iso = (value: unknown): string => {
 };
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/**
- * The `agent_roles` read (node-template): an approved, unrevoked, unexpired NODE role row. A personal row (an owner's delegation) is not a node role, so it never changes the
- * key-upgrade binding rule. The operator injects its OpenFGA read instead.
- */
+/** The `agent_roles` read (node-template): an approved, unrevoked role row. The operator injects its OpenFGA read instead. */
 export const agentRolesHasRoles =
   (client: SqlTag): HasRoles =>
   async (userId) => {
     const rows = await client`
       SELECT EXISTS (SELECT 1 FROM agent_roles r WHERE r.principal_user_id = ${userId}
-                       AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND r.resource_kind = 'node'
-                       AND (r.expires_at IS NULL OR r.expires_at > now())) AS has_roles`;
+                       AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL) AS has_roles`;
     return rows[0]?.has_roles === true;
   };
 
@@ -60,14 +56,11 @@ export interface PostgresCredentialStoreOptions {
   readonly hasRoles: HasRoles;
 }
 
-/**
- * FAIL_CLOSED_ON_WRONG_ROLE: a function that resolves only when the connection role bypasses RLS (`rolbypassrls` or superuser), else throws.
- * Cached per call site, success only: a wrong role keeps failing every call and is re-checked, never cached as fine. Shared by every store in this
- * subpath, because each reads or writes a FORCE RLS table with no policy.
- */
-export function createBypassRlsAssertion(client: SqlTag): () => Promise<void> {
+export function createPostgresCredentialStore(client: CredentialSql, options: PostgresCredentialStoreOptions): CredentialStore {
+  const { hasRoles } = options;
+  // Cached per store instance, success only: a wrong role keeps failing every call and is re-checked, never cached as fine.
   let bypassVerified: Promise<void> | undefined;
-  return () => {
+  const assertBypassRls = (): Promise<void> => {
     bypassVerified ??= (async () => {
       const rows = await client`SELECT (rolbypassrls OR rolsuper) AS bypass FROM pg_roles WHERE rolname = current_user`;
       if (rows[0]?.bypass !== true) throw new Error("credential store role lacks BYPASSRLS");
@@ -77,31 +70,20 @@ export function createBypassRlsAssertion(client: SqlTag): () => Promise<void> {
     });
     return bypassVerified;
   };
-}
-
-/**
- * Insert one pending credential for `userId`. The ONE insert both the credential store and the spawn-grant store use, so a key made by
- * either has the same lifetimes. Runs inside the caller's transaction. Exported for `spawn-postgres.ts` only (not from the package index).
- */
-export async function insertPendingCredential(
-  tx: SqlTag,
-  row: { userId: string; tokenHash: string; createdFrom: string; predecessorId: string | null; policy: CredentialPolicy }
-): Promise<IssueResult> {
-  const { userId, tokenHash, createdFrom, predecessorId, policy: p } = row;
-  const rows = await tx`
-    INSERT INTO agent_credentials (user_id, token_hash, created_from, predecessor_id, expires_at, renew_until, pending_expires_at)
-    VALUES (${userId}, ${tokenHash}, ${createdFrom}, ${predecessorId},
-      now() + (${p.ttlSec}::int * interval '1 second'),
-      now() + ((${p.ttlSec}::int + ${p.renewWindowSec}::int) * interval '1 second'),
-      now() + (${p.pendingSec}::int * interval '1 second'))
-    RETURNING id, pending_expires_at`;
-  return { ok: true, credentialId: text(rows[0]?.id), userId, pendingExpiresAt: iso(rows[0]?.pending_expires_at) };
-}
-
-export function createPostgresCredentialStore(client: CredentialSql, options: PostgresCredentialStoreOptions): CredentialStore {
-  const { hasRoles } = options;
-  const assertBypassRls = createBypassRlsAssertion(client);
-  const insertPending = insertPendingCredential;
+  const insertPending = async (
+    tx: SqlTag,
+    row: { userId: string; tokenHash: string; createdFrom: string; predecessorId: string | null; policy: CredentialPolicy }
+  ): Promise<IssueResult> => {
+    const { userId, tokenHash, createdFrom, predecessorId, policy: p } = row;
+    const rows = await tx`
+      INSERT INTO agent_credentials (user_id, token_hash, created_from, predecessor_id, expires_at, renew_until, pending_expires_at)
+      VALUES (${userId}, ${tokenHash}, ${createdFrom}, ${predecessorId},
+        now() + (${p.ttlSec}::int * interval '1 second'),
+        now() + ((${p.ttlSec}::int + ${p.renewWindowSec}::int) * interval '1 second'),
+        now() + (${p.pendingSec}::int * interval '1 second'))
+      RETURNING id, pending_expires_at`;
+    return { ok: true, credentialId: text(rows[0]?.id), userId, pendingExpiresAt: iso(rows[0]?.pending_expires_at) };
+  };
 
   const store: CredentialStore = {
     async lookup(tokenHash): Promise<CredentialLookup | null> {

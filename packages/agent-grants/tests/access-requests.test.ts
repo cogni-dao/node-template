@@ -46,12 +46,12 @@ describe("pending vs live: a pending ask opens no lock", () => {
 describe("requestAccess (the agent asks for itself)", () => {
   it("writes one pending row for the caller, is idempotent, and reports a live row as granted", async () => {
     const s = store();
-    expect(await requestAccess(s, { principalUserId: "agent", scope: "work_item:transition", declaredScopes, askableScopes })).toMatchObject({ state: "pending", created: true });
-    expect(await requestAccess(s, { principalUserId: "agent", scope: "work_item:transition", declaredScopes, askableScopes })).toMatchObject({ state: "pending", created: false });
+    expect(await requestAccess(s, { principalUserId: "agent", scope: "work_item:transition", declaredScopes, askableScopes })).toEqual({ state: "pending", created: true });
+    expect(await requestAccess(s, { principalUserId: "agent", scope: "work_item:transition", declaredScopes, askableScopes })).toEqual({ state: "pending", created: false });
     expect(s.roles).toHaveLength(1);
     expect(s.roles[0]).toMatchObject({ principal: "agent", approvedBy: null });
     await grantRole(s, { principalUserId: "agent", scope: "work_item:transition", approvedBy: "admin-1", declaredScopes });
-    expect(await requestAccess(s, { principalUserId: "agent", scope: "work_item:transition", declaredScopes, askableScopes })).toMatchObject({ state: "granted", created: false });
+    expect(await requestAccess(s, { principalUserId: "agent", scope: "work_item:transition", declaredScopes, askableScopes })).toEqual({ state: "granted", created: false });
   });
   it("rejects an undeclared scope before any write, and caps open asks", async () => {
     const s = store();
@@ -87,7 +87,7 @@ describe("flood bounds and honest asks", () => {
     const roles = Array.from({ length: MAX_PENDING_TOTAL }, (_, i) => ({ principal: `bot-${i}`, scope: "edo:write", pending: true }));
     const s = memoryStore({ roles });
     await expect(requestAccess(s, { principalUserId: "late-bot", scope: "edo:write", declaredScopes, askableScopes })).rejects.toMatchObject({ code: "too_many_requests" });
-    expect(await requestAccess(s, { principalUserId: "bot-0", scope: "edo:write", declaredScopes, askableScopes })).toMatchObject({ state: "pending", created: false });
+    expect(await requestAccess(s, { principalUserId: "bot-0", scope: "edo:write", declaredScopes, askableScopes })).toEqual({ state: "pending", created: false });
     // an admin clearing one makes room
     await denyRequest(s, { principalUserId: "bot-1", scope: "edo:write" });
     expect((await requestAccess(s, { principalUserId: "late-bot", scope: "edo:write", declaredScopes, askableScopes })).created).toBe(true);

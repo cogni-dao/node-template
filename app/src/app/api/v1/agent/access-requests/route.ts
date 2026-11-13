@@ -12,8 +12,6 @@
  *   - NO_SELF_APPROVAL: the ask writes a row with no approver. It opens no lock. Only an admin session on the human roles
  *     route sets an approver.
  *   - The ask door is open by design: any authenticated bearer may ask with no prior grant (OPEN_BY_DESIGN_ROUTES).
- *   - APPROVAL_URL: every answer carries `approvalUrl`, the page of THIS ask. An owned agent asking for a delegable scope (`knowledge:read`, `knowledge:contribute`)
- *     gets its owner's profile page; every other ask gets the Admin page. The origin comes from config, never from the Host header.
  *   - NODE_DECLARED_SCOPES: an undeclared scope is 400 `invalid_scope`; a scope no route an outside agent can call uses is 400
  *     `no_external_door`. Open asks are capped per agent and across the node (429).
  *   - Idempotent: asking again for a pending or live scope returns 200 with `created: false`.
@@ -29,7 +27,6 @@ import {
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
-import { configuredUrl } from "@/app/_lib/agent-access/setup-line";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -60,13 +57,8 @@ export const POST = wrapRouteHandlerWithLogging(
         principalUserId: sessionUser.id,
         scope: parsed.data.scope,
       });
-      const { approvalPath, ...answer } = result;
       return json(
-        agentAccessRequestCreateOperation.output.parse({
-          scope: parsed.data.scope,
-          ...answer,
-          approvalUrl: approvalPath ? configuredUrl(approvalPath) : null,
-        }),
+        agentAccessRequestCreateOperation.output.parse({ scope: parsed.data.scope, ...result }),
         result.created ? 201 : 200
       );
     } catch (error) {
@@ -86,11 +78,7 @@ export const GET = wrapRouteHandlerWithLogging(
     if (sessionUser.via !== "bearer") return json({ error: "not_found" }, 404);
     try {
       const requests = await getContainer().agentAuthority.listOwnAccess(sessionUser.id);
-      return json(
-        agentAccessRequestListOperation.output.parse({
-          requests: requests.map(({ approvalPath, ...row }) => ({ ...row, ...(approvalPath ? { approvalUrl: configuredUrl(approvalPath) } : {}) })),
-        })
-      );
+      return json(agentAccessRequestListOperation.output.parse({ requests }));
     } catch {
       return json({ error: "authz_unavailable" }, 503);
     }

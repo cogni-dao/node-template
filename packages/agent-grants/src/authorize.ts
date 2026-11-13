@@ -12,17 +12,13 @@
  *     agents included). `admin` means a principal the DAO approved (AUTHORITY_IS_NOT_KIND); until the AI-admin item (I2)
  *     ships no AI identity is approved, so an agent fails `admin` checks and passes `member` checks.
  *   - FAIL_CLOSED_ON_UNKNOWN: a `kind` outside node|own|account or a `subject` outside member|admin is `policy_denied`.
- *   - NO_ACCOUNT_SCOPE: `authorize()` never answers for account data; an `account` tool is denied with `policy_denied`.
- *   - PERSONAL_DELEGATION: a bearer passes a scope with a live NODE row (an admin approved) OR, when the scope is on the delegable list and its DECLARED subject is `member`, a live
- *     personal `delegated` row its OWNER approved (the agent is owned by that owner, the row is not revoked and has not ended). The agent stays the principal; the allow names the owner.
- *     A scope that needs a node-admin (subject `admin`) opens only on a node row, and a personal row never satisfies `adminCheck`.
+ *   - NO_ACCOUNT_SCOPE: account scopes are out of scope; an `account` tool is denied with `policy_denied`.
  *   - FAIL_CLOSED_NON_DISCLOSING: a store or admin outage is `authz_unavailable`, never an allow.
  *   - NEVER_CACHED: every call reads the store.
  * Side-effects: IO (store reads)
  * @public
  */
 
-import { DELEGABLE_SCOPES } from "./roles";
 import type {
   AdminCheck,
   AgentGrantsStore,
@@ -34,11 +30,6 @@ export interface AuthorizeInput {
   readonly principalId?: string | undefined;
   readonly subjectUserId?: string | undefined;
   readonly requires: ToolRequires;
-  /**
-   * The route door for a bearer: an `admin`-subject scope passes on its node row alone (the DAO admin who wrote it was the check; an agent has no admin
-   * wallet). Skips the subject admin check; it does NOT let a personal row open an `admin`-subject scope.
-   */
-  readonly adminSubjectWaived?: boolean | undefined;
 }
 
 const KINDS: ReadonlySet<string> = new Set(["node", "own", "account"]);
@@ -82,18 +73,12 @@ export async function authorizePrincipalLock(
   if (early) return early;
   if (!principalId) return deny("no_principal");
   try {
-    if (await store.hasLiveRole(principalId, requires.scope))
-      return { decision: "allow", basis: "role" };
-    // PERSONAL_DELEGATION: no node row. A delegable scope (declared `member`, a node scope) can also be opened by the agent's OWNER.
-    if (requires.subject === "member" && requires.kind === "node" && DELEGABLE_SCOPES.includes(requires.scope)) {
-      const owner = await store.agentOwner(principalId);
-      if (owner && (await store.hasLiveRole(principalId, requires.scope, { kind: "delegated", ownerUserId: owner })))
-        return { decision: "allow", basis: "personal_grant", owner };
-    }
-    return deny("no_role");
+    if (!(await store.hasLiveRole(principalId, requires.scope)))
+      return deny("no_role");
   } catch {
     return unavailable("store_unavailable");
   }
+  return { decision: "allow", basis: "role" };
 }
 
 export async function authorize(
@@ -106,7 +91,7 @@ export async function authorize(
   if (lock.decision === "deny") return lock;
   if (requires.kind === "own" && !subjectUserId) return deny("no_subject");
 
-  if (subjectUserId && requires.subject === "admin" && input.adminSubjectWaived !== true) {
+  if (subjectUserId && requires.subject === "admin") {
     let admin: Awaited<ReturnType<AdminCheck>>;
     try {
       admin = await adminCheck(subjectUserId);
@@ -116,5 +101,5 @@ export async function authorize(
     if (admin === "unavailable") return unavailable("no_admin_authority");
     if (admin !== "allow") return deny("subject_not_admin");
   }
-  return lock;
+  return { decision: "allow", basis: "role" };
 }
