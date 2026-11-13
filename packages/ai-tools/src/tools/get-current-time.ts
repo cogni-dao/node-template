@@ -14,7 +14,7 @@
  *   - NO LangChain imports (LangChain wrapping in langgraph-graphs)
  * Side-effects: none
  * Notes: Per TOOL_USE_SPEC.md P0 first tool requirement
- * Links: TOOL_USE_SPEC.md, LANGGRAPH_AI.md
+ * Links: TOOL_USE_SPEC.md, https://node-template.cognidao.org/knowledge/graph-execution-invariants
  * @public
  */
 

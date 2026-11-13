@@ -9,7 +9,7 @@
  * Pure navigation data is exported separately from `./cognition-navigation`;
  * import that subpath without loading this Drizzle/schema root. It is not a seed.
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, docs/spec/knowledge-syntropy.md
+ * Links: docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @public
  */
 

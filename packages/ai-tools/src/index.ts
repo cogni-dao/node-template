@@ -7,7 +7,7 @@
  * Scope: Re-exports all public types from submodules. Does NOT import @langchain.
  * Invariants: SINGLE_SOURCE_OF_TRUTH - these are the canonical tool definitions.
  * Side-effects: none
- * Links: LANGGRAPH_AI.md, TOOL_USE_SPEC.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants, TOOL_USE_SPEC.md
  * @public
  */
 

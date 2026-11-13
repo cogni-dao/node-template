@@ -10,7 +10,7 @@ import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
  *   Reads via container.knowledgeStorePort.getKnowledge.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_NEEDS_GRANT.
  * Side-effects: IO (HTTP response, Doltgres read via container port)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @public
  */
 

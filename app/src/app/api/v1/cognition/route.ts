@@ -26,7 +26,7 @@
  *   - NO_GOAL_PROGRESS: goal KPI readings are not bootstrap; agents read them
  *     live from /api/v1/metrics/goals.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
- * Links: docs/spec/node-baas-architecture.md, docs/spec/knowledge-syntropy.md
+ * Links: docs/spec/node-baas-architecture.md, https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @public
  */
 

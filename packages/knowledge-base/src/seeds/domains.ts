@@ -8,7 +8,7 @@
  * Scope: Seed data definitions only. Does not perform I/O — the migrator (or first-write path on candidate-a) applies these.
  * Invariants: Domain `id`s are stable identifiers. New domains are append-only and registered explicitly per knowledge-syntropy.
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @public
  */
 

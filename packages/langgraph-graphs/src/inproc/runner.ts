@@ -15,7 +15,7 @@
  *   - ERROR_NORMALIZATION_ONCE: Catch block uses normalizeErrorToExecutionCode()
  *   - USAGE_AGGREGATION_PER_RUN: Usage aggregated from usage_report events, not LLM instance
  * Side-effects: IO (executes graph, emits events)
- * Links: LANGGRAPH_AI.md, ERROR_HANDLING_ARCHITECTURE.md, GRAPH_EXECUTION.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants, ERROR_HANDLING_ARCHITECTURE.md, GRAPH_EXECUTION.md
  * @public
  */
 

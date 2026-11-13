@@ -7,7 +7,7 @@
  * Scope: Build tooling only; does not contain runtime code.
  * Invariants: Output is ESM. Mirrors `@cogni/knowledge-store` shape — single entry point, no declarations from tsup (tsc -b emits them).
  * Side-effects: IO
- * Links: docs/spec/knowledge-data-plane.md, docs/spec/knowledge-syntropy.md
+ * Links: docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @internal
  */
 

@@ -13,7 +13,7 @@
  *   - THROWS_AI_EXECUTION_ERROR: On completion failure, throws AiExecutionError with structured code
  *   - THROWS_FAST_IF_MISSING: Throws immediately if ALS context or model missing
  * Side-effects: none (effects via ALS-injected deps)
- * Links: LANGGRAPH_AI.md, ERROR_HANDLING_ARCHITECTURE.md, GRAPH_EXECUTION.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants, ERROR_HANDLING_ARCHITECTURE.md, GRAPH_EXECUTION.md
  * @public
  */
 

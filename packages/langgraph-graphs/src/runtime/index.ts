@@ -9,7 +9,7 @@
  *   - CORE_NO_ALS: core/ modules have no ALS dependencies
  *   - COGNI_USES_ALS: cogni/ modules use CogniExecContext (AsyncLocalStorage)
  * Side-effects: none
- * Links: LANGGRAPH_AI.md, TOOL_USE_SPEC.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants, TOOL_USE_SPEC.md
  * @public
  */
 

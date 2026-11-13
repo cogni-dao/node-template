@@ -13,7 +13,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 
 ## Pointers
 
-- [LangGraph AI Guide](../../docs/spec/langgraph-patterns.md)
+- [LangGraph AI Guide](https://node-template.cognidao.org/knowledge/graph-execution-invariants)
 - [Graph Execution](../../docs/spec/graph-execution.md)
 - [Tool Use Spec](../../docs/spec/tool-use.md)
 - [Packages Architecture](../../docs/spec/packages-architecture.md)

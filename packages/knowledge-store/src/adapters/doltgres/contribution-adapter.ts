@@ -31,7 +31,7 @@
  *     recompute in one Dolt commit on the branch. Mirrors EdoCapability's
  *     four-beat semantics but on `contrib/*`, not `main` (EDO_BEARER_VIA_CONTRIB_BRANCH).
  * Side-effects: IO (database reads/writes, dolt branch ops)
- * Links: docs/design/knowledge-contribution-api.md, docs/spec/knowledge-data-plane.md, docs/spec/knowledge-syntropy.md
+ * Links: docs/design/knowledge-contribution-api.md, docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @public
  */
 

@@ -9,7 +9,7 @@
  *   - CONFIDENCE_CLAMPED: 0–100; null renders the neutral placeholder. Anchors: < 30 draft · 30–60 candidate · 60–80 established · 80–95 canonical · 95+ hardened, all on the semantic CSS-var palette.
  *   - COPY_DOES_NOT_SELECT: the copy button stops propagation, so it lives inside a clickable row.
  * Side-effects: clipboard write (copy button)
- * Links: task.0059, docs/spec/knowledge-syntropy.md
+ * Links: task.0059, https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @public
  */
 
