@@ -20,6 +20,8 @@ function setup(options?: {
 	historical?: boolean;
 	display?: "volume";
 	override?: "progress" | "slo";
+	/** Give definitions a revision token, as the knowledge store's HEAD commit. */
+	revisioned?: boolean;
 }) {
 	let time = new Date("2026-10-30T12:00:00Z");
 	const windows: Array<{ start: string; end: string }> = [];
@@ -27,6 +29,13 @@ function setup(options?: {
 	let authorityFailure = false;
 	let deniedRevision: string | null = null;
 	let reads = 0;
+	let lists = 0;
+	let attemptReads = 0;
+	let revision: string | (() => never) = "head-1";
+	let sweeps = 0;
+	const prunes: Array<{ before: string; limit: number }> = [];
+	let pruneFailure = false;
+	let listFailure = false;
 	let sourceFailure = false;
 	const d: MetricDefinition = {
 		id: "open-work",
@@ -110,11 +119,19 @@ function setup(options?: {
 			return snapshots.get(id) ?? null;
 		},
 		async scheduledAttempts(id, hash, slot) {
+			attemptReads++;
 			return (await this.history(id, hash, 100))
 				.filter((r) => r.scheduledFor === slot)
 				.slice(0, 4);
 		},
-		async expireLeases() {},
+		async expireLeases() {
+			sweeps++;
+		},
+		async pruneAttempts(before, limit) {
+			prunes.push({ before, limit });
+			if (pruneFailure) throw new Error("permission denied");
+			return 0;
+		},
 		async cursor() {
 			return cursor;
 		},
@@ -145,13 +162,23 @@ function setup(options?: {
 				return sample;
 			}),
 	});
-	const service = createMetricService({
+	const make = () => createMetricService({
 		definitions: {
 			get: async (id) => (id === d.id ? d : null),
-			list: async (_limit, after) => ({
-				items: !after || d.id > after ? [d] : [],
-				nextCursor: null,
-			}),
+			list: async (_limit, after) => {
+				lists++;
+				if (listFailure) throw new Error("dolt offline");
+				return {
+					items: !after || d.id > after ? [d] : [],
+					nextCursor: null,
+				};
+			},
+			...(options?.revisioned
+				? {
+						revision: async () =>
+							typeof revision === "function" ? revision() : revision,
+					}
+				: {}),
 		},
 		observations: port,
 		registry,
@@ -162,8 +189,11 @@ function setup(options?: {
 			return allowed && definition.revision !== deniedRevision;
 		},
 	});
+	const service = make();
 	return {
 		service,
+		/** A second replica: its own refresh clock over the same stores. */
+		replica: make,
 		port,
 		d,
 		snapshots,
@@ -172,6 +202,24 @@ function setup(options?: {
 			deniedRevision = revision;
 		},
 		reads: () => reads,
+		lists: () => lists,
+		attemptReads: () => attemptReads,
+		setRevision: (value: string) => {
+			revision = value;
+		},
+		failRevision: () => {
+			revision = () => {
+				throw new Error("dolt offline");
+			};
+		},
+		sweeps: () => sweeps,
+		prunes,
+		failPrune: (value: boolean) => {
+			pruneFailure = value;
+		},
+		failList: (value: boolean) => {
+			listFailure = value;
+		},
 		failSource: (value: boolean) => {
 			sourceFailure = value;
 		},
@@ -341,7 +389,170 @@ describe("measurement evidence contract", () => {
 			observationId: baseline.id,
 		});
 	});
-	it("recovers the refresh cursor on the next real tick", async () => {
+	it("does no definition or attempt reads on an idle tick", async () => {
+		const s = setup({ revisioned: true });
+		const first = await s.service.refreshDue();
+		expect(first).toMatchObject({ scanned: 1, due: 1 });
+		expect([s.lists(), s.attemptReads(), s.reads()]).toEqual([1, 1, 1]);
+		s.advance(30000);
+		const idle = await s.service.refreshDue();
+		expect(idle).toMatchObject({ scanned: 1, due: 0, observations: [] });
+		expect([s.lists(), s.attemptReads(), s.reads()]).toEqual([1, 1, 1]);
+		s.advance(30000);
+		const next = await s.service.refreshDue();
+		expect(next.observations[0]?.status).toBe("ok");
+		expect([s.lists(), s.attemptReads(), s.reads()]).toEqual([1, 2, 2]);
+	});
+	it("reloads definitions when the revision moves and measures an edited series at once", async () => {
+		const s = setup({ revisioned: true });
+		s.d.spec.cadenceSeconds = 3600;
+		await s.service.refreshDue();
+		s.advance(60000);
+		await s.service.refreshDue();
+		expect([s.lists(), s.reads()]).toEqual([1, 1]);
+		s.d.spec = { ...s.d.spec, params: { edited: true } };
+		s.setRevision("head-2");
+		// The token is trusted for five minutes; the edit lands at the next read.
+		s.advance(180000);
+		await s.service.refreshDue();
+		expect(s.lists()).toBe(1);
+		s.advance(60000);
+		const edited = await s.service.refreshDue();
+		expect(edited.observations[0]?.status).toBe("ok");
+		expect([s.lists(), s.reads()]).toEqual([2, 2]);
+	});
+	it("answers an idle tick in memory only while nothing is due and the token is trusted", async () => {
+		const s = setup({ revisioned: true });
+		s.d.spec.cadenceSeconds = 3600;
+		expect(s.service.idleTick()).toBeNull();
+		await s.service.refreshDue();
+		s.advance(30000);
+		expect(s.service.idleTick()).toMatchObject({ scanned: 1, due: 0 });
+		expect([s.lists(), s.attemptReads(), s.reads()]).toEqual([1, 1, 1]);
+		// An expired token is re-read in the background; the tick still answers idle.
+		s.advance(270000);
+		expect(s.service.idleTick()).not.toBeNull();
+		await new Promise((r) => setTimeout(r, 0));
+		expect(s.service.idleTick()).not.toBeNull();
+		expect(s.lists()).toBe(1);
+		// A changed token marks the clock stale; the next tick reloads.
+		s.setRevision("head-2");
+		s.advance(300000);
+		expect(s.service.idleTick()).not.toBeNull();
+		await new Promise((r) => setTimeout(r, 0));
+		expect(s.service.idleTick()).toBeNull();
+		await s.service.refreshDue();
+		expect(s.lists()).toBe(2);
+		expect(s.service.idleTick()).not.toBeNull();
+		s.advance(3000000);
+		expect(s.service.idleTick()).toBeNull();
+	});
+	it("retries a failed reload on the next tick instead of trusting stale definitions", async () => {
+		const s = setup({ revisioned: true });
+		s.d.spec.cadenceSeconds = 3600;
+		await s.service.refreshDue();
+		s.setRevision("head-2");
+		s.failList(true);
+		s.advance(300000);
+		await expect(s.service.refreshDue()).rejects.toThrow();
+		expect(s.service.idleTick()).toBeNull();
+		s.failList(false);
+		s.advance(60000);
+		await s.service.refreshDue();
+		expect(s.service.idleTick()).not.toBeNull();
+	});
+	it("recovers the idle path after a failed background read finds the same token", async () => {
+		const s = setup({ revisioned: true });
+		s.d.spec.cadenceSeconds = 3600;
+		await s.service.refreshDue();
+		s.failRevision();
+		s.advance(300000);
+		expect(s.service.idleTick()).not.toBeNull();
+		await new Promise((r) => setTimeout(r, 0));
+		expect(s.service.idleTick()).toBeNull();
+		s.setRevision("head-1");
+		s.advance(60000);
+		await s.service.refreshDue();
+		expect(s.lists()).toBe(1);
+		expect(s.service.idleTick()).not.toBeNull();
+	});
+	it("never answers idle without a revision token", async () => {
+		const s = setup();
+		await s.service.refreshDue();
+		s.advance(1000);
+		expect(s.service.idleTick()).toBeNull();
+	});
+	it("reloads definitions every tick without a revision token, or when it fails", async () => {
+		const plain = setup();
+		await plain.service.refreshDue();
+		plain.advance(30000);
+		await plain.service.refreshDue();
+		expect([plain.lists(), plain.reads()]).toEqual([2, 1]);
+		const failing = setup({ revisioned: true });
+		failing.failRevision();
+		await failing.service.refreshDue();
+		failing.advance(30000);
+		const idle = await failing.service.refreshDue();
+		expect(idle.due).toBe(0);
+		expect([failing.lists(), failing.reads()]).toEqual([2, 1]);
+	});
+	it("runs maintenance on due ticks and hourly when idle, pruning old failed attempts", async () => {
+		const s = setup({ revisioned: true });
+		s.d.spec.cadenceSeconds = 86400;
+		const first = await s.service.refreshDue();
+		expect(first.pruned).toBe(0);
+		expect(s.sweeps()).toBe(1);
+		expect(s.prunes).toEqual([
+			{ before: "2026-09-30T12:00:00.000Z", limit: 500 },
+		]);
+		for (let minute = 1; minute < 60; minute++) {
+			s.advance(60000);
+			await s.service.refreshDue();
+		}
+		expect([s.sweeps(), s.prunes.length, s.attemptReads()]).toEqual([1, 1, 1]);
+		s.advance(60000);
+		await s.service.refreshDue();
+		expect([s.sweeps(), s.prunes.length]).toEqual([2, 2]);
+		expect(s.reads()).toBe(1);
+	});
+	it("measures due metrics when retention fails, and retries retention an hour later", async () => {
+		const s = setup({ revisioned: true });
+		s.failPrune(true);
+		const first = await s.service.refreshDue();
+		expect(first).toMatchObject({ pruneFailed: true, pruned: 0 });
+		expect(first.observations[0]?.status).toBe("ok");
+		s.advance(60000);
+		const next = await s.service.refreshDue();
+		expect(next.pruneFailed).toBe(false);
+		expect(next.observations[0]?.status).toBe("ok");
+		expect(s.prunes.length).toBe(1);
+		s.advance(3600000);
+		await s.service.refreshDue();
+		expect(s.prunes.length).toBe(2);
+	});
+	it("prunes at most hourly even when metrics are due every minute", async () => {
+		const s = setup({ revisioned: true });
+		for (let minute = 0; minute < 61; minute++) {
+			await s.service.refreshDue();
+			s.advance(60000);
+		}
+		expect(s.sweeps()).toBe(61);
+		expect(s.prunes.length).toBe(2);
+	});
+	it("never measures one slot twice across replicas with separate clocks", async () => {
+		const s = setup({ revisioned: true });
+		s.d.spec.cadenceSeconds = 3600;
+		const other = s.replica();
+		await s.service.refreshDue();
+		s.advance(60000);
+		const second = await other.refreshDue();
+		expect(second.due).toBe(1);
+		expect(second.observations).toEqual([]);
+		s.advance(60000);
+		await other.refreshDue();
+		expect([s.reads(), s.attemptReads()]).toEqual([1, 2]);
+	});
+	it("refreshes the series on each new slot", async () => {
 		const s = setup();
 		const first = await s.service.refreshDue();
 		expect(first.scanned).toBe(1);

@@ -439,6 +439,13 @@ export class PostgresMetricObservations implements MetricObservationsPort {
       WHERE scope=${this.key} AND status='pending' AND lease_expires_at<clock_timestamp()
       AND id IN (SELECT id FROM metric_observations WHERE scope=${this.key} AND status='pending' AND lease_expires_at<clock_timestamp() ORDER BY lease_expires_at LIMIT 20 FOR UPDATE SKIP LOCKED)`;
 	}
+	async pruneAttempts(before: string, limit: number) {
+		const rows = await this
+			.sql`DELETE FROM metric_observations WHERE id IN (SELECT id FROM metric_observations WHERE scope=${this.key} AND status IN ('error','unavailable') AND scheduled_for IS NOT NULL
+        AND scheduled_for + (COALESCE((snapshot->'spec'->>'cadenceSeconds')::int,0) * interval '1 second') < ${before}::timestamptz
+        ORDER BY scheduled_for LIMIT ${limit} FOR UPDATE SKIP LOCKED) RETURNING id`;
+		return rows.length;
+	}
 	async cursor() {
 		const [row] = await this
 			.sql`SELECT last_metric_id FROM metric_refresh_cursors WHERE scope=${this.key}`;

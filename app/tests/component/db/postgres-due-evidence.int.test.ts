@@ -197,4 +197,32 @@ describe("due evidence selection against PostgreSQL", () => {
 			});
 		},
 	);
+	it("prunes only failed scheduled attempts whose slot ended before retention, in its own scope", async () => {
+		await sql`DELETE FROM metric_observations`;
+		await sql`ALTER TABLE metric_observations ADD COLUMN IF NOT EXISTS scheduled_for timestamptz`;
+		const old = "2026-09-01T12:00:00.000Z";
+		const hourly = { ...definition, spec: { ...definition.spec, cadenceSeconds: 3600 } };
+		const yearly = { ...definition, spec: { ...definition.spec, cadenceSeconds: 31536000 } };
+		// [id, scope, status, slot, snapshot]; a null slot is a live compute.
+		const rows: Array<[number, string, string, string | null, object]> = [
+			[10, "n/e/d", "ok", old, hourly],
+			[11, "n/e/d", "error", old, hourly],
+			[12, "n/e/d", "unavailable", old, hourly],
+			[13, "n/e/d", "error", "2026-11-01T12:00:00.000Z", hourly],
+			[14, "other/e/d", "error", old, hourly],
+			[15, "n/e/d", "error", null, hourly],
+			[16, "n/e/d", "error", old, yearly],
+		];
+		for (const [id, rowScope, status, slot, snapshot] of rows) {
+			const o = { ...make(id, slot ?? old), status, value: null };
+			await sql`INSERT INTO metric_observations (id,scope,metric_id,definition_hash,evaluation_at,scheduled_for,snapshot,observation,status) VALUES (${o.id},${rowScope},'ratio',${hash},${slot ?? old},${slot},${sql.json(snapshot)},${sql.json(o)},${status})`;
+		}
+		expect(await store.pruneAttempts("2026-10-03T12:00:00.000Z", 10)).toBe(2);
+		const left = await sql`SELECT id FROM metric_observations ORDER BY id`;
+		expect(left.map((r) => r.id)).toEqual(
+			[10, 13, 14, 15, 16].map(
+				(id) => `00000000-0000-4000-8000-${String(id).padStart(12, "0")}`,
+			),
+		);
+	});
 });

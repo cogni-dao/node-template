@@ -22,6 +22,7 @@ import {
 	type MetricService,
 } from "./index.js";
 import { type GoalSourcePort, readGoalsProgress } from "./progress.js";
+import { createTickReads } from "./tick-reads.js";
 import {
 	BRIEF_MAX_BYTES,
 	BRIEF_MAX_ROWS,
@@ -124,6 +125,9 @@ export function createGoalMetrics(deps: {
 	const countParams = z.strictObject({
 		mode: z.enum(["open", "validated", "kpi-linked"]),
 	});
+	// Calculators share identical source statements within one refresh tick.
+	const tick = createTickReads();
+	const sourceSql = tick.share(deps.knowledgeSql);
 	registry.register({
 		id: "work.count@1",
 		unit: "items",
@@ -139,8 +143,8 @@ export function createGoalMetrics(deps: {
 			const { mode } = countParams.parse(params);
 			return ctx.read((signal) =>
 				mode === "kpi-linked"
-					? readWorkKpiLinked(deps.knowledgeSql, signal)
-					: readWorkCount(deps.knowledgeSql, mode, signal),
+					? readWorkKpiLinked(sourceSql, signal)
+					: readWorkCount(sourceSql, mode, signal),
 			);
 		},
 	});
@@ -172,7 +176,7 @@ export function createGoalMetrics(deps: {
 		},
 		compute: async (params, ctx) =>
 			readWorkConvergence(
-				deps.knowledgeSql,
+				sourceSql,
 				convergenceParams.parse(params).output,
 				ctx.window,
 				(source) => ctx.read((signal) => source(signal)),
@@ -222,7 +226,7 @@ export function createGoalMetrics(deps: {
 			const p = briefParams.parse(params);
 			return ctx.read((signal) =>
 				readBriefConformance(
-					deps.knowledgeSql,
+					sourceSql,
 					p.subject,
 					p.maxLongShare,
 					signal,
@@ -280,14 +284,14 @@ export function createGoalMetrics(deps: {
 			const p = noInlineHistoryParams.parse(params);
 			if (p.measure === "state")
 				return ctx.read((signal) =>
-					readNoInlineHistoryState(deps.knowledgeSql, p.subject, signal),
+					readNoInlineHistoryState(sourceSql, p.subject, signal),
 				);
 			if (p.measure === "scope")
 				return ctx.read((signal) =>
-					readNoInlineHistoryScope(deps.knowledgeSql, signal),
+					readNoInlineHistoryScope(sourceSql, signal),
 				);
 			return readNoInlineHistoryEdits(
-				deps.knowledgeSql,
+				sourceSql,
 				p.output,
 				ctx.window,
 				(source) => ctx.read((signal) => source(signal)),
@@ -402,8 +406,16 @@ export function createGoalMetrics(deps: {
 			}
 			return { items, nextCursor: more ? (cursor ?? null) : null };
 		},
+		/** The main branch commit: any merged definition change moves it. */
+		async revision() {
+			const rows = await deps.knowledgeSql.unsafe(
+				"SELECT dolt_hashof('main') AS hash",
+			);
+			const hash = rows[0]?.hash;
+			return typeof hash === "string" && hash ? hash : null;
+		},
 	};
-	return createMetricService({
+	const service = createMetricService({
 		definitions,
 		registry,
 		observations,
@@ -415,6 +427,9 @@ export function createGoalMetrics(deps: {
 			allowed.has(definition.spec.calculatorId),
 		log: deps.log,
 	});
+	const refreshDue = service.refreshDue;
+	service.refreshDue = () => tick.run(refreshDue);
+	return service;
 }
 
 /** Goals and hypotheses stay knowledge entries; the shared read model only sees this port. */
