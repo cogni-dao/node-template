@@ -17,7 +17,7 @@
  *   - DEGRADE_IS_LOGGED_ONCE: each degraded part (chain, links) emits one `EnvelopeDegradedEvent` per read, carrying
  *     only an error name, never row content.
  *   - NEVER_THROWS: a port failure degrades its part; the item is always returned.
- *   - ARTIFACTS_ONE_QUERY (task.0028): with an `artifacts` port the read adds the latest artifact of each kind (at most four) through one bounded call; a failure reads `artifacts: { unavailable: true }`, never an empty answer.
+ *   - ARTIFACTS_ONE_QUERY (task.0028): with an `artifacts` port the read adds the latest artifact of each kind (at most four) through one bounded call; a failure, or one stored row that does not parse as an artifact, reads `artifacts: { unavailable: true }`, never an empty answer and never a 500.
  * Side-effects: none (the ports it calls do I/O)
  * Links: packages/work-items/src/moves.ts, hub agent-tool-context-envelope
  * @public
@@ -26,6 +26,7 @@
 import {
   toLatestArtifacts,
   type WorkItemArtifact,
+  WorkItemArtifactSchema,
   type WorkItemArtifactsLatest,
 } from "./artifacts.js";
 import type { WorkItemLinks } from "./contracts.js";
@@ -121,8 +122,15 @@ export async function composeItemEnvelope<T extends { id: string; moves?: WorkIt
     const port = deps.artifacts;
     if (!port || options.artifacts === false) return undefined;
     try {
+      const stored = await runBounded((signal) => port.latest(item.id, signal), options);
+      // A stored row the wire cannot carry degrades the part; it never fails the item read (a 500).
+      const rows = stored.map((row) => WorkItemArtifactSchema.safeParse(row));
+      if (rows.some((row) => !row.success)) {
+        emit({ part: "artifacts", workItemId: item.id, reason: "invalid_row" });
+        return UNAVAILABLE_ARTIFACTS;
+      }
       return toLatestArtifacts(
-        await runBounded((signal) => port.latest(item.id, signal), options),
+        rows.flatMap((row) => (row.success ? [row.data] : [])),
       );
     } catch (error) {
       emit({ part: "artifacts", workItemId: item.id, reason: reasonOf(error) });

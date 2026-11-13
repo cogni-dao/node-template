@@ -1369,6 +1369,114 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		}
 	}, 60_000);
 
+	it("inserts, lists and reads the latest review artifact of each kind through the real work_item_artifacts table (task.0028)", async () => {
+		const writerSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const readerSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const adapter = new DoltgresWorkItemAdapter(writerSql, {
+			readClient: readerSql,
+			logger: stageLogger,
+			lockWaitMs: 250,
+			lockRetryMs: 25,
+			queryTimeoutMs: 5_000,
+		});
+		const itemId = "task.9508";
+		const pr = "https://github.com/cogni-dao/node-template/pull/352";
+		const rows = [
+			{
+				tweak: "ARTIFACTS ROUTE",
+				human: "\u2014",
+				ai: "\u{1F7E2}",
+				loki: "\u{1F7E2}",
+				trace: "\u2014",
+				overall: "\u{1F7E2} PASS",
+			},
+			{
+				tweak: "ITEM READ",
+				human: "\u{1F7E1}",
+				ai: "\u{1F7E1}",
+				loki: "\u{1F7E1}",
+				trace: "\u2014",
+				overall: "\u{1F7E1} UNPROVEN",
+				reason: "no storageState; it's \"quoted\"",
+			},
+		];
+		try {
+			await adapter.create(
+				{ id: toWorkItemId(itemId), type: "task", title: "Review me" },
+				"artifact-creator",
+			);
+			const review = await adapter.artifacts.insert({
+				itemId,
+				kind: "implementation_review",
+				subject: `${pr}@${"a".repeat(40)}`,
+				verdict: "request_changes",
+				url: `${pr}#issuecomment-1`,
+				author: "artifact-reviewer",
+			});
+			expect(review).toMatchObject({
+				itemId,
+				kind: "implementation_review",
+				verdict: "request_changes",
+				author: "artifact-reviewer",
+			});
+			expect(review.rows).toBeUndefined();
+			expect(review.id).toMatch(/^wia-/);
+			const first = await adapter.artifacts.insert({
+				itemId,
+				kind: "validation",
+				subject: `${pr}@${"a".repeat(40)}`,
+				verdict: "fail",
+				rows: [{ ...rows[0]!, overall: "\u{1F534} FAIL", ai: "\u{1F534}" }] as never,
+				url: `${pr}#issuecomment-2`,
+				author: "artifact-validator",
+			});
+			const second = await adapter.artifacts.insert({
+				itemId,
+				kind: "validation",
+				subject: `${pr}@${"b".repeat(40)}`,
+				verdict: "notes",
+				rows: rows as never,
+				url: `${pr}#issuecomment-3`,
+				author: "artifact-validator",
+			});
+			// Emoji jsonb comes back losslessly, quotes included, through RETURNING and a read.
+			expect(second.rows).toEqual(rows);
+
+			const listed = await adapter.artifacts.list(itemId);
+			expect(listed.map((a) => a.id)).toEqual([second.id, first.id, review.id]);
+			expect(listed[0]?.rows).toEqual(rows);
+
+			// One query returns the newest of each kind that exists; kinds with none are absent.
+			const latest = await adapter.artifacts.latest(itemId);
+			expect(latest.map((a) => a.kind).sort()).toEqual([
+				"implementation_review",
+				"validation",
+			]);
+			expect(latest.find((a) => a.kind === "validation")?.id).toBe(second.id);
+			expect(await adapter.artifacts.latest("task.9599")).toEqual([]);
+
+			// Insert-only on the real engine: every artifact is one Dolt commit with its actor, reason and id;
+			// the work item row was not touched.
+			const log = await writerSql.unsafe(
+				`SELECT message FROM dolt_log WHERE message LIKE '%Artifact: ${second.id}'`,
+			);
+			expect(log).toHaveLength(1);
+			expect(String(log[0]?.message)).toBe(
+				`work-items: artifact ${itemId} by actor:artifact-validator\nReason: Record validation artifact with verdict notes\nArtifact: ${second.id}`,
+			);
+			await expect(adapter.get(toWorkItemId(itemId))).resolves.toMatchObject({
+				revision: 0,
+				status: "needs_triage",
+			});
+			expect(await writerSql.unsafe("SELECT * FROM dolt_status")).toHaveLength(0);
+		} finally {
+			await Promise.all([
+				writerSql.end({ timeout: 0 }),
+				readerSql.end({ timeout: 0 }),
+			]);
+		}
+	}, 60_000);
+
 	it("resolves the metric rule on real Doltgres: main only, AS OF a pinned hash, spec present and not deprecated (story.0033)", async () => {
 		const ksSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		try {

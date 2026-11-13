@@ -21,7 +21,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  artifactInvalidJson,
   type ArtifactItemStore,
+  artifactsNotConfigured,
   isPassGrade,
   listWorkItemArtifacts,
   type NewWorkItemArtifact,
@@ -32,6 +34,7 @@ import {
   type WorkItemArtifact,
   type WorkItemArtifactDeps,
 } from "../src/artifacts.js";
+import { WorkItemWriteOutcomeUnknownError } from "../src/errors.js";
 import { composeItemEnvelope } from "../src/envelope.js";
 import type { HistoryEntry } from "../src/history.js";
 
@@ -77,6 +80,7 @@ function world(
     history?: readonly HistoryEntry[] | "absent" | "throws";
     inbox?: Record<string, string> | "absent" | "throws";
     insertThrows?: boolean;
+    insertError?: Error;
   } = {}
 ): World {
   const stored: NewWorkItemArtifact[] = [];
@@ -105,6 +109,7 @@ function world(
       items,
       artifacts: {
         insert: async (input) => {
+          if (options.insertError) throw options.insertError;
           if (options.insertThrows) throw new Error("write failed");
           stored.push(input);
           return {
@@ -235,6 +240,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
     expect(result.status).toBe(400);
     expect(result.body).toEqual({
       error: "invalid input",
+      errorCode: "invalid_input",
       issues: [{ path: ["kind"], message: "design_waiver is written only by the server" }],
     });
     expect(w.stored).toEqual([]);
@@ -314,8 +320,12 @@ describe("recordWorkItemArtifact: the write contract", () => {
     const w = world({ item: null });
     const result = await recordWorkItemArtifact(w.deps, "task.9", "reviewer-1", designReview);
     expect(result.status).toBe(404);
-    expect(result.body).toEqual({ error: "Work item not found: task.9" });
+    expect(result.body).toEqual({
+      error: "Work item not found: task.9",
+      errorCode: "not_found",
+    });
     expect(w.stored).toEqual([]);
+    expect(result.log).toMatchObject({ event: "work.items.artifact_refused", status: 404 });
   });
 
   it("503: a failed read or write is unavailable and never a pass", async () => {
@@ -335,6 +345,57 @@ describe("recordWorkItemArtifact: the write contract", () => {
     expect(failed.body).toEqual({ error: "artifacts_unavailable", errorCode: "artifacts_unavailable" });
     expect(reads.stored).toEqual([]);
     expect(inbox.stored).toEqual([]);
+    // Every non-success write logs as a refusal, with the database error code and a one-line message.
+    expect(failed.log).toMatchObject({
+      event: "work.items.artifact_refused",
+      status: 503,
+      outcome: "error",
+      errorCode: "artifacts_unavailable",
+      errorName: "Error",
+      errorMessage: "write failed",
+    });
+    const sqlFailure = world({
+      inbox: { "contrib-derek-1": "author-1" },
+      insertError: Object.assign(new Error("relation\n\"work_item_artifacts\" does not exist"), {
+        code: "42P01",
+      }),
+    });
+    const missingTable = await recordWorkItemArtifact(sqlFailure.deps, "task.0028", "r", designReview);
+    expect(missingTable.log).toMatchObject({
+      dbCode: "42P01",
+      errorMessage: 'relation "work_item_artifacts" does not exist',
+    });
+  });
+
+  it("409: a write whose outcome is unknown is distinct and not retryable, never a plain 503", async () => {
+    const w = world({
+      inbox: { "contrib-derek-1": "author-1" },
+      insertError: new WorkItemWriteOutcomeUnknownError("op-1", "work-item-op/x", "c1", "task.0028"),
+    });
+    const result = await recordWorkItemArtifact(w.deps, "task.0028", "r", designReview);
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({
+      error: "work_item_write_outcome_unknown",
+      retryable: false,
+      lookup: { operationId: "op-1", branch: "work-item-op/x", commitHash: "c1", itemId: "task.0028" },
+    });
+    expect(result.log).toMatchObject({
+      event: "work.items.artifact_refused",
+      status: 409,
+      errorCode: "work_item_write_outcome_unknown",
+    });
+  });
+
+  it("an invalid JSON body and a node with no artifact store are logged refusals with an errorCode", () => {
+    const json = artifactInvalidJson("task.0028");
+    expect(json.status).toBe(400);
+    expect(json.body).toEqual({ error: "invalid JSON body", errorCode: "invalid_input" });
+    expect(json.log).toMatchObject({ event: "work.items.artifact_refused", status: 400, outcome: "refused" });
+    const write = artifactsNotConfigured("task.0028", "write");
+    expect(write.status).toBe(503);
+    expect(write.body).toEqual({ error: "artifacts_unavailable", errorCode: "artifacts_unavailable" });
+    expect(write.log.event).toBe("work.items.artifact_refused");
+    expect(artifactsNotConfigured("task.0028", "read").log.event).toBe("work.items.artifacts_read");
   });
 });
 
@@ -427,6 +488,7 @@ describe("recordWorkItemArtifact: independence", () => {
     expect(other.status).toBe(400);
     expect(other.body).toEqual({
       error: "invalid input",
+      errorCode: "invalid_input",
       issues: [{ path: ["subject"], message: "subject is not this item's pr" }],
     });
     const unlinked = world({ item: { revision: 4 } });
@@ -551,6 +613,23 @@ describe("reads", () => {
     );
     expect(down.artifacts).toEqual({ unavailable: true });
     expect(events).toEqual([{ part: "artifacts", workItemId: "task.0028", reason: "Error" }]);
+
+    // One stored row the wire cannot carry degrades the part; the item read still succeeds.
+    const badEvents: unknown[] = [];
+    const bad = await composeItemEnvelope(
+      item,
+      {
+        artifacts: {
+          latest: async () => [
+            stored("design_review", "d1", "approve"),
+            { ...stored("validation", "v1", "pass"), rows: [{ tweak: "x", overall: "PASS" }] } as never,
+          ],
+        },
+        log: (event) => badEvents.push(event),
+      }
+    );
+    expect(bad.artifacts).toEqual({ unavailable: true });
+    expect(badEvents).toEqual([{ part: "artifacts", workItemId: "task.0028", reason: "invalid_row" }]);
 
     // No port: the part is absent, not empty.
     expect((await composeItemEnvelope(item, {})).artifacts).toBeUndefined();

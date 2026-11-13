@@ -75,6 +75,8 @@ export type {
   WorkItemArtifactsLatest,
 } from "./artifacts.js";
 export {
+  artifactInvalidJson,
+  artifactsNotConfigured,
   ARTIFACT_KINDS,
   ARTIFACT_ROWS_MAX,
   ARTIFACT_URL_MAX,

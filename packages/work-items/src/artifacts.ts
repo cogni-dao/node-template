@@ -17,7 +17,8 @@
  *     show an author the write is refused (fail closed), for every subject.
  *   - WAIVER_IS_SERVER_ONLY: a caller may never write `design_waiver`; only the server stamps one (task.0122).
  *   - PASS_GRADE_IS_COMPUTED: `isPassGrade` decides from `rows` and the headline; a caller never sends a grade.
- *   - NEVER_THROWS: every handler failure becomes a status; a missing item is 404, a failed read or write 503.
+ *   - NEVER_THROWS: every handler failure becomes a status; a missing item is 404, a failed read or write 503. A write whose outcome is unknown (`WorkItemWriteOutcomeUnknownError`) is a distinct 409 `work_item_write_outcome_unknown`, `retryable: false`: the caller must inspect, never replay into a duplicate.
+ *   - ONE_EVENT_PER_REFUSAL: every non-success write (400, 404, 409, 503) logs `work.items.artifact_refused`; `work.items.artifact_recorded` is a success only.
  *   - RECORDING_NEVER_MOVES_STATUS: this module never reads or writes an item's status.
  * Side-effects: IO (through the injected ports)
  * Links: hub work-cicd-gates-design (The artifact record), change-history-design
@@ -28,7 +29,9 @@ import { z } from "zod";
 
 import { CITE_COMMIT_PATTERN, CITE_CONTRIBUTION_PATTERN } from "./cites.js";
 import type { HistoryEntry } from "./history.js";
+import { errorDetail } from "./history-read.js";
 import { toWorkItemId, type WorkItemId } from "./types.js";
+import { workItemWriteErrorResponse } from "./write-errors.js";
 
 export const ARTIFACT_KINDS = [
   "design_review",
@@ -401,7 +404,8 @@ export type ArtifactErrorCode =
   | "invalid_input"
   | "not_found"
   | "artifact_author_not_independent"
-  | "artifacts_unavailable";
+  | "artifacts_unavailable"
+  | "work_item_write_outcome_unknown";
 
 /** One terminal log record per call: counts and codes, never a body, a row or a url. */
 export interface ArtifactLog {
@@ -422,6 +426,10 @@ export interface ArtifactLog {
   readonly reason?: string;
   /** Set on a failed call so the route may warn with the error class. */
   readonly errorName?: string;
+  /** Database error code (SQLSTATE) from the thrown error, when it carries one. */
+  readonly dbCode?: string;
+  /** First 300 chars of the thrown error's message, CR/LF collapsed. */
+  readonly errorMessage?: string;
 }
 
 export interface ArtifactResult {
@@ -445,7 +453,7 @@ const UNAVAILABLE_BODY = {
 
 const notFound = (id: string, event: ArtifactLog["event"]): ArtifactResult => ({
   status: 404,
-  body: { error: `Work item not found: ${id}` },
+  body: { error: `Work item not found: ${id}`, errorCode: "not_found" },
   log: {
     event: refusedEvent(event),
     status: 404,
@@ -460,19 +468,73 @@ const unavailable = (
   event: ArtifactLog["event"],
   error: unknown,
   extra: Partial<ArtifactLog> = {}
-): ArtifactResult => ({
-  status: 503,
-  body: UNAVAILABLE_BODY,
-  log: {
-    event,
+): ArtifactResult => {
+  // A write whose outcome is unknown may have landed: say so, and never invite a replay.
+  const mapped = workItemWriteErrorResponse(error, "create");
+  if (mapped?.errorCode === "work_item_write_outcome_unknown") {
+    return {
+      status: 409,
+      body: mapped.body,
+      log: {
+        event: refusedEvent(event),
+        status: 409,
+        outcome: "error",
+        workItemId: id,
+        errorCode: "work_item_write_outcome_unknown",
+        errorName: "WorkItemWriteOutcomeUnknownError",
+        ...extra,
+      },
+    };
+  }
+  return {
     status: 503,
-    outcome: "error",
-    workItemId: id,
-    errorCode: "artifacts_unavailable",
-    errorName: (error as Error | undefined)?.name ?? "Error",
-    ...extra,
-  },
-});
+    body: UNAVAILABLE_BODY,
+    log: {
+      event: refusedEvent(event),
+      status: 503,
+      outcome: "error",
+      workItemId: id,
+      errorCode: "artifacts_unavailable",
+      errorName: (error as Error | undefined)?.name ?? "Error",
+      ...errorDetail(error),
+      ...extra,
+    },
+  };
+};
+
+/** The body was not JSON: a 400 that logs like every other refusal. */
+export function artifactInvalidJson(itemId: string): ArtifactResult {
+  return {
+    status: 400,
+    body: { error: "invalid JSON body", errorCode: "invalid_input" },
+    log: {
+      event: REFUSED,
+      status: 400,
+      outcome: "refused",
+      workItemId: itemId,
+      errorCode: "invalid_input",
+    },
+  };
+}
+
+/** This node has no artifact store wired (no Doltgres): a 503 that logs like every other refusal. */
+export function artifactsNotConfigured(
+  itemId: string,
+  operation: "write" | "read"
+): ArtifactResult {
+  return {
+    status: 503,
+    body: UNAVAILABLE_BODY,
+    log: {
+      event: operation === "write" ? REFUSED : READ,
+      status: 503,
+      outcome: "error",
+      workItemId: itemId,
+      errorCode: "artifacts_unavailable",
+      errorName: "ArtifactsNotConfigured",
+    },
+  };
+}
 
 const invalid = (
   id: string,
@@ -480,7 +542,7 @@ const invalid = (
   extra: Partial<ArtifactLog> = {}
 ): ArtifactResult => ({
   status: 400,
-  body: { error: "invalid input", issues },
+  body: { error: "invalid input", errorCode: "invalid_input", issues },
   log: {
     event: REFUSED,
     status: 400,

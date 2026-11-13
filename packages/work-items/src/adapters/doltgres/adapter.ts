@@ -1026,7 +1026,7 @@ function isArtifactMessage(message: string): boolean {
  * The proof of an artifact insert, from its commit message (a branch with no in-memory proof, found by
  * the restart sweep). The row id is read from the diff and checked against the message's `Artifact:` line.
  */
-function legacyArtifactProofFromMessage(
+function artifactProofFromCommitMessage(
   message: string,
   row: Record<string, unknown>
 ): MutationProof | undefined {
@@ -2417,7 +2417,7 @@ export class DoltgresWorkItemAdapter
       }
       const artifactProof =
         pending?.proof ??
-        legacyArtifactProofFromMessage(String(commit.message ?? ""), added);
+        artifactProofFromCommitMessage(String(commit.message ?? ""), added);
       if (
         !artifactProof ||
         !validateArtifactInsert(artifactProof, added) ||

@@ -8,14 +8,17 @@
  * Invariants:
  *   - SAME_DOOR: POST needs the `work_item:review` grant (route id `work.items.artifacts.create`, capability `work.item.review`); a signed-in human passes. GET needs a session, like history.
  *   - AUTHOR_IS_STAMPED: the author is `sessionUser.id`; a body never names one.
- *   - Errors: 400 `invalid input` (with issues), 403 grant, 404 item, 409 `artifact_author_not_independent`, 503 `artifacts_unavailable`. Nothing is written in any of them.
- *   - One terminal log event per call (codes and counts only): `work.items.artifact_recorded`, `work.items.artifact_refused`, `work.items.artifacts_read`.
+ *   - Errors, each with an `errorCode`: 400 `invalid_input` (an invalid JSON body too), 403 grant, 404 `not_found`, 409 `artifact_author_not_independent` or `work_item_write_outcome_unknown` (inspect, never replay), 503 `artifacts_unavailable` (no store wired too). Nothing is written in the 400, 404, 409 independence and 503 cases.
+ *   - One terminal log event per call (codes and counts only): `work.items.artifact_recorded` on success, `work.items.artifact_refused` on every other write outcome, `work.items.artifacts_read` for the list. A failure also warns once as `work.items.artifact_unavailable`.
  * Side-effects: IO (HTTP response, Doltgres read and write)
  * Links: @cogni-dao/work-items recordWorkItemArtifact, hub work-cicd-gates-design
  * @public
  */
 
 import {
+  type ArtifactResult,
+  artifactInvalidJson,
+  artifactsNotConfigured,
   listWorkItemArtifacts,
   recordWorkItemArtifact,
 } from "@cogni/work-items";
@@ -35,10 +38,28 @@ const EVENT_BY_LOG = {
   "work.items.artifacts_read": EVENT_NAMES.WORK_ITEMS_ARTIFACTS_READ,
 } as const;
 
-const NOT_CONFIGURED = {
-  error: "artifacts_unavailable",
-  errorCode: "artifacts_unavailable",
-} as const;
+/** One terminal log event per call, then the response. A failed call also warns once, under one event name. */
+function respond(
+  ctx: {
+    readonly log: Parameters<typeof logEvent>[0];
+    readonly reqId: string;
+    readonly routeId: string;
+  },
+  startedAt: number,
+  { status, body, log }: ArtifactResult
+): NextResponse {
+  const { event, errorName, ...fields } = log;
+  logEvent(ctx.log, EVENT_BY_LOG[event], {
+    reqId: ctx.reqId,
+    routeId: ctx.routeId,
+    ...fields,
+    durationMs: Date.now() - startedAt,
+  });
+  if (errorName !== undefined) {
+    ctx.log.warn({ errorName }, "work.items.artifact_unavailable");
+  }
+  return NextResponse.json(body, { status });
+}
 
 export const POST = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
@@ -54,34 +75,23 @@ export const POST = wrapRouteHandlerWithLogging<{
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
     const { id } = await context.params;
+    const startedAt = Date.now();
 
     let body: unknown;
     try {
       body = await request.json();
     } catch {
-      return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+      return respond(ctx, startedAt, artifactInvalidJson(id));
     }
 
     const deps = getContainer().workItemArtifacts;
-    if (!deps) return NextResponse.json(NOT_CONFIGURED, { status: 503 });
+    if (!deps) return respond(ctx, startedAt, artifactsNotConfigured(id, "write"));
 
-    const startedAt = Date.now();
-    const {
-      status,
-      body: result,
-      log,
-    } = await recordWorkItemArtifact(deps, id, sessionUser.id, body);
-    const { event, errorName, ...fields } = log;
-    logEvent(ctx.log, EVENT_BY_LOG[event], {
-      reqId: ctx.reqId,
-      routeId: ctx.routeId,
-      ...fields,
-      durationMs: Date.now() - startedAt,
-    });
-    if (errorName !== undefined) {
-      ctx.log.warn({ errorName }, "work.items.artifact_unavailable");
-    }
-    return NextResponse.json(result, { status });
+    return respond(
+      ctx,
+      startedAt,
+      await recordWorkItemArtifact(deps, id, sessionUser.id, body)
+    );
   }
 );
 
@@ -98,22 +108,11 @@ export const GET = wrapRouteHandlerWithLogging<{
     }
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
+    const startedAt = Date.now();
 
     const deps = getContainer().workItemArtifacts;
-    if (!deps) return NextResponse.json(NOT_CONFIGURED, { status: 503 });
+    if (!deps) return respond(ctx, startedAt, artifactsNotConfigured(id, "read"));
 
-    const startedAt = Date.now();
-    const { status, body, log } = await listWorkItemArtifacts(deps, id);
-    const { event, errorName, ...fields } = log;
-    logEvent(ctx.log, EVENT_BY_LOG[event], {
-      reqId: ctx.reqId,
-      routeId: ctx.routeId,
-      ...fields,
-      durationMs: Date.now() - startedAt,
-    });
-    if (errorName !== undefined) {
-      ctx.log.warn({ errorName }, "work.items.artifacts_unavailable");
-    }
-    return NextResponse.json(body, { status });
+    return respond(ctx, startedAt, await listWorkItemArtifacts(deps, id));
   }
 );

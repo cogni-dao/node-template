@@ -9,7 +9,7 @@
  *   - NO_CHECKOUT: the read is a plain SELECT on main; it never waits on a writer lock.
  *   - AUTHOR_IS_PRINCIPAL_ID: the author is the contribution's `principal_id`, the principal the contribution API stamped at creation.
  *   - UNKNOWN_IS_NULL: an unknown inbox is `null`, never an error and never a guess; a failed read throws.
- *   - ABORT_IS_HONORED: an aborted signal stops the read.
+ *   - ABORT_IS_HONORED: an aborted signal rejects the call at once, even while the query is in flight (the read is raced against the signal, like the cite-resolver call).
  * Side-effects: IO (one read)
  * Links: hub work-cicd-gates-design (Independence), change-history-design (EntryResolver port pattern)
  * @public
@@ -27,18 +27,42 @@ export interface ContributionAuthors {
   principalOf(contributionId: string, signal: AbortSignal): Promise<string | null>;
 }
 
+/** Rejects when `signal` aborts, so a hung read cannot hold the caller past its deadline. */
+function abortion(signal: AbortSignal): { promise: Promise<never>; stop: () => void } {
+  let stop = () => {};
+  const promise = new Promise<never>((_, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    stop = () => signal.removeEventListener("abort", onAbort);
+  });
+  // The race may settle first; an unobserved rejection must not surface.
+  promise.catch(() => {});
+  return { promise, stop };
+}
+
 export function createDoltgresContributionAuthors(
   sql: ContributionAuthorSql
 ): ContributionAuthors {
   return {
     async principalOf(contributionId, signal) {
       signal.throwIfAborted();
-      const rows = await sql.unsafe(
-        `SELECT principal_id FROM knowledge_contributions WHERE id = ${escapeValue(contributionId)} LIMIT 1`
-      );
-      signal.throwIfAborted();
-      const principal = rows[0]?.principal_id;
-      return typeof principal === "string" && principal.length > 0 ? principal : null;
+      const aborted = abortion(signal);
+      try {
+        // ABORT_IS_HONORED: raced against the signal, because a query in flight does not see it.
+        const rows = await Promise.race([
+          Promise.resolve(
+            sql.unsafe(
+              `SELECT principal_id FROM knowledge_contributions WHERE id = ${escapeValue(contributionId)} LIMIT 1`
+            )
+          ),
+          aborted.promise,
+        ]);
+        const principal = rows[0]?.principal_id;
+        return typeof principal === "string" && principal.length > 0 ? principal : null;
+      } finally {
+        aborted.stop();
+      }
     },
   };
 }
