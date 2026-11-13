@@ -53,6 +53,17 @@ export interface CatalogEntry {
   readonly guidanceId?: string;
   /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
   readonly program?: "cogni" | "work-review" | "work-closeout";
+  /**
+   * Recurring duty this workflow can own. The node operator reads it to decide, from goals and evidence,
+   * which jobs to keep: no duty is named in the operator prompt. `purpose` is the stable job purpose.
+   */
+  readonly duty?: {
+    readonly purpose: string;
+    readonly serves: string;
+    readonly neededWhen: string;
+    /** The task each recurring run receives; the program owns it, not the coordinator. */
+    readonly instruction: string;
+  };
   readonly displayName: string;
   readonly description: string;
   /**
@@ -151,6 +162,13 @@ export const NODE_LANGGRAPH_CATALOG = {
     graphFactory: createMissionGraph,
     systemPrompt: COGNI_DECIDE_PROMPT,
     program: "work-review",
+    duty: {
+      purpose: "node-work-triage",
+      serves: "Prioritize: every active goal's open work stays scored, goal-linked and routed",
+      neededWhen: "open work is unscored, untriaged or scored before a goal or KPI changed",
+      instruction:
+        "Triage open work per the work-item-triage guide: goal-linked and unscored first, judging and writing one candidate at a time, applying only justified changes and no-op when unchanged.",
+    },
     report: { event: "ai.work_prioritizer.cycle" },
   },
   /**
@@ -174,6 +192,13 @@ export const NODE_LANGGRAPH_CATALOG = {
     graphFactory: createWorkCloseoutGraph,
     systemPrompt: WORK_CLOSEOUT_SYSTEM_PROMPT,
     program: "work-closeout",
+    duty: {
+      purpose: "node-work-closeout",
+      serves: "goal-ai-work-converges: shipped work is counted as validated",
+      neededWhen: "items in needs_closeout or needs_merge have a merged pull request",
+      instruction:
+        "Close out shipped work: close only items whose merged pull request is live in this build, and no-op when none qualifies.",
+    },
     report: { event: "ai.work_closeout.cycle" },
   },
   cogni: {
@@ -191,6 +216,8 @@ export const NODE_LANGGRAPH_CATALOG = {
           description: entry.description,
           toolIds: entry.toolIds,
           mcpServerIds: (entry as CatalogEntry).mcpServerIds ?? [],
+          duty: (entry as CatalogEntry).duty ?? null,
+          schedulable: Boolean((entry as CatalogEntry).guidanceId),
         })),
       );
     },

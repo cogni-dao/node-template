@@ -174,6 +174,8 @@ export function createScheduleManageImplementation(
           const payload = { ...input.input };
           if (input.instruction !== undefined) {
             payload.messages = [{ role: "user", content: input.instruction }];
+          } else if (!Array.isArray(payload.messages)) {
+            throw new Error("instruction is required for action 'create': the task the scheduled workflow runs on each tick.");
           }
           if (input.purpose !== undefined) {
             const meta = payload._meta;
