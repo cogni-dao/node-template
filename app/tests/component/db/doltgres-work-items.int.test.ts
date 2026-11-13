@@ -1379,7 +1379,8 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			lockRetryMs: 25,
 			queryTimeoutMs: 5_000,
 		});
-		const itemId = "task.9508";
+		// An id no other case in this shared database creates (task.9508 belongs to the moves case).
+		const itemId = "task.9530";
 		const pr = "https://github.com/cogni-dao/node-template/pull/352";
 		const rows = [
 			{
@@ -1453,7 +1454,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				"validation",
 			]);
 			expect(latest.find((a) => a.kind === "validation")?.id).toBe(second.id);
-			expect(await adapter.artifacts.latest("task.9599")).toEqual([]);
+			expect(await adapter.artifacts.latest("task.9998")).toEqual([]);
 
 			// Insert-only on the real engine: every artifact is one Dolt commit with its actor, reason and id;
 			// the work item row was not touched.
