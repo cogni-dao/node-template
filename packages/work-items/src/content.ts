@@ -9,7 +9,7 @@
  *   - DEPEND_ON_THE_PORT, routes and facades import these types, never the concrete adapter.
  *   - NOT_CONFIGURED_IS_WIRED, the container substitutes a throwing impl when the node has no Doltgres URL.
  * Side-effects: none
- * Links: docs/spec/work-items-port.md, docs/guides/agent-api-validation.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/work-items-port.md, https://cognidao.org/knowledge/prove-node-agent-api
  * @public
  */
 

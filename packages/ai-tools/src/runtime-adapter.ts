@@ -15,7 +15,7 @@
  *     validateOutput and after redact) and validation errors are scrubbed by exact match. No ai-core change.
  *   - CONTROL_TOOL_UNCHANGED: a contract with no `secretArgs` gets the plain runtime, byte for byte as before
  * Side-effects: none
- * Links: TOOL_USE_SPEC.md #27
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/tool-use.md
  * @public
  */
 

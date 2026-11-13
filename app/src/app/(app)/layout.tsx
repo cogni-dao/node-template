@@ -7,7 +7,7 @@
  * Scope: Client layout component providing sidebar + top bar shell for all routes under (app). Does not handle authentication — proxy.ts guarantees only authenticated users reach this layout.
  * Invariants: Auth enforced at proxy level; this layout is a pure UI shell.
  * Side-effects: none
- * Links: docs/spec/security-auth.md, src/proxy.ts
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/security-auth.md, src/proxy.ts
  * @public
  */
 

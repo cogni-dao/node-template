@@ -13,7 +13,7 @@
  *   - EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE: addCitation checks target row entry_type contracts.
  *   - HYPOTHESIS_HAS_EVALUATE_AT: addKnowledge rejects hypothesis rows w/o evaluate_at.
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, docs/spec/knowledge-domain-registry.md, https://node-template.cognidao.org/knowledge/knowledge-write-contract
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-domain-management, https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @public
  */
 

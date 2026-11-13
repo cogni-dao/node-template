@@ -10,7 +10,7 @@
  *   - Bearer token auth required (INTERNAL_OPS_TOKEN)
  *   - Response shape remains stable
  * Side-effects: none
- * Links: /api/internal/ops/governance/schedules/sync route, docs/spec/governance-scheduling.md
+ * Links: /api/internal/ops/governance/schedules/sync route, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/governance-scheduling.md
  * @internal
  */
 

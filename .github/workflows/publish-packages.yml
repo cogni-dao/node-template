@@ -21,7 +21,7 @@ name: Publish Packages
 # fail-closed. Registry-in-YAML also keeps the workflow checker's inputs to
 # workflow YAML + repo-policy, which is all its self-test harness copies.
 #
-# Not covered by the CI/CD freeze: docs/spec/cicd-platform-boundary.md scopes
+# Not covered by the CI/CD freeze: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/cicd-platform-boundary.md scopes
 # that to the operator control plane, and a node's own GitHub Actions are
 # explicitly exempt. This workflow publishes a package; it deploys nothing.
 #

@@ -13,6 +13,6 @@ CREATE INDEX "identity_signin_challenges_expires_at_idx" ON "identity_signin_cha
 -- ENABLE + FORCE with NO policy = deny-all, fail-closed. Challenges are minted and
 -- consumed exclusively by the service role during sign-in, when there is no app user to
 -- scope a policy to -- the row exists precisely because nobody is authenticated yet.
--- Without FORCE the table owner bypasses RLS entirely (docs/spec/database-rls.md,
+-- Without FORCE the table owner bypasses RLS entirely (https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/database-rls.md,
 -- RLS_COVERAGE invariant).
 ALTER TABLE "identity_signin_challenges" FORCE ROW LEVEL SECURITY;

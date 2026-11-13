@@ -7,7 +7,7 @@
  * Scope: Pure predicate only; does not touch Temporal, langgraph, or a DB.
  * Invariants: LOOP_TERMINATES
  * Side-effects: none
- * Links: src/domain/goal-loop.ts, docs/design/knowledge-goal-loop.md
+ * Links: src/domain/goal-loop.ts, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/knowledge-goal-loop.md
  * @internal
  */
 

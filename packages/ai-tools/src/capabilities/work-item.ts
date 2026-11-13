@@ -9,7 +9,7 @@
  *   - CAPABILITY_INJECTION: Implementation injected at bootstrap, not imported
  *   - PORTS_ARE_AUTHORITY: Delegates to WorkItemQueryPort + WorkItemCommandPort
  * Side-effects: none (interface only)
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @public
  */
 

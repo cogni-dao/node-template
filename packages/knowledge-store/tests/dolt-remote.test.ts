@@ -7,7 +7,7 @@
  * Scope: Pure tests with a recording fake Sql. Does not exercise a real Doltgres or network. The reserved-connection path is not used by this adapter (push doesn't need branch isolation), so no postgres.js reserve() fake is needed.
  * Invariants: First push registers the remote; subsequent pushes skip the add. "already exists" during add is swallowed; other add errors propagate.
  * Side-effects: none
- * Links: docs/runbooks/dolthub-remote-bootstrap.md, packages/knowledge-store/src/adapters/doltgres/dolt-remote.ts
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/dolthub-remote-bootstrap.md, packages/knowledge-store/src/adapters/doltgres/dolt-remote.ts
  * @internal
  */
 

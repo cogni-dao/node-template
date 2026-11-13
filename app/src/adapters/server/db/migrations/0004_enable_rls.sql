@@ -1,5 +1,5 @@
 -- Migration: Enable Row-Level Security on all user-scoped tables
--- Reference: docs/DATABASE_RLS_SPEC.md
+-- Reference: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/database-rls.md
 -- Hand-written (not Drizzle-generated) — RLS policies are outside Drizzle's DDL scope.
 --
 -- Invariant: current_setting('app.current_user_id', true) returns NULL when unset.

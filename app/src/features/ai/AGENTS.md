@@ -15,9 +15,9 @@ AI feature owns all LLM interaction endpoints, runtimes, and services. Provides 
 ## Pointers
 
 - [Root AGENTS.md](../../../../../AGENTS.md)
-- [Architecture](../../../../../docs/spec/architecture.md)
-- [AI Setup Spec](../../../../../docs/spec/ai-setup.md) (P0/P1 checklists, invariants)
-- [LangGraph Server](../../../../../docs/spec/langgraph-server.md) (external runtime, adapter implementation)
+- [Architecture](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/architecture.md)
+- [AI Setup Spec](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/ai-setup.md) (P0/P1 checklists, invariants)
+- [LangGraph Server](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/langgraph-server.md) (external runtime, adapter implementation)
 - [LangGraph Patterns](https://node-template.cognidao.org/knowledge/graph-execution-invariants) (graph patterns, anti-patterns)
 - [Chat subfeature](./chat/AGENTS.md)
 - **Related:** [../payments/](../payments/) (credits), [../../contracts/](../../contracts/) (ai.completions.v1, ai.chat.v1, ai.models.v1)

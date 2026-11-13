@@ -13,7 +13,7 @@
  *     writes to is a SMOKE TEST only — never a real goal's KPI.
  *   - KPI_RANGE_0_100 — `read` returns 0–100, same scale as `target`/`confidence_pct`.
  * Side-effects: none (implementations do I/O; the port does not)
- * Links: https://node-template.cognidao.org/knowledge/edo-loop-contract, docs/design/knowledge-goal-loop.md
+ * Links: https://node-template.cognidao.org/knowledge/edo-loop-contract, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/knowledge-goal-loop.md
  * @public
  */
 

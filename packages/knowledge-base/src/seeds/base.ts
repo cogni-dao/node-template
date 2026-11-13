@@ -7,7 +7,7 @@
  * Scope: Seed data definitions only. Does not perform I/O — the provisioning script applies these.
  * Invariants: Append-only catalogue; IDs are stable. Per-node domain seeds live in their own packages, not here.
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-store-schema
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @public
  */
 

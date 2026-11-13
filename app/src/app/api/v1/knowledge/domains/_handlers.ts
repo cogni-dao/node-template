@@ -18,7 +18,7 @@
  *   can be added later),
  *   DOMAIN_ID_IS_IMMUTABLE, DOMAIN_DELETE_REFUSES_NONEMPTY (409, never cascade).
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
- * Links: docs/spec/knowledge-domain-registry.md, https://node-template.cognidao.org/knowledge/knowledge-write-contract
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-domain-management, https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @internal
  */
 

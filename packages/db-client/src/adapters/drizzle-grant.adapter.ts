@@ -12,7 +12,7 @@
  * - ensureGrant selects non-revoked, unexpired scope-compatible rows before findFirst
  * - withTenantScope called on every method (uniform invariant, no-op on serviceDb)
  * Side-effects: IO (database operations)
- * Links: ports/scheduling/execution-grant.port.ts, docs/spec/scheduler.md
+ * Links: ports/scheduling/execution-grant.port.ts, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/scheduler.md
  * @public
  */
 

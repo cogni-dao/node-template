@@ -10,7 +10,7 @@
  *   - NO_STUB_AT_RUNTIME: All tools have real implementations with I/O
  *   - IO_VIA_ADAPTERS: Capabilities wrap adapter ports from container
  * Side-effects: none
- * Links: TOOL_USE_SPEC.md, container.ts
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/tool-use.md, container.ts
  * @internal
  */
 

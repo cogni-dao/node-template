@@ -1070,7 +1070,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     // The read serves the committed row while the evidence branch still
     // stands, and — unlike before 0.1.7 — does NOT clean it up. Reconciliation
     // renames or drops a branch, which is a WRITE; having it ride along on
-    // `get` violated COMMAND_QUERY_SEPARATION (docs/spec/work-items-port.md)
+    // `get` violated COMMAND_QUERY_SEPARATION (https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/work-items-port.md)
     // and was the reason a read had to take the write lock at all.
     await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject(
       {

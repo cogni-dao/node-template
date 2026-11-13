@@ -7,7 +7,7 @@
  * Scope: Root barrel exports port interfaces, domain types, and the framework-agnostic contribution service factory. Does not export adapters — those live behind subpath imports.
  * Invariants: PACKAGES_NO_ENV, PACKAGES_NO_LIFECYCLE, PACKAGES_NO_SRC_IMPORTS.
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, docs/design/knowledge-contribution-api.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-contribution-flow
  * @public
  */
 

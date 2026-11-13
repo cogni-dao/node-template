@@ -7,7 +7,7 @@
  * Scope: Pure interfaces only. Does not contain I/O or implementations.
  * Invariants: Command/query separation — reads via QueryPort, writes via CommandPort.
  * Side-effects: none
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @public
  */
 

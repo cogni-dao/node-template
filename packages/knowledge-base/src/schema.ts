@@ -20,7 +20,7 @@
  *   - No FK references to Postgres tables (different database server).
  *   - No RLS — access control via Doltgres roles (knowledge_reader / knowledge_writer).
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-store-schema, work/items/task.0425.knowledge-contribution-api.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @public
  */
 

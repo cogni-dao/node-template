@@ -14,7 +14,7 @@ import { displayFits, KpiBindingsSchema, StoredMetricSpecSchema } from "@cogni-d
  *   goal-retiring edge) additionally requires node admin — enforced in ContributionService.merge
  *   on raw diff ids at the gated head; mapped here to 403 `authz_denied` / 503 `authz_unavailable`.
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
- * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-contribution-flow, packages/knowledge-store
  * @internal
  */
 

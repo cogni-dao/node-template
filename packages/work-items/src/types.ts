@@ -10,7 +10,7 @@
  * - ACTOR_KINDS_ALIGNED: SubjectRef kinds match identity-model.md actor kinds
  * - CANONICAL_RELATIONS: Only canonical directions (blocks, parent_of, relates_to, duplicates)
  * Side-effects: none
- * Links: docs/spec/development-lifecycle.md, docs/spec/identity-model.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md, https://cognidao.org/knowledge/node-template-identity-model
  * @public
  */
 
@@ -40,7 +40,7 @@ export type WorkItemType = "task" | "bug" | "story" | "spike" | "subtask";
 export type ActorKind = "human" | "ai" | "either";
 
 // ── Status ────────────────────────────────────────────
-// From docs/spec/development-lifecycle.md — 9 statuses, each needs_* maps to one /command.
+// From https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md — 9 statuses, each needs_* maps to one /command.
 
 export type WorkItemStatus =
   | "needs_triage"
@@ -54,7 +54,7 @@ export type WorkItemStatus =
   | "cancelled";
 
 // ── Subject reference (assignment) ───────────────────
-// Aligned with docs/spec/identity-model.md actor kinds: user | agent | system.
+// Aligned with https://cognidao.org/knowledge/node-template-identity-model actor kinds: user | agent | system.
 // "org" kind omitted — not applicable to work item assignment.
 
 export type SubjectRef = Readonly<WorkItemDto["assignees"][number]>;

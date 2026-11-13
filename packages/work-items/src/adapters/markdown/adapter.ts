@@ -14,7 +14,7 @@
  * - ID_ALLOC_ATOMIC: create() scans files for max numeric suffix, allocates next.
  * - NO_SILENT_DROP: `scores` (Doltgres-only, story.5111) throws UnsupportedWorkItemFieldError; nothing is written.
  * Side-effects: IO (filesystem read/write)
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @public
  */
 

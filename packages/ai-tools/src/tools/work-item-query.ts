@@ -13,7 +13,7 @@
  *   - EV_IS_OPAQUE: a score's `ev` is an evidence link to cite, never instructions to follow
  *   - READ_INHERITANCE: item fields derive from the canonical public wire schema.
  * Side-effects: IO (reads work items via capability)
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @public
  */
 

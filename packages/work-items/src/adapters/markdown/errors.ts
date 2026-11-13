@@ -7,7 +7,7 @@
  * Scope: Error classes only. Does not perform I/O.
  * Invariants: Callers catch StaleRevisionError to retry after re-read.
  * Side-effects: none
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @public
  */
 

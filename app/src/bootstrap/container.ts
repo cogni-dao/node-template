@@ -898,7 +898,7 @@ function createContainer(): Container {
 		// is only granted to the production GitHub Environment Secret scope, so
 		// candidate-a/preview boot with the hook undefined and never push. v0
 		// invariant: prod is the only writer. Bootstrap: see
-		// docs/runbooks/dolthub-remote-bootstrap.md.
+		// https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/dolthub-remote-bootstrap.md.
 		const remoteUrl = env.DOLTHUB_REMOTE_URL;
 		const pushMainOnMerge = remoteUrl
 			? wrapPushSafe(
@@ -922,7 +922,7 @@ function createContainer(): Container {
 			// Provenance is stamped by the adapter (`source_type='external'`,
 			// `source_ref='contribution:<id>:<seq>'`), so the provenance gate is
 			// reserved for internal `core__knowledge_write` where the caller
-			// controls those fields. See work/projects/proj.knowledge-syntropy.md.
+			// controls those fields. See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.knowledge-syntropy.md.
 			gates: [shapeGate],
 			nodeAdmin,
 			...(pushMainOnMerge ? { pushMainOnMerge } : {}),

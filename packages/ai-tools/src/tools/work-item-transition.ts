@@ -19,7 +19,7 @@
  *     (axis ids, 0–5, SCORE_NEEDS_EVIDENCE, safe HTTPS evidence URLs, 1 KB) is the store adapter's
  *     `parseWorkItemScores`. Its rejection propagates, so the agent gets a tool error naming each failed axis.
  * Side-effects: IO (mutates work items via capability)
- * Links: docs/spec/development-lifecycle.md, docs/spec/tool-use.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/tool-use.md
  * @public
  */
 
