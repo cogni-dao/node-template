@@ -926,3 +926,159 @@ describe("DoltgresWorkItemAdapter.patch — cites (task.0086)", () => {
     ).rejects.toMatchObject({ ids: ["a-b"] });
   });
 });
+
+// task.0028: review artifacts are inserted through the same operation-branch writer path as a patch,
+// into their own insert-only table, and read back newest first.
+describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
+  const ROWS = [
+    {
+      tweak: "POST ARTIFACTS",
+      human: "—",
+      ai: "🟢",
+      loki: "🟢",
+      trace: "—",
+      overall: "🟢 PASS",
+    },
+  ];
+
+  function artifactHarness(readRows: Record<string, unknown>[] = []) {
+    const queries: string[] = [];
+    const respond = (query: string) => {
+      if (query.startsWith("INSERT INTO work_item_artifacts")) {
+        const values =
+          /VALUES \('([^']+)', '([^']+)', '([^']+)', '([^']*)', '([^']+)', (NULL|'.*?'::jsonb), (NULL|'[^']*'), '([^']+)'\) RETURNING/.exec(
+            query
+          );
+        const [, id, itemId, kind, subject, verdict, rows, url, author] =
+          values ?? [];
+        return [
+          {
+            id,
+            item_id: itemId,
+            kind,
+            subject,
+            verdict,
+            rows: rows === "NULL" ? null : JSON.parse(String(rows).slice(1, -8)),
+            url: url === "NULL" ? null : String(url).slice(1, -1),
+            author,
+            created_at: "2026-10-03T00:00:00.000Z",
+          },
+        ];
+      }
+      if (query.includes("FROM work_item_artifacts")) return readRows;
+      return [];
+    };
+    const sql = makeFakeDoltgresSql(respond, queries);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+      recreateClient: () => sql,
+    });
+    return { adapter, queries };
+  }
+
+  const PR = "https://github.com/cogni-dao/node-template/pull/352";
+  const input = {
+    itemId: "task.0001",
+    kind: "validation" as const,
+    subject: `${PR}@${"a".repeat(40)}`,
+    verdict: "pass",
+    rows: ROWS as never,
+    url: `${PR}#issuecomment-1`,
+    author: "validator-1",
+  };
+
+  it("inserts one row on an operation branch, adds only its table, and commits with the actor, a reason and the row id", async () => {
+    const { adapter, queries } = artifactHarness();
+    const stored = await adapter.artifacts.insert(input);
+
+    expect(stored).toMatchObject({
+      itemId: "task.0001",
+      kind: "validation",
+      verdict: "pass",
+      url: input.url,
+      author: "validator-1",
+      rows: ROWS,
+    });
+    expect(stored.id).toMatch(/^wia-[0-9a-f-]{36}$/);
+    const insert = queries.find((q) => q.startsWith("INSERT INTO work_item_artifacts"));
+    expect(insert).toContain('(id, item_id, kind, subject, verdict, "rows", url, author)');
+    expect(branchCreated(queries)).toBe(true);
+    expect(queries).toContain("SELECT dolt_add('work_item_artifacts')");
+    expect(queries).not.toContain("SELECT dolt_add('work_items')");
+    expect(queries).toContain(
+      `SELECT dolt_commit('-m', 'work-items: artifact task.0001 by actor:validator-1\nReason: Record validation artifact with verdict pass\nArtifact: ${stored.id}')`
+    );
+    // The operation branch was proven (exact one-row added diff) and merged.
+    expect(queries.some((q) => q.includes("FROM dolt_merge("))).toBe(true);
+    expect(queries.some((q) => q.startsWith("SELECT id FROM work_item_artifacts WHERE id"))).toBe(true);
+  });
+
+  it("refuses an unknown kind or an empty author before any SQL is sent", async () => {
+    const { adapter, queries } = artifactHarness();
+    await expect(
+      adapter.artifacts.insert({ ...input, kind: "approval" as never })
+    ).rejects.toThrow(/Unknown artifact kind/);
+    await expect(adapter.artifacts.insert({ ...input, author: "" })).rejects.toThrow();
+    expect(branchCreated(queries)).toBe(false);
+    expect(committed(queries)).toBe(false);
+  });
+
+  it("lists newest first in one bounded read, and the latest of each kind in one query", async () => {
+    const stored = (kind: string, id: string) => ({
+      id,
+      item_id: "task.0001",
+      kind,
+      subject: "s",
+      verdict: "approve",
+      rows: null,
+      url: "https://example.org/x",
+      author: "a",
+      created_at: new Date("2026-10-03T00:00:00.000Z"),
+    });
+    const { adapter, queries } = artifactHarness([stored("design_review", "wia-1")]);
+
+    const listed = await adapter.artifacts.list("task.0001");
+    expect(listed).toEqual([
+      {
+        id: "wia-1",
+        itemId: "task.0001",
+        kind: "design_review",
+        subject: "s",
+        verdict: "approve",
+        url: "https://example.org/x",
+        author: "a",
+        createdAt: "2026-10-03T00:00:00.000Z",
+      },
+    ]);
+    expect(queries.at(-1)).toBe(
+      "SELECT * FROM work_item_artifacts WHERE item_id = 'task.0001' ORDER BY created_at DESC, id DESC LIMIT 50"
+    );
+
+    const before = queries.length;
+    await adapter.artifacts.latest("task.0001");
+    const latestQueries = queries.slice(before);
+    expect(latestQueries).toHaveLength(1);
+    const latest = latestQueries[0] as string;
+    expect(latest.startsWith("WITH latest AS (")).toBe(true);
+    for (const kind of [
+      "design_review",
+      "implementation_review",
+      "validation",
+      "design_waiver",
+    ]) {
+      expect(latest).toContain(`kind = '${kind}' ORDER BY created_at DESC, id DESC LIMIT 1)`);
+    }
+    expect(latest.match(/UNION ALL/g)).toHaveLength(3);
+  });
+
+  it("is insert-only: the adapter holds no UPDATE or DELETE of the artifact table", async () => {
+    const source = await import("node:fs").then((fs) =>
+      fs.readFileSync(
+        new URL("../../src/adapters/doltgres/adapter.ts", import.meta.url),
+        "utf8"
+      )
+    );
+    expect(source).not.toMatch(/UPDATE\s+(\$\{ARTIFACT_TABLE\}|work_item_artifacts)/);
+    expect(source).not.toMatch(/DELETE\s+FROM\s+(\$\{ARTIFACT_TABLE\}|work_item_artifacts)/);
+  });
+});

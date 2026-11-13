@@ -10,6 +10,7 @@
  * Evaluation: preserves scores in DTOs. Write errors pass through unchanged; `workItemWriteErrorResponse` (@cogni/work-items) maps them to HTTP in the route (task.0097).
  * Moves (story.0033): create and patch resolve new metric links and pin baselines. Detail and bounded summary reads add authorized observations and directional verdicts. Null-direction writes remain gated until reader rollout completes.
  * Envelope (task.0118): `getWorkItem` is the one single-item read; each move also carries its metric, KPI and goal, and `includeLinks` adds the first page of citation links. List and summary reads stay summary-sized.
+ * Artifacts (task.0028): `getWorkItem` also adds `artifacts`, the latest review or validation of each kind from one bounded read; a failed read is `artifacts: { unavailable: true }`, never an empty answer.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
@@ -20,6 +21,7 @@ import type {
   WorkItemsPatchInput as ContractPatchInput,
   WorkItemCoordinationOutput,
   WorkItemDto,
+  WorkItemsGetOutput,
   WorkItemsListInput,
   WorkItemsListOutput,
   WorkItemSummariesListInput,
@@ -348,6 +350,8 @@ export interface WorkItemReadOptions extends WorkSummaryReadOptions {
   readonly includeLinks?: boolean;
   /** Set false for a caller that needs only the stored move ids (the EDO expectations read). Default: resolve the chain. */
   readonly chain?: boolean;
+  /** Set false for a caller that needs only the item (the EDO expectations read). Default: read the latest artifacts. */
+  readonly artifacts?: boolean;
 }
 
 /**
@@ -356,8 +360,9 @@ export interface WorkItemReadOptions extends WorkSummaryReadOptions {
  * links read together, so neither adds a round trip to the other. Never throws for either: an
  * unresolved chain reads `context: "unavailable"` and unreadable links read `unavailable`.
  */
-async function withItemEnvelope(dto: WorkItemDto, options?: WorkItemReadOptions): Promise<WorkItemDto> {
+async function withItemEnvelope(dto: WorkItemDto, options?: WorkItemReadOptions): Promise<WorkItemsGetOutput> {
   const container = getContainer();
+  const artifactStore = container.workItemArtifacts?.artifacts;
   const readings = container.goalMetrics
     ? createMoveMetricPorts(() => container.goalMetrics, () => container.knowledgeStorePort).readings
     : undefined;
@@ -367,13 +372,15 @@ async function withItemEnvelope(dto: WorkItemDto, options?: WorkItemReadOptions)
     {
       readings,
       links: createCitationLinksPort(() => container.knowledgeStorePort),
+      // task.0028: the latest review or validation of each kind, one bounded read.
+      artifacts: artifactStore ? { latest: (id) => artifactStore.latest(id) } : undefined,
       log: (event) => container.log.warn(event, "work.items.envelope_degraded"),
     },
     options,
   );
 }
 
-export async function getWorkItem(id: string, options?: WorkItemReadOptions): Promise<WorkItemDto | null> {
+export async function getWorkItem(id: string, options?: WorkItemReadOptions): Promise<WorkItemsGetOutput | null> {
   const container = getContainer();
   // Doltgres-first: legacy markdown IDs (e.g. bug.0002) can also live in Doltgres
   // after the markdown→Doltgres import (task.5002). Fall back to markdown only when

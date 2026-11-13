@@ -30,6 +30,10 @@ export const EVENT_NAMES = {
 	WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
 	// Row history reads (task.0052): one terminal event per read, counts only.
 	WORK_ITEMS_HISTORY_READ: "work.items.history_read",
+	// Review and validation artifacts (task.0028): a write, a refusal (400, 404, 409) and a read, each one terminal event; codes and counts only, never a body, a row or a url.
+	WORK_ITEMS_ARTIFACT_RECORDED: "work.items.artifact_recorded",
+	WORK_ITEMS_ARTIFACT_REFUSED: "work.items.artifact_refused",
+	WORK_ITEMS_ARTIFACTS_READ: "work.items.artifacts_read",
 	KNOWLEDGE_HISTORY_READ: "knowledge.history_read",
 	// Whole-graph read (task.0059): one terminal event per read, counts and bytes only.
 	KNOWLEDGE_GRAPH_READ: "knowledge.graph_read",

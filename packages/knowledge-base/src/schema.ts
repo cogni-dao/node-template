@@ -17,6 +17,7 @@
  *   - CONFIDENCE_EVERYWHERE: every row in every knowledge table has `confidence_pct` (integer 0-100). New rows default to 40 — start low, raise as evidence accumulates. 100 is reserved for "factual and works" (objectively verifiable + currently functioning). See seed `cogni-meta-confidence-convention`.
  *   - EVALUATION_SCORES: work_items.scores stores bounded evaluation JSON; work-items owns validation.
  *   - WORK_ITEM_MOVES: work_items.moves stores at most 3 declared metric moves with a server-pinned baseline (story.0033); work-items owns validation. Migrate the column before any reader runs the new package.
+ *   - WORK_ITEM_ARTIFACTS_INSERT_ONLY (task.0028): `work_item_artifacts` is insert-only. No route or adapter path updates or deletes a row; Dolt history proves it. work-items owns the contract (kinds, subject formats, verdicts, scorecard rows) and the PASS-grade rule.
  *   - No FK references to Postgres tables (different database server).
  *   - No RLS — access control via Doltgres roles (knowledge_reader / knowledge_writer).
  * Side-effects: none
@@ -327,6 +328,40 @@ export const workItems = pgTable(
     index("idx_work_items_project_id").on(t.projectId),
   ]
 );
+
+/**
+ * work_item_artifacts — immutable, typed verdicts on one revision of a work item (task.0028).
+ *
+ * One row per review or validation: `kind` is `design_review`, `implementation_review`,
+ * `validation` or `design_waiver` (server-written only). `subject` pins the revision judged;
+ * `verdict` and `rows` (validation only, the canonical scorecard rows) say what was found;
+ * `url` points at the body (PR comment or inbox); `author` is the principal the server
+ * stamped. Insert-only: a later verdict is a new row, never an edit. The body stays where it
+ * was produced; the row pins it. `item_id` has no FK: work_items rows are patched in place
+ * and a verdict must survive any edit of its item. `url` is nullable so a server-stamped
+ * waiver (no body) can carry none; a caller-written artifact always has one.
+ */
+export const workItemArtifacts = pgTable(
+  "work_item_artifacts",
+  {
+    id: text("id").primaryKey(),
+    itemId: text("item_id").notNull(),
+    kind: text("kind").notNull(),
+    subject: text("subject").notNull(),
+    verdict: text("verdict").notNull(),
+    // validation only: [{ tweak, human, ai, loki, trace, overall, reason? }]
+    rows: jsonb("rows"),
+    url: text("url"),
+    author: text("author").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("idx_work_item_artifacts_item_created").on(t.itemId, t.createdAt)]
+);
+
+export type WorkItemArtifactRow = typeof workItemArtifacts.$inferSelect;
+export type NewWorkItemArtifactRow = typeof workItemArtifacts.$inferInsert;
 
 export type WorkItemRow = typeof workItems.$inferSelect;
 export type NewWorkItemRow = typeof workItems.$inferInsert;

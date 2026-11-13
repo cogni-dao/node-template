@@ -29,6 +29,8 @@ export function makeFakeDoltgresSql(
   let operation = 0;
   let merged = false;
   let provingMergedRow = false;
+  // task.0028: the open operation inserts into `work_item_artifacts` instead of touching `work_items`.
+  let artifactOperation = false;
 
   const unquote = (value: string | undefined) => value?.replace(/''/g, "'");
   const prefixed = (
@@ -73,6 +75,7 @@ export function makeFakeDoltgresSql(
       branchCommit = undefined;
       afterRow = undefined;
       merged = false;
+      artifactOperation = false;
       return [{ dolt_checkout: [0, ""] }];
     }
     if (query === "SELECT table_name FROM dolt.status") return [];
@@ -83,7 +86,10 @@ export function makeFakeDoltgresSql(
     if (query === "SELECT dolt_hashof('main') AS dolt_hashof") {
       return [{ dolt_hashof: mainHash }];
     }
-    if (query === "SELECT dolt_add('work_items')") {
+    if (
+      query === "SELECT dolt_add('work_items')" ||
+      query === "SELECT dolt_add('work_item_artifacts')"
+    ) {
       return [{ dolt_add: [0, ""] }];
     }
     if (query.startsWith("SELECT dolt_commit")) {
@@ -140,10 +146,11 @@ export function makeFakeDoltgresSql(
         : [];
     }
     if (query.startsWith("SELECT * FROM dolt_diff_summary")) {
+      const table = artifactOperation ? "work_item_artifacts" : "work_items";
       return [
         {
-          from_table_name: "public.work_items",
-          to_table_name: "public.work_items",
+          from_table_name: `public.${table}`,
+          to_table_name: `public.${table}`,
           schema_change: false,
           data_change: false,
         },
@@ -167,6 +174,14 @@ export function makeFakeDoltgresSql(
     }
     if (
       provingMergedRow &&
+      artifactOperation &&
+      query.startsWith("SELECT id FROM work_item_artifacts WHERE id")
+    ) {
+      provingMergedRow = false;
+      return currentTableRow ? [{ id: currentTableRow.id }] : [];
+    }
+    if (
+      provingMergedRow &&
       query.startsWith("SELECT * FROM work_items WHERE id")
     ) {
       provingMergedRow = false;
@@ -174,7 +189,15 @@ export function makeFakeDoltgresSql(
     }
 
     const rows = await respond(query);
+    if (query.startsWith("INSERT INTO work_item_artifacts")) {
+      artifactOperation = true;
+      diffType = "added";
+      beforeRow = undefined;
+      afterRow = rows[0] ? { ...rows[0] } : undefined;
+      return afterRow ? [afterRow] : rows;
+    }
     if (query.startsWith("INSERT INTO work_items")) {
+      artifactOperation = false;
       diffType = "added";
       beforeRow = undefined;
       afterRow = rows[0] ? { ...rows[0] } : undefined;

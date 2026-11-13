@@ -12,6 +12,8 @@
 
 import { z } from "zod";
 
+import { WorkItemArtifactsLatestSchema } from "./artifacts.js";
+
 export const SubjectRefSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("user"), userId: z.string() }),
 	z.object({ kind: z.literal("agent"), agentId: z.string() }),
@@ -191,6 +193,16 @@ export const WorkItemDtoSchema = z.object({
 });
 
 export type WorkItemDto = z.infer<typeof WorkItemDtoSchema>;
+
+/**
+ * The single-item HTTP read (`GET /api/v1/work/items/{id}`): the item plus the latest review or validation
+ * of each kind (task.0028). Not on `WorkItemDtoSchema`: the agent tool's output must carry every key of that
+ * schema (agent-tool-context-envelope rule 3), and the tool does not serve artifacts yet.
+ */
+export const WorkItemReadDtoSchema = WorkItemDtoSchema.extend({
+	artifacts: WorkItemArtifactsLatestSchema.optional(),
+});
+export type WorkItemReadDto = z.infer<typeof WorkItemReadDtoSchema>;
 
 /** Browser list projection; detail and operational fields remain on WorkItemDto. */
 export const WorkItemSummarySchema = WorkItemDtoSchema.pick({

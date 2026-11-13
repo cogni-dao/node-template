@@ -74,6 +74,17 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
       "knowledge.domains.get",
     ],
   },
+  "work.item.review": {
+    requires: {
+      scope: "work_item:review",
+      kind: "node",
+      subject: "member",
+      label: "Record reviews and validations on work items",
+      description:
+        "Write a design review, an implementation review or a validation on a work item. It must come from someone other than the author of what it judges.",
+    },
+    routes: ["work.items.artifacts.create"],
+  },
   "knowledge.contribute": {
     requires: {
       scope: "knowledge:contribute",

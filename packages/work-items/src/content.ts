@@ -13,6 +13,7 @@
  * @public
  */
 
+import type { WorkItemArtifactStore } from "./artifacts.js";
 import type { CiteRef } from "./cites.js";
 import type { WorkItemSummary } from "./contracts.js";
 import type { HistoryEntry } from "./history.js";
@@ -104,6 +105,8 @@ export interface WorkItemsPort {
   history?(id: WorkItemId): Promise<HistoryEntry[]>;
   /** In-memory writer state for deep readiness; makes no database call. */
   writerHealth?(): WorkItemWriterHealth;
+  /** Insert-only review and validation artifacts (task.0028). Absent on a store that does not serve them. */
+  readonly artifacts?: WorkItemArtifactStore;
   claim: WorkItemLeasePort["claim"];
   heartbeat: WorkItemLeasePort["heartbeat"];
   release: WorkItemLeasePort["release"];

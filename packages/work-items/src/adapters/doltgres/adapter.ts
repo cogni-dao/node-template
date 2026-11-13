@@ -46,6 +46,15 @@ export {
 } from "../../errors.js";
 
 import {
+  ARTIFACT_KINDS,
+  ARTIFACTS_LIST_MAX,
+  type ArtifactKind,
+  type NewWorkItemArtifact,
+  type ScorecardRow,
+  type WorkItemArtifact,
+  type WorkItemArtifactStore,
+} from "../../artifacts.js";
+import {
   CITE_COMMIT_PATTERN,
   type CiteRef,
   CitesInvalidError,
@@ -301,7 +310,11 @@ type MutationVerb =
   | "delete"
   | "claim"
   | "heartbeat"
-  | "release";
+  | "release"
+  | "artifact";
+
+/** The table an `artifact` operation inserts into; every other verb writes `work_items`. */
+const ARTIFACT_TABLE = "work_item_artifacts";
 
 interface MutationProof {
   readonly verb: MutationVerb;
@@ -320,6 +333,8 @@ interface MutationProof {
   readonly reason?: string;
   /** `patch` only: the cites the resolver pinned inside the lock; written as the last `Cites:` commit line. */
   cites?: readonly HistoryCite[];
+  /** `artifact` only (task.0028): the id of the one inserted `work_item_artifacts` row; written as an `Artifact:` commit line. */
+  readonly artifactId?: string;
 }
 
 interface MutationOptions<T> {
@@ -353,6 +368,8 @@ interface ValidatedBranchTransition {
   readonly before: RowSnapshot;
   readonly after: RowSnapshot;
   readonly commitAt: number;
+  /** `artifact` operations only: the proven inserted row's id (before and after are empty snapshots). */
+  readonly artifactId?: string;
 }
 
 class PendingBranchRecoveryError<T = unknown> extends Error {
@@ -526,6 +543,25 @@ function jsonArrayOf<T>(value: unknown): readonly T[] {
     }
   }
   return [];
+}
+
+function rowToArtifact(row: Record<string, unknown>): WorkItemArtifact {
+  const rows = jsonArrayOf<ScorecardRow>(row.rows);
+  const url = optionalString(row.url);
+  return {
+    id: String(row.id),
+    itemId: String(row.item_id),
+    kind: String(row.kind) as ArtifactKind,
+    subject: String(row.subject),
+    verdict: String(row.verdict),
+    ...(rows.length ? { rows: [...rows] } : {}),
+    ...(url !== undefined ? { url } : {}),
+    author: String(row.author),
+    createdAt:
+      row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : String(row.created_at ?? ""),
+  };
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -856,6 +892,7 @@ function commitMessage(
 ): string {
   const lines = [`${COMMIT_TAG}: ${message} by actor:${principalId}`];
   if (proof.reason) lines.push(`Reason: ${proof.reason}`);
+  if (proof.artifactId) lines.push(`Artifact: ${proof.artifactId}`);
   if (proof.cites?.length) lines.push(`Cites: ${formatCitesTrailer(proof.cites)}`);
   return lines.join("\n");
 }
@@ -976,6 +1013,56 @@ function legacyProofFromMessage(
     beforeRow: before,
     afterRow: after,
   };
+}
+
+/** The first commit line of an artifact insert: `work-items: artifact <itemId> by actor:<principal>`. */
+const ARTIFACT_MESSAGE = /^work-items: artifact ([^ ]+) by actor:([^ ]+)$/;
+
+function isArtifactMessage(message: string): boolean {
+  return ARTIFACT_MESSAGE.test(message.split("\n")[0] ?? "");
+}
+
+/**
+ * The proof of an artifact insert, from its commit message (a branch with no in-memory proof, found by
+ * the restart sweep). The row id is read from the diff and checked against the message's `Artifact:` line.
+ */
+function legacyArtifactProofFromMessage(
+  message: string,
+  row: Record<string, unknown>
+): MutationProof | undefined {
+  const [first = "", ...rest] = message.split("\n");
+  const match = ARTIFACT_MESSAGE.exec(first);
+  if (!match?.[1] || !match[2]) return undefined;
+  const artifactId = String(row.id ?? "");
+  const named = rest.find((line) => line.startsWith("Artifact: "));
+  if (!artifactId || named?.slice("Artifact: ".length) !== artifactId)
+    return undefined;
+  return {
+    verb: "artifact",
+    principal: match[2],
+    itemId: match[1],
+    artifactId,
+  };
+}
+
+/** The inserted row is exactly what the proof names: one new row, one item, one author, a known kind. */
+function validateArtifactInsert(
+  proof: MutationProof,
+  row: Record<string, unknown>
+): boolean {
+  return (
+    proof.verb === "artifact" &&
+    proof.artifactId !== undefined &&
+    String(row.id ?? "") === proof.artifactId &&
+    String(row.item_id ?? "") === (proof.itemId ?? "") &&
+    String(row.author ?? "") === proof.principal &&
+    proof.principal.length > 0 &&
+    (ARTIFACT_KINDS as readonly string[]).includes(String(row.kind ?? "")) &&
+    String(row.subject ?? "").length > 0 &&
+    String(row.verdict ?? "").length > 0 &&
+    row.created_at !== null &&
+    row.created_at !== undefined
+  );
 }
 
 function requireNamedMerge(rows: unknown): {
@@ -1136,6 +1223,9 @@ function validateTransitionMatrix(
         revisionAdvanced
       );
     }
+    case "artifact":
+      // An artifact insert is proven by `validateArtifactInsert` on its own table, never as a `work_items` transition.
+      return false;
     case "release":
       return (
         String(before.id) === itemId &&
@@ -1175,6 +1265,7 @@ function queryStage(query: string): string {
   if (query.startsWith("INSERT INTO work_items")) return "dml.create";
   if (query.startsWith("UPDATE work_items")) return "dml.update";
   if (query.startsWith("DELETE FROM work_items")) return "dml.delete";
+  if (query.startsWith("INSERT INTO work_item_artifacts")) return "dml.artifact";
   if (query.includes("FROM work_items")) return "dml.read";
   return "sql.other";
 }
@@ -2283,14 +2374,19 @@ export class DoltgresWorkItemAdapter
       `SELECT * FROM dolt_diff_summary(${escapeValue(baseHash)}, ${escapeValue(tip)})`
     )) as ReadonlyArray<Record<string, unknown>>;
     const summary = summaries[0];
+    // An artifact insert touches `work_item_artifacts` only; every other operation touches `work_items`.
+    const isArtifact = pending
+      ? pending.proof.verb === "artifact"
+      : isArtifactMessage(String(commit.message ?? ""));
+    const table = isArtifact ? ARTIFACT_TABLE : "work_items";
     // Deployed Doltgres falsifies data_change=false for the real b112 one-row
     // add. The exact row diff below is data authority; summary is schema/scope
     // authority only (bug.5358 approved Rev3 amendment).
     if (
       summaries.length !== 1 ||
       !summary ||
-      String(summary.from_table_name ?? "") !== "public.work_items" ||
-      String(summary.to_table_name ?? "") !== "public.work_items" ||
+      String(summary.from_table_name ?? "") !== `public.${table}` ||
+      String(summary.to_table_name ?? "") !== `public.${table}` ||
       doltBoolean([summary], "schema_change")
     ) {
       throw new WorkItemsBusyError(
@@ -2298,7 +2394,7 @@ export class DoltgresWorkItemAdapter
       );
     }
     const diffs = (await conn.unsafe(
-      `SELECT * FROM dolt_diff(${escapeValue(baseHash)}, ${escapeValue(tip)}, 'work_items')`
+      `SELECT * FROM dolt_diff(${escapeValue(baseHash)}, ${escapeValue(tip)}, '${table}')`
     )) as ReadonlyArray<Record<string, unknown>>;
     if (diffs.length !== 1 || !diffs[0]) {
       throw new WorkItemsBusyError(
@@ -2306,6 +2402,43 @@ export class DoltgresWorkItemAdapter
       );
     }
     const diff = diffs[0];
+    if (isArtifact) {
+      // INSERT_ONLY: the only provable artifact operation is one added row that matches its proof.
+      const added = Object.fromEntries(
+        Object.entries(diff)
+          .filter(([key]) => key.startsWith("to_"))
+          .map(([key, value]) => [key.slice(3), value])
+      );
+      const artifactCommitAt = asEpoch(commit.date);
+      if (artifactCommitAt === undefined) {
+        throw new WorkItemsBusyError(
+          `Work-item branch ${branch} has no authoritative commit time; preserving evidence`
+        );
+      }
+      const artifactProof =
+        pending?.proof ??
+        legacyArtifactProofFromMessage(String(commit.message ?? ""), added);
+      if (
+        !artifactProof ||
+        !validateArtifactInsert(artifactProof, added) ||
+        String(diff.diff_type ?? "").toLowerCase() !== "added"
+      ) {
+        throw new UnprovableTransitionError(
+          `Work-item branch ${branch} failed its operation proof; preserving evidence`
+        );
+      }
+      const empty = snapshotRow({});
+      return {
+        branch,
+        baseHash,
+        tip,
+        proof: artifactProof,
+        before: empty,
+        after: empty,
+        commitAt: artifactCommitAt,
+        artifactId: String(added.id),
+      };
+    }
     const before = snapshotRow(diff, "from_");
     const after = snapshotRow(diff, "to_");
     const commitAt = asEpoch(commit.date);
@@ -2342,6 +2475,13 @@ export class DoltgresWorkItemAdapter
   ): Promise<void> {
     if (!(await this.branchCommitIsOnMain(conn, transition.tip))) {
       throw new DoltMergeOutcomeUnknownError();
+    }
+    if (transition.artifactId !== undefined) {
+      const found = (await conn.unsafe(
+        `SELECT id FROM ${ARTIFACT_TABLE} WHERE id = ${escapeValue(transition.artifactId)} LIMIT 1`
+      )) as ReadonlyArray<Record<string, unknown>>;
+      if (!found[0]) throw new DoltMergeOutcomeUnknownError();
+      return;
     }
     const id = String(
       transition.proof.verb === "delete"
@@ -2770,11 +2910,10 @@ export class DoltgresWorkItemAdapter
       "SELECT table_name FROM dolt.status"
     )) as ReadonlyArray<Record<string, unknown>>;
     if (
-      rows.some((row) =>
-        String(row.table_name ?? "")
-          .toLowerCase()
-          .endsWith("work_items")
-      )
+      rows.some((row) => {
+        const table = String(row.table_name ?? "").toLowerCase();
+        return table.endsWith("work_items") || table.endsWith(ARTIFACT_TABLE);
+      })
     ) {
       throw new DirtyWorkItemsMainError();
     }
@@ -2868,7 +3007,9 @@ export class DoltgresWorkItemAdapter
         await this.returnToMainAndDeleteBranch(conn, branch);
         return result;
       }
-      const addRows = await conn.unsafe("SELECT dolt_add('work_items')");
+      const addRows = await conn.unsafe(
+        `SELECT dolt_add('${proof.verb === "artifact" ? ARTIFACT_TABLE : "work_items"}')`
+      );
       assertDoltStatus(addRows, "dolt_add");
       state.commitAttempted = true;
       const commitRows = await conn.unsafe(
@@ -3307,6 +3448,80 @@ export class DoltgresWorkItemAdapter
         version: (row) => String(row.to_revision ?? ""),
         reasonAndActor: (row) => parseWorkItemCommitMessage(row.message),
       });
+    });
+  }
+
+  /**
+   * Insert-only review and validation artifacts (task.0028). A write is one INSERT on an operation
+   * branch, committed with the item id, the actor and a reason, then merged to main under the writer
+   * lock, the same path a patch takes. There is no update and no delete.
+   */
+  readonly artifacts: WorkItemArtifactStore = {
+    insert: (row) => this.insertArtifact(row),
+    list: (itemId) => this.listArtifacts(itemId),
+    latest: (itemId) => this.latestArtifacts(itemId),
+  };
+
+  private async insertArtifact(
+    input: NewWorkItemArtifact
+  ): Promise<WorkItemArtifact> {
+    const principal = requirePrincipal(input.author);
+    if (!(ARTIFACT_KINDS as readonly string[]).includes(input.kind)) {
+      throw new Error(`Unknown artifact kind: ${String(input.kind)}`);
+    }
+    const id = `wia-${randomUUID()}`;
+    const itemId = String(input.itemId);
+    const reason = normalizeChangeReason(
+      `Record ${input.kind} artifact with verdict ${input.verdict}`
+    );
+    return this.mutate<WorkItemArtifact>(
+      `artifact ${itemId}`,
+      principal,
+      async (conn, proof) => {
+        const rows = await conn.unsafe(
+          `INSERT INTO ${ARTIFACT_TABLE} (id, item_id, kind, subject, verdict, "rows", url, author) VALUES (${escapeValue(id)}, ${escapeValue(itemId)}, ${escapeValue(input.kind)}, ${escapeValue(input.subject)}, ${escapeValue(input.verdict)}, ${escapeValue(input.rows ?? null)}, ${escapeValue(input.url ?? null)}, ${escapeValue(principal)}) RETURNING *`
+        );
+        const row = rows[0] as Record<string, unknown> | undefined;
+        if (!row) throw new Error("INSERT returned no artifact row");
+        return rowToArtifact(row);
+      },
+      {
+        proof: {
+          verb: "artifact",
+          principal,
+          itemId,
+          artifactId: id,
+          reason,
+        },
+      }
+    );
+  }
+
+  /** Newest first, at most `ARTIFACTS_LIST_MAX`. */
+  private async listArtifacts(
+    itemId: string
+  ): Promise<readonly WorkItemArtifact[]> {
+    return this.readOnCleanMain(async (conn) => {
+      const rows = await conn.unsafe(
+        `SELECT * FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} ORDER BY created_at DESC, id DESC LIMIT ${ARTIFACTS_LIST_MAX}`
+      );
+      return rows.map(rowToArtifact);
+    });
+  }
+
+  /** The newest artifact of each kind, in ONE query (at most one row per kind, so at most four). */
+  private async latestArtifacts(
+    itemId: string
+  ): Promise<readonly WorkItemArtifact[]> {
+    const branches = ARTIFACT_KINDS.map(
+      (kind) =>
+        `(SELECT * FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} AND kind = ${escapeValue(kind)} ORDER BY created_at DESC, id DESC LIMIT 1)`
+    );
+    return this.readOnCleanMain(async (conn) => {
+      const rows = await conn.unsafe(
+        `WITH latest AS (${branches.join(" UNION ALL ")}) SELECT * FROM latest ORDER BY created_at DESC, id DESC`
+      );
+      return rows.map(rowToArtifact);
     });
   }
 

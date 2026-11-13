@@ -1283,6 +1283,11 @@ export {
   type EntryResolverSql,
 } from "./entry-resolver.js";
 export {
+  type ContributionAuthors,
+  type ContributionAuthorSql,
+  createDoltgresContributionAuthors,
+} from "./contribution-author.js";
+export {
   DoltgresEdoResolverAdapter,
   type DoltgresEdoResolverConfig,
 } from "./edo-resolver.js";
