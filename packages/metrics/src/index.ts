@@ -162,9 +162,16 @@ export class MetricRegistry {
 		if (!c) throw new MetricError("unknown_calculator", 422);
 		return c;
 	}
+	/**
+	 * A stored spec or params this node cannot run is a 422 (`invalid_definition`),
+	 * never an unexpected error: the refresh tick skips that series and measures the rest.
+	 */
 	validate(d: MetricDefinition): void {
-		const s = MetricSpecSchema.parse(d.spec);
-		this.get(s.calculatorId).paramsSchema.parse(s.params);
+		const s = MetricSpecSchema.safeParse(d.spec);
+		if (!s.success) throw new MetricError("invalid_definition", 422);
+		const calculator = this.get(s.data.calculatorId);
+		if (!calculator.paramsSchema.safeParse(s.data.params).success)
+			throw new MetricError("invalid_definition", 422);
 	}
 	describe() {
 		return [...this.entries.values()].map((c) => ({
