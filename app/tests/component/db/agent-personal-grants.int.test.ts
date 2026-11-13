@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { completeAgentClaim, createPostgresSpawnStore, type CredentialSql, MAX_OWNED_AGENTS, startAgentClaim } from "@cogni/agent-grants/credentials";
+import { agentRolesHasRoles, completeAgentClaim, createPostgresSpawnStore, type CredentialSql, MAX_OWNED_AGENTS, startAgentClaim } from "@cogni/agent-grants/credentials";
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { NextRequest } from "next/server";
 import pino from "pino";
@@ -254,6 +254,17 @@ describe("personal grants and claim (real Postgres)", () => {
     expect(node).toEqual({ resource_kind: "node", owner_user_id: null, expires_at: null });
     await expect(service`INSERT INTO agent_claims (agent_user_id, expires_at, claimed_at, claimed_by) VALUES (${otherAgent}, now() + interval '1 minute', now(), ${otherAgent})`).rejects.toThrow(/agent_claims_claimant_not_agent/);
     await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${otherAgent}`;
+  });
+
+  it("a personal row is not a node role: agentRolesHasRoles (the key-upgrade binding rule) ignores it, and still sees a live node row", async () => {
+    const hasRoles = agentRolesHasRoles(service as unknown as CredentialSql);
+    const probe = await mkAgent("Binding probe", owner);
+    await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, resource_kind, owner_user_id, expires_at)
+      VALUES (${probe}, ${CONTRIBUTE}, ${owner}, 'delegated', ${owner}, now() + interval '1 day')`;
+    expect(await hasRoles(probe)).toBe(false); // a live personal row changes nothing
+    await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${probe}`;
+    await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${probe}, ${CONTRIBUTE}, ${other})`;
+    expect(await hasRoles(probe)).toBe(true); // a live node row still counts
   });
 
   it("claim: an existing ownerless agent asks with its own key; the owner's click makes it theirs (same principal); single use, 15 minutes, bound to that agent", async () => {

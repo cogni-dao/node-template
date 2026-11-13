@@ -8,8 +8,8 @@
  *   A postgres.js `Sql` or `TransactionSql` fits `SqlTag` as is; a node adapts any other driver.
  * Invariants:
  *   - The package never creates a client, switches a role, or runs a schema.
- *   - `agent_roles` has FORCE RLS: only a service-role connection writes it, and reads every row. The app role reads only an agent's own personal rows
- *     (one select policy, for `agent_has_scope`). `agent_principals` has a read-only select policy for every role; only a service-role connection writes it.
+ *   - `agent_roles` has FORCE RLS and no policy: only a service-role connection reads or writes it. `agent_principals` has a read-only select policy for every role;
+ *     only a service-role connection writes it.
  *   - NODE_READS_ARE_NODE_ONLY: every node read filters `resource_kind = 'node'`, so a personal row never opens a node lock and never reaches the admin table.
  *   - ADMIN_LISTS_WHAT_IT_MAY_APPROVE: an ask for a delegable scope from an agent that has an owner is the owner's to decide, so the admin table leaves that pending node row out.
  *     It lists live personal rows too (the kill switch): the admin may revoke one, never approve one.

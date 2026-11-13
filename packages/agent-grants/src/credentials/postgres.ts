@@ -41,13 +41,17 @@ const iso = (value: unknown): string => {
 };
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** The `agent_roles` read (node-template): an approved, unrevoked role row. The operator injects its OpenFGA read instead. */
+/**
+ * The `agent_roles` read (node-template): an approved, unrevoked, unexpired NODE role row. A personal row (an owner's delegation) is not a node role, so it never changes the
+ * key-upgrade binding rule. The operator injects its OpenFGA read instead.
+ */
 export const agentRolesHasRoles =
   (client: SqlTag): HasRoles =>
   async (userId) => {
     const rows = await client`
       SELECT EXISTS (SELECT 1 FROM agent_roles r WHERE r.principal_user_id = ${userId}
-                       AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL) AS has_roles`;
+                       AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND r.resource_kind = 'node'
+                       AND (r.expires_at IS NULL OR r.expires_at > now())) AS has_roles`;
     return rows[0]?.has_roles === true;
   };
 
