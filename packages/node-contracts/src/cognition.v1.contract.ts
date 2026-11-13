@@ -65,7 +65,7 @@ export const CognitionBundleResponseSchema = z.object({
 	toolingInvariants: z.array(z.string()),
 	/** Compatibility projection of governing rows; title carries the useWhen trigger. */
 	skillsIndex: z.array(CognitionSkillPointerSchema),
-	/** Complete local governing index, including when Markdown uses a shelf pointer. */
+	/** Complete local governing index; the Markdown routes by domain and the architect instead of listing it. */
 	governingIndex: z.array(CognitionGoverningPointerSchema).default([]),
 	governingRender: z
 		.object({
