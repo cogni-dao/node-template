@@ -495,7 +495,31 @@ export function createGoalSource(
 	};
 }
 
-/** A node's ONE goal-progress function; HTTP, SSR and agent tools all call it. */
+/** How long one shared goal-progress read may run before it is abandoned. */
+const GOAL_READ_DEADLINE_MS = 8000;
+/** With a last good result in hand, how long a caller waits for the fresh read. */
+const GOAL_READ_CALLER_WAIT_MS = 2500;
+/** How long the re-authorization of a last good result may take; slower is "not readable". */
+const GOAL_READ_AUTHORIZE_MS = 500;
+/** The oldest last good result a caller may be served instead of a fresh read. */
+const GOAL_READ_MAX_STALE_MS = 10 * 60_000;
+
+/**
+ * A node's ONE goal-progress function; HTTP, SSR and agent tools all call it.
+ *
+ * Callers share one in-flight read, and that read is not aborted when a caller
+ * stops waiting: a read that needs more than the old 2.5 s (bug.0035: production
+ * reads sat at 1-2.5 s and, once the store was busy, every caller aborted and
+ * restarted the read, so none ever finished) runs to its own deadline and its
+ * result serves the callers that joined it. A complete result is kept as the
+ * last good one. While one exists and is under ten minutes old, a caller waits
+ * 2.5 s for the fresh read, then gets the last good result rather than a
+ * failure; so does a caller whose fresh read failed or completed degraded.
+ * That body carries `stale: {reason, ageSeconds}`; a fresh read never does. A
+ * caller with nothing to serve waits for the read, up to its deadline, then
+ * gets a retryable 503. A result with an unavailable annex or hypothesis is
+ * never kept.
+ */
 export function createGoalProgressReader(deps: {
 	metrics: () => MetricService | undefined;
 	knowledge: () => GoalKnowledgeReader | undefined;
@@ -504,25 +528,113 @@ export function createGoalProgressReader(deps: {
 	pooledGoalReads?: boolean;
 }): () => Promise<GoalsProgress> {
 	let inFlight: Promise<GoalsProgress> | undefined;
-	return () => {
-		if (inFlight) return inFlight;
+	let lastGood:
+		| {
+				value: GoalsProgress;
+				at: number;
+				/** The definitions the read that produced it was authorized to list. */
+				definitions: readonly MetricDefinition[];
+		  }
+		| undefined;
+	const degraded = (value: GoalsProgress) =>
+		!!value.servedUnavailable ||
+		value.goals.some((g) => g.hypothesesUnavailable);
+	const start = (): Promise<GoalsProgress> => {
+		let definitions: readonly MetricDefinition[] = [];
 		const run = async () => {
 			const port = deps.knowledge();
 			if (!port) throw new MetricError("goals_unavailable", 503);
-			return readMetricBudget(port, undefined, (signal) =>
-				readGoalsProgress({
-					goals: createGoalSource(port, signal),
-					pooledGoalReads: deps.pooledGoalReads,
-					metrics: deps.metrics(),
-					environment: deps.environment,
-					signal,
-				}),
+			return readMetricBudget(
+				port,
+				undefined,
+				(signal) =>
+					readGoalsProgress({
+						goals: createGoalSource(port, signal),
+						pooledGoalReads: deps.pooledGoalReads,
+						metrics: deps.metrics(),
+						environment: deps.environment,
+						signal,
+						authorized: (list) => {
+							definitions = list;
+						},
+					}),
+				GOAL_READ_DEADLINE_MS,
 			);
 		};
-		const pending = run().finally(() => {
-			if (inFlight === pending) inFlight = undefined;
-		});
+		const pending = run()
+			.then((value) => {
+				if (!degraded(value))
+					lastGood = { value, at: Date.now(), definitions };
+				return value;
+			})
+			.finally(() => {
+				if (inFlight === pending) inFlight = undefined;
+			});
 		inFlight = pending;
 		return pending;
 	};
+	/** Whether every metric a last good result lists is still readable. */
+	const readable = async (kept: NonNullable<typeof lastGood>) => {
+		const metrics = deps.metrics();
+		try {
+			const each = await Promise.all(
+				kept.definitions.map((d) => metrics?.canRead(d) ?? false),
+			);
+			return each.every(Boolean);
+		} catch {
+			return false;
+		}
+	};
+	return () => {
+		const pending = inFlight ?? start();
+		const kept = lastGood;
+		if (!kept || Date.now() - kept.at > GOAL_READ_MAX_STALE_MS) return pending;
+		return serve(pending, kept);
+	};
+	async function serve(
+		pending: Promise<GoalsProgress>,
+		kept: NonNullable<typeof lastGood>,
+	): Promise<GoalsProgress> {
+		// The read may fail while the check runs, before anything awaits it: guard
+		// it here (an unhandled rejection can end the process); every path below
+		// still returns or races the original promise, so its error propagates.
+		pending.catch(() => {});
+		// A metric no longer readable, or a check that is not answered in time,
+		// voids the last good result: wait for the fresh read.
+		let checkTimer: ReturnType<typeof setTimeout> | undefined;
+		const checked = await Promise.race([
+			readable(kept),
+			new Promise<boolean>((resolve) => {
+				checkTimer = setTimeout(() => resolve(false), GOAL_READ_AUTHORIZE_MS);
+			}),
+		]).finally(() => clearTimeout(checkTimer));
+		if (!checked) return pending;
+		// The last good result, marked with why it was served and how old it is.
+		const stale = (
+			reason: NonNullable<GoalsProgress["stale"]>["reason"],
+		): GoalsProgress => ({
+			...kept.value,
+			stale: {
+				reason,
+				ageSeconds: Math.max(
+					0,
+					Math.floor((Date.now() - Date.parse(kept.value.asOf)) / 1000),
+				),
+			},
+		});
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const waited = new Promise<GoalsProgress>((resolve) => {
+			timer = setTimeout(
+				() => resolve(stale("fresh_read_slow")),
+				GOAL_READ_CALLER_WAIT_MS,
+			);
+		});
+		return Promise.race([
+			pending.then(
+				(fresh) => (degraded(fresh) ? stale("fresh_read_degraded") : fresh),
+				() => stale("fresh_read_failed"),
+			),
+			waited,
+		]).finally(() => clearTimeout(timer));
+	}
 }

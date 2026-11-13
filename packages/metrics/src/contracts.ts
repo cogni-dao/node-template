@@ -623,5 +623,20 @@ export const GoalsProgressSchema = z.object({
 	servedTruncated: z.boolean().optional(),
 	/** Error code when the served read failed (for example metric_authority_unavailable); `served`/`orphans`/`unbound` are then absent. */
 	servedUnavailable: z.string().optional(),
+	/**
+	 * Present only when this body is the last good result, served instead of a
+	 * fresh read: why, and how old it is (seconds since `asOf`). Absent means the
+	 * body is a fresh read.
+	 */
+	stale: z
+		.object({
+			reason: z.enum([
+				"fresh_read_slow",
+				"fresh_read_failed",
+				"fresh_read_degraded",
+			]),
+			ageSeconds: z.number().int().nonnegative(),
+		})
+		.optional(),
 });
 export type GoalsProgress = z.infer<typeof GoalsProgressSchema>;

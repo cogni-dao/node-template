@@ -1088,6 +1088,18 @@ export function createMetricService(deps: {
 				},
 			};
 		},
+		/**
+		 * Whether this definition may still be read: the `read` authorization a
+		 * fresh read makes, as a boolean. An authority outage is not a yes.
+		 */
+		async canRead(d: MetricDefinition): Promise<boolean> {
+			try {
+				await authorize("read", d);
+				return true;
+			} catch {
+				return false;
+			}
+		},
 		async history(id: string) {
 			const d = await definitionFor(id, "read");
 			return observations.history(id, metricDefinitionHash(d), 50);

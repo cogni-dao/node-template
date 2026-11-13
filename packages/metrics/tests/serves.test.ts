@@ -911,7 +911,7 @@ describe("bounded complete goal reads", () => {
 				code: "batch_unavailable",
 				status: 503,
 			});
-			await vi.advanceTimersByTimeAsync(2500);
+			await vi.advanceTimersByTimeAsync(8000);
 			await rejected;
 			expect(list).toHaveBeenCalledTimes(1);
 			finish({ items: [definition("kpi")], nextCursor: "kpi" });

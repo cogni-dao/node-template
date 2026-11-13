@@ -1317,6 +1317,356 @@ describe("metric batch cancellation admission", () => {
 });
 
 describe("goal reader deadline ownership", () => {
+	const slowPort = () => {
+		const finishes: ((rows: never[]) => void)[] = [];
+		const port = {
+			listActiveGoals: vi.fn(
+				() => new Promise<never[]>((resolve) => finishes.push(resolve)),
+			),
+			getKnowledge: async () => null,
+			listCitationsByCitedId: async () => [],
+		};
+		const read = createGoalProgressReader({
+			knowledge: () => port,
+			metrics: () => undefined,
+			environment: "test",
+		});
+		return { finishes, port, read };
+	};
+	it("lets a read that needs more than 2.5 s finish for every caller that joined it (bug.0035)", async () => {
+		vi.useFakeTimers();
+		try {
+			const { finishes, port, read } = slowPort();
+			const first = read();
+			const second = read();
+			await vi.advanceTimersByTimeAsync(4000);
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(1);
+			finishes[0]!([]);
+			expect(await first).toMatchObject({ goals: [] });
+			expect(await second).toMatchObject({ goals: [] });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("serves the last good result when the fresh read is slower than the caller wait, and joins that read", async () => {
+		vi.useFakeTimers();
+		try {
+			const { finishes, port, read } = slowPort();
+			const cold = read();
+			await vi.advanceTimersByTimeAsync(0);
+			finishes[0]!([]);
+			const good = await cold;
+			const warm = read();
+			await vi.advanceTimersByTimeAsync(2499);
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(2);
+			await vi.advanceTimersByTimeAsync(1);
+			// The body is the last good one, marked with why and how old it is.
+			expect(good.stale).toBeUndefined();
+			const served = await warm;
+			expect(served).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_slow", ageSeconds: 2 },
+			});
+			expect(good.stale).toBeUndefined();
+			// Another caller joins the read still in flight; none starts a third.
+			const joined = read();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(2);
+			finishes[1]!([]);
+			const fresh = await joined;
+			expect(fresh).not.toBe(good);
+			expect(fresh).toMatchObject({ goals: [] });
+			expect(fresh.stale).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("serves the last good result when the fresh read fails", async () => {
+		vi.useFakeTimers();
+		try {
+			const { finishes, port, read } = slowPort();
+			const cold = read();
+			await vi.advanceTimersByTimeAsync(0);
+			finishes[0]!([]);
+			const good = await cold;
+			port.listActiveGoals.mockRejectedValueOnce(new Error("source failed"));
+			expect(await read()).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_failed", ageSeconds: 0 },
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("serves the last good result, marked, when the fresh read completes degraded, and never keeps the degraded one", async () => {
+		vi.useFakeTimers();
+		try {
+			const serving = vi
+				.fn()
+				.mockResolvedValueOnce(null)
+				.mockRejectedValue(new Error("serving failed"));
+			const read = createGoalProgressReader({
+				knowledge: () => ({
+					listActiveGoals: async () => [],
+					getKnowledge: async () => null,
+					listCitationsByCitedId: async () => [],
+				}),
+				metrics: () => ({ serving }) as never,
+				environment: "test",
+			});
+			const good = await read();
+			expect(good.servedUnavailable).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(5000);
+			const degraded = await read();
+			expect(degraded).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_degraded", ageSeconds: 5 },
+			});
+			expect(degraded.servedUnavailable).toBeUndefined();
+			// The degraded read was not kept: the next one is served from the first.
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(await read()).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_degraded", ageSeconds: 10 },
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("serves the last good result only while every metric it lists is still readable", async () => {
+		vi.useFakeTimers();
+		try {
+			const definition = {
+				id: "m1",
+				title: "M one",
+				revision: "r1",
+				spec: { calculatorId: "c@1" },
+			};
+			const canRead = vi.fn(async () => true);
+			const metrics = {
+				serving: async () => ({
+					items: [],
+					unbound: [
+						{
+							definition,
+							assessment: null,
+							latest: {
+								viewState: "unavailable",
+								value: null,
+								unit: "x",
+								observedAt: null,
+								reason: null,
+							},
+						},
+					],
+					truncated: false,
+					readKpi: vi.fn(),
+				}),
+				canRead,
+			};
+			const finishes: ((rows: never[]) => void)[] = [];
+			let calls = 0;
+			const port = {
+				// The first read answers at once; later reads hang until finished.
+				listActiveGoals: vi.fn(() =>
+					calls++ === 0
+						? Promise.resolve([] as never[])
+						: new Promise<never[]>((resolve) => finishes.push(resolve)),
+				),
+				getKnowledge: async () => null,
+				listCitationsByCitedId: async () => [],
+			};
+			const read = createGoalProgressReader({
+				knowledge: () => port,
+				metrics: () => metrics as never,
+				environment: "test",
+			});
+			const good = await read();
+			expect(good.unbound).toHaveLength(1);
+			// Still readable: served stale after the caller wait.
+			const warm = read();
+			await vi.advanceTimersByTimeAsync(2500);
+			expect(await warm).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_slow" },
+			});
+			expect(canRead).toHaveBeenCalledWith(definition);
+			// No longer readable: nothing stale is served; the caller gets the fresh read.
+			canRead.mockResolvedValue(false);
+			const late = read();
+			let settled = false;
+			void late.then(() => {
+				settled = true;
+			});
+			await vi.advanceTimersByTimeAsync(2500);
+			expect(settled).toBe(false);
+			finishes[0]!([]);
+			const fresh = await late;
+			expect(fresh.stale).toBeUndefined();
+			// It joined the one read already in flight; none started for it.
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it.each([
+		["rejects", () => Promise.reject(new Error("authority down"))],
+		["never answers", () => new Promise<boolean>(() => {})],
+	])("serves nothing stale when the readable check %s: the caller waits for the fresh read", async (_name, check) => {
+		vi.useFakeTimers();
+		try {
+			const definition = {
+				id: "m1",
+				title: "M one",
+				revision: "r1",
+				spec: { calculatorId: "c@1" },
+			};
+			const canRead = vi.fn(async () => true);
+			const metrics = {
+				serving: async () => ({
+					items: [],
+					unbound: [
+						{
+							definition,
+							assessment: null,
+							latest: {
+								viewState: "unavailable",
+								value: null,
+								unit: "x",
+								observedAt: null,
+								reason: null,
+							},
+						},
+					],
+					truncated: false,
+					readKpi: vi.fn(),
+				}),
+				canRead,
+			};
+			const finishes: ((rows: never[]) => void)[] = [];
+			let calls = 0;
+			const read = createGoalProgressReader({
+				knowledge: () => ({
+					listActiveGoals: vi.fn(() =>
+						calls++ === 0
+							? Promise.resolve([] as never[])
+							: new Promise<never[]>((resolve) => finishes.push(resolve)),
+					),
+					getKnowledge: async () => null,
+					listCitationsByCitedId: async () => [],
+				}),
+				metrics: () => metrics as never,
+				environment: "test",
+			});
+			await read();
+			canRead.mockImplementation(check as never);
+			const late = read();
+			let settled = false;
+			void late.then(() => {
+				settled = true;
+			});
+			// Past the check bound and the caller wait, still no stale body.
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(settled).toBe(false);
+			finishes[0]!([]);
+			expect((await late).stale).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it.each([
+		// Unreadable in time: the fresh read's own error reaches the caller.
+		["a check that never answers", () => new Promise<boolean>(() => {}), "error"],
+		// Readable after 400 ms: the last good result is served, marked failed.
+		["a check that answers slowly", () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 400)), "stale"],
+	] as const)("raises no unhandled rejection when the fresh read fails while %s", async (_name, check, outcome) => {
+		vi.useFakeTimers();
+		const unhandled = vi.fn();
+		process.on("unhandledRejection", unhandled);
+		try {
+			const definition = {
+				id: "m1",
+				title: "M one",
+				revision: "r1",
+				spec: { calculatorId: "c@1" },
+			};
+			const canRead = vi.fn(async () => true);
+			const metrics = {
+				serving: async () => ({
+					items: [],
+					unbound: [
+						{
+							definition,
+							assessment: null,
+							latest: {
+								viewState: "unavailable",
+								value: null,
+								unit: "x",
+								observedAt: null,
+								reason: null,
+							},
+						},
+					],
+					truncated: false,
+					readKpi: vi.fn(),
+				}),
+				canRead,
+			};
+			let calls = 0;
+			const read = createGoalProgressReader({
+				knowledge: () => ({
+					// The first read answers; the next one fails at once.
+					listActiveGoals: async () => {
+						if (calls++ === 0) return [];
+						throw new Error("source failed");
+					},
+					getKnowledge: async () => null,
+					listCitationsByCitedId: async () => [],
+				}),
+				metrics: () => metrics as never,
+				environment: "test",
+			});
+			await read();
+			canRead.mockImplementation(check as never);
+			// The fresh read rejects while the check is still pending: nothing is attached to it yet.
+			const late = read().then(
+				(body) => body,
+				(error: Error) => error,
+			);
+			await vi.advanceTimersByTimeAsync(600);
+			await new Promise<void>((resolve) => process.nextTick(resolve));
+			await new Promise<void>((resolve) => process.nextTick(resolve));
+			expect(unhandled).not.toHaveBeenCalled();
+			const result = await late;
+			if (outcome === "error") {
+				expect(result).toBeInstanceOf(Error);
+				expect((result as Error).message).toBe("source failed");
+			} else {
+				expect(result).toMatchObject({
+					stale: { reason: "fresh_read_failed" },
+				});
+			}
+		} finally {
+			process.off("unhandledRejection", unhandled);
+			vi.useRealTimers();
+		}
+	});
+	it("serves nothing stale past ten minutes: the caller waits for the read, then gets a retryable 503", async () => {
+		vi.useFakeTimers();
+		try {
+			const { finishes, read } = slowPort();
+			const cold = read();
+			await vi.advanceTimersByTimeAsync(0);
+			finishes[0]!([]);
+			await cold;
+			await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+			const late = read().catch((error) => error);
+			await vi.advanceTimersByTimeAsync(8000);
+			expect(await late).toMatchObject({ status: 503, code: "batch_unavailable" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it("coalesces callers, abandons a hung owner, and ignores its late completion", async () => {
 		vi.useFakeTimers();
 		try {
@@ -1336,7 +1686,7 @@ describe("goal reader deadline ownership", () => {
 			const first = read();
 			expect(read()).toBe(first);
 			const failed = first.catch((error) => error);
-			await vi.advanceTimersByTimeAsync(2500);
+			await vi.advanceTimersByTimeAsync(8000);
 			expect(await failed).toMatchObject({
 				status: 503,
 				code: "batch_unavailable",
@@ -1372,7 +1722,7 @@ describe("goal reader deadline ownership", () => {
 				});
 			for (let i = 0; i < 4; i++) {
 				const failed = makeReader()().catch((error) => error);
-				await vi.advanceTimersByTimeAsync(2500);
+				await vi.advanceTimersByTimeAsync(8000);
 				expect(await failed).toMatchObject({ status: 503 });
 			}
 			await expect(makeReader()()).rejects.toMatchObject({ status: 503 });
@@ -2269,7 +2619,7 @@ it("retains goal admission until the parallel serving branch settles after goal 
 			});
 		for (let i = 0; i < 4; i++) {
 			const failed = make()().catch((error) => error);
-			await vi.advanceTimersByTimeAsync(2500);
+			await vi.advanceTimersByTimeAsync(8000);
 			expect(await failed).toMatchObject({ code: "batch_unavailable" });
 		}
 		await expect(make()()).rejects.toMatchObject({ code: "batch_unavailable" });

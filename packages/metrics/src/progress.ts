@@ -22,6 +22,7 @@ import {
 	type KpiBinding,
 	KpiBindingsSchema,
 	type KpiReason,
+	type MetricDefinition,
 	MetricError,
 	type MetricOrphan,
 	type ServedMetric,
@@ -67,6 +68,8 @@ export async function readGoalsProgress(deps: {
 	signal?: AbortSignal;
 	/** Opt in only for pooled read ports, never a reserved write connection. */
 	pooledGoalReads?: boolean;
+	/** Called with every definition the metric list authorized for this read. */
+	authorized?: (definitions: readonly MetricDefinition[]) => void;
 }): Promise<GoalsProgress> {
 	const now = deps.now ?? deps.metrics?.now ?? (() => new Date());
 	const at = now();
@@ -111,8 +114,13 @@ export async function readGoalsProgress(deps: {
 	}
 	if (goalRead.status === "rejected") throw goalRead.reason;
 	const goals = goalRead.value;
-	if (servedRead.status === "fulfilled") serving = servedRead.value;
-	else {
+	if (servedRead.status === "fulfilled") {
+		serving = servedRead.value;
+		if (serving)
+			deps.authorized?.(
+				[...serving.items, ...serving.unbound].map((x) => x.definition),
+			);
+	} else {
 		const e = servedRead.reason;
 		servedUnavailable = e instanceof MetricError ? e.code : "source_failed";
 	}
