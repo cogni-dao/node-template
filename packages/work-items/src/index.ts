@@ -11,7 +11,11 @@
  * @public
  */
 
-export type { WorkItemsContentPort, WorkItemsPort } from "./content.js";
+export type {
+  WorkItemsContentPort,
+  WorkItemsPort,
+  WorkItemWriterHealth,
+} from "./content.js";
 export type {
   HistoryCite,
   HistoryDiffRow,

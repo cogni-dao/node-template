@@ -20,6 +20,7 @@ import {
   WorkItemsCapacityError,
   WorkItemWriteOutcomeUnknownError,
 } from "../../errors.js";
+import type { WorkItemWriterHealth } from "../../content.js";
 import type {
   ActorKind,
   ExternalRef,
@@ -151,6 +152,23 @@ const BRANCH_HOUSEKEEPING_STAGES = new Set([
   "main.checkout",
 ]);
 const RESERVE_TIMEOUT_MS = 5_000;
+/**
+ * Writer settlement backoff (bug.0042). A held writer retries its fencing proof
+ * on exponential backoff with equal jitter: attempt n waits between half and
+ * all of `min(SETTLE_MAX_MS, SETTLE_BASE_MS * 2^n)`. The floor stops a
+ * contended lock from spinning; the jitter stops replicas from probing the
+ * substrate in lockstep after a shared outage.
+ */
+const SETTLE_BASE_MS = 1_000;
+const SETTLE_MAX_MS = 30_000;
+/**
+ * How long an abandoned-but-unsettled operation may hold the writer before
+ * settlement takes over. Most late acknowledgements arrive within this window
+ * and release the writer on their own; a half-open socket never does.
+ */
+const SETTLE_GRACE_MS = 15_000;
+/** How long settlement waits for the retired generation's execution to unwind after its pool ends. */
+const SETTLE_WAIT_MS = 5_000;
 
 /** Only content commands own a branch session and reconcile interrupted writes. */
 type BranchReconciliation = "required" | "skipped";
@@ -175,6 +193,14 @@ export interface DoltgresWorkItemAdapterOptions {
    */
   readonly branchTimeoutMs?: number;
   readonly reserveTimeoutMs?: number;
+  /** First settlement backoff step for a held writer; see SETTLE_BASE_MS. */
+  readonly settleBaseMs?: number;
+  /** Settlement backoff ceiling; see SETTLE_MAX_MS. */
+  readonly settleMaxMs?: number;
+  /** Grace before an unsettled abandoned operation is settled; see SETTLE_GRACE_MS. */
+  readonly settleGraceMs?: number;
+  /** Wait for the retired generation to unwind; see SETTLE_WAIT_MS. */
+  readonly settleWaitMs?: number;
   readonly recreateClient?: () => Sql;
   /** Rebuilds the dedicated QUERY pool after a terminal connection failure. */
   readonly recreateReadClient?: () => Sql;
@@ -219,8 +245,35 @@ interface OperationContext {
   mutationState?: PendingBranchState<unknown>;
   admitting?: boolean;
   laneMutated?: boolean;
+  /**
+   * Set before the first writer-lock request leaves the client. Until then the
+   * session can hold no lock and has changed nothing, so a transport failure
+   * leaves no native state to settle (bug.0042).
+   */
+  effectsPossible?: boolean;
+  /** Resolves when this operation's execution has fully unwound. */
+  settled?: Promise<void>;
   acknowledged?: boolean;
   acknowledge?: (value: unknown) => void;
+}
+
+/** Why the writer refuses new operations, from the first hold until settlement proves it free. */
+interface WriterHold {
+  readonly since: number;
+  readonly reason: string;
+  readonly stage: string;
+  readonly operationId: string;
+  readonly operation: string;
+  readonly errorCode?: string;
+  /** The held execution, re-pointed if a settlement attempt itself becomes uncertain. */
+  context: OperationContext;
+  /** The pool generation the held execution ran on; settlement ends it before proving anything. */
+  pool: Sql;
+  nativeState: "pending" | "unknown";
+  attempts: number;
+  timer?: ReturnType<typeof setTimeout>;
+  running?: boolean;
+  unavailableLogged?: boolean;
 }
 
 interface ReadWaiter {
@@ -1095,6 +1148,7 @@ function validateTransitionMatrix(
 }
 
 function queryStage(query: string): string {
+  if (query === "SELECT 1 AS work_items_ready") return "connection.probe";
   if (query.startsWith("SELECT pg_try_advisory_lock")) return "lock.try";
   if (query.startsWith("SELECT pg_advisory_unlock")) return "lock.release";
   if (query.includes("dolt_checkout('-b'")) return "branch.create";
@@ -1129,9 +1183,22 @@ function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function errorCode(error: unknown): string | undefined {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  return code === undefined || code === null ? undefined : String(code);
+}
+
 function errorFields(error: unknown): Record<string, unknown> {
+  const code = errorCode(error);
   return error instanceof Error
-    ? { errorName: error.name, errorMessage: error.message }
+    ? {
+        errorName: error.name,
+        errorMessage: error.message,
+        ...(code ? { errorCode: code } : {}),
+      }
     : { errorMessage: String(error) };
 }
 
@@ -1162,6 +1229,11 @@ export class DoltgresWorkItemAdapter
   private readonly cleanupScope = new AsyncLocalStorage<OperationContext>();
   private poisoned = false;
   private heldWriter: OperationContext | undefined;
+  private hold: WriterHold | undefined;
+  private readonly settleBaseMs: number;
+  private readonly settleMaxMs: number;
+  private readonly settleGraceMs: number;
+  private readonly settleWaitMs: number;
   private readonly logger: WorkItemLogger;
   private readonly idFloor: number;
   private readonly lockWaitMs: number;
@@ -1206,6 +1278,10 @@ export class DoltgresWorkItemAdapter
     this.metricBaseline = options.metricBaseline;
     this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
+    this.settleBaseMs = options.settleBaseMs ?? SETTLE_BASE_MS;
+    this.settleMaxMs = options.settleMaxMs ?? SETTLE_MAX_MS;
+    this.settleGraceMs = options.settleGraceMs ?? SETTLE_GRACE_MS;
+    this.settleWaitMs = options.settleWaitMs ?? SETTLE_WAIT_MS;
     this.recreateClient = options.recreateClient;
     this.readClient = options.readClient;
     this.readConnectionBudget = options.readConnectionBudget;
@@ -1257,8 +1333,7 @@ export class DoltgresWorkItemAdapter
     reason: string
   ): Promise<void> {
     if (context.abandoned || context.nativeUnknown) {
-      this.poisoned = true;
-      this.heldWriter = context;
+      this.holdWriter(context, pool, stage, reason);
       return;
     }
     const activeTermination = this.terminatingPools.get(pool as object);
@@ -1278,6 +1353,7 @@ export class DoltgresWorkItemAdapter
           reason: "terminate_failed",
           ...errorFields(error),
         });
+        this.holdWriter(context, pool, stage, "terminate_failed", error);
         return;
       }
 
@@ -1293,6 +1369,7 @@ export class DoltgresWorkItemAdapter
           failedStage: stage,
           ...errorFields(error),
         });
+        this.holdWriter(context, pool, stage, "recreate_failed", error);
       }
     })();
     this.terminatingPools.set(pool as object, termination);
@@ -1322,6 +1399,8 @@ export class DoltgresWorkItemAdapter
       )
     )
       context.laneMutated = true;
+    if (context.laneMutated || /^SELECT pg_try_advisory_lock\(/.test(query))
+      context.effectsPossible = true;
     const stage = queryStage(query);
     const startedAt = Date.now();
     let timedOut = false;
@@ -1361,26 +1440,33 @@ export class DoltgresWorkItemAdapter
       });
       return rows;
     } catch (error) {
-      if (!nativeReturned && !isServerSqlError(error)) {
+      // UNCERTAINTY_FOLLOWS_EFFECTS (bug.0042): a transport failure means the
+      // server's view is unknown, but that only matters once this session may
+      // hold a writer lock or a change. Before the first lock request it holds
+      // neither, so the failure is an ordinary retryable one. Production
+      // 2026-11-13: a CONNECT_TIMEOUT on the pool probe — a socket that never
+      // connected — held every write for five hours.
+      const transport = !nativeReturned && !isServerSqlError(error);
+      if (transport && context.effectsPossible) {
         context.nativeUnknown = true;
-        this.poisoned = true;
+        this.holdWriter(context, pool, stage, "outcome_unknown", error);
         this.abandonOperation(context, stage);
       }
       this.logStage("error", context, stage, "error", {
         ...queryFields,
         durationMs: Date.now() - startedAt,
         timedOut,
+        effectsPossible: context.effectsPossible === true,
         ...errorFields(error),
       });
       if (timedOut && !cleanup) {
         throw context.abandoned;
       }
-      if (isConnectionTerminal(error)) {
-        context.nativeUnknown = true;
-        this.poisoned = true;
-        this.abandonOperation(context, stage);
-        throw context.abandoned;
-      }
+      if (transport && context.effectsPossible) throw context.abandoned;
+      if (transport || isConnectionTerminal(error))
+        throw new WorkItemsBusyError(
+          "Work-item store connection failed before any write; retry shortly"
+        );
       throw error;
     } finally {
       clearTimeout(timeoutTimer);
@@ -1400,11 +1486,309 @@ export class DoltgresWorkItemAdapter
           context.nativeUnknown ? "unknown" : "pending"
         );
     this.heldWriter = context;
+    this.beginHold(context, this.sql, stage, "caller_abandoned", "pending");
     for (const reject of this.queueWaiters) reject();
     this.logStage("warn", context, stage, "error", {
       reason: "caller_abandoned_native_retained",
     });
     context.rejectCaller?.(context.abandoned);
+  }
+
+  /**
+   * The writer's health for deep readiness. `held` means new writes are being
+   * refused until settlement proves the writer free (bug.0042).
+   */
+  writerHealth(): WorkItemWriterHealth {
+    const hold = this.hold;
+    if (!hold && !this.poisoned && !this.heldWriter)
+      return { state: "available" };
+    const since = hold?.since ?? Date.now();
+    return {
+      state: "held",
+      nativeState: this.poisoned ? "unknown" : (hold?.nativeState ?? "pending"),
+      since: new Date(since).toISOString(),
+      heldMs: Date.now() - since,
+      reason: hold?.reason ?? "unknown",
+      stage: hold?.stage ?? "unknown",
+      operationId: hold?.operationId ?? this.heldWriter?.operationId ?? "",
+      operation: hold?.operation ?? this.heldWriter?.operation ?? "",
+      settleAttempts: hold?.attempts ?? 0,
+      settling: hold?.running === true,
+    };
+  }
+
+  private logWriter(
+    level: "info" | "warn" | "error",
+    event: string,
+    hold: WriterHold,
+    fields: Record<string, unknown> = {}
+  ): void {
+    this.logger[level](
+      {
+        event: `adapter.work_items.${event}`,
+        component: "doltgres-work-items",
+        heldOperationId: hold.operationId,
+        heldOperation: hold.operation,
+        holdReason: hold.reason,
+        holdStage: hold.stage,
+        nativeState: hold.nativeState,
+        heldMs: Date.now() - hold.since,
+        ...(hold.errorCode ? { errorCode: hold.errorCode } : {}),
+        ...fields,
+      },
+      `work_items ${event}`
+    );
+  }
+
+  /** Opens (or escalates) the writer hold; the first transition is logged once. */
+  private beginHold(
+    context: OperationContext,
+    pool: Sql,
+    stage: string,
+    reason: string,
+    nativeState: "pending" | "unknown",
+    error?: unknown
+  ): void {
+    const existing = this.hold;
+    if (existing) {
+      existing.context = context;
+      existing.pool = pool;
+      if (nativeState === "unknown" && existing.nativeState !== "unknown") {
+        existing.nativeState = "unknown";
+        this.logWriter("warn", "writer_held", existing, {
+          escalatedBy: reason,
+          stage,
+          ...(error ? errorFields(error) : {}),
+        });
+        if (existing.timer && !existing.running) {
+          clearTimeout(existing.timer);
+          existing.timer = undefined;
+        }
+      }
+      this.scheduleSettlement();
+      return;
+    }
+    const code = errorCode(error);
+    const hold: WriterHold = {
+      since: Date.now(),
+      reason,
+      stage,
+      operationId: context.operationId,
+      operation: context.operation,
+      ...(code ? { errorCode: code } : {}),
+      context,
+      pool,
+      nativeState,
+      attempts: 0,
+    };
+    this.hold = hold;
+    this.logWriter("warn", "writer_held", hold, {
+      ...(context.branch ? { branch: context.branch } : {}),
+      effectsPossible: context.effectsPossible === true,
+      ...(error ? errorFields(error) : {}),
+    });
+    this.scheduleSettlement();
+  }
+
+  /**
+   * Holds the writer for an operation whose native state is uncertain. A late
+   * report from a retired pool generation is ignored: settlement already
+   * proved, from a fresh session, that the old one holds nothing.
+   */
+  private holdWriter(
+    context: OperationContext,
+    pool: Sql,
+    stage: string,
+    reason: string,
+    error?: unknown
+  ): void {
+    if (pool !== this.sql) {
+      this.logStage("warn", context, stage, "error", {
+        reason: "retired_generation_ignored",
+        holdReason: reason,
+      });
+      return;
+    }
+    this.poisoned = true;
+    this.heldWriter = context;
+    this.beginHold(context, pool, stage, reason, "unknown", error);
+  }
+
+  /** A held operation unwound on its own with nothing uncertain left. */
+  private releaseHold(context: OperationContext): void {
+    const hold = this.hold;
+    if (!hold || hold.context !== context || hold.running) return;
+    if (hold.timer) clearTimeout(hold.timer);
+    this.hold = undefined;
+    this.logWriter("info", "writer_recovered", hold, {
+      settledBy: "execution",
+      settleAttempts: hold.attempts,
+    });
+  }
+
+  private refuse(operation: string): WorkItemsCapacityError {
+    const nativeState = this.poisoned ? "unknown" : "pending";
+    const hold = this.hold;
+    if (hold)
+      this.logWriter("warn", "writer_refused", hold, {
+        operation,
+        settling: hold.running === true,
+      });
+    return new WorkItemsCapacityError(nativeState);
+  }
+
+  private scheduleSettlement(): void {
+    const hold = this.hold;
+    if (!hold || hold.timer || hold.running) return;
+    if (!this.recreateClient) {
+      if (!hold.unavailableLogged) {
+        hold.unavailableLogged = true;
+        this.logWriter("error", "writer_settle_unavailable", hold, {
+          reason: "no_recreate_client",
+        });
+      }
+      return;
+    }
+    let delay: number;
+    if (hold.nativeState === "pending" && hold.attempts === 0) {
+      delay = this.settleGraceMs;
+    } else {
+      const ceiling = Math.min(
+        this.settleMaxMs,
+        this.settleBaseMs * 2 ** hold.attempts
+      );
+      delay = ceiling / 2 + Math.random() * (ceiling / 2);
+    }
+    hold.timer = setTimeout(() => {
+      hold.timer = undefined;
+      void this.settleWriter(hold);
+    }, delay);
+    hold.timer.unref?.();
+  }
+
+  /**
+   * SETTLE_BY_FENCING (bug.0042). Proves the held writer free without a
+   * restart and without replaying anything:
+   *   1. End the held generation's pool. Closing unblocks its awaits and drops
+   *      its sockets; it is NOT taken as proof the server stopped.
+   *   2. Build a fresh pool and take the writer advisory lock on it. Doltgres
+   *      frees a session's advisory locks when that session ends, so winning
+   *      the lock proves the old session holds none. Contended: back off.
+   *   3. Under the lock, run the restart reconciliation every write runs: a
+   *      proven `work-item-op/` branch is merged, an unproven one deleted or
+   *      quarantined, exactly once.
+   */
+  private async settleWriter(hold: WriterHold): Promise<void> {
+    if (this.hold !== hold || hold.running) return;
+    const recreate = this.recreateClient;
+    if (!recreate) return;
+    hold.running = true;
+    hold.attempts += 1;
+    const startedAt = Date.now();
+    const context: OperationContext = {
+      operationId: randomUUID(),
+      operation: "settle writer",
+    };
+    let outcome = "failed";
+    let executionSettled = true;
+    let failure: unknown;
+    try {
+      const retired = hold.pool;
+      const held = hold.context;
+      if (this.sql === retired) {
+        try {
+          await retired.end({ timeout: 0 });
+        } catch (error) {
+          this.logStage("warn", context, "connection.terminate", "error", {
+            reason: "settle_end_failed",
+            ...errorFields(error),
+          });
+        }
+        this.sql = recreate();
+      }
+      if (held.settled) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        executionSettled = await Promise.race([
+          held.settled.then(() => true),
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => resolve(false), this.settleWaitMs);
+          }),
+        ]);
+        if (timer) clearTimeout(timer);
+      }
+      // The retired pool has ended, so its execution can issue no more SQL;
+      // a ticket it never returns must not wedge the FIFO forever.
+      if (!executionSettled) this.operationTail = Promise.resolve();
+      this.poisoned = false;
+      this.heldWriter = context;
+      // Every stage inside has its own budget, but a driver await that never
+      // settles (reserve) must not freeze settlement: the next attempt ends
+      // this generation too, which unblocks it.
+      const attemptBudgetMs =
+        this.reserveTimeoutMs + this.lockWaitMs + 2 * this.branchTimeoutMs;
+      let attemptTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.withGlobalLock(context, async () => undefined, {
+            reconcile: "required",
+          }),
+          new Promise<never>((_resolve, reject) => {
+            attemptTimer = setTimeout(
+              () =>
+                reject(
+                  new WorkItemsBusyError(
+                    `Work-item writer settlement exceeded ${attemptBudgetMs}ms`
+                  )
+                ),
+              attemptBudgetMs
+            );
+          }),
+        ]);
+      } finally {
+        if (attemptTimer) clearTimeout(attemptTimer);
+      }
+      outcome = "recovered";
+    } catch (error) {
+      failure = error;
+      outcome =
+        error instanceof WorkItemsBusyError &&
+        /lock_contended/.test(error.message)
+          ? "lock_contended"
+          : "failed";
+    } finally {
+      hold.running = false;
+      this.logWriter(
+        outcome === "recovered" ? "info" : "warn",
+        "writer_settle_attempt",
+        hold,
+        {
+          attempt: hold.attempts,
+          outcome,
+          executionSettled,
+          durationMs: Date.now() - startedAt,
+          ...(failure ? errorFields(failure) : {}),
+        }
+      );
+      if (
+        outcome === "recovered" &&
+        !this.poisoned &&
+        this.heldWriter === context
+      ) {
+        this.heldWriter = undefined;
+        this.hold = undefined;
+        this.logWriter("info", "writer_recovered", hold, {
+          settledBy: "fencing",
+          settleAttempts: hold.attempts,
+        });
+      } else if (this.hold === hold) {
+        // Still unproven: keep refusing and retry on backoff.
+        this.poisoned = true;
+        this.heldWriter = this.heldWriter ?? context;
+        hold.nativeState = "unknown";
+        hold.pool = this.sql;
+        this.scheduleSettlement();
+      }
+    }
   }
 
   private instrumentConnection(
@@ -1489,7 +1873,7 @@ export class DoltgresWorkItemAdapter
   ): Promise<T> {
     if (this.poisoned) {
       throw new WorkItemsBusyError(
-        "Work-item store requires restart reconciliation"
+        "Work-item writer is settling an uncertain operation; retry shortly"
       );
     }
     const operationPool = this.sql;
@@ -1619,8 +2003,12 @@ export class DoltgresWorkItemAdapter
         !reconciled &&
         (context.laneMutated || context.nativeUnknown)
       ) {
-        this.poisoned = true;
-        this.heldWriter = context;
+        this.holdWriter(
+          context,
+          operationPool,
+          "operation",
+          context.nativeUnknown ? "outcome_unknown" : "abandoned_unreconciled"
+        );
       }
       // Fresh recovery is permitted only after authoritative native settlement.
       // Caller abandonment and transport uncertainty bypass this path entirely:
@@ -1666,8 +2054,7 @@ export class DoltgresWorkItemAdapter
     operation: string,
     fn: (context: OperationContext) => Promise<T>
   ): Promise<T> {
-    if (this.heldWriter || this.poisoned)
-      throw new WorkItemsCapacityError(this.poisoned ? "unknown" : "pending");
+    if (this.heldWriter || this.poisoned) throw this.refuse(operation);
     const context: OperationContext = { operationId: randomUUID(), operation };
     const leaveQueue = await this.enterOperationQueue(context);
     const caller = new Promise<T>((resolve, reject) => {
@@ -1680,18 +2067,21 @@ export class DoltgresWorkItemAdapter
     });
     const execution = (async () => {
       try {
-        if (this.heldWriter || this.poisoned)
-          throw new WorkItemsCapacityError(
-            this.poisoned ? "unknown" : "pending"
-          );
+        if (this.heldWriter || this.poisoned) throw this.refuse(operation);
         return await fn(context);
       } finally {
         // Caller deadline does not release the actual execution's FIFO ticket.
-        if (!this.poisoned && this.heldWriter === context)
+        if (!this.poisoned && this.heldWriter === context) {
           this.heldWriter = undefined;
+          this.releaseHold(context);
+        }
         leaveQueue();
       }
     })();
+    context.settled = execution.then(
+      () => undefined,
+      () => undefined
+    );
     return Promise.race([execution, caller]);
   }
 

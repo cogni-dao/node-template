@@ -62,6 +62,9 @@ export function withWorkItemLeases(
     ...(content.history
       ? { history: (id: WorkItem["id"]) => content.history!(id) }
       : {}),
+    ...(content.writerHealth
+      ? { writerHealth: () => content.writerHealth!() }
+      : {}),
     async claim(input) {
       if (!(await content.get(input.id)))
         throw new Error(`Work item not found: ${input.id}`);
