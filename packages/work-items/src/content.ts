@@ -51,6 +51,26 @@ export interface WorkItemsPatchInput {
   readonly cites?: readonly CiteRef[];
 }
 
+/**
+ * Whether the store's writer admits new writes (bug.0042). `held`: an earlier
+ * operation's native outcome is still unsettled, so writes return 503 until
+ * settlement proves the writer free. Deep readiness reports it.
+ */
+export type WorkItemWriterHealth =
+  | { readonly state: "available" }
+  | {
+      readonly state: "held";
+      readonly nativeState: "pending" | "unknown";
+      readonly since: string;
+      readonly heldMs: number;
+      readonly reason: string;
+      readonly stage: string;
+      readonly operationId: string;
+      readonly operation: string;
+      readonly settleAttempts: number;
+      readonly settling: boolean;
+    };
+
 export interface WorkItemsPort {
   get(id: WorkItemId): Promise<WorkItem | null>;
   list(query?: WorkQuery): Promise<{
@@ -82,6 +102,8 @@ export interface WorkItemsPort {
   delete(id: WorkItemId, principalId: string): Promise<boolean>;
   /** Versions of one item, newest first, with their change reasons (task.0052). */
   history?(id: WorkItemId): Promise<HistoryEntry[]>;
+  /** In-memory writer state for deep readiness; makes no database call. */
+  writerHealth?(): WorkItemWriterHealth;
   claim: WorkItemLeasePort["claim"];
   heartbeat: WorkItemLeasePort["heartbeat"];
   release: WorkItemLeasePort["release"];

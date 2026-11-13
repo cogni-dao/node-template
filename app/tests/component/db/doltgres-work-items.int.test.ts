@@ -1103,13 +1103,16 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				.catch(() => undefined);
 			await lockHolder.end({ timeout: 0 });
 		}
-		// Transport failure does not prove that Dolt finished the old statement.
-		// Keep that adapter quarantined, including after the lock-holder exits.
+		// bug.0042: the adapter's own probe never reached the server — it queued
+		// behind a foreign statement when the pool died — so it owns no native
+		// state. The failure stays retryable and nothing is held; the adapter
+		// replaced its writer pool, so the very next write is admitted.
+		expect(adapter.writerHealth()).toEqual({ state: "available" });
 		await expect(
-			adapter.patch({ reason: "test change", id, set: { title: "no replacement" } }, principalId),
-		).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
-		// This owned test can explicitly observe the old native session depart
-		// before constructing a replacement; production needs its own authority.
+			adapter.patch({ reason: "test change", id, set: { title: "fresh writer" } }, principalId),
+		).resolves.toMatchObject({ id, title: "fresh writer" });
+		// The test still waits for the old native session to depart before it
+		// rebuilds the adapter for the remaining scenarios.
 		await expect
 			.poll(
 				async () =>
@@ -3572,4 +3575,56 @@ if (role === 'original') {
 			);
 		}
 	}, 15_000);
+
+	it("frees a destroyed session's advisory lock for a fresh session (bug.0042 fencing premise)", async () => {
+		// Writer settlement treats "a fresh session wins the writer lock" as proof
+		// that the abandoned session holds nothing. Prove Doltgres frees an ended
+		// session's advisory lock, idle or mid-statement.
+		const client = () => postgres(dbUrl, { max: 1, fetch_types: false });
+		const held = (rows: ReadonlyArray<Record<string, unknown>>) => {
+			const value = rows[0]?.locked;
+			const scalar = Array.isArray(value) ? value[0] : value;
+			return scalar === true || scalar === 1 || scalar === "true" || scalar === "t";
+		};
+		const fresh = client();
+		const blocker = client();
+		try {
+			const idle = client();
+			await idle.unsafe("SELECT pg_advisory_lock(9504201)");
+			expect(
+				held(await fresh.unsafe("SELECT pg_try_advisory_lock(9504201) AS locked")),
+			).toBe(false);
+			await idle.end({ timeout: 0 });
+			await expect
+				.poll(
+					async () =>
+						held(await fresh.unsafe("SELECT pg_try_advisory_lock(9504201) AS locked")),
+					{ timeout: 10_000, interval: 100 },
+				)
+				.toBe(true);
+			await fresh.unsafe("SELECT pg_advisory_unlock(9504201)");
+
+			const busy = client();
+			await busy.unsafe("SELECT pg_advisory_lock(9504202)");
+			await blocker.unsafe("SELECT pg_advisory_lock(9504203)");
+			const inflight = busy
+				.unsafe("SELECT pg_advisory_lock(9504203)")
+				.then(() => undefined, (error: unknown) => error);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			await busy.end({ timeout: 0 });
+			await expect(inflight).resolves.toBeInstanceOf(Error);
+			// Its statement may hold the session until it ends; let it end.
+			await blocker.unsafe("SELECT pg_advisory_unlock(9504203)");
+			await expect
+				.poll(
+					async () =>
+						held(await fresh.unsafe("SELECT pg_try_advisory_lock(9504202) AS locked")),
+					{ timeout: 10_000, interval: 100 },
+				)
+				.toBe(true);
+			await fresh.unsafe("SELECT pg_advisory_unlock(9504202)");
+		} finally {
+			await Promise.all([fresh, blocker].map((c) => c.end({ timeout: 0 })));
+		}
+	}, 30_000);
 });

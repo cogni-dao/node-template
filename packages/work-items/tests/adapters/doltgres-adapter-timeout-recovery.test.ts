@@ -67,6 +67,7 @@ function makeTimeoutHarness({
   branchTimeoutMs = 10,
   mergeMode = "server-error",
   baseHashPending,
+  settleBaseMs,
 }: {
   readonly failFreshReachability?: boolean;
   readonly timeoutAfterDml?: boolean;
@@ -83,6 +84,8 @@ function makeTimeoutHarness({
   readonly branchTimeoutMs?: number;
   readonly mergeMode?: "server-error" | "success" | "stalled";
   readonly baseHashPending?: Promise<Rows>;
+  /** Opt into fast writer settlement (bug.0042); unset keeps the 1 s default out of the test's way. */
+  readonly settleBaseMs?: number;
 } = {}) {
   const state: TimeoutHarnessState = {
     durable: false,
@@ -372,6 +375,14 @@ function makeTimeoutHarness({
     // half a minute each.
     branchTimeoutMs,
     reserveTimeoutMs: 100,
+    ...(settleBaseMs !== undefined
+      ? {
+          settleBaseMs,
+          settleMaxMs: settleBaseMs,
+          settleGraceMs: settleBaseMs,
+          settleWaitMs: 10,
+        }
+      : {}),
     recreateClient: buildPool,
     readClient: {
       options: { max: 1 },
@@ -998,6 +1009,37 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     ).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
     expect(state.inserts).toBe(1);
     expect(state.deadUnlockAttempts).toBe(0);
+  });
+
+  it("settles a post-DML outcome-unknown by reconciling its branch once, never replaying it (bug.0042)", async () => {
+    const { adapter, events, state } = makeTimeoutHarness({
+      timeoutAfterDml: true,
+      settleBaseMs: 10,
+    });
+
+    await expect(
+      within(
+        adapter.create({ type: "task", title: "times out after DML" }, "principal-1")
+      )
+    ).rejects.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
+    expect(adapter.writerHealth()).toMatchObject({ state: "held" });
+
+    const deadline = Date.now() + 1_000;
+    while (!events.includes("adapter.work_items.writer_recovered")) {
+      if (Date.now() > deadline) throw new Error("writer never settled");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // The uncommitted op branch was swept by the fresh, lock-holding session.
+    expect(state.branch).toBeUndefined();
+    expect(state.inserts).toBe(1);
+    expect(state.commits).toBe(0);
+    expect(state.deadUnlockAttempts).toBe(0);
+    expect(adapter.writerHealth()).toEqual({ state: "available" });
+
+    await expect(
+      within(adapter.create({ type: "task", title: "next write" }, "principal-1"))
+    ).resolves.toMatchObject({ title: "next write" });
+    expect(state.inserts).toBe(2);
   });
 
   it("acknowledges a proven mutation while retaining native capacity for pending cleanup", async () => {
