@@ -9,6 +9,7 @@
  *   - Tracked `*.md` is limited to `AGENTS.md` and `README.md` at any depth, root `CLAUDE.md`, and the harness shells under `.claude/` and `.agents/`.
  *   - No tracked file (outside `.context/`) names a repo Markdown doc path (`docs/.../*.md`, `work/.../*.md`); knowledge lives at a hub atom URL.
  *   - A pinned `github.com/<owner>/<repo>/blob/<40-hex sha>/...` URL is immutable evidence and is exempt.
+ *   - Applied SQL migrations are immutable history (their hash is in the drizzle ledger) and are exempt.
  *   - Each EXCEPTIONS entry names one file and one path that is program data, not a doc link, and states why.
  * Side-effects: IO (runs `git ls-files`, reads tracked files).
  * Links: package.json, .github/workflows/ci.yaml, https://node-template.cognidao.org/knowledge/file-header-standard
@@ -63,6 +64,8 @@ for (const file of tracked) {
 for (const file of tracked) {
   // The EXCEPTIONS table above must spell the one allowed path, so this file is not scanned.
   if (file.startsWith(".context/") || file === "scripts/check-markdown-refs.mjs") continue;
+  // Applied migrations are immutable: rewriting a comment changes the ledgered hash.
+  if (/\/migrations\/[^/]+\.sql$/.test(file)) continue;
   const abs = join(REPO_ROOT, file);
   let stat;
   try {

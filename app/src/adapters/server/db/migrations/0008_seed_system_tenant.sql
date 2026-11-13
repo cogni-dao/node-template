@@ -1,5 +1,5 @@
 -- Seed: system tenant bootstrap data (idempotent)
--- Per https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/system-tenant.md: SYSTEM_TENANT_STARTUP_CHECK
+-- Per docs/spec/system-tenant.md: SYSTEM_TENANT_STARTUP_CHECK
 -- All PKs are deterministic UUIDs; human-readable slug stored separately.
 
 -- Set RLS context to the system principal (transaction-local)

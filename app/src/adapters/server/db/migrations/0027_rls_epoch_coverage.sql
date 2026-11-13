@@ -12,7 +12,7 @@
 -- Fix: ENABLE + FORCE with NO policy = deny-all for app_user (fail-closed). These
 -- tables are computed and read exclusively by the service-role attribution worker;
 -- there is no app-role read path today. If one is ever added, add an owner-scoped
--- policy at that time (see https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/database-rls.md, RLS_COVERAGE invariant).
+-- policy at that time (see docs/spec/database-rls.md, RLS_COVERAGE invariant).
 
 ALTER TABLE "epoch_selection" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "epoch_selection" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
