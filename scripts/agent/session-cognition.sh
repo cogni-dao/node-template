@@ -32,16 +32,6 @@ CLAUDE_PARTS=8
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT" || exit 0
 
-# Older Cogni setups installed a user-level Codex hook. Codex runs matching
-# user + project hooks concurrently. Both presenters take the same short-lived
-# per-thread lock, so exactly one writes this event's developer context; the
-# winner releases it immediately for later resume/clear/compact events.
-if [ -n "${CODEX_THREAD_ID:-}" ]; then
-  safe_thread_id="$(printf '%s' "$CODEX_THREAD_ID" | tr -cd '[:alnum:]_-')"
-  COGNI_HOOK_LOCK="${TMPDIR:-/tmp}/cogni-cognition-${safe_thread_id}.lock"
-  mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
-  trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
-fi
 
 # emit_agent_context <text> — Codex reads raw hook stdout as developer context,
 # and .codex/config.toml `additionalContextLimit = 0` disables its head/tail
@@ -226,9 +216,9 @@ fi
 # its own slice, labelled, so the model reads one document in order.
 if [ "${1:-}" = "--claude-part" ]; then
   part="${2:-1}"
-  command -v jq >/dev/null 2>&1 || exit 0
   started=$(date +%s)
-  session_id="$(jq -r '.session_id // empty' 2>/dev/null | tr -cd '[:alnum:]_-')"
+  hook_input="$(cat 2>/dev/null)"
+  session_id="$(printf '%s' "$hook_input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | tr -cd '[:alnum:]_-')"
   snapshot="${TMPDIR:-/tmp}/cogni-cognition-claude-${session_id:-unknown}.md"
   if [ "$part" = 1 ]; then
     text="$(session_bundle || recovery_notice)"
@@ -261,9 +251,26 @@ COGNI COGNITION — the bundle needs $total parts but only $CLAUDE_PARTS are dec
   # Finish in part order: concurrent hooks are recorded as they complete.
   sleep "$(awk -v p="$part" 'BEGIN { print (p - 1) * 0.25 }')"
   printf 'COGNI COGNITION — part %s of %s of this session'"'"'s cognition bundle. Read all %s parts together, in part order, as one document.\n\n%s%s' \
-    "$part" "$total" "$total" "$body" "$note" \
-    | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
+    "$part" "$total" "$total" "$body" "$note" > "$snapshot.part$part"
+  # Claude also adds plain SessionStart stdout to context; JSON is preferred.
+  if command -v jq >/dev/null 2>&1; then
+    jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}' < "$snapshot.part$part"
+  else
+    cat "$snapshot.part$part"
+  fi
+  rm -f "$snapshot.part$part"
   exit 0
+fi
+
+# Older Cogni setups installed a user-level Codex hook. Codex runs matching
+# user + project hooks concurrently. Both presenters take the same short-lived
+# per-thread lock, so exactly one writes this event's developer context; the
+# winner releases it immediately for later resume/clear/compact events.
+if [ -n "${CODEX_THREAD_ID:-}" ]; then
+  safe_thread_id="$(printf '%s' "$CODEX_THREAD_ID" | tr -cd '[:alnum:]_-')"
+  COGNI_HOOK_LOCK="${TMPDIR:-/tmp}/cogni-cognition-${safe_thread_id}.lock"
+  mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
+  trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
 fi
 
 # Codex (stdout) and any other caller: present this session's bundle.
