@@ -103,6 +103,41 @@ describe("step budget ends in a report", () => {
     expect(events.some((e) => e.type === "error")).toBe(false);
   });
 
+  it("reads back writes made before the budget hit", async () => {
+    const reads: string[] = [];
+    const { stream, final } = createInProcGraphRunner({
+      program: "work-review",
+      createGraph: exhaustedGraph(true),
+      completionFn,
+      createToolExecFn: (): ToolExecFn => async (name, args) => {
+        if (name === workItemReadContract.name) {
+          reads.push((args as { id: string }).id);
+          return {
+            ok: true,
+            value: { item: { id: "task.1", status: "needs_design", revision: 9 } },
+          };
+        }
+        return { ok: true, value: { id: "task.1", status: "needs_design", revision: 8 } };
+      },
+      toolContracts: [workItemUpdateContract, workItemReadContract],
+      request: {
+        runId: "budget-readback",
+        messages: [{ role: "user", content: "triage" }],
+        configurable: {
+          model: "test-model",
+          toolIds: [workItemUpdateContract.name, workItemReadContract.name],
+        },
+      },
+    });
+    for await (const _event of stream) {
+      /* Drain native graph events. */
+    }
+    const result = await final;
+    expect(reads).toEqual(["task.1"]);
+    expect(result.content).toMatch(/^STEP_BUDGET: .*Changed 1 item\(s\): task\.1/);
+    expect(result.content).toContain("Verified by post-write reads: task.1");
+  });
+
   it("reports zero changes when the budget ends a read-only run", async () => {
     const { result } = await run(exhaustedGraph(false));
     expect(result.ok).toBe(true);

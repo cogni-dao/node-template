@@ -19,6 +19,7 @@ import {
   isToolMessage,
 } from "@langchain/core/messages";
 import type { CreateReactAgentGraphOptions } from "../types";
+import { triageCompletionEvidence } from "./completion";
 import type { RunReceipts } from "./receipts";
 
 const REPORT_MAX_CHARS = 2048;
@@ -344,7 +345,14 @@ export function projectStepBudgetReport(
   );
   if (!projected) return undefined;
   const { changedItemIds } = projected.telemetry;
-  const answer = `STEP_BUDGET: the run reached its step limit. Changed ${changedItemIds.length} item(s)${changedItemIds.length ? `: ${changedItemIds.join(", ")}` : ""}. Items not yet triaged wait for the next run.`;
+  const { verifiedIds, unverifiedIds } = triageCompletionEvidence(receipts);
+  const answer = [
+    `STEP_BUDGET: the run reached its step limit. Changed ${changedItemIds.length} item(s)${changedItemIds.length ? `: ${changedItemIds.join(", ")}` : ""}. Items not yet triaged wait for the next run.`,
+    verifiedIds.length ? `Verified by post-write reads: ${verifiedIds.join(", ")}.` : undefined,
+    unverifiedIds.length ? `UNVERIFIED: ${unverifiedIds.join(", ")}.` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return {
     answer,
     output: { telemetry: { ...projected.telemetry, report: answer } },
