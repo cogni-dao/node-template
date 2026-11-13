@@ -117,16 +117,6 @@ describe("renderBundleMarkdown", () => {
 		expect(markdown).toContain(
 			"GET https://poly.cognidao.org/api/v1/work/items?sortBy=rankScore&sortDirection=desc&limit=5",
 		);
-		for (const status of [
-			"needs_triage",
-			"needs_research",
-			"needs_design",
-			"needs_implement",
-			"needs_closeout",
-			"needs_merge",
-			"done",
-		])
-			expect(markdown).toContain(`| ${status} |`);
 	});
 
 	it("leads the invariants with grounding in node knowledge", () => {
@@ -231,6 +221,11 @@ describe("renderBundleMarkdown", () => {
 });
 
 describe("no flat governing index in the Markdown (story.0044)", () => {
+	it("keeps the code-owned frame small enough to leave room for the orientation", () => {
+		const frame = renderBundleMarkdown({ ...baseInput, orientation: null });
+		expect(new TextEncoder().encode(frame).byteLength).toBeLessThan(8 * 1024);
+	});
+
 	it("routes by domains and the architect instead of listing governing rows", () => {
 		const rows = Array.from({ length: 80 }, (_, i) => ({
 			id: `build-compute-entry-${i}`,
