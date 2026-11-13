@@ -63,7 +63,8 @@ export function createPostgresSpawnStore(client: CredentialSql): SpawnStore {
       const rows = await client`
         SELECT g.expires_at > now() AS live, g.redeemed_user_id, u.name,
                (g.redeemed_user_id IS NOT NULL AND NOT EXISTS (
-                  SELECT 1 FROM agent_credentials c WHERE c.user_id = g.redeemed_user_id AND c.confirmed_at IS NOT NULL)) AS unconfirmed
+                  SELECT 1 FROM agent_credentials c WHERE c.user_id = g.redeemed_user_id
+                    AND (c.confirmed_at IS NOT NULL OR (c.revoked_at IS NOT NULL AND c.revoked_reason IS DISTINCT FROM 'superseded')))) AS unconfirmed
         FROM agent_spawn_grants g LEFT JOIN users u ON u.id = g.redeemed_user_id
         WHERE g.token_hash = ${tokenHash}`;
       const row = rows[0];
@@ -89,11 +90,12 @@ export function createPostgresSpawnStore(client: CredentialSql): SpawnStore {
         const ownerUserId = text(grant.issuer_user_id);
 
         if (typeof grant.redeemed_user_id === "string") {
-          // Idempotent retry: the same agent, never confirmed, same name. Everything else is a spent grant.
+          // Idempotent retry: the same agent, never confirmed, no key ended by a revoke (REVOKE_IS_FINAL), same name. Everything else is a spent grant.
           const agentUserId = grant.redeemed_user_id;
           const agent = await tx`
             SELECT u.name,
-                   EXISTS (SELECT 1 FROM agent_credentials c WHERE c.user_id = u.id AND c.confirmed_at IS NOT NULL) AS confirmed
+                   EXISTS (SELECT 1 FROM agent_credentials c WHERE c.user_id = u.id
+                             AND (c.confirmed_at IS NOT NULL OR (c.revoked_at IS NOT NULL AND c.revoked_reason IS DISTINCT FROM 'superseded'))) AS confirmed
             FROM users u WHERE u.id = ${agentUserId}`;
           if (!agent[0] || agent[0].confirmed === true || agent[0].name !== name) return { ok: false, reason: "already_redeemed" };
           await tx`

@@ -35,7 +35,8 @@ export function memorySpawnStore(init: { users: Record<string, { agent?: boolean
     if (outage.failing) throw new Error("db down");
   };
   const live = (g: Grant) => g.expiresAt > clock.now;
-  const confirmed = (userId: string) => keys.some((k) => k.userId === userId && k.confirmed);
+  // Spent: a key was confirmed, or ended by a revoke other than a retry's `superseded` (REVOKE_IS_FINAL).
+  const confirmed = (userId: string) => keys.some((k) => k.userId === userId && (k.confirmed || (k.revoked && k.reason !== "superseded")));
   const newKey = (userId: string, tokenHash: string): Key => {
     const key = { id: `k-${++seq}`, userId, tokenHash, confirmed: false, revoked: false, reason: null };
     keys.push(key);

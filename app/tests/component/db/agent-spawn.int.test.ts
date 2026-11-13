@@ -194,6 +194,19 @@ describe("spawn grants (real Postgres)", () => {
       expect(await listOwnedAgents(spawn(), { ownerUserId: alice })).toHaveLength(1);
     });
 
+    it("REVOKE_IS_FINAL: after the owner revokes a never-confirmed agent, the same grant and name cannot mint a new key", async () => {
+      const alice = await makeUser("alice");
+      const g = await issue(alice);
+      const name = agentName();
+      const first = await redeem(g.grant, name);
+      if (!first.ok) throw new Error("unreachable");
+      expect(await revokeOwnedAgentKeys(spawn(), creds(), { ownerUserId: alice, agentUserId: first.userId })).toEqual({ ok: true, revoked: 1 });
+      expect(await redeem(g.grant, name)).toEqual({ ok: false, reason: "already_redeemed" });
+      expect(await verifyBearer(creds(), first.apiKey, ["pending", "active"])).toEqual({ ok: false, reason: "invalid" });
+      expect(await service`SELECT count(*)::int AS n FROM agent_credentials WHERE user_id = ${first.userId} AND revoked_at IS NULL`).toEqual([{ n: 0 }]);
+      expect(await listOwnedAgents(spawn(), { ownerUserId: alice })).toEqual([expect.objectContaining({ agentUserId: first.userId, keyState: "revoked" })]);
+    });
+
     it("an expired grant is refused (retry included)", async () => {
       const alice = await makeUser("alice");
       const g = await issue(alice);

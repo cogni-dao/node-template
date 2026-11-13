@@ -12,6 +12,8 @@
  *   - ONE_USE: a redeemed grant is refused (`already_redeemed`) unless it is an idempotent retry (below).
  *   - IDEMPOTENT_RETRY: a retry of the SAME redeem (same grant, same name) before the agent confirmed its first key supersedes the earlier
  *     unconfirmed key with a fresh pending key for the same agent. It creates no second agent. After the first confirm, the grant is spent.
+ *   - REVOKE_IS_FINAL: an owner revoke ends the agent for good. Once any key of the agent was revoked for a reason other than `superseded`
+ *     (for example `owner_revoked`), the grant is spent even if the agent never confirmed a key: no retry makes a new key for it.
  *   - SHORT_LIVED: a grant lives `SPAWN_GRANT_TTL_SEC` (24 h), read against the DATABASE clock. An expired grant is refused, retry included.
  *   - CAPPED: at most `MAX_PENDING_SPAWN_GRANTS` (5) pending grants per person. The cap and the insert run in one transaction.
  *   - OWNER_IS_THE_ISSUER: the redeemed agent's `owner_user_id` is the grant's issuer. The agent cannot choose it, and cannot name any other owner.
@@ -31,8 +33,6 @@ import { type CredentialPolicy, type CredentialStore, DEFAULT_CREDENTIAL_POLICY 
 export const SPAWN_GRANT_PREFIX = "cogni_sg_v1_";
 const BODY_LENGTH = 43;
 
-/** Regex source for a secret scanner. A spawn grant is a one-time secret: it is shown once and never stored. */
-export const SPAWN_GRANT_SCAN_PATTERN = `${SPAWN_GRANT_PREFIX}[A-Za-z0-9_-]{${BODY_LENGTH}}`;
 const SHAPE = new RegExp(`^${SPAWN_GRANT_PREFIX}[A-Za-z0-9_-]{${BODY_LENGTH}}$`);
 
 /** A grant lives 24 hours. */
@@ -74,7 +74,7 @@ export type GrantState =
       /** The agent the grant made. */
       readonly userId: string;
       readonly name: string | null;
-      /** True while that agent has never confirmed a key: a retry is still allowed. */
+      /** True while that agent has never confirmed a key AND no key of it was ended by a revoke (only a `superseded` key is not one): a retry is still allowed. */
       readonly unconfirmed: boolean;
     };
 

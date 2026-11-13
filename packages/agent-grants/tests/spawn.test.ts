@@ -91,6 +91,17 @@ describe("redeem", () => {
     expect(await listOwnedAgents(w.spawn, { ownerUserId: "alice" })).toHaveLength(1);
   });
 
+  it("REVOKE_IS_FINAL: the owner revokes a pending key (never confirmed); a retry with the same grant and name is refused and the agent stays unusable", async () => {
+    const w = world();
+    const g = await issue(w);
+    const first = await redeem(w, g.grant, "Helper bot", "agent-1");
+    if (!first.ok) throw new Error("unreachable");
+    expect(await revokeOwnedAgentKeys(w.spawn, w.credentials, { ownerUserId: "alice", agentUserId: first.userId })).toEqual({ ok: true, revoked: 1 });
+    expect(await redeem(w, g.grant, "Helper bot", "agent-2")).toEqual({ ok: false, reason: "already_redeemed" });
+    expect(w.keys.filter((k) => !k.revoked)).toHaveLength(0);
+    expect((await listOwnedAgents(w.spawn, { ownerUserId: "alice" })).map((a) => [a.agentUserId, a.keyState])).toEqual([["agent-1", "revoked"]]);
+  });
+
   it("a retry with a different name is a spent grant, not a second agent", async () => {
     const w = world();
     const g = await issue(w);

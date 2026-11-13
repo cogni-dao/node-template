@@ -35,7 +35,6 @@ export {
   redeemSpawnGrant,
   revokeOwnedAgentKeys,
   SPAWN_GRANT_PREFIX,
-  SPAWN_GRANT_SCAN_PATTERN,
   SPAWN_GRANT_TTL_SEC,
   type SpawnRedeemResult,
   type SpawnStore,
