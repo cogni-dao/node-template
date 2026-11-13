@@ -60,6 +60,11 @@ describe("ADMIN_ACTS_IN_ADMIN", () => {
     for (const f of outside) {
       expect(f.text).toContain("endpoints={OWNER_ACCESS_ENDPOINTS}");
       expect(code(f.text)).not.toMatch(/AGENT_ACCESS_ENDPOINTS|\/api\/v1\/admin\//);
+      // The shared section picks its plane by the endpoints it gets: a `roles` key would make the profile instance the admin table. The owner constant has none.
+      const literal = /const OWNER_ACCESS_ENDPOINTS = \{([\s\S]*?)\} as const;/.exec(code(f.text))?.[1] ?? "";
+      expect(literal.length).toBeGreaterThan(0);
+      expect(literal).not.toMatch(/\broles\b/);
+      expect([...literal.matchAll(/(\w+):/g)].map((m) => m[1]).sort()).toEqual(["ais", "aisRevoke", "claims", "mine", "requests"]);
     }
   });
 

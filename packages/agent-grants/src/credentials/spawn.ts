@@ -21,7 +21,7 @@
  *     person's agent, an ownerless agent and an unknown id are the same answer (`not_found`).
  *   - ANONYMOUS_STAYS_OWNERLESS: the node's anonymous door never calls redeem; those agents have no owner and this file never gives them one.
  *   - CLAIM_KEEPS_THE_IDENTITY (no human-carried secret): an EXISTING ownerless agent starts a claim with its OWN key and gets a claim id (15 min, single use, bound to that
- *     agent). The signed-in person opens the claim page and clicks Claim: ONE guarded write sets `owner_user_id` on that same principal, only where it is NULL (ONE_IDENTITY, history kept).
+ *     agent). The signed-in person opens the claim link (their profile, `?claim=<id>`) and clicks Claim: ONE guarded write sets `owner_user_id` on that same principal, only where it is NULL (ONE_IDENTITY, history kept).
  *     The owner is the person who clicked, never a value the agent names. An agent cannot own itself or own another agent; a person owns at most `MAX_OWNED_AGENTS` agents (a spawn grant counts too).
  *   - STORE_OUTAGE_IS_NOT_A_REFUSAL: every store failure surfaces as `CredentialStoreUnavailableError` (503).
  * Side-effects: none (the store does the IO)
@@ -92,7 +92,7 @@ export type StartClaimResult =
   | { readonly ok: true; readonly claimId: string; readonly expiresAt: string }
   | { readonly ok: false; readonly reason: "already_owned" | "not_an_agent" };
 
-/** What the claim page shows the person: the agent by name and whether the claim can still be used. */
+/** What the claim row on the profile shows the person: the agent by name and whether the claim can still be used. */
 export interface ClaimView {
   readonly claimId: string;
   readonly agentName: string | null;

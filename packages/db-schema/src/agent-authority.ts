@@ -229,7 +229,7 @@ export const agentSpawnGrants = pgTable(
 ).enableRLS();
 
 /**
- * One claim: an EXISTING agent asked to become some person's, with its own key. The claim id is the path of the page the person opens (`/profile/ai/claims/<id>`).
+ * One claim: an EXISTING agent asked to become some person's, with its own key. The claim id is the `?claim=<id>` of the link into the person's profile (`/profile?claim=<id>`).
  * Open = `claimed_at IS NULL` and `expires_at > now()`. Single use: the person's click sets `claimed_at` and `claimed_by` together, in the same transaction that sets the owner.
  */
 export const agentClaims = pgTable(

@@ -19,7 +19,7 @@
  *   - APPROVER_FOLLOWS_RESOURCE: a personal row is turned On and Off only by its owner (`grantPersonal`, `revokePersonal`, `decideAsOwner`). An agent that is not the
  *     owner's is "principal_not_found" (the route says 404). A scope not on the delegable list is refused (`invalid_scope`) on every personal path. The admin path never grants
  *     a delegable scope to an agent that has an owner, but may revoke any live row (the kill switch).
- *   - ASK_RETURNS_ITS_OWN_URL: every ask answers with the path of that ask's own approval page (`approvalPath`): the owner's profile page for a personal row, the Admin page otherwise.
+ *   - ASK_RETURNS_ITS_OWN_URL: every ask answers with the deep link of that ask (`approvalPath`): into the owner's profile for a personal row, into the Admin AI-access page otherwise.
  *   - PERSONAL_GRANT_ENDS: an approved personal row lasts `PERSONAL_GRANT_TTL_DAYS` (30) on the database clock. There is no picker in v0.
  * Side-effects: IO (store writes)
  * @public

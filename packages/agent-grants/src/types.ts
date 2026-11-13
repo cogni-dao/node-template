@@ -79,11 +79,11 @@ export interface OwnRoleRow {
   readonly scope: string;
   readonly state: RoleState;
   readonly at: string;
-  /** The path of this ask's own approval page (`/profile/ai/requests/<id>` for a personal row, `/admin/ai-access/requests/<id>` for a node row). Set on a live ask or grant. */
+  /** The deep link of this ask (`/profile?request=<id>` for a personal row, `/admin/ai-access?request=<id>` for a node row): the page highlights that row. Set on a live ask or grant. */
   readonly approvalPath?: string;
 }
 
-/** What one grant row is, for its approval page. The human reads names; the ids are handles the page's click sends back. */
+/** What one grant row is. The human reads names; the ids are handles a click sends back. */
 export interface RequestRecord {
   readonly id: string;
   readonly principalUserId: string;
