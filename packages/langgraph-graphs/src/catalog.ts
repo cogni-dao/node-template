@@ -61,6 +61,8 @@ export interface CatalogEntry {
     readonly purpose: string;
     readonly serves: string;
     readonly neededWhen: string;
+    /** The task each recurring run receives; the program owns it, not the coordinator. */
+    readonly instruction: string;
   };
   readonly displayName: string;
   readonly description: string;
@@ -164,6 +166,8 @@ export const NODE_LANGGRAPH_CATALOG = {
       purpose: "node-work-triage",
       serves: "Prioritize: every active goal's open work stays scored, goal-linked and routed",
       neededWhen: "open work is unscored, untriaged or scored before a goal or KPI changed",
+      instruction:
+        "Triage open work per the work-item-triage guide: goal-linked and unscored first, judging and writing one candidate at a time, applying only justified changes and no-op when unchanged.",
     },
     report: { event: "ai.work_prioritizer.cycle" },
   },
@@ -192,6 +196,8 @@ export const NODE_LANGGRAPH_CATALOG = {
       purpose: "node-work-closeout",
       serves: "goal-ai-work-converges: shipped work is counted as validated",
       neededWhen: "items in needs_closeout or needs_merge have a merged pull request",
+      instruction:
+        "Close out shipped work: close only items whose merged pull request is live in this build, and no-op when none qualifies.",
     },
     report: { event: "ai.work_closeout.cycle" },
   },
