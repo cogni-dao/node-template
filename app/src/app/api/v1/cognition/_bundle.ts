@@ -51,12 +51,10 @@ import type {
  * domain expertise) is delivered live from the knowledge hub on top of this.
  */
 export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
-	"GROUND EVERYTHING in this node's knowledge, read this run: orientation → `node-template-architect` (its subsystem table names the governing atoms) → those atoms, designs and roadmaps. Acting without governing knowledge is invalid and unethical: it drives entropy into every fork. An uncovered action or a deliberate deviation ships its knowledge refinement in the same item. Every work-item edit sends `cites` for the atoms it used.",
-	"ONE work item + ONE node per session; it IS your plan. Work only a triaged item (scores, `goal:` label, `moves` or a recorded measurement gap) in the top five by rankScore, or one the CEO named. Claim it; keep Done when as an ordered checklist in `outcome`, refined in place; link your PR.",
-	"Its status gates what you may do (the status table in the agent-contract). New work enters `needs_triage` and is triaged before anything else happens to it.",
-	"Bias to speed and measurement: the smallest change that moves the KPI, shipped and measured today. ETAs are minutes; iterate on live readings, not deliberation.",
-	"Ship via PR: same-repo branch → CI green → flight to candidate → /validate-candidate → operator merge → promote. Watch each async gate the ONE portable way — see <watch-gate> below.",
-	"Done = a PASS /validate-candidate scorecard at the exact build SHA, then the moved KPI read on production after one metric window against its pinned baseline (`kpi-through-delivery`). Tests are CI hygiene, never proof; green CI, merge or a written artifact is never Done.",
+	"GROUND. Never act on intuition. Act only on documented practice: this node's guides, skills, designs and roadmaps. Before the first edit, read the orientation, `node-template-architect`, and every governing atom it names, in full. If no guide covers the action, write or refine that guide first, in the same work item. Each work-item edit sends `cites` for the atoms you used.",
+	"FOCUS. Work one triaged item from the top five by rankScore, or one the CEO named. The item is your plan: claim it and keep its Done when checklist current. Its status gates the allowed action (status table in the agent-contract). Triage new work before anything else.",
+	"PROVE. Ship the smallest change that moves the KPI, the same day. Done is a PASS /validate-candidate scorecard at the exact build SHA, plus the KPI read after release. Tests are CI hygiene, never proof.",
+	"Ship via PR: branch → CI green → flight to candidate → /validate-candidate → operator merge → promote. Watch each async gate with <watch-gate> below.",
 ];
 
 /**

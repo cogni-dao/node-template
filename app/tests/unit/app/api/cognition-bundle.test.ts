@@ -120,9 +120,9 @@ describe("renderBundleMarkdown", () => {
 	});
 
 	it("leads the invariants with grounding in node knowledge", () => {
-		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toMatch(/^GROUND EVERYTHING/);
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toMatch(/^GROUND\. Never act on intuition\./);
 		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("node-template-architect");
-		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("knowledge refinement");
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("write or refine that guide first");
 	});
 
 	it("renders the current-node orientation entry IN FULL above the tooling invariants", () => {
