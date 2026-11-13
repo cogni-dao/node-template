@@ -87,6 +87,7 @@ import {
 import { columns } from "./_components/columns";
 import { WorkDetailSheet } from "./_components/WorkDetailSheet";
 import { WorkGoalLink } from "./_components/WorkKanban";
+import { WorkGoalsMount } from "./_components/WorkGoalsMount";
 import {
   MOBILE_HIDDEN_COLUMNS,
   WORK_MOBILE_QUERY,
@@ -112,9 +113,6 @@ function readFilters(searchParams: URLSearchParams): ColumnFiltersState {
   } else if (!statusParam) {
     filters.push({ id: "status", value: [...ACTIVE_STATUSES] });
   }
-  const projectParam = searchParams.get("project");
-  if (projectParam)
-    filters.push({ id: "projectId", value: projectParam.split(",") });
   const numberParam = (key: string) => {
     const raw = searchParams.get(key);
     if (!raw?.trim()) return undefined;
@@ -402,7 +400,6 @@ export function WorkDashboardView({
       const href = workViewHref(intent.itemId, intent.params, {
         type: valuesFor("type"),
         status: valuesFor("status"),
-        project: valuesFor("projectId"),
         sort: sort ? `${sort.desc ? "-" : ""}${sort.id}` : null,
         query: state.query,
         rankRange: (state.filters.find((filter) => filter.id === "rankScore")
@@ -583,6 +580,7 @@ export function WorkDashboardView({
   };
 
   return (
+    <WorkGoalsMount>
     <div className="flex flex-col gap-4 p-5 md:p-6">
       <h1 ref={workHeading} tabIndex={-1} className="font-semibold text-xl tracking-tight md:text-2xl">
         Work Dashboard
@@ -755,5 +753,6 @@ export function WorkDashboardView({
         }}
       />
     </div>
+    </WorkGoalsMount>
   );
 }

@@ -15,6 +15,10 @@ export {
   CitationLinks,
   type CitationLinksProps,
   CitationEdgeList,
+  CitationRow,
+  CITATION_HEADING_CLASS,
+  CITATION_LIST_CLASS,
+  DefaultCitationLink,
   type CitationEdgeListProps,
   type ContributionDiffRowLike,
   type ContributionEntryChange,
@@ -129,7 +133,6 @@ export {
 } from "./work-board-toolbar.js";
 export {
   ACTIVE_WORK_STATUSES,
-  formatWorkProject,
   formatWorkStatus,
   WORK_STATUSES,
   WORK_TYPES,
@@ -159,11 +162,18 @@ export {
 } from "./number-range-filter.js";
 export { StatusIcon, StatusPill, TypeIcon } from "./work-item-icons.js";
 export {
-  WorkMetricDetails,
   WorkMetricSummary,
+  workMetricArrow,
   workMetricVerdict,
   type WorkMetric,
 } from "./work-metrics.js";
+export {
+  useWorkGoal,
+  type WorkGoalRef,
+  type WorkGoalResolver,
+  WorkGoalsProvider,
+  type WorkGoalSubject,
+} from "./work-goals.js";
 export { WorkExpectations, type WorkExpectation, type WorkExpectationPage } from "./work-edo.js";
 export {
   DataTable,

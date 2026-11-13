@@ -268,12 +268,13 @@ describe("work board capability (package exports only)", () => {
     await mounted();
     expect(screen.getByPlaceholderText(/Search id, title, labels/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Board columns" })).toBeInTheDocument();
-    for (const name of ["Rank", "Type", "Status", "Project"]) {
+    for (const name of ["Rank", "Type", "Status"]) {
       expect(filterBar().getByRole("button", { name: new RegExp(`^${name}`) })).toBeInTheDocument();
     }
-    for (const name of ["Filter rank", "Filter type", "Filter status", "Filter projects"]) {
+    for (const name of ["Filter rank", "Filter type", "Filter status"]) {
       expect(filterBar().getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(filterBar().queryByRole("button", { name: "Filter projects" })).not.toBeInTheDocument();
     expect(cardIds()).not.toContain("task.0005");
     expect(cardIds()).toContain("story.0004");
   });
@@ -306,13 +307,6 @@ describe("work board capability (package exports only)", () => {
     await openFilter("Filter status");
     await userEvent.click(screen.getByRole("button", { name: "design" }));
     await waitFor(() => expect(cardIds()).toEqual(["story.0004"]));
-  });
-
-  it("filters by project from facets", async () => {
-    await mounted();
-    await openFilter("Filter projects");
-    await userEvent.click(screen.getByRole("button", { name: "beta" }));
-    await waitFor(() => expect(cardIds().sort()).toEqual(["story.0004", "task.0002"]));
   });
 
   it("filters by a rank range", async () => {

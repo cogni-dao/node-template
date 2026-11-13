@@ -10,7 +10,7 @@
  *   emphasis. Clicking the card toggles the same history chart.
  * Scope: Client component over a `MetricSubject`. Reads a series only for a
  *   subject whose goal read carries none (`useMetricSeries`); no router import.
- * Invariants: ONE_SUBJECT_ONE_COMPONENT; STATUS_NEVER_COLOR_ONLY (pill = symbol +
+ * Invariants: ROW_LAYOUT_FOLLOWS_CONTAINER (the row is a container query root: the three-column layout starts at `@xl` of the card's own width, so the same row stacks in a narrow side sheet and spreads on the Metrics page); ONE_SUBJECT_ONE_COMPONENT; STATUS_NEVER_COLOR_ONLY (pill = symbol +
  *   word); NO_TARGET_NO_VERDICT (a metric nothing judges draws no pill and the
  *   hint "No target", never a failed or missing look); UNKNOWN_IS_NOT_ZERO
  *   ("—"); NO_SENTENCES_ON_CARDS (the reason is the accessible description and
@@ -30,7 +30,7 @@ import { AvailabilityStrip, ProgressBar, Sparkline, StatusPill } from "./marks.j
 import type { MetricSubject } from "./metric-subject.js";
 import { flagText, formatAge, type MetricFlag, readingTitle, ROLE_META } from "./metrics-view.js";
 import { isDeadlineStatus, reasonText, STATUS_META } from "./presentation.js";
-import { useMetricSeries, useNearViewport } from "./use-metric-series.js";
+import { useMetricSeriesRead, useNearViewport } from "./use-metric-series.js";
 
 /** Why a metric is flagged, as a wrapping chip. */
 export function FlagChip({ flag }: { readonly flag: MetricFlag }) {
@@ -72,7 +72,7 @@ export function MetricCard({
   const { display, unit, title, status, target } = subject;
   // A supporting metric reads its own series, but only once its card is near the viewport.
   const cardRef = useRef<HTMLDivElement>(null);
-  const series = useMetricSeries(subject, nowIso, useNearViewport(cardRef));
+  const { series, pending: seriesPending, failed: seriesFailed } = useMetricSeriesRead(subject, nowIso, useNearViewport(cardRef));
   const hint = row ? (targetText(subject) ?? "No target") : subjectHint(subject, series);
   const pending = subject.viewState === "pending";
   const number = subject.value === null ? null : formatValue(subject.value, display, unit);
@@ -91,7 +91,7 @@ export function MetricCard({
       {...attrs}
       data-card={subject.level}
       data-display={display}
-      className={`relative ${row ? `rounded-md border ${kpi ? "px-3 py-3" : "px-3 py-2.5"}` : "flex min-h-40 flex-col gap-3 rounded-xl border bg-muted/10 p-4"} transition-colors hover:bg-muted/30 ${open ? "border-foreground/40" : kpi ? "border-border/60" : "border-border/40"}`}
+      className={`relative ${row ? `@container rounded-md border ${kpi ? "px-3 py-3" : "px-3 py-2.5"}` : "flex min-h-40 flex-col gap-3 rounded-xl border bg-muted/10 p-4"} transition-colors hover:bg-muted/30 ${open ? "border-foreground/40" : kpi ? "border-border/60" : "border-border/40"}`}
     >
       {/* The whole card is the toggle; its visible content stays outside the button. */}
       <button
@@ -121,14 +121,14 @@ export function MetricCard({
         aria-hidden="true"
         className={
           row
-            ? "pointer-events-none grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(8rem,12rem)]"
+            ? "pointer-events-none grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-2 @xl:grid-cols-[minmax(0,1fr)_auto_minmax(8rem,12rem)]"
             : "pointer-events-none flex flex-1 flex-col gap-3"
         }
       >
         <span
           className={
             row
-              ? `col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 break-words text-sm md:col-span-1 ${kpi ? "font-medium" : "font-normal"}`
+              ? `col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 break-words text-sm @xl:col-span-1 ${kpi ? "font-medium" : "font-normal"}`
               : `${wrap ? "break-words" : "line-clamp-1"} font-medium text-muted-foreground text-xs uppercase tracking-wider`
           }
         >
@@ -156,7 +156,7 @@ export function MetricCard({
           </div>
           {status && <StatusPill status={status} />}
         </div>
-        <span className={`${row ? "col-span-2 pl-6 md:col-span-1" : "-mt-2"} ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>
+        <span className={`${row ? "col-span-2 pl-6 @xl:col-span-1" : "-mt-2"} ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>
           {pending
             ? `${hint} · ${(status && isDeadlineStatus(status)) || subject.value === null ? "Pending refresh" : "Pending, historical reading"}`
             : hint}
@@ -174,13 +174,13 @@ export function MetricCard({
             ))}
           </div>
         )}
-        <div className={row ? "col-start-2 row-start-2 min-w-0 md:col-start-3 md:row-span-2 md:row-start-1" : "mt-auto"}>
+        <div className={row ? "col-start-2 row-start-2 min-w-0 @xl:col-start-3 @xl:row-span-2 @xl:row-start-1" : "mt-auto"}>
           {display === "progress" && !row ? (
             <ProgressBar fraction={subjectFraction(subject)} label={markLabel} />
           ) : display === "slo" ? (
-            <AvailabilityStrip series={series} binding={target} label={markLabel} />
+            <AvailabilityStrip series={series} binding={target} label={markLabel} loading={seriesPending} failed={seriesFailed} />
           ) : (
-            <Sparkline series={series} label={markLabel} {...(subject.ownSeries ? { latest: subject } : {})} />
+            <Sparkline series={series} label={markLabel} loading={seriesPending} failed={seriesFailed} {...(subject.ownSeries ? { latest: subject } : {})} />
           )}
         </div>
       </div>

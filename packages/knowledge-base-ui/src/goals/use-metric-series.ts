@@ -28,6 +28,9 @@ import type { MetricSubject } from "./metric-subject.js";
 import { historyWindow } from "./presentation.js";
 import { metricHistoryKey } from "./use-goals-progress.js";
 
+/** How far below the fold a row still counts as near, so rows just off-screen are read before they scroll in. */
+export const NEAR_VIEWPORT_MARGIN_PX = 600;
+
 /**
  * True once `ref`'s element is near the viewport (and stays true). Where the
  * browser cannot observe visibility (no IntersectionObserver: SSR, jsdom) it
@@ -45,7 +48,7 @@ export function useNearViewport(ref: RefObject<Element | null>): boolean {
           observer.disconnect();
         }
       },
-      { rootMargin: "200px" }
+      { rootMargin: `${NEAR_VIEWPORT_MARGIN_PX}px` }
     );
     observer.observe(el);
     return () => observer.disconnect();
@@ -59,6 +62,21 @@ export function useNearViewport(ref: RefObject<Element | null>): boolean {
  * the card is `visible` (near the viewport).
  */
 export function useMetricSeries(subject: MetricSubject, nowIso: string, visible = true): MetricHistory | null {
+  return useMetricSeriesRead(subject, nowIso, visible).series;
+}
+
+/**
+ * The same series plus whether its read is still to come. `pending` is true from
+ * mount until the history read has resolved or failed (including while the card
+ * is not yet near the viewport), so a card draws a loading mark, never the
+ * "not enough readings" mark, for a series it has not read yet. `failed` is
+ * true when the read errored and left no series: the card says "Unavailable".
+ */
+export function useMetricSeriesRead(
+  subject: MetricSubject,
+  nowIso: string,
+  visible = true
+): { readonly series: MetricHistory | null; readonly pending: boolean; readonly failed: boolean } {
   const { client, queryKeyPrefix } = useGoalsHost();
   const day = historyWindow("1d", Date.parse(nowIso));
   const read = useQuery({
@@ -69,6 +87,6 @@ export function useMetricSeries(subject: MetricSubject, nowIso: string, visible 
     staleTime: 60_000,
     retry: 1,
   });
-  if (!subject.ownSeries) return subjectSeries(subject);
-  return read.data ?? null;
+  if (!subject.ownSeries) return { series: subjectSeries(subject), pending: false, failed: false };
+  return { series: read.data ?? null, pending: read.isPending, failed: read.isError && !read.data };
 }

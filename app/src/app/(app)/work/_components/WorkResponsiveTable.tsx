@@ -36,7 +36,6 @@ export const MOBILE_HIDDEN_COLUMNS: VisibilityState = {
 	rankScore: false,
 	type: false,
 	goal: false,
-	projectId: false,
 	updatedAt: false,
 	estimate: false,
 };

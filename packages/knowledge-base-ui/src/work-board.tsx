@@ -10,7 +10,7 @@
  *   - EMPTY_IS_NOT_END: a column with no cards but `hasMore` (a capped text scan found nothing yet) shows "Search further (N scanned)" and never says "No items".
  *   - NOT_STARTED_LOADS_FIRST_PAGE: a column the board's budget did not reach shows "Load"; `onLoadMore` then fetches its first page.
  *   - ONE_HOVER_SURFACE: each card has one hover/focus surface; the open button stretches over the card and only the goal link sits above it.
- *   - ONE_GOAL_LINK: at most one goal pointer per card, from a `goal:<slug>` or `goal:goal-<slug>` label with a safe kebab-case slug.
+ *   - ONE_GOAL_LINK: at most one goal pointer per card, showing the goal's resolved title (from the item's moves, else a `goal:<slug>` / `goal:goal-<slug>` label; `WorkGoalsProvider`), clipped to one line, never the raw label (task.0112).
  *   - RANK_FROM_PACKAGE: the rank label comes from `@cogni/work-items` `rankScore`, never re-derived here.
  *   - SAFE_UPDATED: an unparseable or missing `updatedAt` renders "Updated —" with no `<time>` element.
  * Side-effects: none
@@ -27,6 +27,7 @@ import { Kanban, KanbanBoard, KanbanColumn, KanbanColumnContent } from "./reui-k
 import { cn } from "./cn.js";
 import { RelativeTime } from "./relative-time.js";
 import { Button } from "./ui/button.js";
+import { useWorkGoal } from "./work-goals.js";
 import { StatusPill, TypeIcon } from "./work-item-icons.js";
 import { WorkMetricSummary, workMetricVerdict, type WorkMetric } from "./work-metrics.js";
 
@@ -47,7 +48,7 @@ export interface WorkBoardItem {
 export interface WorkBoardGoalLink {
   /** Goal slug without the `goal-` prefix, e.g. `ai-work-converges`. */
   readonly slug: string;
-  /** The original label text, used as the visible link text. */
+  /** The goal's title, used as the visible link text. */
   readonly label: string;
   readonly href: string;
   readonly className: string;
@@ -73,18 +74,17 @@ export interface WorkBoardProps<TItem extends WorkBoardItem> {
   readonly onOpenItem: (item: TItem) => void;
   /** Requests the next page of one column; the node fetches it and passes it back in `columns`. */
   readonly onLoadMore: (status: string) => void;
-  /** Builds a goal link href from its slug. Defaults to `/knowledge/goal-<slug>`. */
+  /** Builds a goal link href from its slug. Defaults to `/knowledge/<goal id>`, so an id without the `goal-` prefix still links to its own page. */
   readonly goalHref?: (slug: string) => string;
   /** Renders the goal link, e.g. with a router link. Defaults to a plain `<a>`. */
   readonly renderGoalLink?: (link: WorkBoardGoalLink) => ReactNode;
 }
 
-const GOAL_LABEL = /^goal:(?:goal-)?([a-z0-9]+(?:-[a-z0-9]+)*)$/;
 const GOAL_LINK_CLASS =
-  "relative z-10 inline-flex min-h-6 min-w-6 items-center truncate underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "relative z-10 block min-h-6 min-w-6 max-w-full truncate leading-6 underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-function defaultGoalHref(slug: string): string {
-  return `/knowledge/${encodeURIComponent(`goal-${slug}`)}`;
+function defaultGoalHref(goalId: string): string {
+  return `/knowledge/${encodeURIComponent(goalId)}`;
 }
 
 function defaultGoalLink(link: WorkBoardGoalLink): ReactNode {
@@ -95,12 +95,24 @@ function defaultGoalLink(link: WorkBoardGoalLink): ReactNode {
   );
 }
 
-export function firstGoal(labels: readonly string[]): { slug: string; label: string } | undefined {
-  for (const label of labels) {
-    const slug = GOAL_LABEL.exec(label)?.[1];
-    if (slug) return { slug, label };
-  }
-  return undefined;
+/** One goal pointer: the resolved goal title (the item's moves, else its goal label), one clipped line. */
+function GoalPointer({
+  item,
+  goalHref,
+  renderGoalLink,
+}: {
+  readonly item: WorkBoardItem;
+  readonly goalHref: ((slug: string) => string) | undefined;
+  readonly renderGoalLink: (link: WorkBoardGoalLink) => ReactNode;
+}): ReactElement | null {
+  const goal = useWorkGoal(item);
+  if (!goal) return null;
+  const slug = goal.id.replace(/^goal-/, "");
+  return (
+    <span title={goal.title} className="min-w-0 max-w-full">
+      {renderGoalLink({ slug, label: goal.title, href: goalHref ? goalHref(slug) : defaultGoalHref(goal.id), className: GOAL_LINK_CLASS })}
+    </span>
+  );
 }
 
 function updatedIso(updatedAt: string | null | undefined): string | undefined {
@@ -134,7 +146,7 @@ export function WorkBoard<TItem extends WorkBoardItem>({
   isLoading,
   onOpenItem,
   onLoadMore,
-  goalHref = defaultGoalHref,
+  goalHref,
   renderGoalLink = defaultGoalLink,
 }: WorkBoardProps<TItem>): ReactElement {
   const byStatus = useMemo(
@@ -199,7 +211,6 @@ export function WorkBoard<TItem extends WorkBoardItem>({
                 ) : (
                   cards.map((item) => {
                     const score = rankScore(item.scores);
-                    const goal = firstGoal(item.labels);
                     return (
                       <div
                         key={item.id}
@@ -234,15 +245,8 @@ export function WorkBoard<TItem extends WorkBoardItem>({
                           {item.moves?.[0] && <WorkMetricSummary move={item.moves[0]} />}
                         </button>
                         <div className="flex items-center justify-between gap-3 text-muted-foreground text-xs">
-                          <span className="flex min-w-0 flex-wrap gap-1">
-                            {goal
-                              ? renderGoalLink({
-                                  slug: goal.slug,
-                                  label: goal.label,
-                                  href: goalHref(goal.slug),
-                                  className: GOAL_LINK_CLASS,
-                                })
-                              : null}
+                          <span className="flex min-w-0 flex-1">
+                            <GoalPointer item={item} goalHref={goalHref} renderGoalLink={renderGoalLink} />
                           </span>
                           <span className="shrink-0">
                             Updated <RelativeTime iso={updatedIso(item.updatedAt)} />

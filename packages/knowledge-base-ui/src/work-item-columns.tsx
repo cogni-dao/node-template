@@ -3,12 +3,13 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/work-item-columns`
- * Purpose: TanStack column definitions that drive both the work board and a work table: rank, priority, type, item, status, project, updated and estimate (task.0044).
+ * Purpose: TanStack column definitions that drive both the work board and a work table: rank, priority, type, item, metric, goal, status, updated and estimate (task.0044, task.0112).
  * Scope: Pure column descriptors + inline cells. No fetching, no router; a node may inject the item cell (e.g. to render a link).
  * Invariants:
  *   - HEADER_OWNS_SORT_AND_FILTER: every header renders a package header control, so sort and facet filters live there.
  *   - RANK_FROM_PACKAGE: `rankScore` is `@cogni/work-items` `rankScore(scores)`; it sorts descending first and unscored items sort last.
- *   - FACET_FILTERS: type, status and projectId use `arrIncludesSome`; rankScore uses `inNumberRange`, so client-side and server-side filtering agree.
+ *   - FACET_FILTERS: type and status use `arrIncludesSome`; rankScore uses `inNumberRange`, so client-side and server-side filtering agree.
+ *   - GOAL_IS_RESOLVED: the Goal column shows the goal title from the item's moves, else its `goal:` label (`useWorkGoal`), never the raw label; `projectId` stays in the data but has no column (task.0112).
  *   - Column visibility is not in the header; a table's toolbar owns it.
  * Side-effects: none
  * Links: task.0044, story.5111
@@ -21,9 +22,10 @@ import { rankScore } from "@cogni/work-items";
 import { type ColumnDef, createColumnHelper, type Row } from "@tanstack/react-table";
 import type { ReactNode } from "react";
 
-import { firstGoal, type WorkBoardItem } from "./work-board.js";
-import { formatWorkProject, WorkFacetControls, WorkRankControls } from "./work-board-controls.js";
+import type { WorkBoardItem } from "./work-board.js";
+import { WorkFacetControls, WorkRankControls } from "./work-board-controls.js";
 import { WorkColumnHeader, workHeaderDisabled } from "./work-column-header.js";
+import { useWorkGoal } from "./work-goals.js";
 import { StatusPill, TypeIcon } from "./work-item-icons.js";
 import { WorkMetricSummary } from "./work-metrics.js";
 
@@ -45,6 +47,17 @@ function defaultItemCell({ id, title }: WorkItemRow): ReactNode {
       <span className="line-clamp-2 text-sm md:line-clamp-1">{title}</span>
       <span className="font-mono text-muted-foreground text-xs">{id}</span>
     </div>
+  );
+}
+
+/** The goal title the item moves (else its goal label's goal), truncated to one line; "—" when it has none. */
+function GoalCell({ item }: { readonly item: WorkItemRow }): ReactNode {
+  const goal = useWorkGoal(item);
+  if (!goal) return <span className="text-muted-foreground">&mdash;</span>;
+  return (
+    <span title={goal.title} data-goal={goal.id} className="block truncate text-muted-foreground text-xs">
+      {goal.title}
+    </span>
   );
 }
 
@@ -141,7 +154,8 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
     col.display({
       id: "goal",
       header: "Goal",
-      cell: ({ row }) => firstGoal(row.original.labels)?.label ?? "—",
+      size: 200,
+      cell: ({ row }) => <GoalCell item={row.original} />,
       meta: { headerTitle: "Goal" },
     }),
 
@@ -154,23 +168,6 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
       cell: (info) => <StatusPill status={info.getValue()} />,
       filterFn: "arrIncludesSome",
       meta: { headerTitle: "Status" },
-    }),
-
-    col.accessor((row) => row.projectId, {
-      id: "projectId",
-      header: ({ column, table }) => (
-        <WorkFacetControls column={column} facet="projectId" disabled={workHeaderDisabled(table)} />
-      ),
-      size: 140,
-      cell: (info) => {
-        const v = info.getValue();
-        if (!v) return null;
-        return (
-          <span className="truncate text-muted-foreground text-xs">{formatWorkProject(v)}</span>
-        );
-      },
-      filterFn: "arrIncludesSome",
-      meta: { headerTitle: "Project" },
     }),
 
     col.accessor((row) => row.updatedAt ?? undefined, {
