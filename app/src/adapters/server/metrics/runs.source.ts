@@ -30,9 +30,11 @@ function isoOrThrow(value: string): string {
 /**
  * One statement; classes are mutually exclusive and sum to total.
  * user_immediate splits by requester: an agent_principals row means a bearer
- * agent; a users row with a wallet means a SIWE human; the rest (the seeded
- * system user, legacy HMAC keys) stays unclassified by design, so a large
+ * agent (internal principals included); a wallet or any user_bindings row
+ * (SIWE, GitHub, Google, Discord) means a human; the rest (the seeded system
+ * user, legacy HMAC keys) stays unclassified by design, so a large
  * unclassified share is a finding about identity, not a metric defect.
+ * system counts schedule and webhook runs whoever authored the schedule.
  */
 export async function readRunsByCaller(
   sql: Sql,
@@ -48,11 +50,14 @@ export async function readRunsByCaller(
       COUNT(*)::int AS total,
       COUNT(*) FILTER (WHERE gr.run_kind IN ('system_scheduled','system_webhook'))::int AS system,
       COUNT(*) FILTER (WHERE gr.run_kind = 'user_immediate' AND ap.user_id IS NOT NULL)::int AS bearer_agent,
-      COUNT(*) FILTER (WHERE gr.run_kind = 'user_immediate' AND ap.user_id IS NULL AND u.wallet_address IS NOT NULL)::int AS human
+      COUNT(*) FILTER (WHERE gr.run_kind = 'user_immediate' AND ap.user_id IS NULL
+        AND (u.wallet_address IS NOT NULL
+          OR EXISTS (SELECT 1 FROM user_bindings ub WHERE ub.user_id = gr.requested_by)))::int AS human
     FROM graph_runs gr
     LEFT JOIN agent_principals ap ON ap.user_id = gr.requested_by
     LEFT JOIN users u ON u.id = gr.requested_by
-    WHERE gr.started_at >= '${start}' AND gr.started_at < '${end}'`,
+    WHERE gr.started_at >= $1 AND gr.started_at < $2`,
+    [start, end],
   );
   const abort = () => {
     void query.cancel();
@@ -70,9 +75,13 @@ export async function readRunsByCaller(
   const system = Number(row.system);
   const bearer = Number(row.bearer_agent);
   const human = Number(row.human);
-  const complete =
-    rows.length === 1 && [total, system, bearer, human].every(Number.isFinite);
   const unclassified = total - system - bearer - human;
+  const complete =
+    rows.length === 1 &&
+    [total, system, bearer, human].every(
+      (n) => Number.isInteger(n) && n >= 0,
+    ) &&
+    unclassified >= 0;
   const byClass: Record<RunCallerClass, number> = {
     all: total,
     system,
