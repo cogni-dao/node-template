@@ -1,15 +1,5 @@
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 
-# Files to copy: gitignored files copied from the clone root into each new
-# worktree at creation, before any agent starts. This replaces the default
-# `.env*` pattern, so keep it. The cognition cache is the clone root's last
-# complete bundle (scripts/agent/session-cognition.sh keeps it current), so
-# Claude's CLAUDE.md import loads the agent-contract on the first session.
-file_include_globs = """
-.env*
-.cogni/.cognition-cache.md
-"""
-
 [scripts]
 setup = "bash scripts/conductor-worktree-setup.sh"
 run_mode = "concurrent"

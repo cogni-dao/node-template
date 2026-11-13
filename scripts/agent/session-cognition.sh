@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Session-start cognition loader — shared by the Claude Code (.claude/settings.json),
-# Codex (.codex/config.toml) and OpenCode (.opencode/plugins) entry points, and by
+# Codex (.codex/config.toml) and OpenCode (.opencode/plugin) entry points, and by
 # Conductor workspace setup. Delivers THIS node's own cognition bundle.
 #
 # Design: FRESH FIRST, BOUNDED, CACHE FALLBACK (story.0001). Every session start
 # fetches the bundle from the node hub with a short timeout, so each session
 # works from cognition acquired for it. When the hub is down or slow, the last
-# complete cache (.cogni/.cognition-cache.md, or the clone root's copy) is
+# complete cache this checkout fetched (.cogni/.cognition-cache.md) is
 # presented instead, so a hub outage never costs a session its contract and the
 # hub is not a fleet-wide boot dependency (bug.5122). Only a boot with no
-# complete bundle anywhere surfaces a short, honest recovery notice that
+# complete bundle surfaces a short, honest recovery notice that
 # separates "no credentials yet" from a key-present failure.
 #
 # .env.cogni holds two accounts (see .env.cogni.example): the NODE account
@@ -105,83 +105,10 @@ fetch_bundle() {
 
 # write_cache_atomic <content> — replace the cache in one rename, never a torn
 # file, and only with a complete bundle: an incomplete hub response never
-# replaces the contract a later import would load (bug.0024).
+# replaces the last complete one (bug.0024).
 write_cache_atomic() {
   bundle_is_complete "$1" || return 1
   write_file_atomic "$CACHE_FILE" "$1"
-  # Keep the clone root's copy current too: Conductor copies it into every new
-  # worktree, and a worktree whose first fetch fails boots from it.
-  if [ -n "$SHARED_CACHE" ]; then
-    write_file_atomic "$SHARED_CACHE" "$1"
-    ensure_clone_root_ignores "$CACHE_FILE"
-    ensure_conductor_copies_cache
-  fi
-}
-
-# ensure_clone_root_ignores <path> — Conductor copies a file from the clone root
-# into a new worktree only when Git ignores it there, and a clone root checked
-# out on an older branch may not ignore the cache. Its info/exclude applies on
-# every branch and stays on this machine.
-ensure_clone_root_ignores() {
-  git -C "$clone_root" check-ignore -q -- "$1" 2>/dev/null && return 0
-  exclude="$clone_root/.git/info/exclude"
-  mkdir -p "$clone_root/.git/info" 2>/dev/null || return 0
-  # Start on a new line even when the file's last line has no newline.
-  if [ -s "$exclude" ] && [ -n "$(tail -c 1 "$exclude" 2>/dev/null)" ]; then
-    printf '\n' >> "$exclude" 2>/dev/null
-  fi
-  printf '/%s\n' "$1" >> "$exclude" 2>/dev/null
-  return 0
-}
-
-# ensure_conductor_copies_cache — Conductor's docs do not say whether the shared
-# Files-to-copy rule (.conductor/settings.toml) is read from the clone root's
-# checkout or the default branch. A clone root on a branch without it would copy
-# only .env*, and Claude's first import would find no cache. The clone root's
-# machine-local settings.local.toml outranks the shared file on every branch, so
-# mirror the shared rule there, verbatim and kept in sync, inside a marked block.
-# A rule the human set there is never touched. Conductor only.
-CONDUCTOR_COPY_MARK="# cogni:file_include_globs — mirrored from .conductor/settings.toml by scripts/agent/session-cognition.sh"
-ensure_conductor_copies_cache() {
-  [ -n "${CONDUCTOR_ROOT_PATH:-}" ] || return 0
-  [ "$(cd "$CONDUCTOR_ROOT_PATH" 2>/dev/null && pwd -P)" = "$(cd "$clone_root" && pwd -P)" ] || return 0
-  rule="$(awk '
-    /^file_include_globs[[:space:]]*=[[:space:]]*"""/ { on = 1 }
-    on { print }
-    on && /"""[[:space:]]*$/ && !/^file_include_globs/ { exit }
-  ' .conductor/settings.toml 2>/dev/null)"
-  case "$rule" in *"$CACHE_FILE"*) ;; *) return 0 ;; esac
-  block="$CONDUCTOR_COPY_MARK
-$rule"
-  settings="$clone_root/.conductor/settings.local.toml"
-  # Drop our previous block; anything else in the file is the human's.
-  kept="$(MARK="$CONDUCTOR_COPY_MARK" awk '
-    $0 == ENVIRON["MARK"] { skip = 1; next }
-    skip && /"""[[:space:]]*$/ && !/^file_include_globs/ { skip = 0; after = 1; next }
-    after && /^[[:space:]]*$/ { after = 0; next }
-    { after = 0 }
-    !skip { print }
-  ' "$settings" 2>/dev/null)"
-  if printf '%s\n' "$kept" | grep -q '^[[:space:]]*file_include_globs[[:space:]]*='; then
-    printf 'warn: %s sets its own file_include_globs; new worktrees get the cognition cache only if it lists %s\n' "$settings" "$CACHE_FILE" >&2
-    return 0
-  fi
-  if [ -f "$settings" ]; then
-    # TOML top-level keys must precede the first [table].
-    updated="$(printf '%s\n' "$kept" | BLOCK="$block" awk '
-      !done && /^[[:space:]]*\[/ { print ENVIRON["BLOCK"]; print ""; done = 1 }
-      { print; last = $0 }
-      END { if (!done) { if (last !~ /^[[:space:]]*$/) print ""; print ENVIRON["BLOCK"] } }
-    ')" || return 0
-  else
-    updated="\"\$schema\" = \"https://conductor.build/schemas/settings.repo.schema.json\"
-
-$block"
-  fi
-  [ "$updated" = "$(cat "$settings" 2>/dev/null)" ] && return 0
-  write_file_atomic "$settings" "$updated"
-  chmod 600 "$settings" 2>/dev/null
-  ensure_clone_root_ignores ".conductor/settings.local.toml"
 }
 
 write_file_atomic() {
@@ -197,21 +124,6 @@ bundle_is_complete() {
   return 1
 }
 
-# SHARED_CACHE — the clone root's cache (the main checkout every worktree hangs
-# off), or empty when this checkout is the clone root.
-SHARED_CACHE=""
-common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-# Only an ordinary clone whose common dir is <root>/.git and whose root is this
-# node's checkout; never a bare repo, a submodule's modules dir, or a tracked file.
-if [ -n "$common_dir" ] && [ "$(basename "$common_dir")" = ".git" ]; then
-  clone_root="$(cd "$(dirname "$common_dir")" 2>/dev/null && pwd || true)"
-  if [ -n "$clone_root" ] && [ "$clone_root" != "$(pwd)" ] \
-    && [ -f "$clone_root/.cogni/repo-spec.yaml" ] \
-    && ! git -C "$clone_root" ls-files --error-unmatch -- "$CACHE_FILE" >/dev/null 2>&1; then
-    SHARED_CACHE="$clone_root/$CACHE_FILE"
-  fi
-fi
-
 # A cognition snapshot committed to git is not a cache: every new workspace
 # would inherit whatever contract happened to be current at that commit. Treat
 # tracked snapshots as absent.
@@ -220,8 +132,7 @@ cache_is_repo_tracked() {
 }
 
 # session_bundle — the bundle this session presents: fetched from the hub now,
-# else the last complete cache, else the clone root's. Prints nothing when no
-# complete bundle exists anywhere.
+# else this checkout's last complete cache. Prints nothing when neither exists.
 session_bundle() {
   fresh="$(fetch_bundle "$SESSION_FETCH_TIMEOUT")"
   if write_cache_atomic "$fresh"; then
@@ -232,14 +143,6 @@ session_bundle() {
     cached="$(cat "$CACHE_FILE")"
     if bundle_is_complete "$cached"; then
       printf '%s\n' "$cached"
-      return 0
-    fi
-  fi
-  if [ -n "$SHARED_CACHE" ] && [ -s "$SHARED_CACHE" ]; then
-    shared="$(cat "$SHARED_CACHE")"
-    if bundle_is_complete "$shared"; then
-      write_file_atomic "$CACHE_FILE" "$shared"
-      printf '%s\n' "$shared"
       return 0
     fi
   fi
@@ -270,7 +173,7 @@ COGNI COGNITION — could not load bundle (no complete cache)
 
 A credential IS present, so this is NOT a missing-key setup problem. Either the
 hub is down/slow, or the key lacks a principal on this hub (or the node has no
-cognition published yet), and no complete bundle is cached on this machine.
+cognition published yet), and this checkout has no complete cached bundle.
 
 Check hub health and that GET $URL resolves with your key. Stay in bootstrap
 recovery (AGENTS.md) until it loads, then restart or resume the agent.

@@ -164,80 +164,25 @@ describe("session cognition hook", () => {
 		);
 	});
 
-	it("boots a new worktree from the clone root's last complete bundle when the hub is down (bug.0018)", () => {
-		const root = fixture();
-		const clone = path.join(root, "clone");
-		mkdirSync(clone);
-		execFileSync("git", ["init", "-q"], { cwd: clone });
-		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
-		writeFileSync(path.join(clone, ".cogni/repo-spec.yaml"), "intent:\n  name: fixture\n");
-		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: clone });
-		const worktree = path.join(root, "wt");
-		execFileSync("git", ["worktree", "add", "-q", "--detach", worktree], { cwd: clone });
-		const complete = "# bundle\n## The agent-contract\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
-		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
-		writeFileSync(path.join(clone, CACHE_PATH), `${complete}\n`);
-		const offline = path.join(root, "bin");
-		mkdirSync(offline);
-		writeFileSync(path.join(offline, "curl"), "#!/bin/sh\nexit 7\n");
-		chmodSync(path.join(offline, "curl"), 0o755);
-		const env = {
-			...process.env,
-			CODEX_HOME: path.join(root, "no-user-hook"),
-			CODEX_THREAD_ID: "",
-			COGNI_NODE_API_KEY: "test-key",
-			PATH: `${offline}:${process.env.PATH ?? ""}`,
-		};
-		const codexOut = execFileSync("bash", [LOADER], {
-			cwd: worktree,
-			env: { ...env, CODEX_THREAD_ID: "shared-boot", TMPDIR: root },
-			encoding: "utf8",
-		});
-		expect(codexOut).toBe(`${complete}\n`);
-		expect(readFileSync(path.join(worktree, CACHE_PATH), "utf8")).toBe(`${complete}\n`);
-
-		// An incomplete root copy is never presented as the contract.
-		const second = path.join(root, "wt2");
-		execFileSync("git", ["worktree", "add", "-q", "--detach", second], { cwd: clone });
-		writeFileSync(path.join(clone, CACHE_PATH), "map only\n");
-		const recovery = execFileSync("bash", [LOADER], {
-			cwd: second,
-			env: { ...env, CODEX_THREAD_ID: "incomplete-root", TMPDIR: root },
-			encoding: "utf8",
-		});
-		expect(recovery).toContain("could not load bundle");
-	});
-
-	it("copies the last complete bundle into every new Conductor worktree (bug.0018)", () => {
-		// The shared rule; the loader mirrors it into the clone root's
-		// settings.local.toml so it also holds on any branch the root has out.
-		const settings = readFileSync(
-			path.join(REPO_ROOT, ".conductor/settings.toml"),
-			"utf8",
-		);
-		const globs = /file_include_globs = """\n([\s\S]*?)"""/.exec(settings)?.[1];
-		const include = (globs ?? "").split("\n").map((line) => line.trim());
-		expect(include).toContain(CACHE_PATH);
-		// file_include_globs replaces Conductor's default pattern; env files still copy.
-		expect(include).toContain(".env*");
+	it("never copies cognition between checkouts (story.0001)", () => {
+		// Each session fetches its own bundle; a copy from the clone root would hand
+		// a new worktree cognition another session acquired.
+		const settings = readFileSync(path.join(REPO_ROOT, ".conductor/settings.toml"), "utf8");
+		expect(settings).not.toContain("file_include_globs");
 		expect(settings).toContain('setup = "bash scripts/conductor-worktree-setup.sh"');
-		// One owner: .worktreeinclude would win over these globs (Conductor docs).
 		for (const legacy of [".worktreeinclude", "conductor.json"])
 			expect(() => readFileSync(path.join(REPO_ROOT, legacy))).toThrow();
+		const loader = readFileSync(LOADER, "utf8");
+		expect(loader).not.toContain("git-common-dir");
+		expect(loader).not.toContain("settings.local.toml");
 	});
 
-	it("refreshes the copied bundle and keeps the clone root's copy copyable (bug.0018)", () => {
+	it("refresh replaces the cache only with a complete hub bundle (bug.0024)", () => {
 		const root = fixture();
-		const clone = path.join(root, "clone");
-		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
-		execFileSync("git", ["init", "-q"], { cwd: clone });
-		writeFileSync(path.join(clone, ".cogni/repo-spec.yaml"), "intent:\n  name: fixture\n");
-		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: clone });
-		const worktree = path.join(root, "wt");
-		execFileSync("git", ["worktree", "add", "-q", "--detach", worktree], { cwd: clone });
-		const copied = "# old\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
-		mkdirSync(path.join(worktree, ".cogni"), { recursive: true });
-		writeFileSync(path.join(worktree, CACHE_PATH), `${copied}\n`);
+		const repo = path.join(root, "repo");
+		mkdirSync(path.join(repo, ".cogni"), { recursive: true });
+		const previous = "# old\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
+		writeFileSync(path.join(repo, CACHE_PATH), `${previous}\n`);
 		const bin = path.join(root, "bin");
 		mkdirSync(bin);
 		const curl = path.join(bin, "curl");
@@ -248,105 +193,15 @@ describe("session cognition hook", () => {
 			COGNI_NODE_API_KEY: "test-key",
 			PATH: `${bin}:${process.env.PATH ?? ""}`,
 		};
-
-		// An incomplete hub response never replaces the copied complete bundle.
 		writeFileSync(curl, "#!/bin/sh\nprintf '%s\\n' '{\"markdown\":\"map only\"}'\n");
 		chmodSync(curl, 0o755);
 		expect(() =>
-			execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env, stdio: "ignore" }),
+			execFileSync("bash", [LOADER, "--refresh"], { cwd: repo, env, stdio: "ignore" }),
 		).toThrow();
-		expect(readFileSync(path.join(worktree, CACHE_PATH), "utf8")).toBe(`${copied}\n`);
-
-		// A complete one replaces it, updates the clone root's copy, and makes Git
-		// ignore that copy there, which Conductor requires before copying it.
-		const current = "# new\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
-		writeFileSync(curl, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ markdown: current })}'\n`);
-		expect(
-			execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env, encoding: "utf8" }),
-		).toBe("");
-		expect(readFileSync(path.join(worktree, CACHE_PATH), "utf8")).toBe(`${current}\n`);
-		expect(readFileSync(path.join(clone, CACHE_PATH), "utf8")).toBe(`${current}\n`);
-		execFileSync("git", ["check-ignore", "-q", "--", CACHE_PATH], { cwd: clone });
-	});
-
-	it("mirrors the shared copy rule into the clone root on any branch (bug.0018)", () => {
-		const root = fixture();
-		const clone = path.join(root, "clone");
-		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
-		mkdirSync(path.join(clone, ".conductor"));
-		execFileSync("git", ["init", "-q"], { cwd: clone });
-		writeFileSync(path.join(clone, ".cogni/repo-spec.yaml"), "intent:\n  name: fixture\n");
-		const shared = (globs: string) =>
-			`[scripts]\nsetup = "bash setup.sh"\n`.replace("[scripts]", `file_include_globs = """\n${globs}"""\n\n[scripts]`);
-		const rule = `.env*\n${CACHE_PATH}\n`;
-		writeFileSync(path.join(clone, ".conductor/settings.toml"), shared(rule));
-		execFileSync("git", ["add", "."], { cwd: clone });
-		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"], { cwd: clone });
-		const worktree = path.join(root, "wt");
-		execFileSync("git", ["worktree", "add", "-q", "--detach", worktree], { cwd: clone });
-		// The clone root has moved to a branch without the shared rule.
-		execFileSync("git", ["rm", "-q", ".conductor/settings.toml"], { cwd: clone });
-		const local = path.join(clone, ".conductor/settings.local.toml");
-		mkdirSync(path.dirname(local), { recursive: true });
-		const machineSetup = [
-			'"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"',
-			"",
-			"[scripts]",
-			"setup = 'bash machine-setup.sh'",
-		].join("\n");
-		writeFileSync(local, `${machineSetup}\n`);
-		const bin = path.join(root, "bin");
-		mkdirSync(bin);
-		const current = "# new\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
-		writeFileSync(path.join(bin, "curl"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ markdown: current })}'\n`);
-		chmodSync(path.join(bin, "curl"), 0o755);
-		const env = {
-			...process.env,
-			CODEX_HOME: path.join(root, "no-user-hook"),
-			CODEX_THREAD_ID: "",
-			COGNI_NODE_API_KEY: "test-key",
-			CONDUCTOR_ROOT_PATH: "",
-			PATH: `${bin}:${process.env.PATH ?? ""}`,
-		};
-		const refresh = (extra: Record<string, string> = {}) =>
-			execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env: { ...env, ...extra }, stdio: "ignore" });
-		const toml = () =>
-			JSON.parse(
-				execFileSync("python3", ["-c", "import json,sys,tomllib; print(json.dumps(tomllib.load(open(sys.argv[1],'rb'))))", local], { encoding: "utf8" }),
-			) as { file_include_globs?: string; scripts: { setup: string } };
-
-		// Outside Conductor the loader never writes Conductor settings.
-		refresh();
-		expect(readFileSync(local, "utf8")).toBe(`${machineSetup}\n`);
-
-		// Under Conductor the shared rule lands verbatim before the first table,
-		// the machine's own settings stay, and a second refresh changes nothing.
-		const conductor = { CONDUCTOR_ROOT_PATH: clone };
-		refresh(conductor);
-		const once = readFileSync(local, "utf8");
-		refresh(conductor);
-		expect(readFileSync(local, "utf8")).toBe(once);
-		expect(toml().file_include_globs).toBe(rule);
-		expect(toml().scripts.setup).toBe("bash machine-setup.sh");
-		execFileSync("git", ["check-ignore", "-q", "--", ".conductor/settings.local.toml"], { cwd: clone });
-
-		// The mirror follows the shared rule; it never becomes a second owner.
-		const grown = `.env*\n${CACHE_PATH}\n.local-auth\n`;
-		writeFileSync(path.join(worktree, ".conductor/settings.toml"), shared(grown));
-		refresh(conductor);
-		expect(toml().file_include_globs).toBe(grown);
-		expect(readFileSync(local, "utf8").match(/^file_include_globs/gm)).toHaveLength(1);
-
-		// A rule the human set is never touched.
-		const human = `${machineSetup.replace("[scripts]", 'file_include_globs = ".env*"\n\n[scripts]')}\n`;
-		writeFileSync(local, human);
-		refresh(conductor);
-		expect(readFileSync(local, "utf8")).toBe(human);
-
-		// A clone root with no local settings gets a valid file of its own.
-		rmSync(local);
-		refresh(conductor);
-		expect(toml().file_include_globs).toBe(grown);
+		expect(readFileSync(path.join(repo, CACHE_PATH), "utf8")).toBe(`${previous}\n`);
+		writeFileSync(curl, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ markdown: LIVE })}'\n`);
+		execFileSync("bash", [LOADER, "--refresh"], { cwd: repo, env, stdio: "ignore" });
+		expect(readFileSync(path.join(repo, CACHE_PATH), "utf8")).toBe(`${LIVE}\n`);
 	});
 
 	it("warms the cognition cache in workspace setup before anything slow (bug.0018)", () => {

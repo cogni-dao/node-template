@@ -32,9 +32,6 @@ without it. Recovery ends only when the native instruction path loads a complete
 
 On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_API_KEY in
 the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
-Conductor copies the clone root's last complete cache into each new worktree when it
-creates it (`.conductor/settings.toml`, mirrored by the loader into the clone root's
-`settings.local.toml`), so a session that starts while the hub is down still has it.
 
 ## Local execution safety
 

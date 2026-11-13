@@ -250,13 +250,11 @@ fs.writeFileSync(
 EOF
 }
 
-# Refresh the session cognition cache before anything slow. Conductor copies the
-# clone root's last complete bundle into the worktree at creation
-# (.conductor/settings.toml file_include_globs), before any agent starts, so
-# Claude's CLAUDE.md import loads it on the first session. This replaces it with
-# the hub's current bundle for every later read.
+# Warm the session cognition cache before anything slow. Every agent session
+# fetches its own bundle when it starts; this cache is only the offline fallback
+# for a session that starts while the hub is down.
 warm_cognition_cache() {
-  local cache=".cogni/.cognition-cache.md" attempt started
+  local attempt started
   started=$(date +%s)
   for attempt in 1 2 3; do
     if bash scripts/agent/session-cognition.sh --refresh </dev/null >/dev/null 2>&1; then
@@ -265,12 +263,7 @@ warm_cognition_cache() {
     fi
     [[ "$attempt" -lt 3 ]] && sleep 2
   done
-  # Complete means the contract itself is present, not just a non-empty map.
-  if [[ -s "$cache" ]] && grep -q "<agent-contract" "$cache" && grep -q "<status-contract" "$cache"; then
-    warn "cognition hub fetch failed; kept the last complete bundle copied from the clone root"
-  else
-    warn "no complete cognition bundle; agents start in bootstrap recovery (AGENTS.md) and must restart once the hub answers"
-  fi
+  warn "cognition hub fetch failed; each agent session retries when it starts"
 }
 
 ensure_auth_root_cogni_env
