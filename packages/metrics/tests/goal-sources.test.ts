@@ -333,7 +333,6 @@ describe("@cogni-dao/metrics/knowledge", () => {
 			"work.count@1",
 			"work.convergence@1",
 			"github.stars@1",
-			"brief.conformance@1",
 			"no-inline-history@1",
 		]);
 	});

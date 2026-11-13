@@ -57,11 +57,11 @@ describe("WorkItemPatchInputSchema moves", () => {
   it("parses directionless associations without activating store writes", () => {
     // Shape compatibility also lets the prioritizer recognize unchanged null links;
     // reader-first adapter rejection is proved below before any SQL access.
-    expect(parse([{ metricId: "edits-7d", direction: null }]).success).toBe(true);
-    expect(WorkItemDtoSchema.shape.moves.safeParse([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]).success).toBe(true);
+    expect(parse([{ metricId: "items-no-inline-history", direction: null }]).success).toBe(true);
+    expect(WorkItemDtoSchema.shape.moves.safeParse([{ metricId: "items-no-inline-history", direction: null, baselineObservationId: OBS_1 }]).success).toBe(true);
     expect(
-      parseStoredMoves([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]),
-    ).toEqual([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]);
+      parseStoredMoves([{ metricId: "items-no-inline-history", direction: null, baselineObservationId: OBS_1 }]),
+    ).toEqual([{ metricId: "items-no-inline-history", direction: null, baselineObservationId: OBS_1 }]);
   });
 
   it("accepts [] (moves nothing), one entry and three entries", () => {
@@ -153,7 +153,7 @@ describe("moveIssues", () => {
   });
 
   it("refuses directionless writes until readers are upgraded", () => {
-    expect(moveIssues([{ metricId: "edits-7d", direction: null }])).toEqual([
+    expect(moveIssues([{ metricId: "items-no-inline-history", direction: null }])).toEqual([
       "moves[0].direction null is not enabled until readers are upgraded",
     ]);
   });
@@ -165,7 +165,7 @@ describe("reader-first store gate", () => {
     const adapter = new DoltgresWorkItemAdapter(sql as never, {
       recreateClient: () => sql as never,
     });
-    const moves = [{ metricId: "edits-7d", direction: null }];
+    const moves = [{ metricId: "items-no-inline-history", direction: null }];
     await expect(
       adapter.create({ type: "task", title: "t", node: "shared", moves } as never, "principal"),
     ).rejects.toMatchObject({ code: "moves_invalid" });
@@ -184,16 +184,16 @@ describe("reader-first store gate", () => {
       labels: [],
       createdAt: "t",
       updatedAt: "t",
-      moves: [{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }],
+      moves: [{ metricId: "items-no-inline-history", direction: null, baselineObservationId: OBS_1 }],
     });
     expect(result.moves).toEqual([
-      { metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 },
+      { metricId: "items-no-inline-history", direction: null, baselineObservationId: OBS_1 },
     ]);
   });
 
   it("selects stored links in a bounded summary page", async () => {
     const queries: string[] = [];
-    const moves = [{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }];
+    const moves = [{ metricId: "items-no-inline-history", direction: null, baselineObservationId: OBS_1 }];
     const sql = makeFakeDoltgresSql(
       (query) =>
         query.includes("FROM (SELECT")

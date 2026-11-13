@@ -2,7 +2,6 @@
 /** Golden cases for no-inline-history-rules@1: one case per marker and one per false-positive guard. */
 import { describe, expect, it } from "vitest";
 import {
-	appendsHistory,
 	approvedLines,
 	markerLines,
 	passesNoInlineHistory,
@@ -304,42 +303,6 @@ describe("approvedLines", () => {
 		expect(approvedLines("```\nGoal = x\nDone when = y\n```")).toEqual({ goal: false, doneWhen: false });
 		expect(approvedLines("Goal =\nDone when =  ")).toEqual({ goal: false, doneWhen: false });
 		expect(approvedLines(null)).toEqual({ goal: false, doneWhen: false });
-	});
-});
-
-describe("appendsHistory", () => {
-	it("is an append when the marker-line count grows across the changed columns", () => {
-		expect(appendsHistory([{ from: "State", to: "State\nUpdate: shipped" }])).toBe(true);
-		expect(appendsHistory([{ from: "a", to: "a\n2026-11-01 x\n2026-11-02 y" }])).toBe(true);
-	});
-	it("is not an append when a marker line is reworded", () => {
-		expect(appendsHistory([{ from: "Update: one", to: "Update: two" }])).toBe(false);
-	});
-	it("is not an append when marker lines are removed or none exist", () => {
-		expect(appendsHistory([{ from: "Update: one\nRev 3", to: "Rev 3" }])).toBe(false);
-		expect(appendsHistory([{ from: "a", to: "b" }])).toBe(false);
-		expect(appendsHistory([{ from: "Update: one", to: "clean" }])).toBe(false);
-	});
-	it("nets additions against removals across columns, and skips unchanged columns", () => {
-		expect(
-			appendsHistory([
-				{ from: "Update: one", to: "clean" },
-				{ from: "x", to: "x\nUpdate: two" },
-			]),
-		).toBe(false);
-		expect(
-			appendsHistory([
-				{ from: "Update: one", to: "Update: one" },
-				{ from: "x", to: "x\nRev 4" },
-			]),
-		).toBe(true);
-	});
-	it("lets a second dated line turn a lone date into history", () => {
-		expect(appendsHistory([{ from: "2026-11-01 start", to: "2026-11-01 start\n2026-11-02 next" }])).toBe(true);
-	});
-	it("treats an absent side as empty", () => {
-		expect(appendsHistory([{ from: null, to: "Update: a" }])).toBe(true);
-		expect(appendsHistory([{ from: "Update: a", to: null }])).toBe(false);
 	});
 });
 

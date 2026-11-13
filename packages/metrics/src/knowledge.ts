@@ -24,14 +24,10 @@ import {
 import { type GoalSourcePort, readGoalsProgress } from "./progress.js";
 import { createTickReads } from "./tick-reads.js";
 import {
-	BRIEF_MAX_BYTES,
-	BRIEF_MAX_ROWS,
 	FIRST_PARENT_WALK_CAP,
 	NO_INLINE_HISTORY_MAX_BYTES,
 	NO_INLINE_HISTORY_MAX_ROWS,
-	readBriefConformance,
 	readGithubStars,
-	readNoInlineHistoryEdits,
 	readNoInlineHistoryScope,
 	readNoInlineHistoryState,
 	readWorkConvergence,
@@ -74,7 +70,6 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"work.count@1",
 	"work.convergence@1",
 	"github.stars@1",
-	"brief.conformance@1",
 	"no-inline-history@1",
 ] as const;
 /** `work.count@1` → `work.count`: the family every version of a calculator shares. */
@@ -82,9 +77,11 @@ export function calculatorFamily(id: string): string {
 	return id.slice(0, id.lastIndexOf("@"));
 }
 /** Families the package owns at every version; node calculators use their own names. */
-export const RESERVED_CALCULATOR_FAMILIES: ReadonlySet<string> = new Set(
-	PACKAGE_CALCULATOR_IDS.map(calculatorFamily),
-);
+export const RESERVED_CALCULATOR_FAMILIES: ReadonlySet<string> = new Set([
+	...PACKAGE_CALCULATOR_IDS.map(calculatorFamily),
+	// Retired and reserved: no calculator may re-register this id with a different meaning.
+	"brief.conformance",
+]);
 
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
@@ -206,34 +203,6 @@ export function createGoalMetrics(deps: {
 			);
 		},
 	});
-	const briefParams = z.strictObject({
-		subject: z.enum(["items", "entries"]),
-		maxLongShare: z.number().min(0).max(0.5),
-	});
-	registry.register({
-		id: "brief.conformance@1",
-		unit: "%",
-		display: "progress",
-		paramsSchema: briefParams,
-		// One statement; it sends at most 5000 rows and 16 MiB or the totals alone.
-		budget: {
-			timeoutMs: 15000,
-			maxSourceCalls: 1,
-			maxRows: BRIEF_MAX_ROWS,
-			maxResponseBytes: BRIEF_MAX_BYTES,
-		},
-		compute: async (params, ctx) => {
-			const p = briefParams.parse(params);
-			return ctx.read((signal) =>
-				readBriefConformance(
-					sourceSql,
-					p.subject,
-					p.maxLongShare,
-					signal,
-				),
-			);
-		},
-	});
 	const noInlineHistoryParams = z.discriminatedUnion("measure", [
 		z.strictObject({
 			measure: z.literal("state"),
@@ -243,40 +212,23 @@ export function createGoalMetrics(deps: {
 			measure: z.literal("scope"),
 			subject: z.literal("work-items"),
 		}),
-		z.strictObject({
-			measure: z.literal("edits"),
-			output: z.enum(["share", "count"]),
-			days: z.number().int().min(1).max(28),
-		}),
 	]);
 	registry.register({
 		id: "no-inline-history@1",
-		// State and scope read main now; only the edits interval has a width.
+		// State and scope read main now; neither has a window.
 		unit: "%",
-		unitFor: (params) => {
-			const p = noInlineHistoryParams.parse(params);
-			if (p.measure === "state") return "%";
-			if (p.measure === "scope") return "items";
-			return p.output === "share" ? "%" : "edits";
-		},
-		displayFor: (params) => {
-			const p = noInlineHistoryParams.parse(params);
-			if (p.measure === "scope") return "volume";
-			return p.measure === "edits" && p.output === "count"
+		unitFor: (params) =>
+			noInlineHistoryParams.parse(params).measure === "scope" ? "items" : "%",
+		displayFor: (params) =>
+			noInlineHistoryParams.parse(params).measure === "scope"
 				? "volume"
-				: "progress";
-		},
-		windowSeconds: (params) => {
-			const p = noInlineHistoryParams.parse(params);
-			return p.measure === "edits" ? p.days * 86400 : 0;
-		},
+				: "progress",
 		paramsSchema: noInlineHistoryParams,
-		// State and scope make one call; edits make three (the window's commits,
-		// work items, atoms). Rows and bytes cap each statement; the service
-		// enforces the call count.
+		// State and scope make one call. Rows and bytes cap the statement; the
+		// service enforces the call count.
 		budget: {
 			timeoutMs: 15000,
-			maxSourceCalls: 3,
+			maxSourceCalls: 1,
 			maxRows: NO_INLINE_HISTORY_MAX_ROWS,
 			maxResponseBytes: NO_INLINE_HISTORY_MAX_BYTES,
 		},
@@ -286,17 +238,7 @@ export function createGoalMetrics(deps: {
 				return ctx.read((signal) =>
 					readNoInlineHistoryState(sourceSql, p.subject, signal),
 				);
-			if (p.measure === "scope")
-				return ctx.read((signal) =>
-					readNoInlineHistoryScope(sourceSql, signal),
-				);
-			return readNoInlineHistoryEdits(
-				sourceSql,
-				p.output,
-				ctx.window,
-				(source) => ctx.read((signal) => source(signal)),
-				ctx.editsTiming,
-			);
+			return ctx.read((signal) => readNoInlineHistoryScope(sourceSql, signal));
 		},
 	});
 	const nodeCalculatorIds: string[] = [];
