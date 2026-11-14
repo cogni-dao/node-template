@@ -57,25 +57,25 @@ export async function readWorkCount(
 	};
 }
 
-/** Response bytes are bounded during streaming, not after allocating the body. */
-export async function readGithubStars(
-	owner: string,
-	repo: string,
+/**
+ * One unauthenticated GET against the fixed provider origin, parsed as JSON.
+ * Response bytes are bounded during streaming, not after allocating the body.
+ * The provider HTTP `Date` is the response snapshot watermark, not a body field.
+ */
+async function fetchProviderJson(
+	url: string,
 	signal: AbortSignal,
-	budget: Readonly<MetricBudget>,
-): Promise<MetricSample> {
-	const response = await fetch(
-		`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
-		{
-			signal,
-			redirect: "error",
-			headers: {
-				Accept: "application/vnd.github+json",
-				"User-Agent": "Cogni-node-metrics",
-			},
-			cache: "no-store",
+	maxResponseBytes: number,
+): Promise<{ body: any; date: string | null }> {
+	const response = await fetch(url, {
+		signal,
+		redirect: "error",
+		headers: {
+			Accept: "application/vnd.github+json",
+			"User-Agent": "Cogni-node-metrics",
 		},
-	);
+		cache: "no-store",
+	});
 	if (!response.ok || !response.body) throw new Error("provider_unavailable");
 	const reader = response.body.getReader();
 	const chunks: Uint8Array[] = [];
@@ -85,8 +85,7 @@ export async function readGithubStars(
 			const part = await reader.read();
 			if (part.done) break;
 			size += part.value.byteLength;
-			if (size > budget.maxResponseBytes)
-				throw new Error("provider_response_budget");
+			if (size > maxResponseBytes) throw new Error("provider_response_budget");
 			chunks.push(part.value);
 		}
 	} finally {
@@ -98,21 +97,180 @@ export async function readGithubStars(
 		bytes.set(chunk, offset);
 		offset += chunk.length;
 	}
-	const body = JSON.parse(new TextDecoder().decode(bytes));
-	// Provider HTTP Date is the response snapshot watermark, not repository.updated_at.
 	const sourceDate = response.headers.get("date");
+	return {
+		body: JSON.parse(new TextDecoder().decode(bytes)),
+		date: sourceDate ? new Date(sourceDate).toISOString() : null,
+	};
+}
+
+export async function readGithubStars(
+	owner: string,
+	repo: string,
+	signal: AbortSignal,
+	budget: Readonly<MetricBudget>,
+): Promise<MetricSample> {
+	const { body, date } = await fetchProviderJson(
+		`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+		signal,
+		budget.maxResponseBytes,
+	);
 	return {
 		value: body.stargazers_count,
 		unit: "stars",
 		complete: typeof body.stargazers_count === "number",
-		sourceWatermarks: [
-			{
-				source: "github.public",
-				asOf: sourceDate ? new Date(sourceDate).toISOString() : null,
-			},
-		],
+		sourceWatermarks: [{ source: "github.public", asOf: date }],
 		evidenceRefs: [`https://github.com/${owner}/${repo}`],
 	};
+}
+
+/** Most runs one workflow-runs page returns; the API's own cap. */
+export const GITHUB_ACTIONS_PAGE_SIZE = 100;
+/** Pages one reading may read: more runs than this is incomplete, never truncated. */
+export const GITHUB_ACTIONS_MAX_PAGES = 10;
+/** A full runs page is about 1.4 MB (100 runs, ~14 KB each, measured); 3 MiB bounds each page. */
+export const GITHUB_ACTIONS_MAX_PAGE_BYTES = 3_145_728;
+
+export interface GithubActionsParams {
+	owner: string;
+	repo: string;
+	workflow: string;
+	event?: "pull_request" | "merge_group" | "push" | undefined;
+	output: "duration" | "failure_rate" | "flake_rate";
+	/** Nearest-rank quantile for `duration`; default 0.95. */
+	quantile?: number | undefined;
+}
+
+interface WorkflowRun {
+	id: number;
+	head_sha: string;
+	conclusion: string | null;
+	run_attempt: number;
+	created_at: string;
+	run_started_at: string;
+	updated_at: string;
+}
+
+const isWorkflowRun = (r: any): r is WorkflowRun =>
+	!!r &&
+	Number.isSafeInteger(r.id) &&
+	typeof r.head_sha === "string" &&
+	(r.conclusion === null || typeof r.conclusion === "string") &&
+	Number.isInteger(r.run_attempt) &&
+	[r.created_at, r.run_started_at, r.updated_at].every(
+		(t) => typeof t === "string" && Number.isFinite(Date.parse(t)),
+	);
+
+const runFailed = (r: WorkflowRun) =>
+	r.conclusion === "failure" ||
+	r.conclusion === "startup_failure" ||
+	r.conclusion === "timed_out";
+
+/**
+ * CI health of one workflow over the half-open window [start, end), read from
+ * the provider's Actions REST API without credentials. The population is
+ * completed runs that succeeded or failed (`startup_failure` and `timed_out`
+ * count as failure); cancelled, skipped, neutral, stale and action_required
+ * runs are no verdict on the code and are left out. A flaky head SHA has a
+ * passing retry (`run_attempt > 1`) or both a failed and a passing run. More
+ * runs than `GITHUB_ACTIONS_MAX_PAGES` pages hold, a malformed page or an
+ * empty population is unknown, never a partial value or a 0. `read` is the
+ * budgeted source call; each page is one call.
+ */
+export async function readGithubActions(
+	p: GithubActionsParams,
+	window: { start: string; end: string },
+	read: <T>(
+		source: (signal: AbortSignal, budget: Readonly<MetricBudget>) => Promise<T>,
+	) => Promise<T>,
+): Promise<MetricSample> {
+	const start = Date.parse(window.start);
+	const end = Date.parse(window.end);
+	const unit = p.output === "duration" ? "min" : "%";
+	const workflowUrl = `https://github.com/${p.owner}/${p.repo}/actions/workflows/${p.workflow}`;
+	const created = window.start.replace(/\.\d+Z$/, "Z");
+	const query =
+		`created=${encodeURIComponent(`>=${created}`)}` +
+		`&status=completed&per_page=${GITHUB_ACTIONS_PAGE_SIZE}&exclude_pull_requests=true` +
+		(p.event ? `&event=${p.event}` : "");
+	const url = (page: number) =>
+		`https://api.github.com/repos/${encodeURIComponent(p.owner)}/${encodeURIComponent(p.repo)}/actions/workflows/${encodeURIComponent(p.workflow)}/runs?${query}&page=${page}`;
+	let asOf: string | null = null;
+	const sample = (
+		value: number,
+		complete: boolean,
+		counts: string,
+		reason?: "incomplete_or_invalid_source" | "zero_denominator",
+	): MetricSample => ({
+		value,
+		unit,
+		complete,
+		...(reason ? { reason } : {}),
+		sourceWatermarks: [{ source: "github.actions", asOf }],
+		evidenceRefs: [
+			workflowUrl,
+			`github:actions:${p.repo}/${p.workflow}:${counts}`,
+		],
+	});
+
+	const cap = GITHUB_ACTIONS_MAX_PAGES * GITHUB_ACTIONS_PAGE_SIZE;
+	const runs = new Map<number, WorkflowRun>();
+	let fetched = 0;
+	let total = Number.POSITIVE_INFINITY;
+	for (let page = 1; page <= GITHUB_ACTIONS_MAX_PAGES && fetched < total; page++) {
+		const got = await read((signal, budget) =>
+			fetchProviderJson(url(page), signal, budget.maxResponseBytes),
+		);
+		asOf ??= got.date;
+		const pageRuns = got.body?.workflow_runs;
+		if (
+			!Array.isArray(pageRuns) ||
+			!Number.isSafeInteger(got.body.total_count) ||
+			!pageRuns.every(isWorkflowRun)
+		)
+			return sample(0, false, `malformed-page=${page}`, "incomplete_or_invalid_source");
+		total = got.body.total_count;
+		if (total > cap)
+			return sample(0, false, `total=${total},cap=${cap}`, "incomplete_or_invalid_source");
+		for (const run of pageRuns) runs.set(run.id, run);
+		fetched += pageRuns.length;
+		if (pageRuns.length === 0) break;
+	}
+	if (fetched < total)
+		return sample(0, false, `read=${fetched},total=${total}`, "incomplete_or_invalid_source");
+
+	const population = [...runs.values()].filter((r) => {
+		const at = Date.parse(r.created_at);
+		return (
+			at >= start && at < end && (r.conclusion === "success" || runFailed(r))
+		);
+	});
+	const bySha = new Map<string, WorkflowRun[]>();
+	for (const r of population) {
+		const group = bySha.get(r.head_sha);
+		if (group) group.push(r);
+		else bySha.set(r.head_sha, [r]);
+	}
+	const flakyShas = [...bySha.values()].filter(
+		(group) =>
+			group.some((r) => r.run_attempt > 1 && r.conclusion === "success") ||
+			(group.some(runFailed) && group.some((r) => r.conclusion === "success")),
+	).length;
+	const failures = population.filter(runFailed).length;
+	const counts = `runs=${population.length},failures=${failures},shas=${bySha.size},flakyShas=${flakyShas}`;
+	if (population.length === 0) return sample(0, false, counts, "zero_denominator");
+
+	if (p.output === "failure_rate")
+		return sample((failures / population.length) * 100, true, counts);
+	if (p.output === "flake_rate")
+		return sample((flakyShas / bySha.size) * 100, true, counts);
+	const minutes = population
+		.map((r) => (Date.parse(r.updated_at) - Date.parse(r.run_started_at)) / 60000)
+		.sort((a, b) => a - b);
+	if (minutes[0] === undefined || minutes[0] < 0)
+		return sample(0, false, counts, "incomplete_or_invalid_source");
+	const rank = Math.max(0, Math.ceil((p.quantile ?? 0.95) * minutes.length) - 1);
+	return sample(minutes[rank] as number, true, counts);
 }
 
 const SYNTHETIC_LABELS = (column: string) =>
