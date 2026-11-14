@@ -161,12 +161,16 @@ describe("github.actions@1 reader", () => {
 
 	it("reads a window of exactly the page cap, and is unknown rather than truncated one run past it", async () => {
 		const cap = GITHUB_ACTIONS_MAX_PAGES * 100;
-		const page = () => Array.from({ length: 100 }, () => run());
+		const page = () => Array.from({ length: 100 }, (_, i) => run({ minutes: i + 1 }));
 		serve(Array.from({ length: GITHUB_ACTIONS_MAX_PAGES }, page), cap);
 		expect(await readGithubActions(params("failure_rate"), window, read)).toMatchObject({
 			value: 0,
 			complete: true,
 		});
+		// 0.55 of 1000 runs is rank 550 (value 55); float 0.55 * 1000 would round up to rank 551 (56).
+		expect(
+			(await readGithubActions(params("duration", { quantile: 0.55 }), window, read)).value,
+		).toBe(55);
 		serve([page()], cap + 1);
 		expect(await readGithubActions(params("failure_rate"), window, read)).toMatchObject({
 			complete: false,
@@ -174,7 +178,7 @@ describe("github.actions@1 reader", () => {
 		});
 	});
 
-	it("reports a quota refusal on a later page as rate limited, not as a source fault or a partial value", async () => {
+	it("reports a quota refusal on a later page as a rate-limited source failure, never a partial value", async () => {
 		const full = Array.from({ length: 100 }, () => run({ conclusion: "failure" }));
 		vi.stubGlobal(
 			"fetch",
@@ -187,10 +191,9 @@ describe("github.actions@1 reader", () => {
 						}),
 			),
 		);
-		expect(await readGithubActions(params("failure_rate"), window, read)).toMatchObject({
-			complete: false,
-			reason: "provider_rate_limited",
-		});
+		const limited = await readGithubActions(params("failure_rate"), window, read);
+		expect(limited).toMatchObject({ complete: false, reason: "source_failed" });
+		expect(limited.evidenceRefs.join(" ")).toContain("rate-limited");
 	});
 
 	it("is unknown, never 0, when no run in the window gives a verdict", async () => {

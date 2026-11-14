@@ -253,7 +253,7 @@ async function loadWorkflowRuns(
  * A flaky head SHA has a passing retry (`run_attempt > 1`) or both a failed and
  * a passing run. More runs than `GITHUB_ACTIONS_MAX_PAGES` pages hold, a
  * malformed page or an empty population is unknown, never a partial value or a
- * 0; a quota refusal is unknown with `provider_rate_limited`. `read` is the
+ * 0; a quota refusal is unknown with the existing `source_failed` reason and a `rate-limited` evidence marker. `read` is the
  * budgeted source call (the whole page read is one call). `share` lets
  * calculators that read the same workflow list inside one tick pay for it once;
  * the list is requested from the minute the window starts and trimmed to the
@@ -295,7 +295,7 @@ export async function readGithubActions(
 		reason?:
 			| "incomplete_or_invalid_source"
 			| "zero_denominator"
-			| "provider_rate_limited",
+			| "source_failed",
 	): MetricSample => ({
 		value,
 		unit,
@@ -308,7 +308,7 @@ export async function readGithubActions(
 		],
 	});
 	if (loaded.kind === "rate_limited")
-		return sample(0, false, "rate-limited", "provider_rate_limited");
+		return sample(0, false, "rate-limited", "source_failed");
 	if (loaded.kind === "incomplete")
 		return sample(0, false, loaded.counts, "incomplete_or_invalid_source");
 
