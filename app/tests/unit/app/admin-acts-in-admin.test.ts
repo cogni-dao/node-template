@@ -50,12 +50,17 @@ const outsideAdmin = files.filter((f) => !ADMIN_DIRS.some((dir) => f.rel.startsW
 const importsOf = (text: string) => text.match(/import[^;]*?from\s*["'][^"']+["']/g) ?? [];
 
 describe("ADMIN_ACTS_IN_ADMIN", () => {
-  it("imports AgentAccessSection and the agent-access endpoints only from the Admin area", () => {
-    const importers = files.filter(
-      (f) => /import[^;]*\bAgentAccessSection\b[^;]*from/.test(f.text) || /from\s+["'][^"']*agent-access-endpoints["']/.test(f.text)
-    );
-    expect(importers.length).toBeGreaterThan(0);
-    expect(importers.map((f) => f.rel).filter((rel) => !ADMIN_DIRS.some((dir) => rel.startsWith(dir)))).toEqual([]);
+  it("imports the admin agent-access endpoints only from the Admin area, and AgentAccessSection only from the Admin area and the profile's account-mode mount", () => {
+    const adminEndpoints = files.filter((f) => /from\s+["'][^"']*\/agent-access-endpoints["']/.test(f.text));
+    expect(adminEndpoints.length).toBeGreaterThan(0);
+    expect(adminEndpoints.map((f) => f.rel).filter((rel) => !ADMIN_DIRS.some((dir) => rel.startsWith(dir)))).toEqual([]);
+    const sections = files.filter((f) => /import[^;]*\bAgentAccessSection\b[^;]*from/.test(f.text));
+    expect(sections.length).toBeGreaterThan(0);
+    // Outside the Admin area only the profile mount may import it, and only in account mode (a person's own account, never node-wide rows).
+    const outside = sections.filter((f) => !ADMIN_DIRS.some((dir) => f.rel.startsWith(dir)));
+    expect(outside.map((f) => f.rel)).toEqual(["app/(app)/profile/AiAccessProfile.client.tsx"]);
+    expect(outside[0]?.text).toContain('mode="account"');
+    expect(outside[0]?.text).not.toMatch(/api\/v1\/admin|\(admin\)/);
   });
 
   it("names NodeAdminPort, AdminSession, nodeAdminPort or the admin-session mint only in the Admin area and the explicit port wiring", () => {

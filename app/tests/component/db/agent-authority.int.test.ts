@@ -188,24 +188,24 @@ describe("agent authority (real Postgres)", () => {
         log: makeLogger({ component: "agent-authority-test" }),
         toolBundle: (await import("@cogni/ai-tools")).CORE_TOOL_BUNDLE as never,
       });
-      const first = await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", approvedBy: admin });
+      const first = await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", me: { userId: admin, admin: {} } });
       expect(first).toEqual({ principalUserId: NODE_AI_PRINCIPAL_USER_ID, created: true });
-      expect((await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", approvedBy: admin })).created).toBe(false);
+      expect((await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", me: { userId: admin, admin: {} } })).created).toBe(false);
       const live = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${NODE_AI_PRINCIPAL_USER_ID} AND scope = 'knowledge:write' AND revoked_at IS NULL`;
       expect(live).toHaveLength(1);
-      expect((await a.revokeRole({ principalSlug: "node-ai", scope: "knowledge:write", revokedBy: admin })).revoked).toBe(true);
+      expect((await a.revokeRole({ principalSlug: "node-ai", scope: "knowledge:write", me: { userId: admin, admin: {} } })).revoked).toBe(true);
       const rows = await service`SELECT revoked_at FROM agent_roles WHERE principal_user_id = ${NODE_AI_PRINCIPAL_USER_ID} AND scope = 'knowledge:write'`;
       expect(rows).toHaveLength(1);
       expect(rows[0]?.revoked_at).not.toBeNull();
       // After a revoke the same role can be granted again as a new live row.
-      expect((await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", approvedBy: admin })).created).toBe(true);
-      await a.revokeRole({ principalSlug: "node-ai", scope: "knowledge:write", revokedBy: admin });
+      expect((await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", me: { userId: admin, admin: {} } })).created).toBe(true);
+      await a.revokeRole({ principalSlug: "node-ai", scope: "knowledge:write", me: { userId: admin, admin: {} } });
     });
 
     it("rejects an undeclared scope and an unknown principal", async () => {
       const admin = await makeUser();
       await expect(
-        authority().grantRole({ principalSlug: "node-ai", scope: "made:up", approvedBy: admin })
+        authority().grantRole({ principalSlug: "node-ai", scope: "made:up", me: { userId: admin, admin: {} } })
       ).rejects.toMatchObject({ code: "invalid_scope" });
       const a = createAgentToolAuthority({
         sql: service as unknown as AgentAuthoritySql,
@@ -214,7 +214,7 @@ describe("agent authority (real Postgres)", () => {
         toolBundle: (await import("@cogni/ai-tools")).CORE_TOOL_BUNDLE as never,
       });
       await expect(
-        a.grantRole({ principalSlug: "ghost", scope: "knowledge:write", approvedBy: admin })
+        a.grantRole({ principalSlug: "ghost", scope: "knowledge:write", me: { userId: admin, admin: {} } })
       ).rejects.toMatchObject({ code: "principal_not_found" });
     });
 
@@ -225,24 +225,32 @@ describe("agent authority (real Postgres)", () => {
     });
   });
 
-  describe("account scope is out of scope", () => {
-    it("ships no account-grant table or SQL function", async () => {
+  describe("the account plane is one more resource on the same row", () => {
+    it("ships the one grant row with the RLS function, no account-grant table, and the app role can read only its own account rows", async () => {
       expect(await service`SELECT 1 FROM information_schema.tables WHERE table_name = 'agent_capability_grants'`).toHaveLength(0);
-      expect(await service`SELECT 1 FROM pg_proc WHERE proname IN ('agent_has_scope', 'agent_grant_has_scope')`).toHaveLength(0);
+      expect(await service`SELECT 1 FROM pg_proc WHERE proname = 'agent_has_scope'`).toHaveLength(1);
+      expect(await service`SELECT 1 FROM pg_policies WHERE tablename = 'agent_roles' AND policyname = 'agent_roles_account_self_read'`).toHaveLength(1);
+      // Only one policy on agent_roles, and it is select-only: the app role never writes a grant.
+      expect(await service`SELECT cmd FROM pg_policies WHERE tablename = 'agent_roles'`).toEqual([expect.objectContaining({ cmd: "SELECT" })]);
     });
 
-    it("denies an account tool with policy_denied even with a live role", async () => {
+    it("denies an account tool with no account (no_account) and a node row never opens it", async () => {
       const { createPostgresAgentGrantsStore, authorize } = await import("@cogni/agent-grants");
       const admin = await makeUser();
-      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${PRIORITIZER_PRINCIPAL_USER_ID}, 'account:read', ${admin})`;
-      const decision = await service.begin((tx) =>
-        authorize(createPostgresAgentGrantsStore(tx), async () => "allow", {
-          principalId: PRIORITIZER_PRINCIPAL_USER_ID,
-          subjectUserId: admin,
-          requires: { scope: "account:read", kind: "account", subject: "member" },
-        })
-      );
-      expect(decision).toMatchObject({ decision: "deny", code: "policy_denied", reason: "account_scope_unsupported" });
+      // A throwaway principal (not a seeded AI), so no other file that counts the seeded AI's rows sees this one.
+      const holder = await makeUser();
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${holder}, 'account:read', ${admin})`;
+      const decide = (accountId?: string) =>
+        service.begin((tx) =>
+          authorize(createPostgresAgentGrantsStore(tx), async () => "allow", {
+            principalId: holder,
+            subjectUserId: admin,
+            accountId,
+            requires: { scope: "account:read", kind: "account", subject: "member" },
+          })
+        );
+      expect(await decide()).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_account" });
+      expect(await decide("acct-x")).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_role" });
     });
   });
 
@@ -295,10 +303,10 @@ describe("agent authority (real Postgres)", () => {
         (guarded(principalId).exec as (a: unknown, c: unknown, k: unknown) => Promise<unknown>)({}, { runId: "r" }, {});
 
       await expect(call(PRIORITIZER_PRINCIPAL_USER_ID)).rejects.toBeInstanceOf(ToolAuthorityError);
-      await authority.grantRole({ principalSlug: "prioritizer", scope: "work_item:transition", approvedBy: admin });
+      await authority.grantRole({ principalSlug: "prioritizer", scope: "work_item:transition", me: { userId: admin, admin: {} } });
       await expect(call(PRIORITIZER_PRINCIPAL_USER_ID)).resolves.toBe("ran");
       await expect(call(undefined)).rejects.toMatchObject({ receipt: { code: "policy_denied" } });
-      await authority.revokeRole({ principalSlug: "prioritizer", scope: "work_item:transition", revokedBy: admin });
+      await authority.revokeRole({ principalSlug: "prioritizer", scope: "work_item:transition", me: { userId: admin, admin: {} } });
       await expect(call(PRIORITIZER_PRINCIPAL_USER_ID)).rejects.toMatchObject({ receipt: { code: "policy_denied", retryable: false } });
     });
   });
@@ -405,7 +413,7 @@ describe("agent authority (real Postgres)", () => {
       const admin = await makeUser();
       const agent = await makeUser();
       const st = await store();
-      expect(await st.requestRole({ principalUserId: agent, scope: "edo:write", maxPending: 3, maxPendingTotal: 1000 })).toBe("created");
+      expect(await st.requestRole({ principalUserId: agent, scope: "edo:write", resource: "node", link: { hash: randomUUID(), expiresAt: new Date(Date.now() + 60_000) }, maxPending: 3, maxPendingTotal: 1000 })).toBe("created");
       expect(await st.hasLiveRole(agent, "edo:write")).toBe(false);
       expect(await st.approvePending({ principalUserId: agent, scope: "edo:write", approvedBy: admin })).toBe(true);
       expect(await st.hasLiveRole(agent, "edo:write")).toBe(true);

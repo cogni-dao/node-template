@@ -16,6 +16,7 @@
  * @public
  */
 
+import { accountCreditsReadBoundTool } from "./tools/account-credits-read";
 import { edoDecideBoundTool } from "./tools/edo-decide";
 import { edoHypothesizeBoundTool } from "./tools/edo-hypothesize";
 import { edoRecordOutcomeBoundTool } from "./tools/edo-record-outcome";
@@ -119,6 +120,7 @@ export function createToolCatalog(
  */
 export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   ...METRIC_TOOL_BUNDLE,
+  accountCreditsReadBoundTool as CatalogBoundTool,
   edoDecideBoundTool as CatalogBoundTool,
   edoHypothesizeBoundTool as CatalogBoundTool,
   edoRecordOutcomeBoundTool as CatalogBoundTool,

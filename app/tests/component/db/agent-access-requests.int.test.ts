@@ -38,6 +38,8 @@ import {
   MAX_ADMIN_OUTSIDE_ROWS,
 } from "@/bootstrap/agent-authority";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
+
+import { runAccountGrantSuites } from "./agent-account-grants.suite";
 // A wallet of its own, so this file never fights another component file for the repo-spec approver's unique wallet binding.
 const ADMIN_WALLET = `0x${randomUUID().replaceAll("-", "").padEnd(40, "a").slice(0, 40)}`;
 const SCOPE = "work_item:transition";
@@ -125,7 +127,14 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     as(agent, "bearer");
     const first = await ask(SCOPE);
     expect(first.status).toBe(201);
-    expect(await first.json()).toEqual({ scope: SCOPE, state: "pending", created: true });
+    const askBody = await first.json();
+    expect(askBody).toEqual({ scope: SCOPE, state: "pending", created: true, approvalUrl: expect.stringMatching(/^https?:\/\/[^/]+\/admin\/ai-access#agent-request=[\w-]{43}$/) });
+    // Only the hash is stored (TOKEN_HASH_ONLY): the row holds a 64-hex hash, never the token in the link.
+    const token = String(askBody.approvalUrl).split("#agent-request=")[1] as string;
+    const stored = (await service`SELECT link_hash, link_expires_at FROM agent_roles WHERE principal_user_id = ${agent}`)[0];
+    expect(stored?.link_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored?.link_hash).not.toBe(token);
+    expect(new Date(stored?.link_expires_at as Date).getTime()).toBeGreaterThan(Date.now() + 23 * 3600_000);
     const row = (await service`SELECT approved_by, granted_at, requested_by, revoked_at FROM agent_roles WHERE principal_user_id = ${agent}`)[0];
     expect(row).toMatchObject({ approved_by: null, granted_at: null, requested_by: agent, revoked_at: null }); // an OFF row
 
@@ -145,7 +154,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     expect(outside).toEqual([expect.objectContaining({ who: "Helper bot", on: true, scope: SCOPE })]);
 
     as(agent, "bearer");
-    expect((await (await mine()).json()).requests).toEqual([expect.objectContaining({ scope: SCOPE, state: "granted" })]);
+    expect((await (await mine()).json()).requests).toEqual([expect.objectContaining({ scope: SCOPE, state: "granted", accountId: null })]);
 
     as(admin, "session");
     const off = await roles(rolesDelete, { principalUserId: agent, scope: SCOPE });
@@ -296,3 +305,6 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     expect((await roles(rolesPost, { principal: "node-ai", principalUserId: none, scope: SCOPE })).status).toBe(400);
   });
 });
+
+// The account grant suites (task.5465) run here, after the open-ask cap test above, because both touch the node-wide pending count.
+runAccountGrantSuites();

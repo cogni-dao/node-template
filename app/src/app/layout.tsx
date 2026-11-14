@@ -26,6 +26,7 @@ import { ThemeProvider } from "next-themes";
 import type { ReactNode } from "react";
 import { cookieToInitialState } from "wagmi";
 
+import { ApprovalScrub } from "@/app/_lib/ApprovalScrub.client";
 import { wagmiConfig } from "@/shared/web3/wagmi.config";
 import { Providers } from "./providers.client";
 
@@ -74,6 +75,7 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <Providers initialState={initialState}>
+            <ApprovalScrub />
             <div id="main">{children}</div>
           </Providers>
         </ThemeProvider>

@@ -77,6 +77,11 @@ describe("agent.json identity", () => {
       label: ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]?.requires.label,
       description:
         ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]?.requires.description,
+      approvalLink: {
+        page: "https://node.example/admin/ai-access",
+        fragment: "#agent-request=<one-time token>",
+        decidedBy: "a node admin",
+      },
     });
     expect(scopes).toContain("work_item:transition");
     // A scope no outside route uses (the tool has no route twin) is not offered.
@@ -100,6 +105,30 @@ describe("agent.json identity", () => {
       kind: "node",
       label: "Try a test capability",
       description: "Only a test declares this.",
+      approvalLink: {
+        page: "https://node.example/admin/ai-access",
+        fragment: "#agent-request=<one-time token>",
+        decidedBy: "a node admin",
+      },
+    });
+  });
+
+  it("lists account:read as askable, with its link opening the person's profile and the account owner as the decider", async () => {
+    const { permissions, actions, permissionsHow } = await read();
+    const accountRead = permissions.find((p: { scope: string }) => p.scope === "account:read");
+    expect(accountRead).toMatchObject({
+      kind: "account",
+      approvalLink: {
+        page: "https://node.example/profile",
+        fragment: "#agent-request=<one-time token>",
+        decidedBy: "the account owner",
+      },
+    });
+    expect(permissionsHow).toContain("approvalUrl");
+    expect(actions.readAccountCredits).toMatchObject({
+      method: "GET",
+      endpoint: "https://node.example/api/v1/accounts/{accountId}/credits",
+      auth: { type: "bearer" },
     });
   });
 });

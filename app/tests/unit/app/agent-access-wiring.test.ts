@@ -18,6 +18,11 @@ import {
   AGENT_ACCESS_ENDPOINTS,
   AGENT_ACCESS_ROLES_PATH,
 } from "@/app/(admin)/admin/ai-access/agent-access-endpoints";
+import {
+  AGENT_ACCESS_MINE_ENDPOINTS,
+  AGENT_ACCESS_MINE_PATH,
+  AGENT_ACCESS_MINE_PREVIEW_PATH,
+} from "@/app/(app)/profile/agent-access-mine-endpoints";
 
 const SRC = resolve(__dirname, "../../../src");
 const read = (rel: string) => readFileSync(resolve(SRC, rel), "utf8");
@@ -40,17 +45,46 @@ describe("S1 wiring", () => {
   it("uses that endpoint in the admin AI-access client and mounts the block there", () => {
     const view = read("app/(admin)/admin/ai-access/AiAccess.client.tsx");
     expect(view).toContain('from "./agent-access-endpoints"');
-    expect(view).toContain("<AgentAccessSection endpoints={AGENT_ACCESS_ENDPOINTS} />");
+    expect(view).toContain("<AgentAccessSection endpoints={AGENT_ACCESS_ENDPOINTS} token={token} />");
+    expect(view).toContain("useApprovalFragment()");
     expect(view).not.toMatch(/\/api\/v1\/agent\/roles/);
   });
 
-  it("no longer mounts the node-wide block on the profile page, and links the admin page from the admin index", () => {
+  it("the profile mounts the SAME section in account mode with the mine endpoints, never the admin endpoint, and the admin page is linked from the admin index", () => {
     const profile = read("app/(app)/profile/view.tsx");
+    expect(profile).toContain("<AiAccessProfile />");
     expect(profile).not.toContain("AgentAccessSection");
     expect(profile).not.toContain("agent-access-endpoints");
     expect(existsSync(resolve(SRC, "app/(app)/profile/agent-access-endpoints.ts"))).toBe(false);
+    const mount = read("app/(app)/profile/AiAccessProfile.client.tsx");
+    expect(mount).toContain('<AgentAccessSection mode="account" endpoints={AGENT_ACCESS_MINE_ENDPOINTS} token={token} />');
+    expect(mount).toContain("useApprovalFragment()");
+    expect(mount).not.toMatch(/api\/v1\/admin|\(admin\)/);
     expect(read("app/(admin)/admin/page.tsx")).toContain('href="/admin/ai-access"');
     expect(existsSync(resolve(SRC, "app/(app)/gov/ai-access"))).toBe(false);
+  });
+
+  it("the profile endpoints point at existing session-only routes: mine (GET, POST, DELETE) and its preview (POST), each refusing an Authorization header first", () => {
+    expect(AGENT_ACCESS_MINE_PATH).toBe("/api/v1/agent-access/mine");
+    expect(AGENT_ACCESS_MINE_ENDPOINTS).toEqual({ roles: AGENT_ACCESS_MINE_PATH, preview: AGENT_ACCESS_MINE_PREVIEW_PATH });
+    const mine = readFileSync(resolve(SRC, `app${AGENT_ACCESS_MINE_PATH}/route.ts`), "utf8");
+    for (const verb of ["GET", "POST", "DELETE"]) expect(mine).toMatch(new RegExp(`export const ${verb} =`));
+    expect(mine.match(/requirePerson\(request, /g)?.length).toBe(3);
+    expect(mine).toContain("refuseNonSession");
+    expect(mine).not.toMatch(/requireAdminSession|nodeAdminPort|adminCheck/); // an account decision never takes an admin session
+    const preview = readFileSync(resolve(SRC, `app${AGENT_ACCESS_MINE_PREVIEW_PATH}/route.ts`), "utf8");
+    expect(preview).toMatch(/export const POST =/);
+    expect(preview).toContain("refuseNonSession");
+    const adminPreview = readFileSync(resolve(SRC, "app/api/v1/admin/ai-access/preview/route.ts"), "utf8");
+    expect(adminPreview).toContain("requireAdminSession(request, ");
+    expect(AGENT_ACCESS_ENDPOINTS.preview).toBe("/api/v1/admin/ai-access/preview");
+  });
+
+  it("the gated credits read declares its door: sameDoor account:read with the account in the path", () => {
+    const route = readFileSync(resolve(SRC, "app/api/v1/accounts/[accountId]/credits/route.ts"), "utf8");
+    expect(route).toContain('sameDoor: "core__account_credits_read"');
+    expect(route).toContain('sameDoorAccountParam: "accountId"');
+    expect(route).toMatch(/export const GET =/);
   });
 
   it("keeps the old AI-plane path and the old human roles route gone", () => {
