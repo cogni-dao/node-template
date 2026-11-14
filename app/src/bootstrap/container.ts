@@ -168,6 +168,10 @@ import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
+import {
+	createPrFactsPort,
+	resolveWorkItemsPrRepos,
+} from "@/bootstrap/capabilities/work-item-pr-facts";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
@@ -743,6 +747,16 @@ function createContainer(): Container {
 		() => goalMetrics,
 		() => knowledgeStorePort,
 	);
+	// The run's principal: the subject or agent the execution scope names (no run, no write).
+	const runPrincipal = (): string => {
+		const actor = scopeUserId(getExecutionScope());
+		if (!actor) {
+			throw new Error(
+				"WorkItemCapability: a run subject or agent principal is required",
+			);
+		}
+		return actor;
+	};
 	const workItemCapability = createWorkItemCapability({
 		workItemQuery: workItemAdapter,
 		workItemCommand: workItemAdapter,
@@ -758,16 +772,10 @@ function createContainer(): Container {
 			store: {
 				patch: (input, principal) => doltgresWorkItems.patch(input, principal),
 			},
-			principalId: () => {
-				const actor = scopeUserId(getExecutionScope());
-				if (!actor) {
-					throw new Error(
-						"WorkItemCapability: a run subject or agent principal is required",
-					);
-				}
-				return actor;
-			},
+			principalId: runPrincipal,
 		},
+		// task.0122: an agent records the triage artifact through the same handler the route calls.
+		artifacts: { deps: () => workItemArtifacts, principalId: runPrincipal },
 	});
 
 	// ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)
@@ -794,6 +802,8 @@ function createContainer(): Container {
 	const nodeAdmin = createApproversNodeAdminAuthority();
 	let knowledgeStorePort: KnowledgeStorePort | undefined;
 	let doltgresWorkItems: WorkItemsDoltgresPort;
+	// One unauthenticated GitHub read for the agent tools and the work-item status gates.
+	const githubReadVcs = createGithubReadVcsCapability();
 	let workItemArtifacts: WorkItemArtifactDeps | undefined;
 	if (env.DOLTGRES_URL) {
 		const doltClient = buildDoltgresClient({
@@ -813,6 +823,29 @@ function createContainer(): Container {
 				applicationName: `cogni_work_items_read_${env.SERVICE_NAME ?? "app"}`,
 				max: 1,
 			});
+		// task.0122: optional pin of the repository whose PRs are code deliverables. Unset (runtime env is operator
+		// custody and not provisioned everywhere) the gate accepts a PR on any github.com repo; say so once, never silently.
+		const prRepos = resolveWorkItemsPrRepos(env.WORK_ITEMS_PR_REPO);
+		if (!prRepos.repos.length) {
+			log.warn(
+				{
+					event: "adapter.work_items.pr_repo_unpinned",
+					reason: prRepos.reason,
+				},
+				"work items accept a pull request of any github.com repository as a code deliverable; set WORK_ITEMS_PR_REPO=owner/repo to pin one",
+			);
+		}
+		// A malformed entry is never pinned, even beside valid ones: say which, so a typo does not silently narrow the pin.
+		if (prRepos.ignored.length) {
+			log.warn(
+				{
+					event: "adapter.work_items.pr_repo_ignored",
+					ignored: prRepos.ignored,
+					pinned: prRepos.repos,
+				},
+				"WORK_ITEMS_PR_REPO entries that are not owner/repo were ignored",
+			);
+		}
 		const workItemsClient = createWorkItemsClient();
 		// Node stores start their allocator at 1; operator alone reserves the
 		// imported legacy range below 5000.
@@ -830,6 +863,12 @@ function createContainer(): Container {
 				entryResolver: createDoltgresEntryResolver(doltClient),
 				// story.0033: a `moves` entry pins the metric's latest good observation as its baseline.
 				metricBaseline: moveMetrics.baselines,
+				// task.0122: the status gates read a PR's head and merge state (before the writer lock) through the
+				// node's unauthenticated GitHub read, and an inbox's head and merge state locally on the knowledge pool.
+				prFacts: createPrFactsPort(githubReadVcs),
+				inboxes: createDoltgresContributionAuthors(doltClient),
+				...(prRepos.repos.length ? { prRepos: prRepos.repos } : {}),
+				...(env.APP_BASE_URL ? { hubOrigin: new URL(env.APP_BASE_URL).origin } : {}),
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log }),
 		);
@@ -994,7 +1033,7 @@ function createContainer(): Container {
 		webSearchCapability,
 		repoCapability,
 		scheduleCapability,
-		vcsCapability: createGithubReadVcsCapability(),
+		vcsCapability: githubReadVcs,
 		runningBuildSha: env.APP_BUILD_SHA,
 		workItemCapability,
 	});

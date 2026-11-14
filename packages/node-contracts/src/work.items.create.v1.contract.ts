@@ -9,7 +9,7 @@
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
  *   - ID is server-allocated per node store by default; client-supplied `id` is allowed for ID-preserving bulk imports. Server validates the format and rejects collisions with existing rows.
- *   - status defaults to "needs_triage" if not provided
+ *   - status is "needs_triage" or absent (CREATE_IS_TRIAGE_ONLY, task.0122): triage routes new work
  *   - node defaults to "shared"
  * Side-effects: none
  * Links: /api/v1/work/items route, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/work-items-port.md
@@ -32,17 +32,8 @@ const SubjectRefSchema = z.discriminatedUnion("kind", [
 
 const WorkItemTypeSchema = z.enum(["task", "bug", "story", "spike", "subtask"]);
 
-const WorkItemStatusSchema = z.enum([
-  "needs_triage",
-  "needs_research",
-  "needs_design",
-  "needs_implement",
-  "needs_closeout",
-  "needs_merge",
-  "done",
-  "blocked",
-  "cancelled",
-]);
+/** CREATE_IS_TRIAGE_ONLY (task.0122): a new item enters at needs_triage; triage routes it. Any other status is a 400 here and a refusal in the store. */
+const CreateStatusSchema = z.literal("needs_triage");
 
 export const workItemsCreateOperation = {
   id: "work.items.create.v1",
@@ -58,7 +49,7 @@ export const workItemsCreateOperation = {
     title: z.string().min(1).max(500),
     summary: z.string().optional(),
     outcome: z.string().optional(),
-    status: WorkItemStatusSchema.optional(),
+    status: CreateStatusSchema.optional(),
     node: z.string().optional(),
     projectId: z.string().optional(),
     parentId: z.string().optional(),

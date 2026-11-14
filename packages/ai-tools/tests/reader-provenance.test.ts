@@ -27,7 +27,7 @@ import {
   createWorkItemQueryImplementation,
   WorkItemQueryOutputSchema,
 } from "../src/tools/work-item-query";
-import { workItemTransitionContract } from "../src/tools/work-item-transition";
+import { workItemUpdateContract } from "../src/tools/work-item-update";
 import { toToolSpec } from "../src/schema";
 import { createScheduleListImplementation } from "../src/tools/schedule-list";
 import type { ScheduleCapability } from "../src/capabilities/schedule";
@@ -113,7 +113,6 @@ describe("evaluation reader provenance", () => {
         },
       ]),
       patch: vi.fn(),
-      transitionStatus: vi.fn(),
     };
     const out = await createWorkItemQueryImplementation({
       workItemCapability: work,
@@ -161,7 +160,7 @@ describe("evaluation reader provenance", () => {
 
   it("retains a flat provider tool schema after score-patch input refinements", () => {
     expect(
-      toToolSpec(workItemTransitionContract).spec.inputSchema
+      toToolSpec(workItemUpdateContract).spec.inputSchema
     ).toMatchObject({
       type: "object",
     });

@@ -296,6 +296,9 @@ export const workItems = pgTable(
     pr: text("pr"),
     reviewer: text("reviewer"),
     revision: integer("revision").notNull().default(0),
+    // The revision at which the item entered its current status (task.0122): an exit artifact counts only when its
+    // `item_revision` is at or after it. The adapter stamps it on every status change; a migration backfills it to `revision`.
+    statusRevision: integer("status_revision").notNull().default(0),
     blockedBy: text("blocked_by"),
     deployVerified: boolean("deploy_verified").notNull().default(false),
 

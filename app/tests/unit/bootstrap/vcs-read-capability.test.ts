@@ -52,6 +52,21 @@ const CLOSED_LIST = /\/pulls\?state=closed/;
 const LISTED_PR = { ...MERGED_PR, merged: undefined };
 
 describe("createGithubReadVcsCapability.getPr", () => {
+  it("passes the caller's AbortSignal to the fetch, and gives a read with none a timeout signal (task.0122)", async () => {
+    const f = routes([[CLOSED_LIST, [LISTED_PR]]]);
+    const vcs = createGithubReadVcsCapability(f as unknown as typeof fetch);
+    const controller = new AbortController();
+    await vcs.getPr({ owner: "a", repo: "b", prNumber: 7, signal: controller.signal });
+    expect(f.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+
+    const g = routes([[/\/pulls\/9$/, { ...MERGED_PR, number: 9 }], [CLOSED_LIST, []]]);
+    const bare = createGithubReadVcsCapability(g as unknown as typeof fetch);
+    await bare.getPr({ owner: "a", repo: "b", prNumber: 9 });
+    for (const [, init] of g.mock.calls) {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
   it("answers from one closed-PR list, unauthenticated, and reuses it", async () => {
     const f = routes([[CLOSED_LIST, [LISTED_PR]]]);
     const vcs = createGithubReadVcsCapability(f as unknown as typeof fetch);

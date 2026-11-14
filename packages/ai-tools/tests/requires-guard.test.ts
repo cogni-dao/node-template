@@ -49,7 +49,7 @@ describe("requires guard", () => {
         "core__vcs_create_branch",
         "core__vcs_flight_candidate",
         "core__vcs_merge_pr",
-        "core__work_item_transition",
+        "core__work_item_artifact_record",
         "core__work_item_update",
       ].sort()
     );
@@ -74,7 +74,7 @@ describe("requires guard", () => {
   it("declares the intended scope map", () => {
     const by = Object.fromEntries(contracts.map((c) => [c.name, c.requires]));
     expect(by.core__knowledge_write).toMatchObject({ scope: "knowledge:write", kind: "node", subject: "admin" });
-    expect(by.core__work_item_transition).toMatchObject({ scope: "work_item:transition", kind: "node", subject: "member" });
+    expect(by.core__work_item_update).toMatchObject({ scope: "work_item:transition", kind: "node", subject: "member" });
     expect(by.core__schedule_manage).toMatchObject({ scope: "schedule:manage", kind: "own", subject: "member" });
     expect(by.core__edo_decide?.scope).toBe("edo:write");
     expect(by.core__vcs_merge_pr?.subject).toBe("admin");

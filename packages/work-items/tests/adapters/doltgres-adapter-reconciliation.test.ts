@@ -54,9 +54,33 @@ interface ReconciliationState {
   readonly listError?: Error;
   readonly proofError?: Error;
   readonly artifact?: ArtifactBranch;
+  /** The branch holds a status patch; `after` overrides columns of the patched row. */
+  readonly statusPatch?: { readonly after?: Record<string, unknown> };
   readonly queries: string[];
   merged: boolean;
 }
+
+/** An orphan branch that holds a status patch: the row moves back to triage and `status_revision` is restamped (task.0122). */
+const statusPatchMessage = "work-items: patch task.0001 by actor:principal-1\nReason: move it back";
+const statusBefore = {
+  id: "task.0001",
+  type: "task",
+  title: "restart evidence",
+  status: "needs_validation",
+  node: "shared",
+  revision: 4,
+  status_revision: 2,
+  created_by_principal_id: "principal-1",
+  created_at: "2026-10-03T00:00:00.000Z",
+  updated_at: "2026-10-03T00:00:00.000Z",
+};
+const statusAfter = {
+  ...statusBefore,
+  status: "needs_triage",
+  revision: 5,
+  status_revision: 5,
+  updated_at: "2026-10-03T00:01:00.000Z",
+};
 
 const recoveredRow = {
   id: "task.0001",
@@ -85,6 +109,7 @@ function makeReconciliationHarness({
   deleteError,
   deleteLeavesRef = false,
   artifact,
+  statusPatch,
 }: {
   readonly branchCommit?: string;
   readonly mergeBase: string;
@@ -101,6 +126,8 @@ function makeReconciliationHarness({
   readonly deleteLeavesRef?: boolean;
   /** The branch holds an artifact insert instead of a work-item create. */
   readonly artifact?: ArtifactBranch;
+  /** The branch holds a status patch that restamps `status_revision`. */
+  readonly statusPatch?: { readonly after?: Record<string, unknown> };
 }) {
   const state: ReconciliationState = {
     branch: "work-item-op/restart-evidence",
@@ -113,6 +140,7 @@ function makeReconciliationHarness({
     unprovableTransition,
     proofError,
     artifact,
+    statusPatch,
     queries: [],
     merged: false,
   };
@@ -166,9 +194,11 @@ function makeReconciliationHarness({
           // That is precisely the quarantinable arm, and the only one.
           message: state.unprovableTransition
             ? "unrelated commit with no work-item proof"
-            : state.artifact
-              ? (state.artifact.message ?? artifactMessage)
-              : "work-items: create work item by actor:principal-1",
+            : state.statusPatch
+              ? statusPatchMessage
+              : state.artifact
+                ? (state.artifact.message ?? artifactMessage)
+                : "work-items: create work item by actor:principal-1",
           date: "2026-10-03T00:01:00.000Z",
         },
       ];
@@ -192,6 +222,17 @@ function makeReconciliationHarness({
           to_table_name: table,
           schema_change: false,
           data_change: false,
+        },
+      ];
+    }
+    if (query.startsWith("SELECT * FROM dolt_diff(") && state.statusPatch) {
+      const prefixed = (prefix: string, row: Record<string, unknown>) =>
+        Object.fromEntries(Object.entries(row).map(([key, value]) => [`${prefix}${key}`, value]));
+      return [
+        {
+          ...prefixed("from_", statusBefore),
+          ...prefixed("to_", { ...statusAfter, ...state.statusPatch.after }),
+          diff_type: "modified",
         },
       ];
     }
@@ -244,6 +285,8 @@ function makeReconciliationHarness({
       return state.merged ? [{ id: "wia-1" }] : [];
     }
     if (query.startsWith("SELECT * FROM work_items WHERE id = 'task.0001'")) {
+      if (state.statusPatch)
+        return state.merged ? [{ ...statusAfter, ...state.statusPatch.after }] : [];
       return state.merged ? [recoveredRow] : [];
     }
     if (query.includes("FROM work_items")) return [];
@@ -502,6 +545,41 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     expect(q[0]?.fields.quarantinedAs).toBe(
       "work-item-quarantine/restart-evidence"
     );
+  });
+
+  // task.0122: a status change restamps `status_revision`; the sweep must prove such a patch, not quarantine it.
+  describe("an orphan status patch (task.0122)", () => {
+    const probe = (adapter: DoltgresWorkItemAdapter) =>
+      adapter.patch(
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        "principal-1"
+      );
+
+    it("merges forward a committed status patch whose status_revision was restamped", async () => {
+      const { adapter, state, logs } = makeReconciliationHarness({
+        mergeBase: "main-commit",
+        statusPatch: {},
+      });
+      await expect(probe(adapter)).rejects.toThrow(/Work item not found/);
+      expect(state.queries.some((q) => q.includes("FROM dolt_merge("))).toBe(true);
+      expect(state.branch).toBeUndefined();
+      expect(logs.find((e) => e.fields.classification === "merged_verified")?.fields).toMatchObject({
+        verb: "patch",
+        itemId: "task.0001",
+      });
+    });
+
+    it("quarantines a status patch whose status_revision is not the new revision, never merging it", async () => {
+      const { adapter, state, logs } = makeReconciliationHarness({
+        mergeBase: "main-commit",
+        statusPatch: { after: { status_revision: 9 } },
+      });
+      await expect(probe(adapter)).rejects.toThrow(/Work item not found/);
+      expect(state.queries.some((q) => q.includes("FROM dolt_merge("))).toBe(false);
+      expect(
+        logs.filter((e) => e.fields.classification === "quarantined_unprovable")
+      ).toHaveLength(1);
+    });
   });
 
   // task.0028: the sweep recognises an orphan artifact insert by its commit message and proves it on its own table.

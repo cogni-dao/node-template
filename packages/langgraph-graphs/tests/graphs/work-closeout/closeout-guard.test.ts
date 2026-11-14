@@ -18,7 +18,7 @@ const SHA = "a".repeat(40);
 const item = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
   type: "bug",
-  status: "needs_closeout",
+  status: "needs_merge",
   revision: 3,
   createdAt: new Date().toISOString(),
   labels: [],
@@ -30,7 +30,7 @@ const close = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
   expectedRevision: 3,
   reason: `PR #297 merged as ${SHA.slice(0, 8)} and live in this build`,
-  set: { status: "done", deployVerified: true, pr: PR },
+  set: { status: "done", pr: PR },
   ...overrides,
 });
 
@@ -128,17 +128,34 @@ describe("closeout guard", () => {
     t.pr(true);
     t.live(true);
     expect(
-      await t.call(close("bug.0019", { set: { status: "done", deployVerified: true, pr: PR, priority: 0 } })),
+      await t.call(close("bug.0019", { set: { status: "done", pr: PR, priority: 0 } })),
     ).toContain("write_shape");
     expect(
-      await t.call(close("bug.0019", { set: { status: "cancelled", deployVerified: true, pr: PR } })),
+      await t.call(close("bug.0019", { set: { status: "cancelled", pr: PR } })),
     ).toContain("write_shape");
     expect(await t.call(close("bug.0019", { expectedRevision: 2 }))).toContain("expected_revision");
     t.read(item("bug.0020", { status: "needs_triage" }));
     expect(await t.call(close("bug.0020"))).toContain("status_source");
     expect(await t.call(close("bug.0021"))).toContain("item_not_read");
+    // task.0122: deployVerified is never written, and closeout never closes from needs_implement or a review queue.
+    expect(
+      await t.call(close("bug.0019", { set: { status: "done", deployVerified: true, pr: PR } })),
+    ).toContain("write_shape");
+    for (const status of ["needs_implement", "needs_implementation_review", "needs_validation", "blocked"]) {
+      t.read(item("bug.0022", { status }));
+      expect(await t.call(close("bug.0022"))).toContain("status_source");
+    }
     expect(t.writes).toHaveLength(0);
-    expect(t.receipts.refused).toBe(5);
+    expect(t.receipts.refused).toBe(10);
+  });
+
+  it("does not close a legacy needs_closeout item: the placement job moves it first", async () => {
+    const t = setup();
+    t.read(item("bug.0023", { status: "needs_closeout" }));
+    t.pr(true);
+    t.live(true);
+    expect(await t.call(close("bug.0023"))).toContain("status_source");
+    expect(t.writes).toHaveLength(0);
   });
 
   it("closes at most five items per run", async () => {

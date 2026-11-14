@@ -185,10 +185,14 @@ describe("DENIAL_IS_TERMINAL", () => {
 });
 
 describe("work item artifacts (task.0028)", () => {
-  it("the artifact write rides the work_item:transition door beside PATCH; no review scope exists", () => {
+  it("the artifact write rides the work_item:transition door beside PATCH, as its own tool twin; no review scope exists", () => {
     expect(SAME_DOOR_ROUTES.core__work_item_update).toEqual({
       scope: "work_item:transition",
-      routes: ["work.items.patch", "work.items.artifacts.create"],
+      routes: ["work.items.patch"],
+    });
+    expect(SAME_DOOR_ROUTES.core__work_item_artifact_record).toEqual({
+      scope: "work_item:transition",
+      routes: ["work.items.artifacts.create"],
     });
     const scopes = Object.values(ROUTE_ONLY_CAPABILITIES).map((c) => c.requires.scope);
     expect(scopes).not.toContain("work_item:review");

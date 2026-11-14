@@ -104,3 +104,39 @@ export class WorkItemScoresInvalidError extends Error {
     this.name = "WorkItemScoresInvalidError";
   }
 }
+
+/**
+ * A move is refused (task.0122): the exit artifact or fact it needs is missing, stale or not independent, or the move is
+ * not allowed at all (a jump, an exit from done or cancelled, into a legacy status). Nothing was written. `missing` is the
+ * artifact kind or fact (`GateMissing`).
+ */
+export class WorkItemGateUnmetError extends Error {
+  readonly code = "gate_unmet" as const;
+  constructor(
+    readonly id: string,
+    readonly from: string,
+    readonly to: string,
+    readonly missing: string
+  ) {
+    super(
+      `Work item ${id} cannot move from ${from} to ${to}: gate unmet (${missing})`
+    );
+    this.name = "WorkItemGateUnmetError";
+  }
+}
+
+/** A fact the gate needs (the PR's head and merge state, an inbox head) could not be read. Nothing was written; retry. */
+export class WorkItemGateFactsUnavailableError extends Error {
+  readonly code = "gate_facts_unavailable" as const;
+  constructor(
+    readonly id: string,
+    readonly from: string,
+    readonly to: string,
+    readonly missing: string
+  ) {
+    super(
+      `Work item ${id} cannot move from ${from} to ${to}: could not read ${missing}; retry shortly`
+    );
+    this.name = "WorkItemGateFactsUnavailableError";
+  }
+}

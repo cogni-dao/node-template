@@ -101,7 +101,6 @@ export type {
   WorkItemPatchScores,
   WorkItemQueryPage,
   WorkItemQueryParams,
-  WorkItemTransitionResult,
 } from "./work-item";
 export { WorkItemPatchConflictError } from "./work-item";
 

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /** Catalog authority and observed cycle-report boundary regressions; no model-quality claims. */
-import { EDO_DECIDE_NAME, GET_CURRENT_TIME_NAME, GOAL_LIST_NAME, KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
+import { EDO_DECIDE_NAME, GET_CURRENT_TIME_NAME, GOAL_LIST_NAME, KNOWLEDGE_READ_NAME, WORK_ITEM_UPDATE_NAME } from "@cogni/ai-tools";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 import { LANGGRAPH_CATALOG } from "../../../src/catalog";
@@ -116,12 +116,11 @@ describe("work-prioritizer catalog and cycle report", () => {
       tool(EDO_DECIDE_NAME, "d", { committed: true }),
     ];
     const writes = [1, 2, 3, 4, 5].flatMap((n) => [
-      ai(WORK_ITEM_TRANSITION_NAME, `p${n}`, {
-        action: "patch",
+      ai(WORK_ITEM_UPDATE_NAME, `p${n}`, {
         id: `task.${n}`,
-        rank: n,
+        set: { rank: n },
       }),
-      tool(WORK_ITEM_TRANSITION_NAME, `p${n}`, {
+      tool(WORK_ITEM_UPDATE_NAME, `p${n}`, {
         success: true,
         id: `task.${n}`,
       }),
@@ -168,12 +167,11 @@ describe("work-prioritizer catalog and cycle report", () => {
           { id: "task.1", scores: { value: 5, evidence: { a: 1, b: 2 } } },
         ],
       }),
-      ai(WORK_ITEM_TRANSITION_NAME, "p", {
-        action: "patch",
+      ai(WORK_ITEM_UPDATE_NAME, "p", {
         id: "task.1",
-        scores: { evidence: { b: 2, a: 1 }, value: 5 },
+        set: { scores: { evidence: { b: 2, a: 1 }, value: 5 } },
       }),
-      tool(WORK_ITEM_TRANSITION_NAME, "p", { success: true, id: "task.1" }),
+      tool(WORK_ITEM_UPDATE_NAME, "p", { success: true, id: "task.1" }),
     ]);
     expect(reordered).toMatchObject({
       identicalPatches: 1,
@@ -229,62 +227,60 @@ describe("work-prioritizer catalog and cycle report", () => {
       ai([
         {
           id: "p1",
-          name: WORK_ITEM_TRANSITION_NAME,
+          name: WORK_ITEM_UPDATE_NAME,
           args: {
-            action: "patch",
             id: "story.1",
-            priority: 2,
-            labels: ["a"],
+            set: { priority: 2, labels: ["a"] },
             expectedRevision: 3,
           },
         },
         {
           id: "p2",
-          name: WORK_ITEM_TRANSITION_NAME,
-          args: { action: "patch", id: "bug.2", rank: 0, expectedRevision: 1 },
+          name: WORK_ITEM_UPDATE_NAME,
+          args: { id: "bug.2", set: { rank: 0 }, expectedRevision: 1 },
         },
         {
           id: "p3",
-          name: WORK_ITEM_TRANSITION_NAME,
-          args: { action: "patch", id: "bug.2", rank: 0, expectedRevision: 2 },
+          name: WORK_ITEM_UPDATE_NAME,
+          args: { id: "bug.2", set: { rank: 0 }, expectedRevision: 2 },
         },
         {
           id: "p4",
-          name: WORK_ITEM_TRANSITION_NAME,
-          args: { action: "patch", id: "task.7", rank: 0 },
+          name: WORK_ITEM_UPDATE_NAME,
+          args: { id: "task.7", set: { rank: 0 } },
         },
         {
           id: "p5",
-          name: WORK_ITEM_TRANSITION_NAME,
-          args: { action: "patch", id: "story.1", rank: 9 },
+          name: WORK_ITEM_UPDATE_NAME,
+          args: { id: "story.1", set: { rank: 9 } },
         },
       ]),
-      tool("p1", WORK_ITEM_TRANSITION_NAME, {
+      tool("p1", WORK_ITEM_UPDATE_NAME, {
         success: true,
         action: "patch",
         id: "story.1",
         revision: 4,
       }),
-      tool("p2", WORK_ITEM_TRANSITION_NAME, {
+      tool("p2", WORK_ITEM_UPDATE_NAME, {
         success: true,
         action: "patch",
         id: "bug.2",
         revision: 2,
       }),
       // p3 re-sends what p2 just wrote → identical; p4 unseen item → unknown; p5 denied → not counted
-      tool("p3", WORK_ITEM_TRANSITION_NAME, {
+      tool("p3", WORK_ITEM_UPDATE_NAME, {
         success: true,
         action: "patch",
         id: "bug.2",
         revision: 3,
       }),
-      tool("p4", WORK_ITEM_TRANSITION_NAME, {
+      tool("p4", WORK_ITEM_UPDATE_NAME, {
         success: true,
         action: "patch",
         id: "task.7",
         revision: 1,
       }),
-      tool("p5", WORK_ITEM_TRANSITION_NAME, {
+      tool("p5", WORK_ITEM_UPDATE_NAME, {
         success: false,
         code: "authz_denied",
         message: "authz_denied",
