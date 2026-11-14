@@ -9,7 +9,7 @@ const scopeOf = (files) => classifyFiles(files, DIRS).scope;
 
 const CASES = [
   // Defect: docs-only PRs keep paying for install + build + tests.
-  ["docs and markdown only is docs-only", () => assert.equal(scopeOf(["docs/spec/a.md", "packages/ids/README.md"]), "docs-only")],
+  ["docs and markdown only is docs-only", () => assert.equal(scopeOf(["docs/spec/overview.png", "packages/ids/README.md"]), "docs-only")],
   // Defect: a unit test reads root CLAUDE.md/AGENTS.md, so skipping unit on their edit is a false green.
   ["root CLAUDE.md is not docs-only", () => assert.notEqual(scopeOf(["CLAUDE.md"]), "docs-only")],
   // Defect: a workflow, script or lockfile change scoped down hides breakage in every package.
@@ -23,7 +23,7 @@ const CASES = [
   ["an empty diff runs full", () => assert.equal(scopeOf([]), "full")],
   // Defect: a doc riding along with code must not hide the code change.
   ["docs plus a package change is affected, naming the package", () => {
-    const result = classifyFiles(["docs/a.md", "packages/ids/src/a.ts"], DIRS);
+    const result = classifyFiles(["docs/diagram.png","packages/ids/src/a.ts"], DIRS);
     assert.equal(result.scope, "affected");
     assert.deepEqual(result.packages, ["packages/ids"]);
   }],

@@ -32,8 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          # The classifier diffs a PR against its base; queue and main runs need no history.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # The classifier diffs a PR against its base, so it needs the merge base's history.
+          # (Not `cond && 0 || 1`: 0 is falsy in expressions and that yields 1.)
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -112,8 +113,9 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          # The classifier diffs a PR against its base; queue and main runs need no history.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # The classifier diffs a PR against its base, so it needs the merge base's history.
+          # (Not `cond && 0 || 1`: 0 is falsy in expressions and that yields 1.)
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -163,8 +165,9 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          # The classifier diffs a PR against its base; queue and main runs need no history.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # The classifier diffs a PR against its base, so it needs the merge base's history.
+          # (Not `cond && 0 || 1`: 0 is falsy in expressions and that yields 1.)
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
