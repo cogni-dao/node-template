@@ -72,6 +72,8 @@ export class NodeOperatorReceipts {
 	readonly purposes = new Set<string>();
 	readonly attemptedGuidance = new Set<string>();
 	readonly readGuidance = new Set<string>();
+	/** Successful schedule writes this run, for the step-budget report. */
+	readonly scheduleChanges: string[] = [];
 	observe(
 		name: string,
 		args: unknown,
@@ -89,6 +91,15 @@ export class NodeOperatorReceipts {
 			this.contextAttempts.add(name);
 			if (result.ok && expected.schema.safeParse(result.value).success)
 				this.contextRead.add(name);
+		}
+		if (name === "core__schedule_manage" && result.ok) {
+			const write = z
+				.object({ action: z.string(), scheduleId: z.string().optional() })
+				.safeParse(result.value);
+			if (write.success)
+				this.scheduleChanges.push(
+					`${write.data.action}${write.data.scheduleId ? ` ${write.data.scheduleId}` : ""}`,
+				);
 		}
 		if (name === "core__schedule_list" && result.ok) {
 			const input = lookup.safeParse(args);

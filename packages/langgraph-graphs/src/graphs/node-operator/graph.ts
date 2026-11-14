@@ -68,6 +68,21 @@ export function createNodeOperatorRunHooks() {
 			args: unknown,
 			result: { ok: boolean; value?: unknown },
 		) => receipts.observe(name, args, result),
+		// A tick that hits the step limit ends in a report of its actual schedule writes, not a crash.
+		projectStepBudget: () => {
+			const changes = receipts.scheduleChanges;
+			const answer = `STEP_BUDGET: the operate tick reached its step limit. Schedule changes: ${changes.length ? changes.join(", ") : "none"}.`;
+			return {
+				answer,
+				output: {
+					telemetry: {
+						aborted: true,
+						abortReason: "step_budget",
+						scheduleChanges: [...changes],
+					},
+				},
+			};
+		},
 	};
 }
 createNodeOperatorGraph.createRunHooks = createNodeOperatorRunHooks;
