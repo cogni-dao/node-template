@@ -36,7 +36,7 @@ export interface SameDoorRoute {
 export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
   core__work_item_update: {
     scope: "work_item:transition",
-    routes: ["work.items.patch"],
+    routes: ["work.items.patch", "work.items.artifacts.create"],
   },
   core__schedule_manage: {
     scope: "schedule:manage",
@@ -73,17 +73,6 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
       "knowledge.domains.list",
       "knowledge.domains.get",
     ],
-  },
-  "work.item.review": {
-    requires: {
-      scope: "work_item:review",
-      kind: "node",
-      subject: "member",
-      label: "Record reviews and validations on work items",
-      description:
-        "Write a design review, an implementation review or a validation on a work item. It must come from someone other than the author of what it judges.",
-    },
-    routes: ["work.items.artifacts.create"],
   },
   "knowledge.contribute": {
     requires: {

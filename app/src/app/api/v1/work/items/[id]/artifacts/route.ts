@@ -6,7 +6,7 @@
  * Purpose: POST records an immutable review or validation artifact on a work item; GET lists them, newest first (task.0028).
  * Scope: Thin shells: session check, id, body parse, one `@cogni/work-items` handler call, one log event, response. The independence check, PASS-grade and the insert live in the package.
  * Invariants:
- *   - SAME_DOOR: POST needs the `work_item:review` grant (route id `work.items.artifacts.create`, capability `work.item.review`); a signed-in human passes. GET needs a session, like history.
+ *   - SAME_DOOR: POST needs the `work_item:transition` grant, the same door `PATCH /work/items/{id}` runs (route id `work.items.artifacts.create` listed beside `work.items.patch` under `core__work_item_update`); a signed-in human passes. A granular review grant is a later story. GET needs a session, like history.
  *   - AUTHOR_IS_STAMPED: the author is `sessionUser.id`; a body never names one.
  *   - Errors, each with an `errorCode`: 400 `invalid_input` (an invalid JSON body too), 403 grant, 404 `not_found`, 409 `artifact_author_not_independent` or `work_item_write_outcome_unknown` (inspect, never replay), 503 `artifacts_unavailable` (no store wired too). Nothing is written in the 400, 404, 409 independence and 503 cases.
  *   - One terminal log event per call (codes and counts only): `work.items.artifact_recorded` on success, `work.items.artifact_refused` on every other write outcome, `work.items.artifacts_read` for the list. A failure also warns once as `work.items.artifact_unavailable`.
@@ -66,7 +66,7 @@ export const POST = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "work.items.artifacts.create",
-    sameDoor: "work.item.review",
+    sameDoor: "core__work_item_update",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, context) => {
