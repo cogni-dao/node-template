@@ -3,6 +3,8 @@
 -- `db:generate` (add the new columns and CHECKs to the node's `agentRoles` schema, with the one select policy), then append the hand-written part
 -- (everything after the line `Hand-written below`). It needs `agent_roles` (0036 + 0038 shape) and `billing_accounts`.
 -- EXPAND-ONLY: every existing role row is a node row (the DEFAULT 'node' backfills `resource`; each CHECK holds for a node row with no account and no end).
+-- node-template's own 0041 is additionally IDEMPOTENT (ADD COLUMN IF NOT EXISTS, DROP-then-ADD constraints and policies, a column type check) because the reverted #366
+-- had already run on its databases; a fork with a clean history can use the plain statements below.
 -- Keep `agent_roles_live_unique` (principal, scope) and the old ON CONFLICT targets: a pod on the previous release keeps working. The contract migration (task.5484) replaces it.
 ALTER TABLE "agent_roles" ADD COLUMN "resource" text DEFAULT 'node' NOT NULL;--> statement-breakpoint
 ALTER TABLE "agent_roles" ADD COLUMN "account_id" text;--> statement-breakpoint
