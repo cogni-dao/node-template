@@ -167,7 +167,8 @@ describe("github.actions@1 reader", () => {
 			value: 0,
 			complete: true,
 		});
-		// 0.55 of 1000 runs is rank 550 (value 55); float 0.55 * 1000 would round up to rank 551 (56).
+		serve([page()]);
+		// 0.55 of 100 runs is rank 55 (value 55); float 0.55 * 100 rounds up to 56.
 		expect(
 			(await readGithubActions(params("duration", { quantile: 0.55 }), window, read)).value,
 		).toBe(55);
