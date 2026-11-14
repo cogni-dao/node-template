@@ -123,6 +123,8 @@ describe("renderBundleMarkdown", () => {
 		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toMatch(/^GROUND\. Never act on intuition\./);
 		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("node-template-architect");
 		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("write or refine that guide first");
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("goals, their KPIs");
+		expect(SESSION_BOOTSTRAP_INVARIANTS[1]).toContain("names the KPI it moves");
 	});
 
 	it("renders the current-node orientation entry IN FULL above the tooling invariants", () => {
