@@ -25,7 +25,7 @@ import { NextResponse } from "next/server";
 import { requireAdminSession } from "@/app/(admin)/_lib/admin-session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES } from "@/shared/observability";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -43,7 +43,7 @@ export const GET = wrapRouteHandlerWithLogging(
       const view = await getContainer().nodeAdminPort.listNodeAi(admin.session);
       return json(agentRolesListOperation.output.parse({ canManage: true, ...view }));
     } catch (error) {
-      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_LIST_FAILED, routeId: "admin.ai-access.list", errorName: error instanceof Error ? error.name : "unknown" }, EVENT_NAMES.AGENT_ROLES_LIST_FAILED);
+      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "admin.ai-access.list", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
       return json({ error: "authz_unavailable" }, 503);
     }
   }

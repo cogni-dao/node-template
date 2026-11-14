@@ -31,7 +31,7 @@ import { refuseNonSession } from "@/app/_lib/auth/human-plane";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES } from "@/shared/observability";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -50,17 +50,15 @@ async function requirePerson(request: Request, log: { warn: (f: Record<string, u
   return { ok: true, me: { userId: user.id, admin: null } };
 }
 
-function mapError(error: unknown, ctx: { log: { error: (f: Record<string, unknown>, m: string) => void } }): NextResponse {
+function mapError(error: unknown, ctx: { log: { error: (f: Record<string, unknown>, m: string) => void } }, routeId: string): NextResponse {
   if (error instanceof AgentRolesError) {
     // A person who owns no account and a request that names no usable row are the same quiet no. Only a bad shape is a 400.
     if (error.code === "not_allowed") return json({ changed: false });
     if (error.code === "invalid_days" || error.code === "invalid_scope" || error.code === "wrong_kind") return json({ error: error.code }, 400);
     if (error.code === "principal_not_found" || error.code === "not_pending") return json({ error: error.code }, 409);
   }
-  ctx.log.error(
-    { event: EVENT_NAMES.AGENT_ROLES_LIST_FAILED, routeId: "agent.mine", errorName: error instanceof Error ? error.name : "unknown" },
-    EVENT_NAMES.AGENT_ROLES_LIST_FAILED
-  );
+  // A 503 must never be silent: the failure class (name, SQLSTATE, constraint, table, column), never a message, token or hash.
+  ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId, ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
   return json({ error: "authz_unavailable" }, 503);
 }
 
@@ -73,7 +71,7 @@ export const GET = wrapRouteHandlerWithLogging(
       const view = await getContainer().agentAuthority.listMine(person.me.userId);
       return json(agentMineListOperation.output.parse(view));
     } catch (error) {
-      return mapError(error, ctx);
+      return mapError(error, ctx, "agent.mine.list");
     }
   }
 );
@@ -108,7 +106,7 @@ export const POST = wrapRouteHandlerWithLogging(
       const result = await authority.turnMineOn(person.me, input);
       return json(agentMineOnOperation.output.parse(result));
     } catch (error) {
-      return mapError(error, ctx);
+      return mapError(error, ctx, "agent.mine.on");
     }
   }
 );
@@ -134,7 +132,7 @@ export const DELETE = wrapRouteHandlerWithLogging(
       );
       return json(agentMineOffOperation.output.parse(result));
     } catch (error) {
-      return mapError(error, ctx);
+      return mapError(error, ctx, "agent.mine.off");
     }
   }
 );

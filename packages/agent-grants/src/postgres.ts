@@ -8,6 +8,8 @@
  *   A postgres.js `Sql` or `TransactionSql` fits `SqlTag` as is; a node adapts any other driver.
  * Invariants:
  *   - The package never creates a client, switches a role, or runs a schema.
+ *   - NO_DATE_PARAMETERS: a timestamp is written with `now()`, SQL interval arithmetic or an ISO string, never a JS Date. The node's client is drizzle's postgres.js
+ *     client, which replaces the timestamp serializers; timestamps read back as strings too (`iso()` accepts both).
  *   - RESOURCE_SPLIT (R1): every node-plane statement names `resource = 'node'`; every account statement names `resource = 'account'`.
  *     The expand-phase live index stays (principal, scope), so one open row exists per AI and scope.
  *   - ACCOUNT_LIVE (R1, R14): an account row is live when approved, unrevoked and `expires_at > now()`; expired is read, and an expired live
@@ -227,6 +229,9 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       return out;
     },
     async requestRole({ principalUserId, scope, resource, link, maxPending, maxPendingTotal }) {
+      // An ISO STRING, never a Date: the node hands this store `drizzle-orm`'s postgres.js client, whose timestamp serializers pass a value through unchanged, so a JS
+      // Date parameter fails there (ERR_INVALID_ARG_TYPE) although a bare postgres.js client accepts it. A string works on both. (candidate-a, 11-13: every ask was a 503.)
+      const linkEnds = link.expiresAt.toISOString();
       await closeExpired(principalUserId, scope);
       const open = await sql`
         SELECT id, approved_by FROM agent_roles
@@ -235,7 +240,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         if (open[0].approved_by) return "granted";
         // A re-ask rotates the link: the agent always gets a working link, and the old one stops working.
         await sql`
-          UPDATE agent_roles SET link_hash = ${link.hash}, link_expires_at = ${link.expiresAt}, link_consumed_at = NULL
+          UPDATE agent_roles SET link_hash = ${link.hash}, link_expires_at = ${linkEnds}, link_consumed_at = NULL
           WHERE id = ${open[0].id as string}`;
         return "pending";
       }
@@ -248,7 +253,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       if (Number(all[0]?.n ?? 0) >= maxPendingTotal) return "node_full";
       const inserted = await sql`
         INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by, resource, link_hash, link_expires_at)
-        VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId}, ${resource}, ${link.hash}, ${link.expiresAt})
+        VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId}, ${resource}, ${link.hash}, ${linkEnds})
         ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       if (inserted.length > 0) return "created";
@@ -256,7 +261,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       // onto the winner's pending row, or report that row as already live. If neither exists (it ended in between) the ask failed: say so, never
       // return a link whose hash was not written.
       const rotated = await sql`
-        UPDATE agent_roles SET link_hash = ${link.hash}, link_expires_at = ${link.expiresAt}, link_consumed_at = NULL
+        UPDATE agent_roles SET link_hash = ${link.hash}, link_expires_at = ${linkEnds}, link_consumed_at = NULL
         WHERE principal_user_id = ${principalUserId} AND scope = ${scope} AND resource = ${resource}
           AND approved_by IS NULL AND revoked_at IS NULL
         RETURNING id`;

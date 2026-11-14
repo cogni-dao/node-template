@@ -26,6 +26,7 @@ import { NODE_AI_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { UserDrizzleAccountService } from "@/adapters/server/accounts/drizzle.adapter";
 import { getAppDb } from "@/adapters/server/db/client";
 import { isBillingAccountNotFoundPortError } from "@/ports";
@@ -71,7 +72,8 @@ describe("account grants (real Postgres, real roles)", () => {
 
   beforeAll(() => {
     if (!process.env.DATABASE_SERVICE_URL || !process.env.DATABASE_URL) throw new Error("component PostgreSQL required");
-    service = postgres(process.env.DATABASE_SERVICE_URL, { max: 4 });
+    // The PRODUCTION service client, so the suite sees what the container hands the package (drizzle replaces the timestamp serializers).
+    service = getServiceDb().$client as unknown as Sql;
     app = postgres(process.env.DATABASE_URL, { max: 2 });
   });
 
@@ -83,14 +85,13 @@ describe("account grants (real Postgres, real roles)", () => {
     await service.unsafe("DELETE FROM billing_accounts WHERE id = ANY($1)", [accountIds]);
     await service.unsafe("DELETE FROM agent_principals WHERE user_id = ANY($1)", [users]);
     await service.unsafe("DELETE FROM users WHERE id = ANY($1)", [users]);
-    await service.end({ timeout: 1 });
     await app?.end({ timeout: 1 });
   });
 
   // 1. The conformance suite, over the real SQL store. Each row cleans its own asks, so the node-wide open-ask cap never fills.
   describe("conformance over the real SQL store", () => {
     let mine: string[] = [];
-    let startedAt = new Date();
+    let startedAt = new Date().toISOString();
     runGrantConformance({
       describe,
       it: (name, fn) =>
@@ -117,7 +118,7 @@ describe("account grants (real Postgres, real roles)", () => {
         // This node's AI is the SEEDED principal: the suite adds no agent_principals row, so a test that counts principals never sees one.
         for (const name of internal) ids[name] = NODE_AI_PRINCIPAL_USER_ID;
         mine = Object.values(ids).filter((id) => id !== NODE_AI_PRINCIPAL_USER_ID);
-        startedAt = new Date();
+        startedAt = new Date().toISOString();
         return { store: storeOf(), ids, accounts };
       },
       async expireGrant(principalUserId, scope) {

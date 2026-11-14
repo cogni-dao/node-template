@@ -29,6 +29,7 @@ import {
   buildAskView,
   ROUTE_ONLY_CAPABILITIES,
   type AuthzEvent,
+  AgentRolesError,
   createPostgresAgentGrantsStore,
   buildNodeAiView,
   type GuardDeps,
@@ -55,7 +56,7 @@ import type { CatalogBoundTool } from "@cogni/ai-tools";
 import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import type { NodeAdminAuthority } from "@cogni/knowledge-store";
 import type { Logger } from "pino";
-import { EVENT_NAMES } from "@/shared/observability";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 import { buildPermissionCatalog, buildRequiresById } from "./agent-permissions";
 
 /** The service-role postgres.js client (`serviceDb.$client`): a tagged template that can also open a transaction. */
@@ -188,9 +189,21 @@ export function createAgentToolAuthority(deps: {
     scopesByPrincipalOf(Object.values(LANGGRAPH_CATALOG), requiresById, plane);
   const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
 
-  // One transaction per call, so a role read sees one consistent snapshot.
-  const withStore: WithStore = (fn) =>
-    deps.sql.begin((tx) => fn(createPostgresAgentGrantsStore(tx)));
+  // One transaction per call, so a role read sees one consistent snapshot. A failure that is not a domain refusal is logged HERE, once, with its class (name,
+  // SQLSTATE, constraint, table, column; never a message), because the callers that follow (the tool guard, the route door, a route catch) turn it into a quiet
+  // `authz_unavailable`: without this line a broken store is a 503 with nothing in Loki.
+  const withStore: WithStore = async (fn) => {
+    try {
+      return await deps.sql.begin((tx) => fn(createPostgresAgentGrantsStore(tx)));
+    } catch (error) {
+      if (!(error instanceof AgentRolesError))
+        deps.log.error(
+          { event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "agent.authority.store", ...failureFields(error) },
+          EVENT_NAMES.AGENT_ROLES_UNAVAILABLE
+        );
+      throw error;
+    }
+  };
 
   const onDecision = (event: AuthzEvent): void => {
     const level = event.decision === "allow" ? "info" : "warn";
