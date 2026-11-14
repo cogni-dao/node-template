@@ -34,11 +34,24 @@ const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), chil
 log.child.mockReturnValue(log);
 
 /** A tagged template that answers the role queries from a set. `begin` hands back the same tag. */
-function fakeSql(state: { roles: Set<string>; down: boolean; queries: number }): AgentAuthoritySql {
+function fakeSql(state: {
+  roles: Set<string>;
+  down: boolean;
+  queries: number;
+  /** `principal|scope|account` rows that are live account grants. */
+  grants?: Set<string>;
+  /** `account|user` pairs: who owns which account. */
+  owners?: Set<string>;
+}): AgentAuthoritySql {
   const tag = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     state.queries += 1;
     if (state.down) throw new Error("db down");
     const text = strings.join("?");
+    if (text.includes("INSERT INTO agent_roles")) return [{ id: "row-1" }]; // an ask's insert lands
+    if (text.includes("FROM billing_accounts") && text.includes("owner_user_id"))
+      return state.owners?.has(`${values[0]}|${values[1]}`) ? [{ ok: 1 }] : [];
+    if (text.includes("FROM agent_roles") && text.includes("resource = 'account'"))
+      return state.grants?.has(`${values[0]}|${values[1]}|${values[2]}`) ? [{ ok: 1 }] : [];
     if (text.includes("FROM agent_roles"))
       return state.roles.has(`${values[0]}|${values[1]}`) ? [{ ok: 1 }] : [];
     return [];
@@ -49,7 +62,7 @@ function fakeSql(state: { roles: Set<string>; down: boolean; queries: number }):
 
 const handler = vi.fn(async () => NextResponse.json({ ran: true }));
 const AGENT = "agent-user-1";
-const state = { roles: new Set<string>(), down: false, queries: 0 };
+const state = { roles: new Set<string>(), down: false, queries: 0, grants: new Set<string>(), owners: new Set<string>() };
 
 function route(sameDoor: string, user: SessionUser | null) {
   return wrapRouteHandlerWithLogging(
@@ -71,6 +84,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   log.child.mockReturnValue(log);
   state.roles = new Set();
+  state.grants = new Set();
+  state.owners = new Set();
   state.down = false;
   state.queries = 0;
   fake.container = {
@@ -176,5 +191,61 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     )(new NextRequest("https://node.example/api/v1/x", { method: "PATCH" }));
     expect(res.status).toBe(200);
     expect(state.queries).toBe(0);
+  });
+});
+
+
+describe("the ACCOUNT door (real wrapper, real authorizeRoute): owner, delegated, or one 404", () => {
+  const OWNER = "owner-1";
+  const ACCOUNT = "acct-1";
+  const accountRoute = (u: SessionUser | null, accountId = ACCOUNT) =>
+    wrapRouteHandlerWithLogging(
+      {
+        routeId: "accounts.credits.read",
+        sameDoor: "core__account_credits_read",
+        sameDoorAccountParam: "accountId",
+        auth: { mode: "required", getSessionUser: async () => u },
+      },
+      handler
+    )(new NextRequest(`https://node.example/api/v1/accounts/${accountId}/credits`), { params: Promise.resolve({ accountId }) });
+
+  it("the owner by session reaches the handler; a stranger by session gets the 404", async () => {
+    state.owners.add(`${ACCOUNT}|${OWNER}`);
+    expect((await accountRoute(user("session", OWNER))).status).toBe(200);
+    handler.mockClear();
+    const res = await accountRoute(user("session", "stranger"));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "not_found" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("a bearer agent needs a live grant for exactly this account: another account, no grant and a node-only role are the SAME 404", async () => {
+    state.grants.add(`${AGENT}|account:read|${ACCOUNT}`);
+    expect((await accountRoute(user("bearer"))).status).toBe(200);
+    handler.mockClear();
+    const foreign = await accountRoute(user("bearer"), "acct-2");
+    const nothing = await accountRoute(user("bearer", "agent-2"));
+    state.roles.add(`agent-3|account:read`);
+    const nodeOnly = await accountRoute(user("bearer", "agent-3"));
+    for (const res of [foreign, nothing, nodeOnly]) {
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "not_found" });
+    }
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("a store outage is 503 authz_unavailable (not a 404, not an allow)", async () => {
+    state.down = true;
+    const res = await accountRoute(user("bearer"));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "authz_unavailable", code: "authz_unavailable" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("logs the route and the account (an id, never data) for the decision", async () => {
+    state.grants.add(`${AGENT}|account:read|${ACCOUNT}`);
+    await accountRoute(user("bearer"));
+    const authz = log.info.mock.calls.map((c) => c[0] as Record<string, unknown>).find((f) => f.route === "accounts.credits.read");
+    expect(authz).toMatchObject({ tool: "core__account_credits_read", decision: "allow", code: "allowed", account: ACCOUNT, principal: AGENT });
   });
 });

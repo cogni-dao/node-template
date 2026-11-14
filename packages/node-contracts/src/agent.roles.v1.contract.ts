@@ -49,6 +49,23 @@ export const HUMAN_SESSION_REQUIRED = "human_session_required" as const;
  * `GET /api/v1/agent-access/roles`: what the "AI access" table renders. A non-admin gets `canManage: false`, `permissions: []`.
  * One row = one grant row. Name and description come from the declaration; the agent's name from `agent_principals` or the user.
  */
+/** One row of the "AI access" table, shared by the admin list and the profile list. */
+export const agentAccessRowSchema = z.object({
+  section: z.enum(["pending", "node", "outside"]),
+  principalUserId: z.string(),
+  who: z.string(),
+  outside: z.boolean(),
+  hint: z.string().nullable(),
+  scope: z.string(),
+  label: z.string(),
+  description: z.string(),
+  on: z.boolean(),
+  until: z.string().nullable(),
+  resource: z.enum(["node", "account"]),
+  rowId: z.string().nullable(),
+  viaLink: z.boolean().optional(),
+});
+
 export const agentRolesListOperation = {
   id: "agent.roles.list.v1",
   output: z.object({
@@ -65,6 +82,9 @@ export const agentRolesListOperation = {
         description: z.string(),
         on: z.boolean(),
         until: z.string().nullable(),
+        resource: z.enum(["node", "account"]),
+        rowId: z.string().nullable(),
+        viaLink: z.boolean().optional(),
       })
     ),
     /** Outside rows left out because the list is bounded. */

@@ -55,6 +55,9 @@ export function viewIsWire(view: NodeAiAccessView): Wire {
       description: row.description,
       on: row.on,
       until: row.until,
+      resource: row.resource,
+      rowId: row.rowId,
+      ...(row.viaLink !== undefined ? { viaLink: row.viaLink } : {}),
     })),
   };
 }

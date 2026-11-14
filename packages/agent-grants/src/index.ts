@@ -10,8 +10,39 @@
  */
 
 export {
+  type CatalogEntryLike,
+  listMine,
+  MAX_ACCOUNT_ROWS,
+  type MineListInput,
+  type MineOffInput,
+  type MineOnInput,
+  type MineOnResult,
+  scopesByPrincipalOf,
+  turnMineOff,
+  turnMineOn,
+} from "./account-access";
+export {
+  ACCOUNT_GRANT_DAYS,
+  type AccountGrantDays,
+  APPROVAL_FRAGMENT_KEY,
+  APPROVAL_PAGE,
+  type ApprovalCaller,
+  type ApprovalRow,
+  approvalPath,
+  canApprove,
+  DEFAULT_ACCOUNT_GRANT_DAYS,
+  hashLinkToken,
+  isAccountGrantDays,
+  isLinkTokenShape,
+  LINK_TTL_MS,
+  newLinkToken,
+  resourceOfKind,
+} from "./approval";
+export {
+  type AuthorizeAccountInput,
   type AuthorizeInput,
   authorize,
+  authorizeAccount,
   authorizePrincipalLock,
   principalLockPrecheck,
 } from "./authorize";
@@ -35,31 +66,43 @@ export {
   type SameDoorRoute,
 } from "./same-door";
 export { agentNameKey, hasHiddenCharacters } from "./names";
-export { buildNodeAiView } from "./node-ai";
+export { buildAccountAiView, buildAskView, buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
   AgentRolesError,
+  type AskOutcome,
+  approveAccountAsk,
+  denyAccountAsk,
   denyRequest,
+  grantInternalOnAccount,
   grantRole,
   listOwnAccess,
   MAX_PENDING_PER_AGENT,
   MAX_PENDING_TOTAL,
   type PrincipalRef,
+  previewAsk,
   requestAccess,
   type RolesErrorCode,
   resolveInternalPrincipal,
+  revokeAccountRow,
   revokeRole,
+  type ScopeKinds,
 } from "./roles";
 export type {
+  AccountAccess,
   AdminCheck,
   AdminDecision,
   AgentGrantsStore,
+  AskLink,
+  AskResult,
   AuthzDecision,
   AuthzEvent,
   DenialCode,
+  GrantResource,
   NodeAiAccessView,
   AccessSection,
   NodeAiPermissionView,
+  PendingAskView,
   RoleRow,
   RoleState,
   RunIdentity,

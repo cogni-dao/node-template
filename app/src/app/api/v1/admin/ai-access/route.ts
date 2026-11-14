@@ -11,6 +11,8 @@
  *   - HUMAN_ROUTES_SESSION_ONLY: any `Authorization` header is 403 `human_session_required` (proxy.ts, then the mint).
  *   - FAIL_CLOSED_WITH_DISTINCTION: non-admin 403 `authz_denied`; no configured admins 503 `authz_unavailable`.
  *   - NODE_DECLARED_SCOPES: an undeclared scope is 400 before any write.
+ *   - ADMIN_NEVER_SHOWS_ACCOUNT_ROWS (ONE_GATE): this table lists and decides NODE rows only. An account permission is its owner's alone, on the profile.
+ *     A one-time link to a waiting node ask highlights through `POST /api/v1/admin/ai-access/preview`.
  * Side-effects: IO (service-role database read and write), logs `admin.action` and `agent_role.*`
  * Links: src/app/(admin)/_lib/admin-session.ts, src/ports/node-admin.port.ts, https://cognidao.org/knowledge/node-capability-grants-standard
  * @public
@@ -23,7 +25,7 @@ import { NextResponse } from "next/server";
 import { requireAdminSession } from "@/app/(admin)/_lib/admin-session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES } from "@/shared/observability";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -41,7 +43,7 @@ export const GET = wrapRouteHandlerWithLogging(
       const view = await getContainer().nodeAdminPort.listNodeAi(admin.session);
       return json(agentRolesListOperation.output.parse({ canManage: true, ...view }));
     } catch (error) {
-      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_LIST_FAILED, routeId: "admin.ai-access.list", errorName: error instanceof Error ? error.name : "unknown" }, EVENT_NAMES.AGENT_ROLES_LIST_FAILED);
+      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "admin.ai-access.list", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
       return json({ error: "authz_unavailable" }, 503);
     }
   }
@@ -89,7 +91,7 @@ function writeRoute(routeId: string, action: string, write: "on" | "off") {
             ? 404
             : error.code === "not_pending"
               ? 409
-              : error.code === "self_approval"
+              : error.code === "self_approval" || error.code === "not_allowed"
                 ? 403
                 : 400;
         return json({ error: error.code }, status);

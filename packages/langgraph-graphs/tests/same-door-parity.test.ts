@@ -16,6 +16,8 @@ import { describe, expect, it } from "vitest";
 
 const contracts = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map((t) => t.contract);
 const writers = contracts.filter((c) => c.effect !== "read_only");
+/** A read tool is gated only when it declares `requires` (an account read, task.5465): it needs a route twin too. */
+const gatedReaders = contracts.filter((c) => c.effect === "read_only" && c.requires);
 
 /** The check itself, so a test can show it fails on an unmapped write tool. */
 export function unmappedWriteTools(
@@ -33,6 +35,16 @@ describe("same-door parity", () => {
     expect(unmappedWriteTools(writers, SAME_DOOR_ROUTES, NO_ROUTE_TWIN)).toEqual([]);
   });
 
+  it("maps every gated READ tool (an account read) to its route twin, with the same scope and an account kind", () => {
+    expect(gatedReaders.map((c) => c.name)).toEqual(["core__account_credits_read"]);
+    for (const c of gatedReaders) {
+      expect(c.requires?.kind, c.name).toBe("account");
+      expect(SAME_DOOR_ROUTES[c.name]?.scope, c.name).toBe(c.requires?.scope);
+      expect(c.name in NO_ROUTE_TWIN, c.name).toBe(false);
+    }
+    expect(SAME_DOOR_ROUTES.core__account_credits_read?.routes).toEqual(["accounts.credits.read"]);
+  });
+
   it("fails on a new unmapped write tool", () => {
     expect(
       unmappedWriteTools(
@@ -44,7 +56,7 @@ describe("same-door parity", () => {
   });
 
   it("carries the same scope on the route map as on the tool contract", () => {
-    for (const c of writers) {
+    for (const c of [...writers, ...gatedReaders]) {
       const mapped = SAME_DOOR_ROUTES[c.name];
       if (mapped) expect(mapped.scope, c.name).toBe(c.requires?.scope);
     }

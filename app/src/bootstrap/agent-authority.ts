@@ -21,23 +21,33 @@
 
 import {
   type AdminCheck,
+  type ApprovalCaller,
   agentNameKey,
+  type AskOutcome,
   type AuthzDecision,
   authorizeCaller,
+  buildAskView,
   ROUTE_ONLY_CAPABILITIES,
   type AuthzEvent,
+  AgentRolesError,
   createPostgresAgentGrantsStore,
   buildNodeAiView,
   type GuardDeps,
+  type GrantResource,
   denyRequest,
   grantRole,
+  listMine,
   listOwnAccess,
   type PrincipalRef,
+  previewAsk,
   requestAccess,
   type RoleState,
   type NodeAiPermissionView,
   resolveInternalPrincipal,
   revokeRole,
+  scopesByPrincipalOf,
+  turnMineOff,
+  turnMineOn,
   type SqlTag,
   type ToolRequires,
   type WithStore,
@@ -46,7 +56,7 @@ import type { CatalogBoundTool } from "@cogni/ai-tools";
 import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import type { NodeAdminAuthority } from "@cogni/knowledge-store";
 import type { Logger } from "pino";
-import { EVENT_NAMES } from "@/shared/observability";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 import { buildPermissionCatalog, buildRequiresById } from "./agent-permissions";
 
 /** The service-role postgres.js client (`serviceDb.$client`): a tagged template that can also open a transaction. */
@@ -61,30 +71,53 @@ export interface AgentToolAuthority {
   readonly guardDeps: Omit<GuardDeps, "runAs">;
   /** Scopes a role may name. */
   readonly declaredScopes: readonly string[];
-  /** Turn a row ON: approve a pending ask, or grant one of this node's AI directly. */
+  /** The declared kind of every scope (it picks the resource, the approver and the page the approval link opens). */
+  readonly scopeKinds: Readonly<Record<string, ToolRequires["kind"]>>;
+  /** Turn a NODE row ON: approve a pending ask, or grant one of this node's AI directly. `me.admin` is the admin session (ONE_GATE). */
   grantRole(
-    input: PrincipalRef & { scope: string; approvedBy: string }
+    input: PrincipalRef & { scope: string; me: ApprovalCaller }
   ): Promise<{ principalUserId: string; created: boolean }>;
-  /** Turn a live row OFF. */
+  /** Turn a live NODE row OFF. */
   revokeRole(
-    input: PrincipalRef & { scope: string; revokedBy: string }
+    input: PrincipalRef & { scope: string; me: ApprovalCaller }
   ): Promise<{ principalUserId: string; revoked: boolean }>;
-  /** Dismiss a pending ask (the agent then sees `denied`). */
+  /** Dismiss a pending NODE ask (the agent then sees `denied`). */
   denyRequest(
-    input: PrincipalRef & { scope: string; deniedBy: string }
+    input: PrincipalRef & { scope: string; me: ApprovalCaller }
   ): Promise<{ principalUserId: string; denied: boolean }>;
-  /** An agent asks for a scope for itself (a pending row, no approver). Idempotent. Throws AgentRolesError on a bad scope or too many asks. */
+  /**
+   * An agent asks for a scope for itself (a pending row, no approver) and gets one one-time link path, picked by the scope's declared kind.
+   * Idempotent: a waiting row is reported and its link rotated. Throws AgentRolesError on a bad scope or too many asks.
+   */
   requestAccess(input: {
     principalUserId: string;
     scope: string;
-  }): Promise<{ state: "pending" | "granted"; created: boolean }>;
+  }): Promise<AskOutcome>;
+  /** The waiting ask a link token opens on this page's resource, as a table row; null for any unusable token (one non-disclosing answer). */
+  previewAsk(input: { token: string; resource: GrantResource }): Promise<NodeAiPermissionView | null>;
+  /**
+   * The profile table for ONE person: the live account rows on their own account (this node's AI and outside agents), this node's AI Off until On,
+   * and no node rows. An account that does not exist yet lists no rows.
+   */
+  listMine(userId: string): Promise<{ permissions: NodeAiPermissionView[]; more: number }>;
+  /** The person turns an ACCOUNT row On: an outside AI's ask by its token, or this node's AI directly. The person's account is created if absent. */
+  turnMineOn(
+    me: ApprovalCaller,
+    input:
+      | { token: string; days?: number | undefined }
+      | { principalUserId: string; scope: string; days?: number | undefined }
+  ): Promise<{ changed: boolean }>;
+  /** The person turns a live ACCOUNT row Off by id, or dismisses a waiting ask by its token. */
+  turnMineOff(me: ApprovalCaller, input: { rowId: string } | { token: string }): Promise<{ changed: boolean }>;
   /**
    * True when `name` matches (case, spacing and look-alike forms ignored) any user's name or any of this node's AI slugs. Used at
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
    */
   nameTaken(name: string): Promise<boolean>;
   /** The agent's own rows by state. */
-  listOwnAccess(principalUserId: string): Promise<Array<{ scope: string; state: RoleState; at: string }>>;
+  listOwnAccess(
+    principalUserId: string
+  ): Promise<Array<{ scope: string; state: RoleState; at: string; accountId: string | null }>>;
   /**
    * The admin table: one row per grant row, in three blocks. Name and description come from the declarations only.
    * Outside rows are bounded (`MAX_ADMIN_OUTSIDE_ROWS`); `more` counts the ones cut.
@@ -101,6 +134,8 @@ export interface AgentToolAuthority {
     routeId: string;
     userId: string;
     via: "bearer" | "session";
+    /** The account the route names. Required for an account-kind tool. */
+    accountId?: string;
   }): Promise<AuthzDecision>;
 }
 
@@ -142,16 +177,33 @@ export function createAgentToolAuthority(deps: {
   nodeAdmin: NodeAdminAuthority;
   log: Logger;
   toolBundle: readonly CatalogBoundTool[];
+  /** The id of the billing account this person owns, created on first use. A person who never opened credits has none until they decide a grant. */
+  ensureBillingAccount?: (userId: string) => Promise<string>;
 }): AgentToolAuthority {
   const requiresById = buildRequiresById(deps.toolBundle);
   // Declared once, shown everywhere: one derivation feeds the role routes, the ask door and agent discovery.
-  const { declarations, declaredScopes, askableScopes } =
+  const { declarations, scopeKinds, declaredScopes, askableScopes } =
     buildPermissionCatalog(requiresById);
+  // Which scopes each of this node's AI may use is the package's helper over this node's catalog: node scopes feed the admin table, account scopes the profile.
+  const scopesOf = (plane: "account" | "node") =>
+    scopesByPrincipalOf(Object.values(LANGGRAPH_CATALOG), requiresById, plane);
   const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
 
-  // One transaction per call, so a role read sees one consistent snapshot.
-  const withStore: WithStore = (fn) =>
-    deps.sql.begin((tx) => fn(createPostgresAgentGrantsStore(tx)));
+  // One transaction per call, so a role read sees one consistent snapshot. A failure that is not a domain refusal is logged HERE, once, with its class (name,
+  // SQLSTATE, constraint, table, column; never a message), because the callers that follow (the tool guard, the route door, a route catch) turn it into a quiet
+  // `authz_unavailable`: without this line a broken store is a 503 with nothing in Loki.
+  const withStore: WithStore = async (fn) => {
+    try {
+      return await deps.sql.begin((tx) => fn(createPostgresAgentGrantsStore(tx)));
+    } catch (error) {
+      if (!(error instanceof AgentRolesError))
+        deps.log.error(
+          { event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "agent.authority.store", ...failureFields(error) },
+          EVENT_NAMES.AGENT_ROLES_UNAVAILABLE
+        );
+      throw error;
+    }
+  };
 
   const onDecision = (event: AuthzEvent): void => {
     const level = event.decision === "allow" ? "info" : "warn";
@@ -164,17 +216,11 @@ export function createAgentToolAuthority(deps: {
   return {
     resolvePrincipal: (slug) => withStore((store) => resolveInternalPrincipal(store, slug)),
     guardDeps: { withStore, adminCheck, onDecision },
+    scopeKinds,
     async listNodeAi() {
-      // The scopes each AI may use come from the contracts of every tool its graphs list.
-      const scopesByPrincipal: Record<string, string[]> = {};
-      for (const entry of Object.values(LANGGRAPH_CATALOG)) {
-        if (!entry.principal) continue;
-        const scopes = (scopesByPrincipal[entry.principal] ??= []);
-        for (const toolId of entry.toolIds) {
-          const requires = requiresById[toolId];
-          if (requires) scopes.push(requires.scope);
-        }
-      }
+      // The scopes each AI may use come from the contracts of every tool its graphs list. NODE scopes only: an account scope is the person's,
+      // and the admin table never shows account rows.
+      const scopesByPrincipal = scopesOf("node");
       const { internal, listed } = await withStore(async (store) => ({
         internal: await store.listInternalPrincipals(),
         listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS),
@@ -186,13 +232,13 @@ export function createAgentToolAuthority(deps: {
     },
     declaredScopes,
     adminCheck,
-    async authorizeRoute({ toolId, routeId, userId, via }) {
+    async authorizeRoute({ toolId, routeId, userId, via, accountId }) {
       const requires =
         requiresById[toolId] ?? ROUTE_ONLY_CAPABILITIES[toolId]?.requires;
       const decision: AuthzDecision = !requires
         ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
         : await withStore((store) =>
-            authorizeCaller(store, adminCheck, { userId, via, requires })
+            authorizeCaller(store, adminCheck, { userId, via, requires, accountId })
           ).catch(
             (): AuthzDecision => ({
               decision: "deny",
@@ -210,12 +256,13 @@ export function createAgentToolAuthority(deps: {
         reason: decision.decision === "allow" ? decision.basis : decision.reason,
         runId: null,
         route: routeId,
+        account: accountId ?? null,
       });
       return decision;
     },
     async grantRole(input) {
       const result = await withStore((store) =>
-        grantRole(store, { ...input, declaredScopes })
+        grantRole(store, { ...input, declaredScopes, scopeKinds })
       );
       if (result.created)
         deps.log.info(
@@ -223,7 +270,8 @@ export function createAgentToolAuthority(deps: {
             event: EVENT_NAMES.AGENT_ROLE_GRANTED,
             principalUserId: result.principalUserId,
             scope: input.scope,
-            approvedBy: input.approvedBy,
+            resource: "node",
+            approvedBy: input.me.userId,
           },
           EVENT_NAMES.AGENT_ROLE_GRANTED
         );
@@ -236,6 +284,8 @@ export function createAgentToolAuthority(deps: {
             ? { principalSlug: input.principalSlug }
             : { principalUserId: input.principalUserId as string }),
           scope: input.scope,
+          me: input.me,
+          scopeKinds,
         })
       );
       if (result.revoked)
@@ -244,7 +294,8 @@ export function createAgentToolAuthority(deps: {
             event: EVENT_NAMES.AGENT_ROLE_REVOKED,
             principalUserId: result.principalUserId,
             scope: input.scope,
-            revokedBy: input.revokedBy,
+            resource: "node",
+            revokedBy: input.me.userId,
           },
           EVENT_NAMES.AGENT_ROLE_REVOKED
         );
@@ -257,6 +308,8 @@ export function createAgentToolAuthority(deps: {
             ? { principalSlug: input.principalSlug }
             : { principalUserId: input.principalUserId as string }),
           scope: input.scope,
+          me: input.me,
+          scopeKinds,
         })
       );
       if (result.denied)
@@ -265,7 +318,8 @@ export function createAgentToolAuthority(deps: {
             event: EVENT_NAMES.AGENT_ROLE_DENIED,
             principalUserId: result.principalUserId,
             scope: input.scope,
-            deniedBy: input.deniedBy,
+            resource: "node",
+            deniedBy: input.me.userId,
           },
           EVENT_NAMES.AGENT_ROLE_DENIED
         );
@@ -273,7 +327,7 @@ export function createAgentToolAuthority(deps: {
     },
     async requestAccess(input) {
       const result = await withStore((store) =>
-        requestAccess(store, { ...input, declaredScopes, askableScopes })
+        requestAccess(store, { ...input, declaredScopes, askableScopes, scopeKinds })
       );
       if (result.created)
         deps.log.info(
@@ -281,10 +335,46 @@ export function createAgentToolAuthority(deps: {
             event: EVENT_NAMES.AGENT_ROLE_REQUESTED,
             principalUserId: input.principalUserId,
             scope: input.scope,
+            resource: scopeKinds[input.scope] === "account" ? "account" : "node",
           },
           EVENT_NAMES.AGENT_ROLE_REQUESTED
         );
       return result;
+    },
+    async previewAsk({ token, resource }) {
+      const ask = await withStore((store) => previewAsk(store, { token, resource }));
+      return ask ? buildAskView(ask, declarations) : null;
+    },
+    listMine: (userId) =>
+      withStore((store) => listMine(store, { userId, declarations, scopesByPrincipal: scopesOf("account") })),
+    async turnMineOn(me, input) {
+      // The orchestration (validate, then ensure the person's account, then decide) is the package's; this wrapper only wires the account hook and logs.
+      const result = await withStore((store) =>
+        turnMineOn(store, { me, on: input, declaredScopes, scopeKinds, ensureAccount: deps.ensureBillingAccount })
+      );
+      if (result.changed)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ROLE_GRANTED,
+            resource: "account",
+            via: result.via,
+            ...(result.principalUserId ? { principalUserId: result.principalUserId, scope: result.scope } : {}),
+            approvedBy: me.userId,
+          },
+          EVENT_NAMES.AGENT_ROLE_GRANTED
+        );
+      return { changed: result.changed };
+    },
+    async turnMineOff(me, input) {
+      const result = await withStore((store) => turnMineOff(store, { me, off: input }));
+      if (result.changed)
+        deps.log.info(
+          result.via === "row"
+            ? { event: EVENT_NAMES.AGENT_ROLE_REVOKED, resource: "account", revokedBy: me.userId }
+            : { event: EVENT_NAMES.AGENT_ROLE_DENIED, resource: "account", via: "link", deniedBy: me.userId },
+          result.via === "row" ? EVENT_NAMES.AGENT_ROLE_REVOKED : EVENT_NAMES.AGENT_ROLE_DENIED
+        );
+      return { changed: result.changed };
     },
     async nameTaken(name) {
       const key = agentNameKey(name);

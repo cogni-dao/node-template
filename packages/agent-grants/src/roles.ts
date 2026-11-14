@@ -3,20 +3,36 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/roles`
- * Purpose: Principal lookup, the ask (an agent requests a scope for itself), and the admin's yes, no and take-back on grant rows.
- *   The caller already passed the node admin gate for every admin function here.
- * Scope: Pure over the store. Role rows never grant account data.
+ * Purpose: Principal lookup, the ask (an agent requests a scope for itself and gets one link), and the approver's yes, no and take-back on grant rows:
+ *   an admin for a node row, the account owner for an account row. Every decision passes `canApprove` (ONE_GATE).
+ * Scope: Pure over the store. A node row never grants account data; an account row never grants node data (RESOURCE_SPLIT).
  * Invariants:
  *   - NODE_DECLARED_SCOPES: an undeclared scope is rejected before any write, on the ask and on the grant.
  *   - REQUEST_IS_AN_OFF_ROW: an ask is a row with no approver. It opens no lock until an admin approves it.
- *   - NO_SELF_APPROVAL: `requestAccess` can only write a pending row for the caller; only `approveRequest` sets an approver,
- *     and it refuses an approver who is the asking principal.
+ *   - NO_SELF_APPROVAL: `requestAccess` can only write a pending row for the caller; only a decision sets an approver,
+ *     and `canApprove` refuses an approver who is the asking principal.
+ *   - ONE_GATE: node rows are decided with an admin session, account rows by the owner of the account; both through `canApprove`.
+ *   - TWO_STARTS: an outside AI asks and gets one link (its token is shown once, rotated by a re-ask); this node's AI never asks, its approver
+ *     turns it On directly (`grantInternalOnAccount`, and `grantRole` for a node scope). An outside principal with no pending row is refused.
  *   - Revoke is soft: the row stays, `revoked_at` is set. A deny is the same soft write on a row that was never approved.
  * Side-effects: IO (store writes)
  * @public
  */
 
-import type { AgentGrantsStore, RoleState } from "./types";
+import {
+  ACCOUNT_GRANT_DAYS,
+  type ApprovalCaller,
+  approvalPath,
+  canApprove,
+  DEFAULT_ACCOUNT_GRANT_DAYS,
+  hashLinkToken,
+  isAccountGrantDays,
+  isLinkTokenShape,
+  LINK_TTL_MS,
+  newLinkToken,
+  resourceOfKind,
+} from "./approval";
+import type { AgentGrantsStore, GrantResource, PendingAskView, RoleState, ScopeKind } from "./types";
 
 export type RolesErrorCode =
   | "principal_not_found"
@@ -24,7 +40,10 @@ export type RolesErrorCode =
   | "not_pending"
   | "self_approval"
   | "too_many_requests"
-  | "no_external_door";
+  | "no_external_door"
+  | "not_allowed"
+  | "invalid_days"
+  | "wrong_kind";
 
 export class AgentRolesError extends Error {
   readonly code: RolesErrorCode;
@@ -75,7 +94,34 @@ async function resolveRef(
   return { userId: ref.principalUserId, internal };
 }
 
-/** An agent asks for a scope for itself. Idempotent: a pending or live row is reported, not duplicated. */
+/** The declared kind of every scope. A scope missing here is `node` (the default kind), so an account decision on it is refused. */
+export type ScopeKinds = Readonly<Record<string, ScopeKind>>;
+
+/**
+ * SCOPE_KIND_PICKS_THE_PLANE: an account decision (direct On, an owner's yes, a revoke) is only for a scope that declares kind `account`; a node decision
+ * (an admin's yes, no, take-back) is only for a scope that does NOT. Without this, a person could write an account row for a node scope and take the
+ * one open-row slot of that (AI, scope), or an admin could write a node row for an account scope.
+ */
+function requireKind(scopeKinds: ScopeKinds, scope: string, account: boolean): void {
+  if ((scopeKinds[scope] === "account") !== account)
+    throw new AgentRolesError(
+      "wrong_kind",
+      account ? "an account decision needs an account permission" : "a node decision needs a node permission"
+    );
+}
+
+/** What an ask returns. `approvalPath` is present while the row waits (a new token on every ask); the node adds its public origin. */
+export interface AskOutcome {
+  readonly state: "pending" | "granted";
+  readonly created: boolean;
+  /** Path and fragment of the one-time link, by the scope's declared kind. Absent when the grant is already live. */
+  readonly approvalPath?: string;
+}
+
+/**
+ * An agent asks for a scope for itself. Idempotent: a pending row is reported and its link rotated (a link is always returned), a live row is
+ * reported as granted. The declared kind picks the resource and so the page and the approver.
+ */
 export async function requestAccess(
   store: AgentGrantsStore,
   input: {
@@ -84,46 +130,56 @@ export async function requestAccess(
     declaredScopes: readonly string[];
     /** Scopes an outside agent can actually use: a route twin it can call. Any other ask is refused (`no_external_door`). */
     askableScopes: readonly string[];
+    /** The declared kind of every scope. A scope missing here is `node`. */
+    scopeKinds?: Readonly<Record<string, ScopeKind>>;
   }
-): Promise<{ state: "pending" | "granted"; created: boolean }> {
+): Promise<AskOutcome> {
   if (!input.declaredScopes.includes(input.scope))
     throw new AgentRolesError("invalid_scope", "scope is not declared");
-  // An ask the admin could approve but that opens nothing is misleading consent: refuse it.
+  // An ask the approver could say yes to but that opens nothing is misleading consent: refuse it.
   if (!input.askableScopes.includes(input.scope))
     throw new AgentRolesError("no_external_door", "no route an outside agent can call uses this scope");
+  const kind = input.scopeKinds?.[input.scope] ?? "node";
+  const token = newLinkToken();
   const result = await store.requestRole({
     principalUserId: input.principalUserId,
     scope: input.scope,
+    resource: resourceOfKind(kind),
+    link: { hash: await hashLinkToken(token), expiresAt: new Date(Date.now() + LINK_TTL_MS) },
     maxPending: MAX_PENDING_PER_AGENT,
     maxPendingTotal: MAX_PENDING_TOTAL,
   });
   if (result === "too_many" || result === "node_full")
     throw new AgentRolesError("too_many_requests", result === "node_full" ? "node has too many open requests" : "too many open requests");
-  return { state: result === "granted" ? "granted" : "pending", created: result === "created" };
+  if (result === "granted") return { state: "granted", created: false };
+  return { state: "pending", created: result === "created", approvalPath: approvalPath(kind, token) };
 }
 
-/** The agent's own rows, by state. */
+/** The agent's own rows, by state, per account. */
 export async function listOwnAccess(
   store: AgentGrantsStore,
   principalUserId: string
-): Promise<Array<{ scope: string; state: RoleState; at: string }>> {
+): Promise<Array<{ scope: string; state: RoleState; at: string; accountId: string | null }>> {
   return store.listOwnRoles(principalUserId);
 }
 
 /**
- * The admin turns a row ON. A pending ask is approved; an internal AI with no row gets a live row. An outside agent with no
- * ask cannot be granted: it has to ask first.
+ * The admin turns a NODE row ON. A pending ask is approved; an internal AI with no row gets a live row. An outside agent with no
+ * ask cannot be granted: it has to ask first. `me.admin` is the admin session (ONE_GATE).
  */
 export async function grantRole(
   store: AgentGrantsStore,
-  input: PrincipalRef & { scope: string; approvedBy: string; declaredScopes: readonly string[] }
+  input: PrincipalRef & { scope: string; me: ApprovalCaller; declaredScopes: readonly string[]; scopeKinds: ScopeKinds }
 ): Promise<{ principalUserId: string; created: boolean }> {
   if (!input.declaredScopes.includes(input.scope))
     throw new AgentRolesError("invalid_scope", "scope is not declared");
+  requireKind(input.scopeKinds, input.scope, false);
   const { userId, internal } = await resolveRef(store, input);
-  if (userId === input.approvedBy)
+  if (userId === input.me.userId)
     throw new AgentRolesError("self_approval", "an approver cannot approve its own row");
-  if (await store.approvePending({ principalUserId: userId, scope: input.scope, approvedBy: input.approvedBy }))
+  if (!(await canApprove(store, input.me, { resource: "node", principalUserId: userId })))
+    throw new AgentRolesError("not_allowed", "only a node admin decides a node permission");
+  if (await store.approvePending({ principalUserId: userId, scope: input.scope, approvedBy: input.me.userId }))
     return { principalUserId: userId, created: true };
   if (!internal) {
     // No pending ask: if it is already live this is a no-op, else the agent must ask first.
@@ -133,27 +189,127 @@ export async function grantRole(
   const created = await store.insertRole({
     principalUserId: userId,
     scope: input.scope,
-    approvedBy: input.approvedBy,
+    approvedBy: input.me.userId,
   });
   return { principalUserId: userId, created };
 }
 
-/** The admin turns a live row OFF. */
+/** The admin turns a live NODE row OFF. */
 export async function revokeRole(
   store: AgentGrantsStore,
-  input: PrincipalRef & { scope: string }
+  input: PrincipalRef & { scope: string; me: ApprovalCaller; scopeKinds: ScopeKinds }
 ): Promise<{ principalUserId: string; revoked: boolean }> {
+  requireKind(input.scopeKinds, input.scope, false);
   const { userId } = await resolveRef(store, input);
+  if (!(await canApprove(store, input.me, { resource: "node", principalUserId: userId })))
+    throw new AgentRolesError("not_allowed", "only a node admin decides a node permission");
   const revoked = await store.revokeRole({ principalUserId: userId, scope: input.scope });
   return { principalUserId: userId, revoked };
 }
 
-/** The admin dismisses a pending ask (the x). The agent sees `denied`. */
+/** The admin dismisses a pending NODE ask (the x). The agent sees `denied`. */
 export async function denyRequest(
   store: AgentGrantsStore,
-  input: PrincipalRef & { scope: string }
+  input: PrincipalRef & { scope: string; me: ApprovalCaller; scopeKinds: ScopeKinds }
 ): Promise<{ principalUserId: string; denied: boolean }> {
+  requireKind(input.scopeKinds, input.scope, false);
   const { userId } = await resolveRef(store, input);
+  if (!(await canApprove(store, input.me, { resource: "node", principalUserId: userId })))
+    throw new AgentRolesError("not_allowed", "only a node admin decides a node permission");
   const denied = await store.denyPending({ principalUserId: userId, scope: input.scope });
   return { principalUserId: userId, denied };
+}
+
+const daysOrDefault = (days: number | undefined): number => {
+  const d = days ?? DEFAULT_ACCOUNT_GRANT_DAYS;
+  if (!isAccountGrantDays(d))
+    throw new AgentRolesError("invalid_days", `days must be one of ${ACCOUNT_GRANT_DAYS.join(", ")}`);
+  return d;
+};
+
+/**
+ * Looks up a pending ask by its one-time link token for the page that opens it (profile: account asks; admin: node asks). A wrong-kind,
+ * used, expired or unknown token is one answer: null (the route says 404 and discloses nothing).
+ */
+export async function previewAsk(
+  store: AgentGrantsStore,
+  input: { token: string; resource: GrantResource }
+): Promise<PendingAskView | null> {
+  if (!isLinkTokenShape(input.token)) return null;
+  return store.findPendingByLink({ linkHash: await hashLinkToken(input.token), resource: input.resource });
+}
+
+/**
+ * The account owner turns a pending ACCOUNT ask On, by its link token. The row takes an account the approver owns, and ends in 1, 7 or 30
+ * days (default 7). A node-admin has no say here (R12). Returns false for a token that is not usable.
+ */
+export async function approveAccountAsk(
+  store: AgentGrantsStore,
+  input: { me: ApprovalCaller; token: string; days?: number | undefined }
+): Promise<{ approved: boolean }> {
+  const days = daysOrDefault(input.days);
+  const pending = await previewAsk(store, { token: input.token, resource: "account" });
+  if (!pending) return { approved: false };
+  if (!(await canApprove(store, input.me, { resource: "account", principalUserId: pending.principalUserId })))
+    throw new AgentRolesError("not_allowed", "only the owner of an account decides access to it");
+  const approved = await store.approveAccountByLink({
+    linkHash: await hashLinkToken(input.token),
+    approvedBy: input.me.userId,
+    days,
+  });
+  return { approved };
+}
+
+/** The account owner dismisses a pending ACCOUNT ask (the x). It needs the token: an undecided ask has no account yet (R15). */
+export async function denyAccountAsk(
+  store: AgentGrantsStore,
+  input: { me: ApprovalCaller; token: string }
+): Promise<{ denied: boolean }> {
+  const pending = await previewAsk(store, { token: input.token, resource: "account" });
+  if (!pending) return { denied: false };
+  if (!(await canApprove(store, input.me, { resource: "account", principalUserId: pending.principalUserId })))
+    throw new AgentRolesError("not_allowed", "only the owner of an account decides access to it");
+  return { denied: await store.denyAccountByLink({ linkHash: await hashLinkToken(input.token), deniedBy: input.me.userId }) };
+}
+
+/**
+ * The account owner turns this node's own AI On for their own account (no ask). Internal principals only: an outside principal is refused
+ * (`not_pending`), because it has to ask and be approved by its link.
+ */
+export async function grantInternalOnAccount(
+  store: AgentGrantsStore,
+  input: {
+    me: ApprovalCaller;
+    principalUserId: string;
+    scope: string;
+    declaredScopes: readonly string[];
+    scopeKinds: ScopeKinds;
+    days?: number | undefined;
+  }
+): Promise<{ principalUserId: string; created: boolean }> {
+  if (!input.declaredScopes.includes(input.scope))
+    throw new AgentRolesError("invalid_scope", "scope is not declared");
+  requireKind(input.scopeKinds, input.scope, true);
+  const days = daysOrDefault(input.days);
+  const { internal } = await resolveRef(store, { principalUserId: input.principalUserId });
+  if (!internal) throw new AgentRolesError("not_pending", "an outside agent must ask first");
+  if (!(await canApprove(store, input.me, { resource: "account", principalUserId: input.principalUserId })))
+    throw new AgentRolesError("not_allowed", "only the owner of an account decides access to it");
+  const created = await store.insertAccountRole({
+    principalUserId: input.principalUserId,
+    scope: input.scope,
+    approvedBy: input.me.userId,
+    days,
+  });
+  // `false` with an internal AI means a live or pending row already exists (the v0 limit: one open row per AI and scope).
+  return { principalUserId: input.principalUserId, created };
+}
+
+/** The account owner turns a live ACCOUNT row Off, by id. A row on someone else's account is invisible: `revoked: false`. */
+export async function revokeAccountRow(
+  store: AgentGrantsStore,
+  input: { me: ApprovalCaller; rowId: string }
+): Promise<{ revoked: boolean }> {
+  // The statement joins billing_accounts.owner_user_id = me, which is exactly canApprove for an account row with an account.
+  return { revoked: await store.revokeAccountRole({ rowId: input.rowId, ownerUserId: input.me.userId }) };
 }

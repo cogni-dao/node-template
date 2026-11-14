@@ -14,7 +14,8 @@
 
 import { z } from "zod";
 
-export const agentAccessRequestStateSchema = z.enum(["pending", "granted", "denied", "revoked"]);
+/** `expired` is a state read from the row's end date (R14): an account grant whose time passed. */
+export const agentAccessRequestStateSchema = z.enum(["pending", "granted", "denied", "revoked", "expired"]);
 
 export const agentAccessRequestCreateOperation = {
   id: "agent.access-requests.create.v1",
@@ -28,6 +29,12 @@ export const agentAccessRequestCreateOperation = {
     state: z.enum(["pending", "granted"]),
     /** false when the ask (or grant) already existed. */
     created: z.boolean(),
+    /**
+     * The one link to hand the person who decides: `/admin/ai-access#agent-request=<token>` for a node permission, `/profile#agent-request=<token>`
+     * for an account permission, picked by the permission's declared kind. One-time, 24 hours; every ask on a waiting row returns a new one.
+     * Absent when the grant is already live.
+     */
+    approvalUrl: z.string().url().optional(),
   }),
 } as const;
 
@@ -39,6 +46,8 @@ export const agentAccessRequestListOperation = {
         scope: z.string(),
         state: agentAccessRequestStateSchema,
         at: z.string(),
+        /** The account an account grant covers (set once its owner decided); null for a node permission and for a waiting ask. */
+        accountId: z.string().nullable(),
       })
     ),
   }),

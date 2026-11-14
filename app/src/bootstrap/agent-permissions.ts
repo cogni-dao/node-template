@@ -36,6 +36,8 @@ export interface GrantablePermission {
 
 export interface PermissionCatalog {
   readonly declarations: Readonly<Record<string, PermissionDeclaration>>;
+  /** The declared kind of every scope: it picks the resource (account or node), the approver and the page the approval link opens. */
+  readonly scopeKinds: Readonly<Record<string, ToolRequires["kind"]>>;
   readonly declaredScopes: readonly string[];
   readonly askableScopes: readonly string[];
   /** Askable scopes with a name and description, by scope. What discovery shows. */
@@ -62,8 +64,11 @@ export function buildPermissionCatalog(
     requires[cap.requires.scope] = cap.requires;
 
   const declarations: Record<string, PermissionDeclaration> = {};
-  for (const r of Object.values(requires))
+  const scopeKinds: Record<string, ToolRequires["kind"]> = {};
+  for (const r of Object.values(requires)) {
     declarations[r.scope] = { label: r.label, description: r.description };
+    scopeKinds[r.scope] = r.kind;
+  }
   const declaredScopes = Object.keys(declarations).sort();
   // The scopes an outside agent can actually use: a route twin it can call. An ask for any other scope would be an approvable
   // row that opens nothing, so it is refused up front.
@@ -79,5 +84,5 @@ export function buildPermissionCatalog(
       ? [{ scope, label: r.label, description: r.description, kind: r.kind }]
       : [];
   });
-  return { declarations, declaredScopes, askableScopes, permissions };
+  return { declarations, scopeKinds, declaredScopes, askableScopes, permissions };
 }

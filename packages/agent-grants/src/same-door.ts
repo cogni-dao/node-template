@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/same-door`
- * Purpose: SAME_DOOR. The one declaration of which agent-reachable route twins which guarded tool, or which read route needs a grant, and the one
- *   check a route calls. An outside agent that calls the route passes the same `authorize()` lock as the node's own AI.
+ * Purpose: SAME_DOOR. The one declaration of which agent-reachable route twins which guarded tool (a write tool, or a read tool that declares an
+ *   `account` scope), or which read route needs a grant, and the one check a route calls. An outside agent that calls the route passes the same `authorize()` lock as the node's own AI.
  * Scope: A static map (tool id -> route ids + scope), an allowlist of tools that have no node route, and `authorizeCaller`.
  *   The parity test (packages/langgraph-graphs/tests/same-door-parity.test.ts) fails when a non-read_only tool is in neither.
  * Invariants:
@@ -18,7 +18,7 @@
  * @public
  */
 
-import { authorize } from "./authorize";
+import { authorize, authorizeAccount } from "./authorize";
 import type {
   AdminCheck,
   AgentGrantsStore,
@@ -46,6 +46,8 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
   core__edo_decide: { scope: "edo:write", routes: ["edo.decide"] },
   core__edo_record_outcome: { scope: "edo:write", routes: ["edo.record_outcome"] },
   core__metric_compute: { scope: "metric:compute", routes: ["metrics.metricCompute"] },
+  // A READ tool with an account scope (task.5465): the one route twin of the account read. An agent needs a live account row for the exact account.
+  core__account_credits_read: { scope: "account:read", routes: ["accounts.credits.read"] },
 };
 
 /**
@@ -137,6 +139,8 @@ export interface CallerInput {
   /** How the request authenticated. `bearer` is an AI on the AI plane; `session` is a human. */
   readonly via: "bearer" | "session";
   readonly requires: ToolRequires;
+  /** The account the request names. Required for an `account` scope: no account is a deny. */
+  readonly accountId?: string | undefined;
 }
 
 /** The route door. Same `authorize()` for a bearer (its own principal); subject rules only for a human. */
@@ -146,6 +150,19 @@ export async function authorizeCaller(
   input: CallerInput
 ): Promise<AuthzDecision> {
   const { userId, via, requires } = input;
+  if (requires.kind === "account") {
+    // ONE_ACCOUNT_DOOR: the owner, or a bearer agent with a live row for this scope and this exact account; everything else is one deny.
+    if (!input.accountId) return { decision: "deny", code: "policy_denied", reason: "no_account" };
+    const access = await authorizeAccount(store, {
+      callerUserId: userId,
+      via,
+      scope: requires.scope,
+      accountId: input.accountId,
+    });
+    return access
+      ? { decision: "allow", basis: access }
+      : { decision: "deny", code: "policy_denied", reason: "no_account_access" };
+  }
   if (via === "bearer") {
     // The bearer IS the principal. `own` data belongs to it, so it is also the subject there. `admin`-subject scopes
     // pass on the role row alone: a DAO admin wrote that row, and an AI identity has no admin check yet (item I2).
@@ -156,8 +173,6 @@ export async function authorizeCaller(
         requires.subject === "admin" ? { ...requires, subject: "member" } : requires,
     });
   }
-  if (requires.kind === "account")
-    return { decision: "deny", code: "policy_denied", reason: "account_scope_unsupported" };
   if (requires.subject === "member") return { decision: "allow", basis: "signed_in" };
   if (requires.subject !== "admin")
     return { decision: "deny", code: "policy_denied", reason: "unknown_contract_value" };

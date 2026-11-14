@@ -34,6 +34,8 @@ import {
 import { Spinner } from "@cogni/node-ui-kit/shadcn/spinner";
 import { OpenAIIcon } from "@/features/ai/icons/providers/OpenAIIcon";
 
+import { AiAccessProfile } from "./AiAccessProfile.client";
+
 /* ─── Types ────────────────────────────────────────────────────────── */
 
 interface LinkedProvider {
@@ -1133,6 +1135,8 @@ export function ProfileView({
       )}
 
       {/* ── Ownership ── */}
+
+      <AiAccessProfile />
 
       <SectionHeading>Ownership</SectionHeading>
 

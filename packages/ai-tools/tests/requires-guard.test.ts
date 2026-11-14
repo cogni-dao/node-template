@@ -65,10 +65,12 @@ describe("requires guard", () => {
     ).toEqual(["core__new_writer", "core__new_effect"]);
   });
 
-  it("never puts requires on a read_only tool", () => {
+  it("puts requires on a read_only tool only when it reads one account's data (kind account)", () => {
     expect(
-      contracts.filter((c) => c.effect === "read_only" && c.requires)
-    ).toEqual([]);
+      contracts
+        .filter((c) => c.effect === "read_only" && c.requires)
+        .map((c) => [c.name, c.requires?.kind])
+    ).toEqual([["core__account_credits_read", "account"]]);
   });
 
   it("declares the intended scope map", () => {

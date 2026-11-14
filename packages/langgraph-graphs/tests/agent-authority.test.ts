@@ -66,6 +66,14 @@ describe("catalog principals (N4)", () => {
     expect(ids).not.toContain("core__knowledge_write");
   });
 
+  it("gives cogni the account credit read, which opens only after an account owner's yes (an account-kind grant on the run's account)", () => {
+    const ids = LANGGRAPH_CATALOG.cogni?.toolIds ?? [];
+    expect(ids).toContain("core__account_credits_read");
+    // No other catalog graph lists it: the node's AI is the only internal AI an owner can turn On for their account today.
+    for (const [name, entry] of Object.entries(LANGGRAPH_CATALOG))
+      if (name !== "cogni") expect(entry.toolIds, name).not.toContain("core__account_credits_read");
+  });
+
   it("names only seeded principal slugs", () => {
     for (const entry of Object.values(LANGGRAPH_CATALOG))
       if ("principal" in entry && entry.principal)
