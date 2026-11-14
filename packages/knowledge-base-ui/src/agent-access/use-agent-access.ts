@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-base-ui/agent-access/use-agent-access`
  * Purpose: The data hook behind "AI access": loads one table, and allows or removes one permission. Two modes share it.
  *   - `admin` (default): a node-admin's table of NODE permissions on `/admin/ai-access`.
- *   - `account`: a person's table of the AIs that may act on THEIR OWN account on `/profile`, with the Until control (1, 7 or 30 days).
+ *   - `account`: a person's table of the AIs that may act on THEIR OWN account on `/profile`.
  *   Both can open an AI's one-time link: the page passes the token it read from the URL fragment, the hook asks the preview endpoint which row it opens,
  *   and the section highlights that row.
  * Scope: Plain `fetch` with `cache: "no-store"`; no react-query and no kept copy beyond component state.
@@ -57,11 +57,6 @@ export type AgentAccessState =
   | { readonly status: "unavailable" }
   | { readonly status: "ready"; readonly view: NodeAiAccessView };
 
-/** Options of one click. `days` is the Until control (1, 7 or 30), used on an account row; the server defaults to 7. */
-export interface AllowOptions {
-  readonly days?: number;
-}
-
 export interface UseAgentAccess {
   readonly state: AgentAccessState;
   /** `principalUserId|scope` of the click in flight, else null. While set, every button is disabled. */
@@ -74,7 +69,7 @@ export interface UseAgentAccess {
   readonly linkInvalid: boolean;
   readonly reload: () => Promise<void>;
   /** Turn a row ON: approves a pending ask or grants one of this node's AI. */
-  readonly allow: (principalUserId: string, scope: string, options?: AllowOptions) => Promise<void>;
+  readonly allow: (principalUserId: string, scope: string) => Promise<void>;
   /** Turn a row OFF. */
   readonly remove: (principalUserId: string, scope: string) => Promise<void>;
   /** The x on a pending ask. */
@@ -235,7 +230,7 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints, options: UseAgen
       method: "POST" | "DELETE",
       principalUserId: string,
       scope: string,
-      opts: { deny?: boolean; days?: number | undefined } = {}
+      opts: { deny?: boolean } = {}
     ) => {
       setBusy(`${principalUserId}|${scope}`);
       setError(null);
@@ -247,8 +242,8 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints, options: UseAgen
           const target = rows.find((p) => p.principalUserId === principalUserId && p.scope === scope);
           if (method === "POST") {
             body = target?.viaLink
-              ? { token: tokenRef.current, ...(opts.days ? { days: opts.days } : {}) }
-              : { principalUserId, scope, ...(opts.days ? { days: opts.days } : {}) };
+              ? { token: tokenRef.current }
+              : { principalUserId, scope };
           } else {
             body = opts.deny ? { token: tokenRef.current, deny: true } : { rowId: target?.rowId };
           }
@@ -289,7 +284,7 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints, options: UseAgen
     highlight,
     linkInvalid,
     reload,
-    allow: (principalUserId, scope, opts) => send("POST", principalUserId, scope, { days: opts?.days }),
+    allow: (principalUserId, scope) => send("POST", principalUserId, scope),
     remove: (principalUserId, scope) => send("DELETE", principalUserId, scope),
     dismiss: (principalUserId, scope) => send("DELETE", principalUserId, scope, { deny: true }),
   };

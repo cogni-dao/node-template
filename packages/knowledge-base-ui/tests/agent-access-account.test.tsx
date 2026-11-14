@@ -19,8 +19,8 @@ const ENDPOINTS = { roles: "/api/v1/agent-access/mine", preview: "/api/v1/agent-
 const row = (o: Partial<NodeAiPermissionView> & Pick<NodeAiPermissionView, "section" | "principalUserId" | "who" | "scope">): NodeAiPermissionView => ({
   outside: false,
   hint: null,
-  label: "Read your credit balance",
-  description: "See the credit balance of the account it acts for.",
+  label: "Read your account data",
+  description: "See everything this account owns: credits, usage and history.",
   on: false,
   until: null,
   resource: "account",
@@ -72,20 +72,19 @@ describe("AgentAccessSection, account mode (the profile)", () => {
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Who", "Can do", "Until", "On"]);
   });
 
-  it("lists this node's AI Off with an Until choice (1, 7 or 30 days, default 7), and an outside AI On with its end date", async () => {
+  it("lists this node's AI Off and an outside AI On, in the same table as admin: no Until choice, a grant lasts until Off", async () => {
     fetchMock.mockImplementation(() => json(200, list()));
     render(<AgentAccessSection endpoints={ENDPOINTS} mode="account" />);
     await screen.findByRole("table");
-    const until = screen.getByRole("combobox", { name: /^Until: node-ai: Read your credit balance$/ });
-    expect(until).toHaveValue("7");
-    expect(within(until).getAllByRole("option").map((o) => o.textContent)).toEqual(["1 day", "7 days", "30 days"]);
-    expect(screen.getByRole("switch", { name: /^node-ai: Read your credit balance$/ })).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByRole("switch", { name: /^Reader bot: Read your credit balance$/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("combobox")).toBeNull(); // no Until picker on either row
+    expect(screen.getByRole("switch", { name: /^node-ai: Read your account data$/ })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: /^Reader bot: Read your account data$/ })).toHaveAttribute("aria-checked", "true");
+    // A row that already carries an end date (an old one) still shows it; one without says "No end".
     expect(screen.getByText(/^Until Nov (20|21)$/)).toBeInTheDocument();
-    expect(screen.getAllByRole("combobox")).toHaveLength(1); // an On row shows its end, not a choice
+    expect(screen.getByText("No end")).toBeInTheDocument();
   });
 
-  it("turning this node's AI On sends its id and permission with the chosen days; turning it Off sends the row id", async () => {
+  it("turning this node's AI On sends its id and permission only; turning it Off sends the row id", async () => {
     const calls: Array<{ method: string; body?: unknown }> = [];
     fetchMock.mockImplementation((_u: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
@@ -95,16 +94,15 @@ describe("AgentAccessSection, account mode (the profile)", () => {
       return json(200, method === "GET" ? list() : { changed: true });
     });
     render(<AgentAccessSection endpoints={ENDPOINTS} mode="account" />);
-    await userEvent.selectOptions(await screen.findByRole("combobox", { name: /^Until: node-ai/ }), "30");
-    await userEvent.click(screen.getByRole("switch", { name: /^node-ai: Read your credit balance$/ }));
-    await waitFor(() => expect(screen.getByRole("switch", { name: /^node-ai: Read your credit balance$/ })).toHaveAttribute("aria-checked", "true"));
-    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ principalUserId: "u-node-ai", scope: "account:read", days: 30 });
-    await userEvent.click(screen.getByRole("switch", { name: /^node-ai: Read your credit balance$/ }));
+    await userEvent.click(await screen.findByRole("switch", { name: /^node-ai: Read your account data$/ }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: /^node-ai: Read your account data$/ })).toHaveAttribute("aria-checked", "true"));
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ principalUserId: "u-node-ai", scope: "account:read" });
+    await userEvent.click(screen.getByRole("switch", { name: /^node-ai: Read your account data$/ }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE")).toBe(true));
     expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ rowId: "11111111-1111-4111-8111-111111111111" });
   });
 
-  it("an AI's link: the token is previewed in a POST body, the ask is shown highlighted, On sends the token with days, and the ask is dropped", async () => {
+  it("an AI's link: the token is previewed in a POST body, the ask is shown highlighted, On sends the token alone, and the ask is dropped", async () => {
     const calls: Array<{ url: string; method: string; body?: unknown }> = [];
     let decided = false;
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
@@ -115,7 +113,7 @@ describe("AgentAccessSection, account mode (the profile)", () => {
       return json(200, method === "GET" ? { ...list(), permissions: [...list().permissions, ...(decided ? [row({ section: "outside", principalUserId: "ext-9", who: "Asker bot", outside: true, scope: "account:read", on: true, rowId: "33333333-3333-4333-8333-333333333333", until: "2026-11-20T00:00:00.000Z" })] : [])] } : { changed: true });
     });
     const { container } = render(<AgentAccessSection endpoints={ENDPOINTS} mode="account" token={TOKEN} />);
-    const ask = await screen.findByRole("switch", { name: /^Asker bot: Read your credit balance$/ });
+    const ask = await screen.findByRole("switch", { name: /^Asker bot: Read your account data$/ });
     const tr = ask.closest("tr") as HTMLElement;
     expect(tr.className).toMatch(/ring-1/); // highlighted
     expect(tr.id).toBe("ai-access-highlight"); // a constant id: no token, id or scope string in the markup
@@ -124,8 +122,8 @@ describe("AgentAccessSection, account mode (the profile)", () => {
     expect(container.textContent).not.toContain(TOKEN);
     await userEvent.click(ask);
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url === ENDPOINTS.roles)).toBe(true));
-    expect(calls.find((c) => c.method === "POST" && c.url === ENDPOINTS.roles)?.body).toEqual({ token: TOKEN, days: 7 });
-    await waitFor(() => expect(screen.getByRole("switch", { name: /^Asker bot: Read your credit balance$/ })).toHaveAttribute("aria-checked", "true"));
+    expect(calls.find((c) => c.method === "POST" && c.url === ENDPOINTS.roles)?.body).toEqual({ token: TOKEN });
+    await waitFor(() => expect(screen.getByRole("switch", { name: /^Asker bot: Read your account data$/ })).toHaveAttribute("aria-checked", "true"));
     expect(screen.queryByText("Asks waiting")).toBeNull(); // the used-up ask left the block
   });
 
@@ -138,7 +136,7 @@ describe("AgentAccessSection, account mode (the profile)", () => {
       return json(200, method === "GET" ? list() : { changed: true });
     });
     render(<AgentAccessSection endpoints={ENDPOINTS} mode="account" token={TOKEN} />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Dismiss the ask: Asker bot: Read your credit balance$/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Dismiss the ask: Asker bot: Read your account data$/ }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE")).toBe(true));
     expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ token: TOKEN, deny: true });
     cleanup();
@@ -153,7 +151,7 @@ describe("AgentAccessSection, account mode (the profile)", () => {
     const mixed = {
       more: 0,
       permissions: [
-        row({ section: "node", principalUserId: "u-node-ai", who: "node-ai", scope: "account:read", label: "Read your credit balance" }),
+        row({ section: "node", principalUserId: "u-node-ai", who: "node-ai", scope: "account:read", label: "Read your account data" }),
         row({ section: "node", principalUserId: "u-node-ai", who: "node-ai", scope: "knowledge:write", label: "Save notes", description: "Save notes into the knowledge base.", resource: "node" }),
       ],
     };
@@ -161,13 +159,13 @@ describe("AgentAccessSection, account mode (the profile)", () => {
     render(<AgentAccessSection endpoints={ENDPOINTS} mode="account" />);
     await screen.findByRole("table");
     expect(screen.queryByText("Save notes")).toBeNull();
-    expect(screen.getByText("Read your credit balance")).toBeInTheDocument();
+    expect(screen.getByText("Read your account data")).toBeInTheDocument();
     cleanup();
     fetchMock.mockImplementation(() => json(200, { canManage: true, ...mixed }));
     render(<AgentAccessSection endpoints={{ roles: "/api/v1/admin/ai-access" }} />);
     await screen.findByRole("table");
     expect(screen.getByText("Save notes")).toBeInTheDocument();
-    expect(screen.queryByText("Read your credit balance")).toBeNull();
+    expect(screen.queryByText("Read your account data")).toBeNull();
   });
 
   it("a 401 shows nothing; a 503 shows the retry line", async () => {

@@ -80,6 +80,17 @@ describe("S1 wiring", () => {
     expect(AGENT_ACCESS_ENDPOINTS.preview).toBe("/api/v1/admin/ai-access/preview");
   });
 
+  it("every bearer-reachable GET keyed to a billing account declares the ONE account scope: the credits twin by path, the credits summary by query", () => {
+    const summary = readFileSync(resolve(SRC, "app/api/v1/payments/credits/summary/route.ts"), "utf8");
+    expect(summary).toContain('sameDoor: "core__account_credits_read"');
+    expect(summary).toContain('sameDoorAccountQuery: "accountId"');
+    // Routes that stay un-gated, each for a stated reason: the activity feed and the profile read are session-only (no bearer reaches them), the payment
+    // attempt status poll can settle credits (a write, not a read), and runs and threads are keyed to the user, not to a billing account.
+    for (const rel of ["app/api/v1/activity/route.ts", "app/api/v1/users/me/route.ts"])
+      expect(readFileSync(resolve(SRC, rel), "utf8")).toContain("getServerSessionUser");
+    expect(readFileSync(resolve(SRC, "app/api/v1/payments/attempts/[id]/route.ts"), "utf8")).not.toContain("sameDoor");
+  });
+
   it("the gated credits read declares its door: sameDoor account:read with the account in the path", () => {
     const route = readFileSync(resolve(SRC, "app/api/v1/accounts/[accountId]/credits/route.ts"), "utf8");
     expect(route).toContain('sameDoor: "core__account_credits_read"');

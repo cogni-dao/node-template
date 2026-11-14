@@ -83,6 +83,12 @@ type AuthRequiredOptions = {
    * (`not_found`), so a foreign, expired, revoked and missing account cannot be told apart (ACCOUNT_404_NON_DISCLOSING).
    */
   sameDoorAccountParam?: string;
+  /**
+   * An OPTIONAL account door for a route that reads the caller's own account by default (task.5465): the name of a QUERY parameter that may carry another
+   * account id. With the parameter present the same account door runs (the owner by session, or a bearer agent with a live `account:read` grant for exactly that
+   * account; every other answer is the one 404). Absent, the route reads the caller's own account as before and no door runs.
+   */
+  sameDoorAccountQuery?: string;
   auth: {
     mode: "required";
     getSessionUser: () => Promise<SessionUser | null>;
@@ -263,12 +269,17 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           }
 
           const sameDoor = "sameDoor" in options ? options.sameDoor : undefined;
-          const accountParam = "sameDoorAccountParam" in options ? options.sameDoorAccountParam : undefined;
-          if (sameDoor && sessionUser) {
+          const pathAccountParam = "sameDoorAccountParam" in options ? options.sameDoorAccountParam : undefined;
+          const queryAccountParam = "sameDoorAccountQuery" in options ? options.sameDoorAccountQuery : undefined;
+          const queryAccountId = queryAccountParam ? new URL(request.url).searchParams.get(queryAccountParam) : null;
+          // An optional query door runs only when the caller names an account; otherwise the route's own-account read needs no door.
+          const accountParam = pathAccountParam ?? (queryAccountId !== null ? queryAccountParam : undefined);
+          if (sameDoor && sessionUser && (!queryAccountParam || pathAccountParam || queryAccountId !== null)) {
             let accountId: string | undefined;
-            if (accountParam) {
+            if (queryAccountParam && !pathAccountParam) accountId = queryAccountId ?? "";
+            else if (pathAccountParam) {
               const params = (await (context as { params?: Promise<Record<string, string | string[] | undefined>> } | undefined)?.params) ?? {};
-              const raw = params[accountParam];
+              const raw = params[pathAccountParam];
               accountId = typeof raw === "string" ? raw : undefined;
             }
             const decision = await container.agentAuthority.authorizeRoute({

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/ai-tools/tools/account-credits-read`
- * Purpose: AI tool that reads the credit balance of the account the run acts on. The tool twin of `GET /api/v1/accounts/{accountId}/credits`
+ * Purpose: AI tool that reads the credit balance of the account the run acts on, under the ONE account scope `account:read` ("Read your account data": credits, usage and history). The tool twin of `GET /api/v1/accounts/{accountId}/credits`
  *   (SAME_DOOR): the same `account:read` scope, the same grant, the same denial.
  * Scope: Read-only. It is the one read tool that declares `requires`, because its authority is an owner's grant on an account (kind `account`),
  *   not the graph lock alone.
@@ -49,8 +49,8 @@ export const accountCreditsReadContract: ToolContract<
     scope: "account:read",
     kind: "account",
     subject: "member",
-    label: "Read your credit balance",
-    description: "See the credit balance of the account it acts for.",
+    label: "Read your account data",
+    description: "See everything this account owns: credits, usage and history.",
   },
   inputSchema: AccountCreditsReadInputSchema,
   outputSchema: AccountCreditsReadOutputSchema,

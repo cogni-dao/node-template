@@ -47,9 +47,9 @@ describe("the Postgres store passes no JS Date as a parameter", () => {
     await store.insertRole({ principalUserId: "p", scope: "s", approvedBy: "a" });
     await store.revokeRole({ principalUserId: "p", scope: "s" });
     await store.findPendingByLink({ linkHash: "h", resource: "account" });
-    await store.approveAccountByLink({ linkHash: "h", approvedBy: "a", days: 7 });
+    await store.approveAccountByLink({ linkHash: "h", approvedBy: "a" });
     await store.denyAccountByLink({ linkHash: "h", deniedBy: "a" });
-    await store.insertAccountRole({ principalUserId: "p", scope: "s", approvedBy: "a", days: 7 });
+    await store.insertAccountRole({ principalUserId: "p", scope: "s", approvedBy: "a" });
     await store.revokeAccountRole({ rowId: "r", ownerUserId: "o" });
     expect(seen.flat().some((v) => v instanceof Date)).toBe(false);
   });

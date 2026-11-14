@@ -26,14 +26,6 @@ export const LINK_TTL_MS = 24 * 60 * 60 * 1000;
 /** The URL fragment key that carries the link token. A fragment is never sent to a server and is stripped from history on landing. */
 export const APPROVAL_FRAGMENT_KEY = "agent-request";
 
-/** Days an account owner may pick for an account grant, and the default. 30 is the most the migration CHECK allows. */
-export const ACCOUNT_GRANT_DAYS = [1, 7, 30] as const;
-export const DEFAULT_ACCOUNT_GRANT_DAYS = 7;
-export type AccountGrantDays = (typeof ACCOUNT_GRANT_DAYS)[number];
-
-export const isAccountGrantDays = (n: unknown): n is AccountGrantDays =>
-  typeof n === "number" && (ACCOUNT_GRANT_DAYS as readonly number[]).includes(n);
-
 /** The resource a scope's declared kind puts its row on: `account` for an account scope, `node` for every other kind. */
 export const resourceOfKind = (kind: ScopeKind): GrantResource => (kind === "account" ? "account" : "node");
 

@@ -87,7 +87,7 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
     it("a live grant for this agent, this scope and this account is delegated; the same agent on another account is null", async () => {
       const { store, ids, accounts } = await h.setup(spec);
       const token = await asker(store, ids.agent as string);
-      expect(await approveAccountAsk(store, { me: person(ids.alice as string), token, days: 7 })).toEqual({ approved: true });
+      expect(await approveAccountAsk(store, { me: person(ids.alice as string), token })).toEqual({ approved: true });
       const read = (callerUserId: string, accountId: string, scope = SCOPE) =>
         authorizeAccount(store, { callerUserId, via: "bearer", scope, accountId });
       expect(await read(ids.agent as string, accounts.alice as string)).toBe("delegated");
@@ -101,7 +101,7 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
 
     it("an expired grant is null and reads as expired; it is closed before the next ask so the AI can ask again", async () => {
       const { store, ids, accounts } = await h.setup(spec);
-      await approveAccountAsk(store, { me: person(ids.alice as string), token: await asker(store, ids.agent as string), days: 1 });
+      await approveAccountAsk(store, { me: person(ids.alice as string), token: await asker(store, ids.agent as string) });
       await h.expireGrant(ids.agent as string, SCOPE);
       expect(await store.hasLiveAccountGrant(ids.agent as string, SCOPE, accounts.alice as string)).toBe(false);
       expect(await authorizeAccount(store, { callerUserId: ids.agent as string, via: "bearer", scope: SCOPE, accountId: accounts.alice as string })).toBeNull();
@@ -115,7 +115,7 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
 
     it("a revoked grant is null from the next call, and only the owner of the account can revoke it", async () => {
       const { store, ids, accounts } = await h.setup(spec);
-      await approveAccountAsk(store, { me: person(ids.alice as string), token: await asker(store, ids.agent as string), days: 7 });
+      await approveAccountAsk(store, { me: person(ids.alice as string), token: await asker(store, ids.agent as string) });
       const rows = (await store.listAccountRoleRows(accounts.alice as string, 10)).rows;
       expect(rows).toHaveLength(1);
       const rowId = rows[0]?.rowId as string;
@@ -173,7 +173,7 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
       expect(second).not.toBe(first);
       expect(await previewAsk(store, { token: first, resource: "account" })).toBeNull();
       expect(await approveAccountAsk(store, { me: person(ids.alice as string), token: first })).toEqual({ approved: false });
-      expect(await approveAccountAsk(store, { me: person(ids.alice as string), token: second, days: 1 })).toEqual({ approved: true });
+      expect(await approveAccountAsk(store, { me: person(ids.alice as string), token: second })).toEqual({ approved: true });
       expect(await approveAccountAsk(store, { me: person(ids.bob as string), token: second })).toEqual({ approved: false }); // used up
       expect(await previewAsk(store, { token: second, resource: "account" })).toBeNull();
       // An ask whose link ended in the past is null until it is asked again.
@@ -205,12 +205,20 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
       expect((await listOwnAccess(store, ids.agent as string)).find((r) => r.scope === SCOPE)?.state).toBe("denied");
     });
 
-    it("the owner picks 1, 7 or 30 days; nothing else", async () => {
+    it("a grant lasts until Off: no end date, still live a year later, and the owner's Off ends it", async () => {
       const { store, ids } = await h.setup(spec);
       const token = await asker(store, ids.agent as string);
-      await expect(approveAccountAsk(store, { me: person(ids.alice as string), token, days: 31 })).rejects.toMatchObject({ code: "invalid_days" });
-      await expect(approveAccountAsk(store, { me: person(ids.alice as string), token, days: 0 })).rejects.toMatchObject({ code: "invalid_days" });
-      expect(await approveAccountAsk(store, { me: person(ids.alice as string), token, days: 30 })).toEqual({ approved: true });
+      expect(await approveAccountAsk(store, { me: person(ids.alice as string), token })).toEqual({ approved: true });
+      const accountId = (await store.accountOf(ids.alice as string)) as string;
+      const row = (await store.listAccountRoleRows(accountId, 5)).rows[0];
+      expect(row?.expiresAt).toBeNull(); // no end date: like a node row, it lasts until Off
+      expect(await store.hasLiveAccountGrant(ids.agent as string, SCOPE, accountId)).toBe(true);
+      // The same for this node's AI turned On directly.
+      await grantInternalOnAccount(store, { me: person(ids.bob as string), principalUserId: ids["node-ai"] as string, scope: SCOPE, declaredScopes, scopeKinds });
+      const bobAccount = (await store.accountOf(ids.bob as string)) as string;
+      expect((await store.listAccountRoleRows(bobAccount, 5)).rows[0]?.expiresAt).toBeNull();
+      expect(await revokeAccountRow(store, { me: person(ids.alice as string), rowId: row?.rowId as string })).toEqual({ revoked: true });
+      expect(await store.hasLiveAccountGrant(ids.agent as string, SCOPE, accountId)).toBe(false);
     });
   });
 
@@ -226,7 +234,7 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
       expect(await store.hasLiveRole(ids["node-ai"] as string, SCOPE)).toBe(false);
       await expect(grantInternalOnAccount(store, { me: person(ids.alice as string), principalUserId: ids.agent as string, scope: SCOPE, declaredScopes, scopeKinds })).rejects.toMatchObject({ code: "not_pending" });
       // The SQL itself refuses an outside principal, whatever the caller does.
-      expect(await store.insertAccountRole({ principalUserId: ids.agent as string, scope: SCOPE, approvedBy: ids.bob as string, days: 7 })).toBe(false);
+      expect(await store.insertAccountRole({ principalUserId: ids.agent as string, scope: SCOPE, approvedBy: ids.bob as string })).toBe(false);
       expect(await store.hasLiveAccountGrant(ids.agent as string, SCOPE, accounts.bob as string)).toBe(false);
     });
 
@@ -292,10 +300,10 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
   });
 
   describe("grant conformance: the person's own table (listMine, turnMineOn, turnMineOff)", () => {
-    const declarations = { [SCOPE]: { label: "Read your credit balance", description: "See the credit balance of the account it acts for." } };
+    const declarations = { [SCOPE]: { label: "Read your account data", description: "See everything this account owns: credits, usage and history." } };
     const scopesByPrincipal = { "node-ai": [SCOPE] };
 
-    it("the person's account is ensured only after the request validated: a bogus token, a node scope, a bad day count and an own ask create nothing", async () => {
+    it("the person's account is ensured only after the request validated: a bogus token, a node scope, and an own ask create nothing", async () => {
       const { store, ids } = await h.setup({ ...spec, owners: ["alice"] });
       let ensured = 0;
       const ensureAccount = async (u: string) => {
@@ -309,12 +317,11 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
       await expect(turnMineOn(store, { ...base, on: { principalUserId: ids["node-ai"] as string, scope: NODE_SCOPE } })).rejects.toMatchObject({ code: "wrong_kind" });
       await expect(turnMineOn(store, { ...base, on: { principalUserId: ids["node-ai"] as string, scope: "made:up" } })).rejects.toMatchObject({ code: "invalid_scope" });
       await expect(turnMineOn(store, { ...base, on: { principalUserId: ids.agent as string, scope: SCOPE } })).rejects.toMatchObject({ code: "not_pending" });
-      await expect(turnMineOn(store, { ...base, on: { principalUserId: ids["node-ai"] as string, scope: SCOPE, days: 31 } })).rejects.toMatchObject({ code: "invalid_days" });
       const own = await asker(store, ids.alice as string); // alice's own ask is never hers to decide
       expect(await turnMineOn(store, { ...base, on: { token: own } })).toMatchObject({ changed: false });
       expect(ensured).toBe(0);
       const agentToken = await asker(store, ids.agent as string);
-      expect(await turnMineOn(store, { ...base, on: { token: agentToken, days: 7 } })).toEqual({ changed: true, via: "link" });
+      expect(await turnMineOn(store, { ...base, on: { token: agentToken } })).toEqual({ changed: true, via: "link" });
       expect(ensured).toBe(1);
       expect(await turnMineOn(store, { ...base, on: { principalUserId: ids["node-ai"] as string, scope: SCOPE } })).toMatchObject({ changed: true, via: "direct", scope: SCOPE });
       expect(ensured).toBe(2);

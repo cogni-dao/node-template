@@ -104,8 +104,8 @@ export interface AgentToolAuthority {
   turnMineOn(
     me: ApprovalCaller,
     input:
-      | { token: string; days?: number | undefined }
-      | { principalUserId: string; scope: string; days?: number | undefined }
+      | { token: string }
+      | { principalUserId: string; scope: string }
   ): Promise<{ changed: boolean }>;
   /** The person turns a live ACCOUNT row Off by id, or dismisses a waiting ask by its token. */
   turnMineOff(me: ApprovalCaller, input: { rowId: string } | { token: string }): Promise<{ changed: boolean }>;

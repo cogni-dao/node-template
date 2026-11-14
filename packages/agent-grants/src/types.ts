@@ -123,7 +123,7 @@ export interface AgentGrantsStore {
   hasLiveRole(principalId: string, scope: string): Promise<boolean>;
   /** The subset of `scopes` this principal holds a live NODE role for, in ONE read. Never cached. Account rows never count. */
   liveScopes(principalId: string, scopes: readonly string[]): Promise<string[]>;
-  /** A live account row for exactly this principal, scope and account: approved, unrevoked, `expires_at` in the future. Never cached. */
+  /** A live account row for exactly this principal, scope and account: approved, unrevoked, and with no end date or an end in the future. Never cached. */
   hasLiveAccountGrant(principalId: string, scope: string, accountId: string): Promise<boolean>;
   /** The subset of `scopes` this principal holds a live row for on exactly this account, in ONE read. Never cached. */
   liveAccountScopes(principalId: string, scopes: readonly string[], accountId: string): Promise<string[]>;
@@ -185,10 +185,10 @@ export interface AgentGrantsStore {
   findPendingByLink(input: { linkHash: string; resource: GrantResource }): Promise<PendingAskView | null>;
   /**
    * The account owner's yes on a pending ACCOUNT row found by its link token: in one UPDATE the row takes the approver, `granted_at`,
-   * the account the approver owns, `expires_at = now() + days`, and its link is consumed. Refuses (false) a token that is used, expired or
+   * the account the approver owns, no end date (a grant lasts until Off), and its link is consumed. Refuses (false) a token that is used, expired or
    * of the wrong resource, an approver who owns no account, and an approver who is the asking principal.
    */
-  approveAccountByLink(input: { linkHash: string; approvedBy: string; days: number }): Promise<boolean>;
+  approveAccountByLink(input: { linkHash: string; approvedBy: string }): Promise<boolean>;
   /** The owner's no on a pending ACCOUNT row found by its link token (the row's account is not set yet). */
   denyAccountByLink(input: { linkHash: string; deniedBy: string }): Promise<boolean>;
   /**
@@ -199,7 +199,6 @@ export interface AgentGrantsStore {
     principalUserId: string;
     scope: string;
     approvedBy: string;
-    days: number;
   }): Promise<boolean>;
   /** Revokes a live ACCOUNT row by id, only where its account is owned by `ownerUserId`. False otherwise (a foreign row is invisible). */
   revokeAccountRole(input: { rowId: string; ownerUserId: string }): Promise<boolean>;

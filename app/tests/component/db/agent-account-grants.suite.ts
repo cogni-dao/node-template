@@ -171,6 +171,33 @@ describe("account grants (real Postgres, real roles)", () => {
       expect(await storeOf().hasLiveAccountGrant(agent, "account:read", other.accountId)).toBe(false);
     });
 
+    it("a DURABLE grant (no end date) opens the account and the ledger, in the function and in RLS, until the owner turns it Off", async () => {
+      const owner = await makeOwner(650);
+      const agent = await makeUser();
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id, expires_at)
+        VALUES (${agent}, 'account:read', ${owner.userId}, now() - interval '200 days', 'account', ${owner.accountId}, NULL)`;
+      const seen = async () =>
+        asApp(agent, async (tx) => ({
+          accounts: await tx`SELECT id FROM billing_accounts WHERE id = ${owner.accountId}`,
+          ledger: await tx`SELECT 1 FROM credit_ledger WHERE billing_account_id = ${owner.accountId}`,
+          fn: await tx`SELECT agent_has_scope(${owner.accountId}, 'account:read') AS yes`,
+        }));
+      const on = await seen();
+      expect(on.accounts).toHaveLength(1);
+      expect(on.ledger).toHaveLength(1);
+      expect(on.fn[0]?.yes).toBe(true);
+      expect(await storeOf().hasLiveAccountGrant(agent, "account:read", owner.accountId)).toBe(true);
+      expect(await storeOf().liveAccountScopes(agent, ["account:read"], owner.accountId)).toEqual(["account:read"]);
+      expect((await storeOf().listAccountRoleRows(owner.accountId, 5)).rows).toEqual([expect.objectContaining({ principalUserId: agent, expiresAt: null })]);
+      // Off is the only end: revoke by the owner.
+      const rowId = (await storeOf().listAccountRoleRows(owner.accountId, 5)).rows[0]?.rowId as string;
+      expect(await storeOf().revokeAccountRole({ rowId, ownerUserId: owner.userId })).toBe(true);
+      const off = await seen();
+      expect(off.accounts).toHaveLength(0);
+      expect(off.fn[0]?.yes).toBe(false);
+      expect(await storeOf().hasLiveAccountGrant(agent, "account:read", owner.accountId)).toBe(false);
+    });
+
     it("an expired, a revoked and a never-granted row each return 0 rows", async () => {
       const owner = await makeOwner();
       const expired = await makeUser();
@@ -297,11 +324,15 @@ describe("account grants (real Postgres, real roles)", () => {
   // migration file twice, asserts, and rolls everything back so no other test file sees it.
   describe("migration 0041 is safe on a database that already ran the reverted #366", () => {
     const ROLLBACK = new Error("rollback");
+    // 0041 then 0042 (durable grants), in journal order, exactly as the migrator would run them.
     const migrationStatements = async (): Promise<string[]> => {
       const { readFileSync } = await import("node:fs");
       const { resolve } = await import("node:path");
-      const text = readFileSync(resolve(__dirname, "../../../src/adapters/server/db/migrations/0041_agent_account_grants.sql"), "utf8");
-      return text.split("--> statement-breakpoint").filter((q) => q.trim().length > 0);
+      return ["0041_agent_account_grants.sql", "0042_agent_account_grants_durable.sql"].flatMap((file) =>
+        readFileSync(resolve(__dirname, "../../../src/adapters/server/db/migrations", file), "utf8")
+          .split("--> statement-breakpoint")
+          .filter((q) => q.trim().length > 0)
+      );
     };
     const runMigration = async (tx: Sql) => {
       for (const statement of await migrationStatements()) await tx.unsafe(statement);
@@ -381,8 +412,12 @@ describe("account grants (real Postgres, real roles)", () => {
       });
     });
 
-    it("runs on a clean database too (a second run of the real file is a no-op)", async () => {
+    it("runs on a clean database too (a second run of the real files is a no-op)", async () => {
       await inRolledBackTx(async (tx) => {
+        // Re-running 0041 (the 30-day CHECK) after 0042 only makes sense without the durable rows other tests made; this transaction is rolled back.
+        await tx.unsafe("ALTER TABLE agent_roles NO FORCE ROW LEVEL SECURITY");
+        await tx.unsafe("DELETE FROM agent_roles WHERE resource = 'account' AND approved_by IS NOT NULL AND (expires_at IS NULL OR expires_at > granted_at + interval '30 days')");
+        await tx.unsafe("ALTER TABLE agent_roles FORCE ROW LEVEL SECURITY");
         await runMigration(tx);
         await runMigration(tx);
       });
@@ -401,14 +436,17 @@ describe("account grants (real Postgres, real roles)", () => {
 
   // 3. The CHECKs hold the shape even for a writer that skips the package.
   describe("the row shape is enforced by the database", () => {
-    it("refuses a node row with an account, an approved account row with no account or end, an end over 30 days, and self approval", async () => {
+    it("refuses a node row with an account, an approved account row with no account, an end before the grant, and self approval; allows NO end and any later end (durable)", async () => {
       const owner = await makeOwner();
       const agent = await makeUser();
       const base = (extra: string) =>
         service.unsafe(`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id, expires_at) VALUES ${extra}`);
       await expect(base(`('${agent}', 's1', '${owner.userId}', now(), 'node', '${owner.accountId}', NULL)`)).rejects.toThrow(/agent_roles_node_shape/);
       await expect(base(`('${agent}', 's2', '${owner.userId}', now(), 'account', NULL, NULL)`)).rejects.toThrow(/agent_roles_account_live_shape/);
-      await expect(base(`('${agent}', 's3', '${owner.userId}', now(), 'account', '${owner.accountId}', now() + interval '31 days')`)).rejects.toThrow(/agent_roles_account_live_shape/);
+      await expect(base(`('${agent}', 's3', '${owner.userId}', now(), 'account', '${owner.accountId}', now() - interval '1 day')`)).rejects.toThrow(/agent_roles_account_live_shape/);
+      // Durable (task.5465): no end date is valid for an account row, and so is any later end (there is no 30-day cap any more).
+      await base(`('${agent}', 's7', '${owner.userId}', now(), 'account', '${owner.accountId}', NULL)`);
+      await base(`('${agent}', 's8', '${owner.userId}', now(), 'account', '${owner.accountId}', now() + interval '400 days')`);
       await expect(base(`('${agent}', 's4', '${agent}', now(), 'node', NULL, NULL)`)).rejects.toThrow(/agent_roles_no_self_approval/);
       await expect(base(`('${agent}', 's5', '${owner.userId}', now(), 'weird', NULL, NULL)`)).rejects.toThrow(/agent_roles_resource_canonical/);
       await expect(service`INSERT INTO agent_roles (principal_user_id, scope, requested_by, link_consumed_at, link_hash) VALUES (${agent}, 's6', ${agent}, now(), 'h')`).rejects.toThrow(/agent_roles_link_consumed_has_no_hash/);

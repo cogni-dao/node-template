@@ -249,3 +249,46 @@ describe("the ACCOUNT door (real wrapper, real authorizeRoute): owner, delegated
     expect(authz).toMatchObject({ tool: "core__account_credits_read", decision: "allow", code: "allowed", account: ACCOUNT, principal: AGENT });
   });
 });
+
+describe("the OPTIONAL query account door (payments.credits_summary?accountId=)", () => {
+  const OWNER = "owner-1";
+  const ACCOUNT = "acct-1";
+  const queryRoute = (u: SessionUser | null, query: string) =>
+    wrapRouteHandlerWithLogging(
+      {
+        routeId: "payments.credits_summary",
+        sameDoor: "core__account_credits_read",
+        sameDoorAccountQuery: "accountId",
+        auth: { mode: "required", getSessionUser: async () => u },
+      },
+      handler
+    )(new NextRequest(`https://node.example/api/v1/payments/credits/summary${query}`));
+
+  it("with no accountId the route reads the caller's own account and no door runs (no store read)", async () => {
+    expect((await queryRoute(user("bearer"), "")).status).toBe(200);
+    expect((await queryRoute(user("session", "human-1"), "?limit=5")).status).toBe(200);
+    expect(state.queries).toBe(0);
+  });
+
+  it("with an accountId the account door runs: the owner passes by session; a stranger, an empty id and an agent with no grant get the one 404", async () => {
+    state.owners.add(`${ACCOUNT}|${OWNER}`);
+    expect((await queryRoute(user("session", OWNER), `?accountId=${ACCOUNT}`)).status).toBe(200);
+    handler.mockClear();
+    for (const [u, q] of [
+      [user("session", "stranger"), `?accountId=${ACCOUNT}`],
+      [user("session", OWNER), "?accountId="],
+      [user("bearer"), `?accountId=${ACCOUNT}`],
+    ] as const) {
+      const res = await queryRoute(u, q);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "not_found" });
+    }
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("an agent holding a live account:read grant for exactly that account passes; another account does not", async () => {
+    state.grants.add(`${AGENT}|account:read|${ACCOUNT}`);
+    expect((await queryRoute(user("bearer"), `?accountId=${ACCOUNT}`)).status).toBe(200);
+    expect((await queryRoute(user("bearer"), "?accountId=acct-2")).status).toBe(404);
+  });
+});

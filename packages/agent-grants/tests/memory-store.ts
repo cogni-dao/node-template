@@ -87,7 +87,7 @@ export function memoryStore(init?: {
   const owns = (userId: string, accountId: string) => init?.accounts?.[userId] === accountId;
   const liveNode = (r: MemoryRole) => r.resource === "node" && !r.revoked && !!r.approvedBy;
   const liveAccount = (r: MemoryRole) =>
-    r.resource === "account" && !r.revoked && !!r.approvedBy && r.expiresAt !== null && r.expiresAt > clock.now;
+    r.resource === "account" && !r.revoked && !!r.approvedBy && (r.expiresAt === null || r.expiresAt > clock.now);
   const openRow = (principal: string, scope: string) =>
     roles.find((r) => r.principal === principal && r.scope === scope && !r.revoked);
   const slugOf = (id: string) => Object.entries(init?.principals ?? {}).find(([, v]) => v === id)?.[0] ?? null;
@@ -257,7 +257,7 @@ export function memoryStore(init?: {
       };
       return view;
     },
-    async approveAccountByLink({ linkHash, approvedBy, days }) {
+    async approveAccountByLink({ linkHash, approvedBy }) {
       guard();
       const r = byLink(linkHash, "account");
       const account = init?.accounts?.[approvedBy];
@@ -265,7 +265,7 @@ export function memoryStore(init?: {
       r.approvedBy = approvedBy;
       r.grantedAt = clock.now;
       r.accountId = account;
-      r.expiresAt = clock.now + days * DAY;
+      r.expiresAt = null; // a grant lasts until Off
       r.linkConsumed = true;
       r.linkHash = null;
       return true;
@@ -280,13 +280,13 @@ export function memoryStore(init?: {
       r.linkHash = null;
       return true;
     },
-    async insertAccountRole({ principalUserId, scope, approvedBy, days }) {
+    async insertAccountRole({ principalUserId, scope, approvedBy }) {
       guard();
       const account = init?.accounts?.[approvedBy];
       if (!account || principalUserId === approvedBy || !isInternal(principalUserId)) return false;
       closeExpired(principalUserId, scope);
       if (openRow(principalUserId, scope)) return false;
-      roles.push(mk({ principal: principalUserId, scope, approvedBy, resource: "account", accountId: account, grantedAt: clock.now, expiresAt: clock.now + days * DAY }));
+      roles.push(mk({ principal: principalUserId, scope, approvedBy, resource: "account", accountId: account, grantedAt: clock.now, expiresAt: null }));
       return true;
     },
     async revokeAccountRole({ rowId, ownerUserId }) {

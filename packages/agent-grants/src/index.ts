@@ -22,17 +22,13 @@ export {
   turnMineOn,
 } from "./account-access";
 export {
-  ACCOUNT_GRANT_DAYS,
-  type AccountGrantDays,
   APPROVAL_FRAGMENT_KEY,
   APPROVAL_PAGE,
   type ApprovalCaller,
   type ApprovalRow,
   approvalPath,
   canApprove,
-  DEFAULT_ACCOUNT_GRANT_DAYS,
   hashLinkToken,
-  isAccountGrantDays,
   isLinkTokenShape,
   LINK_TTL_MS,
   newLinkToken,

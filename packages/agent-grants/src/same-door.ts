@@ -46,8 +46,8 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
   core__edo_decide: { scope: "edo:write", routes: ["edo.decide"] },
   core__edo_record_outcome: { scope: "edo:write", routes: ["edo.record_outcome"] },
   core__metric_compute: { scope: "metric:compute", routes: ["metrics.metricCompute"] },
-  // A READ tool with an account scope (task.5465): the one route twin of the account read. An agent needs a live account row for the exact account.
-  core__account_credits_read: { scope: "account:read", routes: ["accounts.credits.read"] },
+  // A READ tool with an account scope (task.5465): the route twins of the ONE account scope (`account:read`, "Read your account data"): the account-keyed credits read, and the credits summary when it names an account. An agent needs a live account row for the exact account.
+  core__account_credits_read: { scope: "account:read", routes: ["accounts.credits.read", "payments.credits_summary"] },
 };
 
 /**

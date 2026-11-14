@@ -56,7 +56,6 @@ export {
   type AgentAccessEndpoints,
   type AgentAccessMode,
   type AgentAccessState,
-  type AllowOptions,
   LINK_INVALID_COPY,
   UNAVAILABLE_COPY,
   useAgentAccess,

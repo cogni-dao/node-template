@@ -96,7 +96,8 @@ describe("requires guard", () => {
       const r = c.requires!;
       expect(r.description.length, c.name).toBeGreaterThan(15);
       expect(r.description.length, c.name).toBeLessThan(90);
-      expect(r.description, c.name).not.toMatch(/[:/_]|\bcore\b|http|token|curl|\bjobs?\b/i);
+      // A colon is punctuation here (`owns: credits`), but a scope string is `word:word`, which stays forbidden.
+      expect(r.description, c.name).not.toMatch(/\w:\w|[/_]|\bcore\b|http|token|curl|\bjobs?\b/i);
       expect(seen.get(r.scope) ?? r.description, r.scope).toBe(r.description);
       seen.set(r.scope, r.description);
     }

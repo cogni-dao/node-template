@@ -2,6 +2,8 @@
 -- node-template keeps it as `0041_agent_account_grants.sql`. Do not copy it blind into a fork: generate the column and constraint part with the node's own
 -- `db:generate` (add the new columns and CHECKs to the node's `agentRoles` schema, with the one select policy), then append the hand-written part
 -- (everything after the line `Hand-written below`). It needs `agent_roles` (0036 + 0038 shape) and `billing_accounts`.
+-- DURABLE: an account row has no end date (it lasts until Off, like a node row); `expires_at` stays nullable and a row that carries an end keeps the expired state.
+-- node-template ships this as 0041 plus 0042 (0041 had required an end within 30 days before the CEO asked for durable grants).
 -- EXPAND-ONLY: every existing role row is a node row (the DEFAULT 'node' backfills `resource`; each CHECK holds for a node row with no account and no end).
 -- node-template's own 0041 is additionally IDEMPOTENT (ADD COLUMN IF NOT EXISTS, DROP-then-ADD constraints and policies, a column type check) because the reverted #366
 -- had already run on its databases; a fork with a clean history can use the plain statements below.
@@ -16,7 +18,7 @@ ALTER TABLE "agent_roles" ADD CONSTRAINT "agent_roles_account_id_billing_account
 CREATE UNIQUE INDEX "agent_roles_link_hash_unique" ON "agent_roles" USING btree ("link_hash");--> statement-breakpoint
 ALTER TABLE "agent_roles" ADD CONSTRAINT "agent_roles_resource_canonical" CHECK ("agent_roles"."resource" IN ('node','account'));--> statement-breakpoint
 ALTER TABLE "agent_roles" ADD CONSTRAINT "agent_roles_node_shape" CHECK ("agent_roles"."resource" <> 'node' OR ("agent_roles"."account_id" IS NULL AND "agent_roles"."expires_at" IS NULL));--> statement-breakpoint
-ALTER TABLE "agent_roles" ADD CONSTRAINT "agent_roles_account_live_shape" CHECK ("agent_roles"."resource" <> 'account' OR "agent_roles"."approved_by" IS NULL OR ("agent_roles"."account_id" IS NOT NULL AND "agent_roles"."granted_at" IS NOT NULL AND "agent_roles"."expires_at" IS NOT NULL AND "agent_roles"."expires_at" > "agent_roles"."granted_at" AND "agent_roles"."expires_at" <= "agent_roles"."granted_at" + interval '30 days'));--> statement-breakpoint
+ALTER TABLE "agent_roles" ADD CONSTRAINT "agent_roles_account_live_shape" CHECK ("agent_roles"."resource" <> 'account' OR "agent_roles"."approved_by" IS NULL OR ("agent_roles"."account_id" IS NOT NULL AND "agent_roles"."granted_at" IS NOT NULL AND ("agent_roles"."expires_at" IS NULL OR "agent_roles"."expires_at" > "agent_roles"."granted_at")));--> statement-breakpoint
 ALTER TABLE "agent_roles" ADD CONSTRAINT "agent_roles_no_self_approval" CHECK ("agent_roles"."approved_by" IS NULL OR "agent_roles"."approved_by" <> "agent_roles"."principal_user_id");--> statement-breakpoint
 ALTER TABLE "agent_roles" ADD CONSTRAINT "agent_roles_link_consumed_has_no_hash" CHECK ("agent_roles"."link_consumed_at" IS NULL OR "agent_roles"."link_hash" IS NULL);--> statement-breakpoint
 CREATE POLICY "agent_roles_account_self_read" ON "agent_roles" AS PERMISSIVE FOR SELECT TO public USING ("agent_roles"."resource" = 'account' AND "agent_roles"."principal_user_id" = current_setting('app.current_user_id', true));
@@ -44,7 +46,7 @@ AS $$
       AND r.account_id = p_account_id
       AND r.approved_by IS NOT NULL
       AND r.revoked_at IS NULL
-      AND r.expires_at > now()
+      AND (r.expires_at IS NULL OR r.expires_at > now())
   )
 $$;--> statement-breakpoint
 REVOKE ALL ON FUNCTION agent_has_scope(text, text) FROM PUBLIC;--> statement-breakpoint

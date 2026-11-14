@@ -54,7 +54,7 @@ function mapError(error: unknown, ctx: { log: { error: (f: Record<string, unknow
   if (error instanceof AgentRolesError) {
     // A person who owns no account and a request that names no usable row are the same quiet no. Only a bad shape is a 400.
     if (error.code === "not_allowed") return json({ changed: false });
-    if (error.code === "invalid_days" || error.code === "invalid_scope" || error.code === "wrong_kind") return json({ error: error.code }, 400);
+    if (error.code === "invalid_scope" || error.code === "wrong_kind") return json({ error: error.code }, 400);
     if (error.code === "principal_not_found" || error.code === "not_pending") return json({ error: error.code }, 409);
   }
   // A 503 must never be silent: the failure class (name, SQLSTATE, constraint, table, column), never a message, token or hash.
@@ -76,7 +76,7 @@ export const GET = wrapRouteHandlerWithLogging(
   }
 );
 
-/** Turn a row On: an outside AI's ask by its token, or this node's own AI directly. `days` is the Until control (1, 7 or 30; default 7). */
+/** Turn a row On: an outside AI's ask by its token, or this node's own AI directly. The grant has no end date: it lasts until Off. */
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "agent.mine.on", auth: { mode: "none" } },
   async (ctx, request) => {
@@ -97,11 +97,10 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const input =
         parsed.data.token !== undefined
-          ? { token: parsed.data.token, days: parsed.data.days }
+          ? { token: parsed.data.token }
           : {
               principalUserId: parsed.data.principalUserId as string,
               scope: parsed.data.scope as string,
-              days: parsed.data.days,
             };
       const result = await authority.turnMineOn(person.me, input);
       return json(agentMineOnOperation.output.parse(result));

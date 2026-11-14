@@ -8,6 +8,11 @@ describe("core__account_credits_read", () => {
   it("is a read tool with an account-kind scope and takes no account argument", () => {
     expect(accountCreditsReadContract.effect).toBe("read_only");
     expect(accountCreditsReadContract.requires).toMatchObject({ scope: "account:read", kind: "account", subject: "member" });
+    // The ONE account scope reads as "all your account data" (credits, usage and history), not as a credits-only permission.
+    expect(accountCreditsReadContract.requires).toMatchObject({
+      label: "Read your account data",
+      description: "See everything this account owns: credits, usage and history.",
+    });
     expect(accountCreditsReadContract.inputSchema.safeParse({}).success).toBe(true);
     expect(accountCreditsReadContract.inputSchema.safeParse({ accountId: "someone-else" }).success).toBe(false);
   });

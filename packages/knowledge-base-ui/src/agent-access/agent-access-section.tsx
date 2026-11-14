@@ -6,7 +6,7 @@
  * Purpose: "AI access": one compact table where the approver says yes or no to what each AI can do.
  *   Columns: Who · Can do · Until · On. One row = one grant row, in three blocks: asks waiting, this node's AI, outside agents.
  *   Two mounts share it (TWO_STARTS, ONE_TABLE): the Admin page (`mode="admin"`, a node-admin, node permissions) and the profile (`mode="account"`,
- *   any signed-in person, the AIs that may act on their own account, with an Until control of 1, 7 or 30 days).
+ *   any signed-in person, the AIs that may act on their own account). Both render the SAME table: a grant lasts until Off, so there is no Until control.
  * Scope: Presentation over `useAgentAccess`. In admin mode it renders nothing for a non-admin.
  * Invariants:
  *   - ONE_CONTROL_ONE_DECISION: the switch is the whole decision, both directions. No "are you sure" step. A pending ask also
@@ -31,7 +31,6 @@
 "use client";
 
 import type { AccessSection, NodeAiPermissionView } from "@cogni/agent-grants";
-import { useState } from "react";
 
 import { cn } from "../cn.js";
 import { Skeleton } from "../ui/skeleton.js";
@@ -54,11 +53,6 @@ export interface AgentAccessSectionProps {
   readonly className?: string;
 }
 
-/** The Until choices on an account grant, in days. The server accepts exactly these; 7 is the default. */
-const UNTIL_DAYS = [1, 7, 30] as const;
-const DEFAULT_DAYS = 7;
-const UNTIL_LABEL: Record<number, string> = { 1: "1 day", 7: "7 days", 30: "30 days" };
-
 const BLOCKS: ReadonlyArray<{ section: AccessSection; title: string }> = [
   { section: "pending", title: "Asks waiting" },
   { section: "node", title: "This node's AI" },
@@ -73,7 +67,6 @@ function untilDate(iso: string): string {
 
 export function AgentAccessSection({ endpoints, mode = "admin", token = null, className }: AgentAccessSectionProps) {
   const { state, busy, error, highlight, linkInvalid, allow, remove, dismiss, reload } = useAgentAccess(endpoints, { mode, token });
-  const [days, setDays] = useState<Record<string, number>>({});
   const ready = state.status === "ready";
   const permissions: readonly NodeAiPermissionView[] = ready
     ? state.view.permissions.filter((r) => (mode === "account" ? r.resource === "account" : r.resource !== "account"))
@@ -163,7 +156,6 @@ export function AgentAccessSection({ endpoints, mode = "admin", token = null, cl
                       const key = rowKey(row);
                       const saving = busy === key;
                       const highlighted = highlight === key;
-                      const picked = days[key] ?? DEFAULT_DAYS;
                       return (
                         <tr
                           key={key}
@@ -195,26 +187,7 @@ export function AgentAccessSection({ endpoints, mode = "admin", token = null, cl
                             <div className="text-muted-foreground text-xs">{row.description}</div>
                           </td>
                           <td className="whitespace-nowrap py-2 pr-3 align-top text-muted-foreground">
-                            {mode === "account" && !row.on ? (
-                              <select
-                                aria-label={`Until: ${row.who}: ${row.label}`}
-                                value={picked}
-                                onChange={(e) => setDays((d) => ({ ...d, [key]: Number(e.target.value) }))}
-                                className="h-7 rounded-md border border-input bg-background px-1 text-foreground text-sm"
-                              >
-                                {UNTIL_DAYS.map((n) => (
-                                  <option key={n} value={n}>
-                                    {UNTIL_LABEL[n]}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : mode === "account" ? (
-                              row.until ? `Until ${untilDate(row.until)}` : "No end"
-                            ) : row.section === "pending" ? (
-                              "—"
-                            ) : (
-                              (row.until ?? "No end")
-                            )}
+                            {row.section === "pending" ? "—" : row.until ? `Until ${untilDate(row.until)}` : "No end"}
                           </td>
                           <td className="h-10 py-2 text-right align-top">
                             {saving ? (
@@ -231,7 +204,7 @@ export function AgentAccessSection({ endpoints, mode = "admin", token = null, cl
                                   onToggle={() =>
                                     void (row.on
                                       ? remove(row.principalUserId, row.scope)
-                                      : allow(row.principalUserId, row.scope, mode === "account" ? { days: picked } : undefined))
+                                      : allow(row.principalUserId, row.scope))
                                   }
                                 />
                                 {row.section === "pending" && (

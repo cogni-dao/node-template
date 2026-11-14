@@ -9,7 +9,7 @@
  *   it holds none of this logic (one fleet-carried mechanism, one owner).
  * Scope: Pure over the store plus the injected `ensureAccount`. No routes, no logging, no UI.
  * Invariants:
- *   - ENSURE_AFTER_VALIDATION: the person's billing account is created (`ensureAccount`) only after the token or the principal, scope, days and kind have
+ *   - ENSURE_AFTER_VALIDATION: the person's billing account is created (`ensureAccount`) only after the token or the principal, scope and kind have
  *     validated, so a bogus request creates nothing.
  *   - SCOPE_KIND_PICKS_THE_PLANE: a direct On needs a declared scope of kind `account` (a node scope is refused, `wrong_kind`).
  *   - PROFILE_NEVER_SHOWS_NODE_ROWS: `listMine` reads account rows on the viewer's own account only.
@@ -19,7 +19,7 @@
  * @public
  */
 
-import { ACCOUNT_GRANT_DAYS, type ApprovalCaller, isAccountGrantDays } from "./approval";
+import type { ApprovalCaller } from "./approval";
 import { buildAccountAiView } from "./node-ai";
 import {
   AgentRolesError,
@@ -97,8 +97,8 @@ export async function listMine(
 }
 
 export type MineOnInput =
-  | { readonly token: string; readonly days?: number | undefined }
-  | { readonly principalUserId: string; readonly scope: string; readonly days?: number | undefined };
+  | { readonly token: string }
+  | { readonly principalUserId: string; readonly scope: string };
 
 export interface MineOnResult {
   readonly changed: boolean;
@@ -107,11 +107,6 @@ export interface MineOnResult {
   readonly principalUserId?: string;
   readonly scope?: string;
 }
-
-const checkDays = (days: number | undefined): void => {
-  if (days !== undefined && !isAccountGrantDays(days))
-    throw new AgentRolesError("invalid_days", `days must be one of ${ACCOUNT_GRANT_DAYS.join(", ")}`);
-};
 
 /**
  * The person turns an ACCOUNT row On: an outside AI's ask by its token, or this node's own AI directly (no ask). The approver is the signed-in person
@@ -130,13 +125,12 @@ export async function turnMineOn(
   }
 ): Promise<MineOnResult> {
   const { me, on } = input;
-  checkDays(on.days);
   if ("token" in on) {
     // A token that is not usable, or an ask that is the person's own, creates nothing.
     const ask = await previewAsk(store, { token: on.token, resource: "account" });
     if (!ask || ask.principalUserId === me.userId) return { changed: false, via: "link" };
     await input.ensureAccount?.(me.userId);
-    const { approved } = await approveAccountAsk(store, { me, token: on.token, days: on.days });
+    const { approved } = await approveAccountAsk(store, { me, token: on.token });
     return { changed: approved, via: "link" };
   }
   if (!input.declaredScopes.includes(on.scope)) throw new AgentRolesError("invalid_scope", "scope is not declared");
@@ -153,7 +147,6 @@ export async function turnMineOn(
     scope: on.scope,
     declaredScopes: input.declaredScopes,
     scopeKinds: input.scopeKinds,
-    days: on.days,
   });
   return { changed: created, via: "direct", principalUserId: on.principalUserId, scope: on.scope };
 }

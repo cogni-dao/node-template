@@ -42,7 +42,7 @@ describe("same-door parity", () => {
       expect(SAME_DOOR_ROUTES[c.name]?.scope, c.name).toBe(c.requires?.scope);
       expect(c.name in NO_ROUTE_TWIN, c.name).toBe(false);
     }
-    expect(SAME_DOOR_ROUTES.core__account_credits_read?.routes).toEqual(["accounts.credits.read"]);
+    expect(SAME_DOOR_ROUTES.core__account_credits_read?.routes).toEqual(["accounts.credits.read", "payments.credits_summary"]);
   });
 
   it("fails on a new unmapped write tool", () => {

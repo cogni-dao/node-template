@@ -20,13 +20,10 @@
  */
 
 import {
-  ACCOUNT_GRANT_DAYS,
   type ApprovalCaller,
   approvalPath,
   canApprove,
-  DEFAULT_ACCOUNT_GRANT_DAYS,
   hashLinkToken,
-  isAccountGrantDays,
   isLinkTokenShape,
   LINK_TTL_MS,
   newLinkToken,
@@ -42,7 +39,6 @@ export type RolesErrorCode =
   | "too_many_requests"
   | "no_external_door"
   | "not_allowed"
-  | "invalid_days"
   | "wrong_kind";
 
 export class AgentRolesError extends Error {
@@ -220,13 +216,6 @@ export async function denyRequest(
   return { principalUserId: userId, denied };
 }
 
-const daysOrDefault = (days: number | undefined): number => {
-  const d = days ?? DEFAULT_ACCOUNT_GRANT_DAYS;
-  if (!isAccountGrantDays(d))
-    throw new AgentRolesError("invalid_days", `days must be one of ${ACCOUNT_GRANT_DAYS.join(", ")}`);
-  return d;
-};
-
 /**
  * Looks up a pending ask by its one-time link token for the page that opens it (profile: account asks; admin: node asks). A wrong-kind,
  * used, expired or unknown token is one answer: null (the route says 404 and discloses nothing).
@@ -240,14 +229,13 @@ export async function previewAsk(
 }
 
 /**
- * The account owner turns a pending ACCOUNT ask On, by its link token. The row takes an account the approver owns, and ends in 1, 7 or 30
- * days (default 7). A node-admin has no say here (R12). Returns false for a token that is not usable.
+ * The account owner turns a pending ACCOUNT ask On, by its link token. The row takes an account the approver owns and has no end date: like a node
+ * row it lasts until Off. A node-admin has no say here (R12). Returns false for a token that is not usable.
  */
 export async function approveAccountAsk(
   store: AgentGrantsStore,
-  input: { me: ApprovalCaller; token: string; days?: number | undefined }
+  input: { me: ApprovalCaller; token: string }
 ): Promise<{ approved: boolean }> {
-  const days = daysOrDefault(input.days);
   const pending = await previewAsk(store, { token: input.token, resource: "account" });
   if (!pending) return { approved: false };
   if (!(await canApprove(store, input.me, { resource: "account", principalUserId: pending.principalUserId })))
@@ -255,7 +243,6 @@ export async function approveAccountAsk(
   const approved = await store.approveAccountByLink({
     linkHash: await hashLinkToken(input.token),
     approvedBy: input.me.userId,
-    days,
   });
   return { approved };
 }
@@ -284,13 +271,11 @@ export async function grantInternalOnAccount(
     scope: string;
     declaredScopes: readonly string[];
     scopeKinds: ScopeKinds;
-    days?: number | undefined;
   }
 ): Promise<{ principalUserId: string; created: boolean }> {
   if (!input.declaredScopes.includes(input.scope))
     throw new AgentRolesError("invalid_scope", "scope is not declared");
   requireKind(input.scopeKinds, input.scope, true);
-  const days = daysOrDefault(input.days);
   const { internal } = await resolveRef(store, { principalUserId: input.principalUserId });
   if (!internal) throw new AgentRolesError("not_pending", "an outside agent must ask first");
   if (!(await canApprove(store, input.me, { resource: "account", principalUserId: input.principalUserId })))
@@ -299,7 +284,6 @@ export async function grantInternalOnAccount(
     principalUserId: input.principalUserId,
     scope: input.scope,
     approvedBy: input.me.userId,
-    days,
   });
   // `false` with an internal AI means a live or pending row already exists (the v0 limit: one open row per AI and scope).
   return { principalUserId: input.principalUserId, created };

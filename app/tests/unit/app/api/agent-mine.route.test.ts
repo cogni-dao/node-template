@@ -70,7 +70,7 @@ import * as pkg from "@cogni/agent-grants";
 function wire() {
   const declaredScopes = ["account:read", "work_item:transition"];
   const scopeKinds = { "account:read": "account", "work_item:transition": "node" } as const;
-  const declarations = { "account:read": { label: "Read your credit balance", description: "See the credit balance of the account it acts for." } };
+  const declarations = { "account:read": { label: "Read your account data", description: "See everything this account owns: credits, usage and history." } };
   fake.authority = {
     previewAsk: async ({ token, resource }: { token: string; resource: "node" | "account" }) => {
       const ask = await pkg.previewAsk(store, { token, resource });
@@ -140,20 +140,20 @@ describe("the person's own table and decisions", () => {
     expect((await preview({ token: "z".repeat(43) })).status).toBe(404);
     expect((await preview({ token: "short" })).status).toBe(404);
     expect((await preview({})).status).toBe(404);
-    expect(await post({ token, days: 7 })).toBeTruthy();
+    expect(await post({ token })).toBeTruthy();
     expect((await preview({ token })).status).toBe(404); // used up
   });
 
-  it("On by token: the signed-in person is the approver, the row names THEIR account, and the days they picked set its end; the response carries no token", async () => {
+  it("On by token: the signed-in person is the approver, the row names THEIR account, and it has NO end date (it lasts until Off); the response carries no token", async () => {
     const token = await ask("ext-1");
-    const res = await post({ token, days: 30 });
+    const res = await post({ token });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ changed: true });
     expect(await store.hasLiveAccountGrant("ext-1", "account:read", "acct-alice")).toBe(true);
     expect(await store.hasLiveAccountGrant("ext-1", "account:read", "acct-bob")).toBe(false);
     const row = store.roles.find((r) => r.principal === "ext-1");
     expect(row?.approvedBy).toBe("alice");
-    expect(Math.round(((row?.expiresAt ?? 0) - store.clock.now) / 86_400_000)).toBe(30);
+    expect(row?.expiresAt).toBeNull(); // durable: no end date
   });
 
   it("Off by row id works for the owner only; another person's click on the same row changes nothing and says nothing", async () => {
@@ -175,7 +175,7 @@ describe("the person's own table and decisions", () => {
   });
 
   it("this node's AI turns On directly for the person's own account, once, and an outside principal is refused", async () => {
-    const on = await post({ principalUserId: "ai-1", scope: "account:read", days: 1 });
+    const on = await post({ principalUserId: "ai-1", scope: "account:read" });
     expect(await on.json()).toEqual({ changed: true });
     expect(await store.hasLiveAccountGrant("ai-1", "account:read", "acct-alice")).toBe(true);
     expect(await (await post({ principalUserId: "ai-1", scope: "account:read" })).json()).toEqual({ changed: false }); // already open (v0 limit)
@@ -183,10 +183,9 @@ describe("the person's own table and decisions", () => {
     expect(await store.hasLiveAccountGrant("ext-1", "account:read", "acct-alice")).toBe(false);
   });
 
-  it("validates the body: a token or a principal with scope, days 1, 7 or 30 only", async () => {
+  it("validates the body: a token, or a principal with scope; an old `days` field is ignored (no Until)", async () => {
     expect((await post({})).status).toBe(400);
     expect((await post({ token: await ask("ext-1"), principalUserId: "ai-1", scope: "account:read" })).status).toBe(400);
-    expect((await post({ principalUserId: "ai-1", scope: "account:read", days: 31 })).status).toBe(400);
     expect((await post({ principalUserId: "ai-1", scope: "made:up" })).status).toBe(400);
     // A declared NODE scope is an admin's: the profile route refuses it, and nothing is written (SCOPE_KIND_PICKS_THE_PLANE).
     expect((await post({ principalUserId: "ai-1", scope: "work_item:transition" })).status).toBe(400);

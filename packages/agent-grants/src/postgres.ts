@@ -12,7 +12,7 @@
  *     client, which replaces the timestamp serializers; timestamps read back as strings too (`iso()` accepts both).
  *   - RESOURCE_SPLIT (R1): every node-plane statement names `resource = 'node'`; every account statement names `resource = 'account'`.
  *     The expand-phase live index stays (principal, scope), so one open row exists per AI and scope.
- *   - ACCOUNT_LIVE (R1, R14): an account row is live when approved, unrevoked and `expires_at > now()`; expired is read, and an expired live
+ *   - ACCOUNT_LIVE (R1, R14, durable): an account row is live when approved, unrevoked and (`expires_at` is null, i.e. until Off, or in the future); expired is read, and an expired live
  *     row is closed (`revoked_at = now()`) before an ask or a direct On on the same (AI, scope), so the old index frees.
  *   - The decision statements carry the owner join themselves (`billing_accounts.owner_user_id = approver`), so a caller cannot widen them.
  *   - `agent_roles` has FORCE RLS and one narrow select policy (an account row naming the connection's own user): only a service-role
@@ -93,7 +93,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const rows = await sql`
         SELECT 1 AS ok FROM agent_roles
         WHERE principal_user_id = ${principalId} AND scope = ${scope} AND resource = 'account' AND account_id = ${accountId}
-          AND approved_by IS NOT NULL AND revoked_at IS NULL AND expires_at > now()
+          AND approved_by IS NOT NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
         LIMIT 1`;
       return rows.length > 0;
     },
@@ -102,7 +102,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const rows = await sql`
         SELECT DISTINCT scope FROM agent_roles
         WHERE principal_user_id = ${principalId} AND scope = ANY(${scopes as string[]}) AND resource = 'account' AND account_id = ${accountId}
-          AND approved_by IS NOT NULL AND revoked_at IS NULL AND expires_at > now()`;
+          AND approved_by IS NOT NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`;
       return rows.flatMap((row) => (typeof row.scope === "string" ? [row.scope] : []));
     },
     async ownsAccount(userId, accountId) {
@@ -183,13 +183,13 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         JOIN users u ON u.id = r.principal_user_id
         LEFT JOIN agent_principals p ON p.user_id = r.principal_user_id
         WHERE r.resource = 'account' AND r.account_id = ${accountId}
-          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND r.expires_at > now()
+          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now())
         ORDER BY r.created_at DESC
         LIMIT ${limit}`;
       const total = await sql`
         SELECT count(*)::int AS n FROM agent_roles r
         WHERE r.resource = 'account' AND r.account_id = ${accountId}
-          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND r.expires_at > now()`;
+          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now())`;
       const listed = rows.flatMap((row) => {
         const mapped = toRow(row);
         return mapped ? [mapped] : [];
@@ -343,12 +343,12 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       };
       return view;
     },
-    async approveAccountByLink({ linkHash, approvedBy, days }) {
+    async approveAccountByLink({ linkHash, approvedBy }) {
       // ONE statement: the owner join (billing_accounts.owner_user_id = approver) is what makes the row name an account the approver owns.
       const rows = await sql`
         UPDATE agent_roles r
         SET approved_by = ${approvedBy}, granted_at = now(), account_id = b.id,
-            expires_at = now() + ${days}::int * interval '1 day',
+            expires_at = NULL,
             link_consumed_at = now(), link_hash = NULL
         FROM billing_accounts b
         WHERE r.link_hash = ${linkHash} AND r.resource = 'account'
@@ -370,12 +370,12 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         RETURNING r.id`;
       return rows.length > 0;
     },
-    async insertAccountRole({ principalUserId, scope, approvedBy, days }) {
+    async insertAccountRole({ principalUserId, scope, approvedBy }) {
       await closeExpired(principalUserId, scope);
       // Direct On is for this node's own AI only (R8), on an account the approver owns.
       const rows = await sql`
         INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id, expires_at)
-        SELECT ${principalUserId}, ${scope}, ${approvedBy}, now(), 'account', b.id, now() + ${days}::int * interval '1 day'
+        SELECT ${principalUserId}, ${scope}, ${approvedBy}, now(), 'account', b.id, NULL
         FROM billing_accounts b
         WHERE b.owner_user_id = ${approvedBy}
           AND ${principalUserId} <> ${approvedBy}

@@ -15,15 +15,12 @@
  * @public
  */
 
-import { toUserId } from "@cogni/ids";
 import { creditsSummaryOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { getContainer } from "@/bootstrap/container";
+import { readAccountCredits } from "@/app/_facades/payments/account-credits.server";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { getCreditsSummary } from "@/features/payments/services/creditsSummary";
-import { isBillingAccountNotFoundPortError } from "@/ports";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,31 +46,8 @@ export const GET = wrapRouteHandlerWithLogging<Ctx>(
         : undefined,
     });
     if (!parsed.success) return json({ error: "Invalid query" }, 400);
-    try {
-      // The caller is the RLS actor: an owner reads through the owner policy, an agent through agent_has_scope.
-      const summary = await getCreditsSummary(getContainer().accountsForUser(toUserId(sessionUser.id)), {
-        billingAccountId: accountId,
-        limit: parsed.data.limit,
-      });
-      return json(
-        creditsSummaryOperation.output.parse({
-          billingAccountId: summary.billingAccountId,
-          balanceCredits: summary.balanceCredits,
-          ledger: summary.ledger.map((entry) => ({
-            id: entry.id,
-            amount: entry.amount,
-            balanceAfter: entry.balanceAfter,
-            reason: entry.reason,
-            reference: entry.reference,
-            metadata: entry.metadata,
-            createdAt: entry.createdAt.toISOString(),
-          })),
-        })
-      );
-    } catch (error) {
-      // RLS returned no row for this caller (the door agreed, the database did not, or the account vanished): the same 404.
-      if (isBillingAccountNotFoundPortError(error)) return json({ error: "not_found" }, 404);
-      throw error;
-    }
+    // The caller is the RLS actor: an owner reads through the owner policy, an agent through agent_has_scope.
+    const summary = await readAccountCredits({ callerUserId: sessionUser.id, accountId, limit: parsed.data.limit });
+    return summary ? json(creditsSummaryOperation.output.parse(summary)) : json({ error: "not_found" }, 404);
   }
 );

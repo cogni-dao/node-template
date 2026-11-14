@@ -100,7 +100,7 @@ export const agentRoles = pgTable(
     resource: text("resource").notNull().default("node"),
     /** The account an approved account row covers. Null on a node row and on a pending account row. */
     accountId: text("account_id").references(() => billingAccounts.id),
-    /** When an approved account row ends. Null on a node row (no end in v0). */
+    /** When an approved account row ends. Null = until Off (the default, like a node row). A row with an end keeps the expired state (R14). */
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     /** sha256 of the one-time approval link token. The token is never stored. Null once consumed. */
     linkHash: text("link_hash"),
@@ -125,7 +125,7 @@ export const agentRoles = pgTable(
     ),
     check(
       "agent_roles_account_live_shape",
-      sql`${table.resource} <> 'account' OR ${table.approvedBy} IS NULL OR (${table.accountId} IS NOT NULL AND ${table.grantedAt} IS NOT NULL AND ${table.expiresAt} IS NOT NULL AND ${table.expiresAt} > ${table.grantedAt} AND ${table.expiresAt} <= ${table.grantedAt} + interval '30 days')`
+      sql`${table.resource} <> 'account' OR ${table.approvedBy} IS NULL OR (${table.accountId} IS NOT NULL AND ${table.grantedAt} IS NOT NULL AND (${table.expiresAt} IS NULL OR ${table.expiresAt} > ${table.grantedAt}))`
     ),
     check(
       "agent_roles_no_self_approval",

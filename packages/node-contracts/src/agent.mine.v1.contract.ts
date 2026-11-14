@@ -20,8 +20,6 @@ import { agentAccessRowSchema } from "./agent.roles.v1.contract";
 
 /** A one-time link token: 43 base64url characters. */
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-/** How long an account grant lasts, in days: the owner picks one. 30 is the most. */
-const daysSchema = z.union([z.literal(1), z.literal(7), z.literal(30)]);
 
 export const agentMineListOperation = {
   id: "agent.mine.list.v1",
@@ -36,14 +34,13 @@ export const agentMineOnOperation = {
   id: "agent.mine.on.v1",
   /**
    * Turn a row On. Send exactly one of: `token` (an outside AI's ask, from its link) or `principalUserId` + `scope` (this node's own AI, no ask).
-   * `days` is the Until control: 1, 7 or 30; default 7.
+   * An account grant has no end date: it lasts until Off, like a node permission.
    */
   input: z
     .object({
       token: tokenSchema.optional(),
       principalUserId: z.string().min(1).max(100).optional(),
       scope: z.string().min(1).max(100).optional(),
-      days: daysSchema.optional(),
     })
     .refine(
       (v) =>
