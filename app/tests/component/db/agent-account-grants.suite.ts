@@ -291,6 +291,113 @@ describe("account grants (real Postgres, real roles)", () => {
     });
   });
 
+  // 2d. Migration 0041 on a DIRTY database: the reverted #366 already ran its migrations on candidate-a and production (the revert removed the files, not the
+  // objects). The test rebuilds that state inside one transaction (leftover columns, CHECKs, tables, a delegated row, a broken agent_has_scope), runs the real
+  // migration file twice, asserts, and rolls everything back so no other test file sees it.
+  describe("migration 0041 is safe on a database that already ran the reverted #366", () => {
+    const ROLLBACK = new Error("rollback");
+    const migrationStatements = async (): Promise<string[]> => {
+      const { readFileSync } = await import("node:fs");
+      const { resolve } = await import("node:path");
+      const text = readFileSync(resolve(__dirname, "../../../src/adapters/server/db/migrations/0041_agent_account_grants.sql"), "utf8");
+      return text.split("--> statement-breakpoint").filter((q) => q.trim().length > 0);
+    };
+    const runMigration = async (tx: Sql) => {
+      for (const statement of await migrationStatements()) await tx.unsafe(statement);
+    };
+    /** Rebuild the #366 leftovers on top of a migrated database: 0041 undone except `expires_at`, which #366 had added with the same name. */
+    const makeDirty = async (tx: Sql) => {
+      for (const table of ["agent_roles"]) await tx.unsafe(`DROP POLICY IF EXISTS agent_roles_account_self_read ON ${table}`);
+      await tx.unsafe(`ALTER TABLE agent_roles
+        DROP COLUMN resource, DROP COLUMN account_id, DROP COLUMN link_hash, DROP COLUMN link_expires_at, DROP COLUMN link_consumed_at`);
+      // #366 (0042): resource_kind, owner_user_id, expires_at, four CHECKs, and the agent_claims table.
+      await tx.unsafe(`ALTER TABLE agent_roles ADD COLUMN resource_kind text DEFAULT 'node' NOT NULL, ADD COLUMN owner_user_id text`);
+      await tx.unsafe(`ALTER TABLE agent_roles
+        ADD CONSTRAINT agent_roles_resource_kind_canonical CHECK (resource_kind IN ('node','delegated')),
+        ADD CONSTRAINT agent_roles_owner_shape CHECK ((resource_kind = 'node') = (owner_user_id IS NULL)),
+        ADD CONSTRAINT agent_roles_personal_approver CHECK (resource_kind = 'node' OR approved_by IS NULL OR (approved_by = owner_user_id AND approved_by <> principal_user_id AND expires_at IS NOT NULL)),
+        ADD CONSTRAINT agent_roles_personal_scope_delegable CHECK (resource_kind = 'node' OR scope IN ('knowledge:read','knowledge:contribute'))`);
+      await tx.unsafe(`CREATE TABLE agent_claims (id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL, agent_user_id text NOT NULL, created_at timestamptz DEFAULT now() NOT NULL, expires_at timestamptz NOT NULL)`);
+      // #366 (0041): agent_principals.owner_user_id and agent_spawn_grants.
+      await tx.unsafe(`ALTER TABLE agent_principals ADD COLUMN owner_user_id text`);
+      await tx.unsafe(`CREATE TABLE agent_spawn_grants (id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL, issuer_user_id text NOT NULL, token_hash text NOT NULL, expires_at timestamptz NOT NULL)`);
+      // An earlier, wrong agent_has_scope that says yes to everything.
+      await tx.unsafe(`CREATE OR REPLACE FUNCTION agent_has_scope(p_account_id text, p_scope text) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$`);
+    };
+    const seedDelegatedRow = async (tx: Sql, owner: string, agent: string) => {
+      await tx.unsafe("ALTER TABLE agent_roles NO FORCE ROW LEVEL SECURITY");
+      await tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource_kind, owner_user_id, expires_at)
+        VALUES (${agent}, 'knowledge:read', ${owner}, now(), 'delegated', ${owner}, now() + interval '5 days')`;
+      await tx.unsafe("ALTER TABLE agent_roles FORCE ROW LEVEL SECURITY");
+    };
+    const inRolledBackTx = async (fn: (tx: Sql) => Promise<void>) => {
+      await app
+        .begin(async (tx) => {
+          await fn(tx as unknown as Sql);
+          throw ROLLBACK;
+        })
+        .catch((error: unknown) => {
+          if (error !== ROLLBACK) throw error;
+        });
+    };
+
+    it("runs on the leftovers, ends the delegated row, drops the stale CHECKs, keeps the leftover columns and tables, and runs a second time", async () => {
+      const owner = await makeUser();
+      const agent = await makeUser();
+      await inRolledBackTx(async (tx) => {
+        await makeDirty(tx);
+        await seedDelegatedRow(tx, owner, agent);
+        await runMigration(tx);
+        // The delegated row is ended: it must not read as a live NODE row (the new column defaults to 'node').
+        // (FORCE RLS hides the row from the owner too, so lift it for this read, inside the rolled-back transaction.)
+        await tx.unsafe("ALTER TABLE agent_roles NO FORCE ROW LEVEL SECURITY");
+        const rows = await tx`SELECT resource, revoked_at, expires_at FROM agent_roles WHERE principal_user_id = ${agent}`;
+        await tx.unsafe("ALTER TABLE agent_roles FORCE ROW LEVEL SECURITY");
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.resource).toBe("node");
+        expect(rows[0]?.revoked_at).not.toBeNull();
+        expect(rows[0]?.expires_at).toBeNull();
+        // The stale #366 authority rules are gone; the new shape is in place.
+        const names = (await tx`SELECT conname FROM pg_constraint WHERE conrelid = 'public.agent_roles'::regclass`).map((r) => r.conname);
+        for (const stale of ["agent_roles_owner_shape", "agent_roles_personal_approver", "agent_roles_personal_scope_delegable", "agent_roles_resource_kind_canonical"])
+          expect(names).not.toContain(stale);
+        for (const fresh of ["agent_roles_node_shape", "agent_roles_account_live_shape", "agent_roles_no_self_approval", "agent_roles_resource_canonical", "agent_roles_link_consumed_has_no_hash", "agent_roles_account_id_billing_accounts_id_fk"])
+          expect(names).toContain(fresh);
+        // Nothing is dropped in this PR (cleanup follow-up).
+        expect(await tx`SELECT 1 FROM information_schema.columns WHERE table_name = 'agent_roles' AND column_name IN ('resource_kind','owner_user_id')`).toHaveLength(2);
+        expect(await tx`SELECT 1 FROM information_schema.columns WHERE table_name = 'agent_principals' AND column_name = 'owner_user_id'`).toHaveLength(1);
+        expect(await tx`SELECT 1 FROM information_schema.tables WHERE table_name IN ('agent_claims','agent_spawn_grants')`).toHaveLength(2);
+        // The wrong agent_has_scope is replaced, FORCE RLS is back, and every policy is single.
+        const [fn] = await tx`SELECT agent_has_scope('no-such-account', 'account:read') AS yes`;
+        expect(fn?.yes).toBe(false);
+        const [force] = await tx`SELECT relforcerowsecurity AS f FROM pg_class WHERE relname = 'agent_roles'`;
+        expect(force?.f).toBe(true);
+        const policies = (await tx`SELECT policyname, tablename FROM pg_policies WHERE policyname IN ('agent_roles_account_self_read','agent_delegated_read')`).map((r) => `${r.tablename}:${r.policyname}`).sort();
+        expect(policies).toEqual(["agent_roles:agent_roles_account_self_read", "billing_accounts:agent_delegated_read", "credit_ledger:agent_delegated_read"]);
+        // Idempotent: a second run on the migrated, dirty database changes nothing and does not fail.
+        await runMigration(tx);
+        expect((await tx`SELECT conname FROM pg_constraint WHERE conrelid = 'public.agent_roles'::regclass`).length).toBe(names.length);
+      });
+    });
+
+    it("runs on a clean database too (a second run of the real file is a no-op)", async () => {
+      await inRolledBackTx(async (tx) => {
+        await runMigration(tx);
+        await runMigration(tx);
+      });
+    });
+
+    it("fails loudly when a leftover expires_at has a type 0041 cannot reuse", async () => {
+      await expect(
+        inRolledBackTx(async (tx) => {
+          await tx.unsafe("ALTER TABLE agent_roles DROP COLUMN expires_at CASCADE");
+          await tx.unsafe("ALTER TABLE agent_roles ADD COLUMN expires_at text");
+          await runMigration(tx);
+        })
+      ).rejects.toThrow(/agent_roles\.expires_at already exists with a type other than timestamp with time zone/);
+    });
+  });
+
   // 3. The CHECKs hold the shape even for a writer that skips the package.
   describe("the row shape is enforced by the database", () => {
     it("refuses a node row with an account, an approved account row with no account or end, an end over 30 days, and self approval", async () => {
