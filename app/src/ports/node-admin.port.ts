@@ -43,4 +43,6 @@ export interface NodeAdminPort {
   turnAiPermissionOff(session: AdminSession, target: AiPermissionTarget): Promise<AiPermissionChange>;
   /** Dismiss a pending ask (the agent then sees `denied`). */
   dismissAiRequest(session: AdminSession, target: AiPermissionTarget): Promise<AiPermissionChange>;
+  /** The waiting node ask a one-time link token opens, as a table row to highlight; null for a wrong-kind, used, expired or unknown token. */
+  previewAiRequest(session: AdminSession, token: string): Promise<NodeAiPermissionView | null>;
 }

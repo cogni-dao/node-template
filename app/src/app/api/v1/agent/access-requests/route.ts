@@ -3,10 +3,12 @@
 
 /**
  * Module: `@app/api/v1/agent/access-requests`
- * Purpose: AI plane (bearer only). An agent asks for a permission for itself (POST) and lists its own asks (GET).
- *   This is the external grant path: the ask is an OFF row; an admin's click on the profile table turns it on.
+ * Purpose: AI plane (bearer only). An agent asks for a permission for itself (POST) and lists its own asks per account (GET).
+ *   This is the external grant path: the ask is an OFF row; the approver's click (a node admin in Admin, the account owner on the profile) turns it on.
  * Scope: HTTP validation, the bearer-only plane rule, and delegation to the agent authority. No authority logic.
  * Invariants:
+ *   - ASK_RETURNS_ONE_LINK: a waiting ask returns `approvalUrl`: a one-time link (24 hours, a new token on every ask) to `/profile` for an account permission
+ *     or `/admin/ai-access` for a node permission, picked by the permission's declared kind. The agent hands it to the person who decides.
  *   - KIND_PICKS_THE_PLANE: a browser session (or any identity that is not a verified bearer) gets 404, never a result.
  *   - SELF_REQUEST_ONLY: the caller's own user id is the principal and the requester. The body never names another agent.
  *   - NO_SELF_APPROVAL: the ask writes a row with no approver. It opens no lock. Only an admin session on the human roles
@@ -28,6 +30,7 @@ import {
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { publicOrigin } from "@/app/_lib/public-origin";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
@@ -57,8 +60,15 @@ export const POST = wrapRouteHandlerWithLogging(
         principalUserId: sessionUser.id,
         scope: parsed.data.scope,
       });
+      // The one link for the person who decides, by the scope's declared kind: /profile for an account permission, /admin/ai-access otherwise.
+      // The token is in the fragment, so no server log or referrer ever sees it.
+      const { approvalPath, ...rest } = result;
       return json(
-        agentAccessRequestCreateOperation.output.parse({ scope: parsed.data.scope, ...result }),
+        agentAccessRequestCreateOperation.output.parse({
+          scope: parsed.data.scope,
+          ...rest,
+          ...(approvalPath ? { approvalUrl: `${publicOrigin(request)}${approvalPath}` } : {}),
+        }),
         result.created ? 201 : 200
       );
     } catch (error) {

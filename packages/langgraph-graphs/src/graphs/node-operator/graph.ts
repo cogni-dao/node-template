@@ -1,4 +1,4 @@
-import { SCHEDULE_LIST_NAME, SCHEDULE_MANAGE_NAME } from "@cogni/ai-tools";
+import { ACCOUNT_CREDITS_READ_NAME, SCHEDULE_LIST_NAME, SCHEDULE_MANAGE_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
 import { COGNI_TOOL_IDS } from "../cogni/tools";
 import type { CreateReactAgentGraphOptions } from "../types";
@@ -10,9 +10,14 @@ import {
 	type WorkflowGuidance,
 } from "./guidance";
 
-/** Cogni's reads plus schedule management; its only write is arranging jobs. */
+/**
+ * Cogni's reads plus schedule management; its only write is arranging jobs. `core__account_credits_read` is a read that opens only after the
+ * account owner turns "this node's AI" On for their account (task.5465, an `account` grant on the run's account); until then the run-start filter
+ * withholds it, so listing it here changes nothing for a person who has not said yes.
+ */
 export const NODE_OPERATOR_TOOL_IDS: readonly string[] = [
 	...COGNI_TOOL_IDS.filter((id) => id !== "core__metric_compute"),
+	ACCOUNT_CREDITS_READ_NAME,
 	SCHEDULE_LIST_NAME,
 	SCHEDULE_MANAGE_NAME,
 ];

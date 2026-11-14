@@ -10,10 +10,11 @@
  *   - CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: `agent_credentials` rows belong only to a user with an `external` `agent_principals` row
  *     (a trigger in the migration enforces it).
  *   - ROLE_ROWS_ARE_SOFT_REVOKED: a role row is never deleted; `revoked_at` ends it. One live row per (principal, scope).
- *   - NO_ACCOUNT_GRANTS: account scopes are out of scope; no account-grant table ships.
+ *   - ONE_GRANT_ROW (task.5465): node and account grants are one table, `agent_roles`; `resource` and `account_id` say which.
  *   - TOKEN_HASH_ONLY / STATE_IS_DERIVED: `agent_credentials` stores sha256 of the key and timestamps only; state (pending, active,
  *     renew_only, expired, revoked) is derived by the SQL function `agent_credential_state` (migration), never stored.
- *   - SERVICE_ROLE_ONLY_WRITES: `agent_credentials` and `agent_roles` have ENABLE + FORCE RLS and no policy (deny-all for the app role).
+ *   - SERVICE_ROLE_ONLY_WRITES: `agent_credentials` has ENABLE + FORCE RLS and no policy (deny-all for the app role). `agent_roles` has ENABLE + FORCE RLS
+ *     and ONE narrow select policy (an account row naming the connection's own user as principal); no write policy.
  *     `agent_principals` is readable by every role (its select policy) and writable only by a BYPASSRLS service
  *     connection. FORCE is added by hand in the migration.
  *   - AGENTS_HOLD_NO_WALLET (a payout guard, enforced in the database; it does not decide who may be admin): a trigger on `user_bindings` (migration) refuses a wallet
@@ -36,7 +37,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-import { users } from "./refs";
+import { billingAccounts, users } from "./refs";
 
 /** A marked agent. `internal` rows are seeded for a graph to act as; `external` rows come from redeemed spawn grants (later). */
 export const agentPrincipals = pgTable(
@@ -70,9 +71,13 @@ export const agentPrincipals = pgTable(
 ).enableRLS();
 
 /**
- * One grant row: a permission (scope) for an agent principal.
- * Pending = `approved_by IS NULL` and not revoked (the agent asked; no admin has said yes). Live = approved and not revoked.
- * Denied = never approved, revoked. Revoked = approved, then revoked. Only a live row opens a lock.
+ * One grant row: a permission (scope) for an agent principal, on the node (`resource = 'node'`) or on one account (`'account'`).
+ * Pending = `approved_by IS NULL` and not revoked (the agent asked; no approver has said yes). Live = approved, not revoked and, for an
+ * account row, not past `expires_at`. Denied = never approved, revoked. Revoked = approved, then revoked. Expired is a state read from
+ * `expires_at` (task.5465 R14), never a write. Only a live row opens a lock.
+ * Account rows (task.5465): the account owner is the approver. A pending account row has no account until its owner decides it
+ * (`account_id` is set in the decide statement, from an account the approver owns). One-time approval link: `link_hash` is sha256 of the
+ * token (never the token), consumed by the decision.
  */
 export const agentRoles = pgTable(
   "agent_roles",
@@ -83,7 +88,7 @@ export const agentRoles = pgTable(
       .references(() => users.id),
     scope: text("scope").notNull(),
     approvedBy: text("approved_by").references(() => users.id),
-    /** Set when an admin approves. Null while pending or denied. */
+    /** Set when an approver approves. Null while pending or denied. */
     grantedAt: timestamp("granted_at", { withTimezone: true }),
     /** The agent that asked, for a row that began as a request. Null for a row an admin wrote directly. */
     requestedBy: text("requested_by").references(() => users.id),
@@ -91,12 +96,51 @@ export const agentRoles = pgTable(
       .notNull()
       .defaultNow(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /** What the row covers: the whole node, or one account. Every row before this column is a node row. */
+    resource: text("resource").notNull().default("node"),
+    /** The account an approved account row covers. Null on a node row and on a pending account row. */
+    accountId: text("account_id").references(() => billingAccounts.id),
+    /** When an approved account row ends. Null on a node row (no end in v0). */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    /** sha256 of the one-time approval link token. The token is never stored. Null once consumed. */
+    linkHash: text("link_hash"),
+    linkExpiresAt: timestamp("link_expires_at", { withTimezone: true }),
+    linkConsumedAt: timestamp("link_consumed_at", { withTimezone: true }),
   },
   (table) => [
+    // EXPAND PHASE: kept as the only live-row uniqueness (one open row per principal and scope). Old pods keep their ON CONFLICT
+    // target. The contract migration (task.5484) replaces it with per-account indexes.
     uniqueIndex("agent_roles_live_unique")
       .on(table.principalUserId, table.scope)
       .where(sql`${table.revokedAt} IS NULL`),
+    uniqueIndex("agent_roles_link_hash_unique").on(table.linkHash),
     index("agent_roles_principal_idx").on(table.principalUserId),
+    check(
+      "agent_roles_resource_canonical",
+      sql`${table.resource} IN ('node','account')`
+    ),
+    check(
+      "agent_roles_node_shape",
+      sql`${table.resource} <> 'node' OR (${table.accountId} IS NULL AND ${table.expiresAt} IS NULL)`
+    ),
+    check(
+      "agent_roles_account_live_shape",
+      sql`${table.resource} <> 'account' OR ${table.approvedBy} IS NULL OR (${table.accountId} IS NOT NULL AND ${table.grantedAt} IS NOT NULL AND ${table.expiresAt} IS NOT NULL AND ${table.expiresAt} > ${table.grantedAt} AND ${table.expiresAt} <= ${table.grantedAt} + interval '30 days')`
+    ),
+    check(
+      "agent_roles_no_self_approval",
+      sql`${table.approvedBy} IS NULL OR ${table.approvedBy} <> ${table.principalUserId}`
+    ),
+    check(
+      "agent_roles_link_consumed_has_no_hash",
+      sql`${table.linkConsumedAt} IS NULL OR ${table.linkHash} IS NULL`
+    ),
+    // R11: an app-role connection sees only account rows that name it as the principal (the RLS function `agent_has_scope` reads them).
+    // Writes stay service-role only: no write policy.
+    pgPolicy("agent_roles_account_self_read", {
+      for: "select",
+      using: sql`${table.resource} = 'account' AND ${table.principalUserId} = current_setting('app.current_user_id', true)`,
+    }),
   ]
 ).enableRLS();
 

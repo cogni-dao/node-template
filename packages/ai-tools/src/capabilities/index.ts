@@ -14,6 +14,8 @@
  * @public
  */
 
+// Account credits capability (account:read grant, task.5465)
+export type { AccountCreditsCapability, AccountCreditsInfo } from "./account-credits";
 // Hypothesis-loop capability (per knowledge-syntropy spec § The Hypothesis Loop)
 export type {
   ChainDirection,

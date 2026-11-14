@@ -1,3 +1,8 @@
+import {
+	APPROVAL_FRAGMENT_KEY,
+	APPROVAL_PAGE,
+	resourceOfKind,
+} from "@cogni/agent-grants";
 import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
 import {
 	GoalsProgressSchema,
@@ -35,6 +40,7 @@ import {
 	agentAccessRequestCreateOperation,
 	agentAccessRequestListOperation,
 	confirmAgentCredentialOperation,
+	creditsSummaryOperation,
 	knowledgeHistoryOperation,
 	registerAgentOperation,
 	revokeAgentCredentialOperation,
@@ -51,6 +57,7 @@ import {
 	workItemsReleaseOperation,
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
+import { publicOrigin } from "@/app/_lib/public-origin";
 import { z } from "zod";
 import {
 	buildPermissionCatalog,
@@ -69,31 +76,23 @@ import { serverEnv } from "@/shared/env";
 export const runtime = "nodejs";
 
 
-/**
- * Resolve the public origin this request reached us through. In prod the app
- * runs behind Caddy / k8s ingress, so Next.js's `request.url` exposes the
- * in-pod bind address (e.g. `http://0.0.0.0:3000`) rather than the external
- * host clients are using. Prefer the forwarded headers the proxy injects,
- * falling back to the raw `host` and `request.url` for local/dev usage.
- */
-function publicOrigin(request: Request): string {
-	const url = new URL(request.url);
-	const host =
-		request.headers.get("x-forwarded-host") ??
-		request.headers.get("host") ??
-		url.host;
-	const proto =
-		request.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "");
-	return `${proto}://${host}`;
-}
-
 export async function GET(request: Request) {
 	const env = serverEnv();
 	const origin = publicOrigin(request);
 	// DECLARED_ONCE_SHOWN_EVERYWHERE: rendered from the grant declarations on every read, never a copy table.
-	const { permissions } = buildPermissionCatalog(
+	const { permissions: askable } = buildPermissionCatalog(
 		buildRequiresById([...CORE_TOOL_BUNDLE]),
 	);
+	// Each askable permission says where its approval link opens, from its declared kind (an account permission: the person's profile; any
+	// other: the node-admin page). The ask returns the link itself (`approvalUrl`); this is its shape, so an agent can plan before it asks.
+	const permissions = askable.map((p) => ({
+		...p,
+		approvalLink: {
+			page: `${origin}${APPROVAL_PAGE[resourceOfKind(p.kind)]}`,
+			fragment: `#${APPROVAL_FRAGMENT_KEY}=<one-time token>`,
+			decidedBy: resourceOfKind(p.kind) === "account" ? "the account owner" : "a node admin",
+		},
+	}));
 	return NextResponse.json({
 		name: "Cogni Node API",
 		version: "v1",
@@ -135,7 +134,7 @@ export async function GET(request: Request) {
 		// Scopes an outside agent can ask for (requestPermission). Derived from the declarations, not listed here.
 		permissions,
 		permissionsHow:
-			"Ask with requestPermission; a node admin turns it On on the profile page.",
+			"Ask with requestPermission. The answer carries approvalUrl: one link, one-time, 24 hours. Give it to the person who decides: a node admin for a node permission, the account owner for an account permission (signed in, on their profile). Poll listMyPermissions for the state.",
 		actions: {
 			register: {
 				method: "POST",
@@ -185,6 +184,17 @@ export async function GET(request: Request) {
 				auth: { type: "bearer" },
 				inputSchema: z.toJSONSchema(z.strictObject({})),
 				outputSchema: z.toJSONSchema(agentAccessRequestListOperation.output),
+			},
+			readAccountCredits: {
+				method: "GET",
+				// Needs a live `account:read` grant from the account's owner (ask for it with requestPermission). Without one, or after it ends or
+				// is turned Off, the answer is 404, the same as for an account that does not exist.
+				endpoint: `${origin}/api/v1/accounts/{accountId}/credits`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(
+					creditsSummaryOperation.input.extend({ accountId: z.string() }),
+				),
+				outputSchema: z.toJSONSchema(creditsSummaryOperation.output),
 			},
 			readGoalsProgress: {
 				method: "GET",

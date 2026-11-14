@@ -54,11 +54,22 @@ export {
 } from "./agent-access/agent-access-section.js";
 export {
   type AgentAccessEndpoints,
+  type AgentAccessMode,
   type AgentAccessState,
+  type AllowOptions,
+  LINK_INVALID_COPY,
   UNAVAILABLE_COPY,
   useAgentAccess,
   type UseAgentAccess,
+  type UseAgentAccessOptions,
 } from "./agent-access/use-agent-access.js";
+export {
+  APPROVAL_FRAGMENT_PARAM,
+  APPROVAL_PAGES,
+  ApprovalFragmentScrub,
+  splitApprovalFragment,
+  useApprovalFragment,
+} from "./agent-access/approval-fragment.js";
 export {
   formatRelativeTime,
   RelativeTime,

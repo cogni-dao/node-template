@@ -12,6 +12,8 @@
  */
 
 export type {
+  AccountCreditsCapability,
+  AccountCreditsInfo,
   ActiveGoalInfo,
   AuthCapability,
   ChainDirection,
@@ -120,6 +122,19 @@ export {
   toToolSpecs,
 } from "./schema";
 // Tools
+export {
+  ACCOUNT_CREDITS_READ_NAME,
+  type AccountCreditsReadDeps,
+  type AccountCreditsReadInput,
+  AccountCreditsReadInputSchema,
+  type AccountCreditsReadOutput,
+  AccountCreditsReadOutputSchema,
+  type AccountCreditsReadRedacted,
+  accountCreditsReadBoundTool,
+  accountCreditsReadContract,
+  accountCreditsReadStubImplementation,
+  createAccountCreditsReadImplementation,
+} from "./tools/account-credits-read";
 export {
   createEdoDecideImplementation,
   EDO_DECIDE_NAME,

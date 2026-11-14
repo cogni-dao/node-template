@@ -12,7 +12,10 @@
  *     agents included). `admin` means a principal the DAO approved (AUTHORITY_IS_NOT_KIND); until the AI-admin item (I2)
  *     ships no AI identity is approved, so an agent fails `admin` checks and passes `member` checks.
  *   - FAIL_CLOSED_ON_UNKNOWN: a `kind` outside node|own|account or a `subject` outside member|admin is `policy_denied`.
- *   - NO_ACCOUNT_SCOPE: account scopes are out of scope; an `account` tool is denied with `policy_denied`.
+ *   - ACCOUNT_NEEDS_ACCOUNT (R1, R13): an `account` tool is decided only against one account. With no `accountId` it is denied (`no_account`);
+ *     with one, the principal needs a live account row for exactly that account (`hasLiveAccountGrant`). Node rows never satisfy it and
+ *     account rows never satisfy a node tool.
+ *   - ONE_ACCOUNT_DOOR: `authorizeAccount()` is the one answer for account data on a route: owner | delegated | null (a non-disclosing 404).
  *   - FAIL_CLOSED_NON_DISCLOSING: a store or admin outage is `authz_unavailable`, never an allow.
  *   - NEVER_CACHED: every call reads the store.
  * Side-effects: IO (store reads)
@@ -20,6 +23,7 @@
  */
 
 import type {
+  AccountAccess,
   AdminCheck,
   AgentGrantsStore,
   AuthzDecision,
@@ -29,6 +33,8 @@ import type {
 export interface AuthorizeInput {
   readonly principalId?: string | undefined;
   readonly subjectUserId?: string | undefined;
+  /** The account the run acts on. Only an `account` tool reads it. */
+  readonly accountId?: string | undefined;
   readonly requires: ToolRequires;
 }
 
@@ -46,15 +52,16 @@ const unavailable = (reason: string): AuthzDecision => ({
   reason,
 });
 
-/** The contract-only denials of the principal lock (no store read): unknown kind or subject, account scope, no principal. */
+/** The contract-only denials of the principal lock (no store read): unknown kind or subject, no principal, an account tool with no account. */
 export function principalLockPrecheck(
   principalId: string | undefined,
-  requires: ToolRequires
+  requires: ToolRequires,
+  accountId?: string | undefined
 ): AuthzDecision | null {
   if (!KINDS.has(requires.kind) || !SUBJECTS.has(requires.subject))
     return deny("unknown_contract_value");
   if (!principalId) return deny("no_principal");
-  if (requires.kind === "account") return deny("account_scope_unsupported");
+  if (requires.kind === "account" && !accountId) return deny("no_account");
   return null;
 }
 
@@ -64,17 +71,24 @@ export function principalLockPrecheck(
  */
 export async function authorizePrincipalLock(
   store: AgentGrantsStore,
-  input: { readonly principalId?: string | undefined; readonly requires: ToolRequires }
+  input: {
+    readonly principalId?: string | undefined;
+    readonly accountId?: string | undefined;
+    readonly requires: ToolRequires;
+  }
 ): Promise<AuthzDecision> {
-  const { principalId, requires } = input;
+  const { principalId, requires, accountId } = input;
   // FAIL_CLOSED_ON_UNKNOWN: `requires` comes from a published contract and this package is pinned independently,
   // so an unknown kind or subject (a newer contract) must deny, never run as `node` or `member`.
-  const early = principalLockPrecheck(principalId, requires);
+  const early = principalLockPrecheck(principalId, requires, accountId);
   if (early) return early;
   if (!principalId) return deny("no_principal");
   try {
-    if (!(await store.hasLiveRole(principalId, requires.scope)))
-      return deny("no_role");
+    if (requires.kind === "account") {
+      // The same call at the run-start filter and at exec (DENIAL_IS_TERMINAL), so the two cannot disagree.
+      if (!accountId || !(await store.hasLiveAccountGrant(principalId, requires.scope, accountId)))
+        return deny("no_role");
+    } else if (!(await store.hasLiveRole(principalId, requires.scope))) return deny("no_role");
   } catch {
     return unavailable("store_unavailable");
   }
@@ -86,8 +100,8 @@ export async function authorize(
   adminCheck: AdminCheck,
   input: AuthorizeInput
 ): Promise<AuthzDecision> {
-  const { principalId, subjectUserId, requires } = input;
-  const lock = await authorizePrincipalLock(store, { principalId, requires });
+  const { principalId, subjectUserId, accountId, requires } = input;
+  const lock = await authorizePrincipalLock(store, { principalId, accountId, requires });
   if (lock.decision === "deny") return lock;
   if (requires.kind === "own" && !subjectUserId) return deny("no_subject");
 
@@ -102,4 +116,31 @@ export async function authorize(
     if (admin !== "allow") return deny("subject_not_admin");
   }
   return { decision: "allow", basis: "role" };
+}
+
+export interface AuthorizeAccountInput {
+  /** The caller's user id: the signed-in person, or the bearer agent. */
+  readonly callerUserId: string;
+  /** How the request authenticated. A `bearer` caller is an agent, so a delegated row can apply; a session caller is a person. */
+  readonly via: "bearer" | "session";
+  readonly scope: string;
+  readonly accountId: string;
+}
+
+/**
+ * The ONE answer for a read of one account's data on a route: `owner` (the caller owns the account), `delegated` (a bearer agent holds a live
+ * account row for this scope and this exact account), or null. A null is a non-disclosing 404: foreign, expired, revoked, wrong-scope and
+ * missing accounts are indistinguishable. A store failure throws (the route says 503), never allows.
+ */
+export async function authorizeAccount(
+  store: AgentGrantsStore,
+  input: AuthorizeAccountInput
+): Promise<AccountAccess> {
+  if (await store.ownsAccount(input.callerUserId, input.accountId)) return "owner";
+  if (
+    input.via === "bearer" &&
+    (await store.hasLiveAccountGrant(input.callerUserId, input.scope, input.accountId))
+  )
+    return "delegated";
+  return null;
 }

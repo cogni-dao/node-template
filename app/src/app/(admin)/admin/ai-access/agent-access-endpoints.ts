@@ -11,4 +11,8 @@
  */
 
 export const AGENT_ACCESS_ROLES_PATH = "/api/v1/admin/ai-access" as const;
-export const AGENT_ACCESS_ENDPOINTS = { roles: AGENT_ACCESS_ROLES_PATH } as const;
+export const AGENT_ACCESS_PREVIEW_PATH = "/api/v1/admin/ai-access/preview" as const;
+export const AGENT_ACCESS_ENDPOINTS = {
+	roles: AGENT_ACCESS_ROLES_PATH,
+	preview: AGENT_ACCESS_PREVIEW_PATH,
+} as const;

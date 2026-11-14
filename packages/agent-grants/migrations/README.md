@@ -12,3 +12,12 @@ file, and it must not copy node-template's `DROP TABLE IF EXISTS ... CASCADE`, w
 4. Run `db:check`. The journal `when` must be greater than every earlier entry.
 
 The store needs a BYPASSRLS (service role) connection: the table has no policy, so the app role sees nothing.
+
+# agent_account_grants migration template
+
+`agent_account_grants.sql` is the FINAL shape a node applies for account-resource grants on `agent_roles` (`@cogni-dao/agent-grants` 0.6.0). node-template keeps it as `0041_agent_account_grants.sql`. Do not copy it blind into a fork:
+
+1. Add the new columns, the five CHECKs, the unique `link_hash` index and the one select policy (`agent_roles_account_self_read`) to the node's own `agentRoles` schema, then run the node's `db:generate`. drizzle-kit writes that part and the snapshot against the node's own prior snapshot. Never copy a snapshot.
+2. Append the hand-written part (everything after the line `Hand-written below`): the table privilege, `agent_has_scope()` (SECURITY INVOKER, no PUBLIC execute) and one delegated select policy per table that holds an account's data. Drizzle cannot emit them.
+3. Keep `agent_roles_live_unique` and the old `ON CONFLICT` targets (EXPAND-ONLY). The contract migration (task.5484) replaces them.
+4. Run `db:check`. The journal `when` must be greater than every earlier entry. Run `runGrantConformance` over the node's real SQL store, and check row-level security as the real app role (owner, live grant, foreign, expired, revoked: 0 rows).

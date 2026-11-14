@@ -88,6 +88,11 @@ Published React components and hooks every node renders for knowledge (Browse, G
 - Every row passes `entityId` to the injected `LinkComponent`, so a host can open the entry in place (node-template opens a side sheet). The default anchor drops it.
 - `formatCitationLabel` is deprecated (it drops direction); kept for existing adopters.
 
+## Public Surface (AI access, task.5465; root entry)
+
+- `AgentAccessSection` is the ONE table where an approver says yes or no to what each AI can do (Who · Can do · Until · On). `mode="admin"` (default): a node-admin's node permissions on `/admin/ai-access`, rendered only for a confirmed admin. `mode="account"`: the AIs that may act on a person's OWN account on `/profile`, rendered for every signed-in person, with an Until choice (1, 7 or 30 days, default 7) on a row that is Off. The section drops any row of the other resource. Endpoints: `{ roles, preview? }`; the node owns the routes and their auth (session only).
+- `useApprovalFragment()` (the two pages that open an AI's one-time link) reads `#agent-request=<token>` once and removes it from the address bar at once; the page passes the token to the section, which previews it (POST body, never a URL), highlights the row it opens and sends the token back to decide it. `ApprovalFragmentScrub` (root layout) removes the fragment on every other path. Only the `agent-request` key is touched; `#attestation=` and any other value survive.
+
 ## Boundaries
 
 - Does not import node app code, routers, auth or environment.

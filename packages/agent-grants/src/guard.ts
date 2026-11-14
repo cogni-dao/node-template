@@ -12,6 +12,7 @@
  *     returns the fixed message plus that receipt (see `failureReceipt` in ai-core tool-runner).
  *   - The fixed message never names a role, scope or reason. `onDecision` carries the reason.
  *   - `runAs` lets the node bind principal and subject for the duration of the tool call.
+ *   - ACCOUNT_TOOL_NEEDS_RUN_ACCOUNT (R13): an `account`-kind tool (even a read-only one) is checked against the run's `accountId`, at run start and at exec.
  *   - DENIAL_IS_TERMINAL: `offeredToolIds` drops every tool whose principal lock already fails, so the model is never offered
  *     a tool it cannot use. An exec-time denial (a role revoked mid-run, a failed subject lock) calls `onTerminalDenial`
  *     once so the node ends the run cleanly. A denied run never loops.
@@ -95,6 +96,7 @@ export function guardTools<T extends GuardableRuntime>(
   const identity: RunIdentity = {
     principalId: scope.principalId,
     subjectUserId: scope.subjectUserId,
+    accountId: scope.accountId,
   };
   const guarded: Record<string, T> = {};
   for (const [id, runtime] of Object.entries(runtimes)) {
@@ -150,6 +152,7 @@ export function guardTools<T extends GuardableRuntime>(
           code: decision.decision === "allow" ? "allowed" : decision.code,
           reason: decision.decision === "allow" ? decision.basis : decision.reason,
           runId: runIdOf(ctx),
+          account: identity.accountId ?? null,
         });
         if (decision.decision === "deny") {
           deps.onTerminalDenial?.({
@@ -174,7 +177,7 @@ export function guardTools<T extends GuardableRuntime>(
  * Run-start filter (DENIAL_IS_TERMINAL). Returns the tool ids the run may offer the model: a read_only tool with no
  * `requires` always; any other tool only when its PRINCIPAL lock opens now. A tool whose principal lock fails, or whose
  * store check is unavailable, or that has no `requires` entry and an effect other than read_only, is excluded and reported.
- * One store read for the whole run (`liveScopes`), filtered in memory. An `own` scope with no run subject is withheld too,
+ * One store read per plane for the whole run (`liveScopes` for node tools, `liveAccountScopes` for account tools on the run's account), filtered in memory. An `own` scope with no run subject is withheld too,
  * matching `authorize()`'s `no_subject` deny. The rest of the subject lock is not checked here: it can only narrow, and
  * the exec-time guard still enforces it.
  */
@@ -188,7 +191,7 @@ export async function offeredToolIds(
   readonly excluded: ReadonlyArray<{ tool: string; code: DenialCode; reason: string }>;
 }> {
   const verdicts = new Map<string, AuthzDecision>();
-  const needStore: Array<{ id: string; scope: string }> = [];
+  const needStore: Array<{ id: string; scope: string; account: boolean }> = [];
   for (const tool of tools) {
     const requires = requiresById[tool.id];
     if (!requires && tool.effect === "read_only") {
@@ -199,7 +202,7 @@ export async function offeredToolIds(
       verdicts.set(tool.id, { decision: "deny", code: "policy_denied", reason: "no_requires" });
       continue;
     }
-    const early = principalLockPrecheck(scope.principalId, requires);
+    const early = principalLockPrecheck(scope.principalId, requires, scope.accountId);
     if (early) {
       verdicts.set(tool.id, early);
       continue;
@@ -208,26 +211,39 @@ export async function offeredToolIds(
       verdicts.set(tool.id, { decision: "deny", code: "policy_denied", reason: "no_subject" });
       continue;
     }
-    needStore.push({ id: tool.id, scope: requires.scope });
+    needStore.push({ id: tool.id, scope: requires.scope, account: requires.kind === "account" });
   }
   if (needStore.length > 0 && scope.principalId) {
     const principalId = scope.principalId;
-    const scopes = [...new Set(needStore.map((n) => n.scope))];
+    const accountId = scope.accountId;
+    // One read per plane (R13): node-kind tools keep `liveScopes`; an account-kind tool opens only when the principal holds a live row
+    // for exactly this run's account (the same call the exec-time check makes).
+    const nodeScopes = [...new Set(needStore.filter((n) => !n.account).map((n) => n.scope))];
+    const accountScopes = [...new Set(needStore.filter((n) => n.account).map((n) => n.scope))];
     let held: Set<string> | null = null;
+    let heldAccount: Set<string> | null = null;
     try {
-      held = new Set(await deps.withStore((store) => store.liveScopes(principalId, scopes)));
+      held = new Set(await deps.withStore((store) => store.liveScopes(principalId, nodeScopes)));
+      heldAccount = new Set(
+        accountId && accountScopes.length > 0
+          ? await deps.withStore((store) => store.liveAccountScopes(principalId, accountScopes, accountId))
+          : []
+      );
     } catch {
       held = null;
+      heldAccount = null;
     }
-    for (const n of needStore)
+    for (const n of needStore) {
+      const open = n.account ? heldAccount : held;
       verdicts.set(
         n.id,
-        held === null
+        open === null
           ? { decision: "deny", code: "authz_unavailable", reason: "store_unavailable" }
-          : held.has(n.scope)
+          : open.has(n.scope)
             ? { decision: "allow", basis: "role" }
             : { decision: "deny", code: "policy_denied", reason: "no_role" }
       );
+    }
   }
   const offered: string[] = [];
   const excluded: Array<{ tool: string; code: DenialCode; reason: string }> = [];
@@ -247,6 +263,7 @@ export async function offeredToolIds(
       code: decision.code,
       reason: `not_offered:${decision.reason}`,
       runId: scope.runId ?? null,
+      account: scope.accountId ?? null,
     });
   }
   return { offered, excluded };
