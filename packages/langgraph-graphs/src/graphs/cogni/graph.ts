@@ -205,7 +205,9 @@ export function createCogniProgram(
 					return (
 						current instanceof InvalidCompletionError ||
 						(isAiExecutionError(current) &&
-							(current.code === "timeout" || current.code === "rate_limit"))
+							(current.code === "timeout" ||
+								current.code === "rate_limit" ||
+								current.code === "internal"))
 					);
 				},
 				initialDelayMs: 250,
