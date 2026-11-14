@@ -1530,7 +1530,8 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			// Insert-only on the real engine: every artifact is one Dolt commit with its actor, reason and id;
 			// recording moved nothing on the item beyond the one patch above.
 			const log = await writerSql.unsafe(
-				`SELECT message FROM dolt_log WHERE message LIKE '%Artifact: ${second.id}'`,
+				// The Artifact: line is followed by the Seq: line, so the pattern must not end at the id.
+				`SELECT message FROM dolt_log WHERE message LIKE '%Artifact: ${second.id}%'`,
 			);
 			expect(log).toHaveLength(1);
 			expect(String(log[0]?.message)).toBe(
