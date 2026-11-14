@@ -319,6 +319,29 @@ const CASES = [
     expectExit: 1,
     expectMatch: /jobs\.publish\.needs must include "select"/,
   },
+  // Defect: narrowing the full unit step to pull requests lets the merge queue pass without
+  // running the full chain, so a PR-time under-selection is never caught before merge.
+  {
+    name: "the full unit chain must still run on merge_group",
+    mutate: edit(
+      ".github/workflows/ci.yaml",
+      "scope != 'docs-only' && steps.scope.outputs.scope != 'affected'",
+      "scope != 'docs-only' && steps.scope.outputs.scope != 'affected' && github.event_name == 'pull_request'"
+    ),
+    expectExit: 1,
+    expectMatch: /unit on merge_group with scope "full" must skip exactly/,
+  },
+  // Defect: gating the Markdown check on scope lets a docs-only PR pass with nothing verified.
+  {
+    name: "markdown refs must never be gated",
+    mutate: edit(
+      ".github/workflows/ci.yaml",
+      "      - name: Markdown references check\n",
+      "      - name: Markdown references check\n        if: steps.scope.outputs.scope != 'docs-only'\n"
+    ),
+    expectExit: 1,
+    expectMatch: /markdown-refs/,
+  },
 ];
 
 let failed = 0;

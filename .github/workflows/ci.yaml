@@ -48,6 +48,8 @@ jobs:
       # job, so the required context still reports. Any classifier error means full.
       - name: Classify CI scope
         id: scope
+        # A crash leaves the outputs empty, which every gated step reads as full.
+        continue-on-error: true
         env:
           CI_EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -98,7 +100,7 @@ jobs:
 
       # Never scoped out. A docs-only PR runs only this: Markdown can break no build, type,
       # schema, workflow or declaration, so the one check a Markdown edit can fail is its
-      # own reference policy. It needs only git and node, so it runs before any install.
+      # own reference policy. It needs only git and node, so a docs-only run does no install.
       # story.0046: node-template Markdown lives in the hub. Fails on tracked Markdown outside
       # the bootstrap set and on any repo docs/ or work/ Markdown path reference.
       - name: Markdown references check
@@ -129,6 +131,8 @@ jobs:
       # job, so the required context still reports. Any classifier error means full.
       - name: Classify CI scope
         id: scope
+        # A crash leaves the outputs empty, which every gated step reads as full.
+        continue-on-error: true
         env:
           CI_EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -181,6 +185,8 @@ jobs:
       # job, so the required context still reports. Any classifier error means full.
       - name: Classify CI scope
         id: scope
+        # A crash leaves the outputs empty, which every gated step reads as full.
+        continue-on-error: true
         env:
           CI_EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}

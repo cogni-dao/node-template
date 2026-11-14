@@ -1,8 +1,14 @@
 // Outcome test for classify-ci-scope.mjs. Each case names the defect it catches: a wrong
 // scope either skips tests a PR can break (false green) or runs everything for nothing.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { classifyFiles, parseTestChain, selectUnitFilters } from "./classify-ci-scope.mjs";
+import { classifyFiles, decide, parseTestChain, selectUnitFilters } from "./classify-ci-scope.mjs";
+import { findUndeclaredWorkspaceEdges } from "./workspace-edges.mjs";
 
 const DIRS = ["app", "graphs", "packages/ids", "packages/metrics"];
 const scopeOf = (files) => classifyFiles(files, DIRS).scope;
@@ -32,6 +38,44 @@ const CASES = [
     const chain = parseTestChain('node a && pnpm --filter @x/b test && pnpm --filter @x/a test && pnpm --filter "@x/c" test');
     assert.deepEqual(chain, ["@x/b", "@x/a", "@x/c"]);
     assert.deepEqual(selectUnitFilters(chain, ["@x/c", "@x/b", "@x/not-in-chain"]), ["@x/b", "@x/c"]);
+  }],
+  // Defect: a package test importing another package's source by path is invisible to pnpm's
+  // graph, so an app-only change would skip that test (false green). Declared (even aliased) is fine.
+  ["an undeclared cross-package relative import is found; a declared or aliased one is not", () => {
+    const pkgs = [
+      { name: "@x/app", dir: "app" },
+      { name: "@x/lib", dir: "packages/lib" },
+      { name: "@x/ui", dir: "packages/ui" },
+    ];
+    const manifests = {
+      "app/package.json": { dependencies: { "@x/ui-alias": "workspace:@x/ui@*" } },
+      "packages/lib/package.json": {},
+      "packages/ui/package.json": {},
+    };
+    const sources = {
+      "packages/ui/tests/a.test.ts": 'import { f } from "../../../app/src/f";',
+      "app/tests/b.test.ts": 'import { g } from "../../packages/ui/src/g";\nimport { h } from "../../packages/lib/src/h";',
+    };
+    const read = (file) => (manifests[file] ? JSON.stringify(manifests[file]) : sources[file]);
+    const edges = findUndeclaredWorkspaceEdges(pkgs, Object.keys(sources), read);
+    assert.equal(edges.length, 2);
+    assert.ok(edges.some((e) => e.startsWith("packages/ui/tests/a.test.ts") && e.includes("@x/app")));
+    assert.ok(edges.some((e) => e.startsWith("app/tests/b.test.ts") && e.includes("@x/lib")));
+  }],
+  // Defect: any path through main() that is not a clean PR classification must be `full`:
+  // the merge queue, main, a throwing classifier, an unresolvable base. A smaller scope there is a false green.
+  ["merge_group, push, a thrown error and an unresolvable base all decide full", () => {
+    const boom = () => {
+      throw new Error("boom");
+    };
+    assert.equal(decide({ CI_EVENT: "merge_group" }, () => ({ scope: "docs-only" })).scope, "full");
+    assert.equal(decide({ CI_EVENT: "push" }, () => ({ scope: "docs-only" })).scope, "full");
+    assert.equal(decide({ CI_EVENT: "pull_request" }, boom).scope, "full");
+    const out = join(mkdtempSync(join(tmpdir(), "ci-scope-")), "out");
+    spawnSync(process.execPath, [fileURLToPath(new URL("./classify-ci-scope.mjs", import.meta.url))], {
+      env: { ...process.env, CI_EVENT: "pull_request", BASE_REF: "no-such-branch-for-test", GITHUB_OUTPUT: out },
+    });
+    assert.match(readFileSync(out, "utf8"), /^scope=full$/m);
   }],
 ];
 

@@ -77,6 +77,8 @@
     }
   },
   "devDependencies": {
+    "@cogni-dao/knowledge-store": "workspace:*",
+    "@cogni-dao/work-items": "workspace:*",
     "postgres": "^3.4.5",
     "tsup": "^8.5.1",
     "typescript": "^5",

@@ -10,7 +10,9 @@
  *   - FAIL_SAFE: any classifier error, an empty diff or an unresolvable base is `full`, never a smaller scope.
  *   - SKIP_STEPS_NOT_JOBS: this script only emits outputs; the workflow skips steps and every required job still reports.
  *   - The curated unit list stays owned by the root `test` script: it is parsed here the way scripts/check-test-filters.mjs parses it, never copied.
- *   - Uses node builtins and `pnpm ls` only, so it runs before `pnpm install`.
+ *   - UNDECLARED_EDGE_IS_FULL: a relative import across workspace packages with no declared dependency (scripts/ci/workspace-edges.mjs) hides a dependent from pnpm's graph, so the diff runs `full`.
+ *   - Uses node builtins, git and `pnpm ls` only, so it runs before `pnpm install`.
+ * Preview locally: `CI_EVENT=pull_request BASE_REF=main pnpm ci:scope` (run after `git fetch origin main`; optional HEAD_REF=<commit> classifies a past commit).
  * Side-effects: IO (runs git and pnpm, appends to $GITHUB_OUTPUT).
  * Links: .github/workflows/ci.yaml, scripts/ci/run-unit-tests.mjs, scripts/check-test-filters.mjs
  */
@@ -19,10 +21,10 @@
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+import { REPO_ROOT, scanRepo, workspacePackages } from "./workspace-edges.mjs";
 
 // Root `CLAUDE.md` / `AGENTS.md` are Markdown that unit tests read as contract
 // (app/tests/meta/cognition-bootstrap.test.ts), so they are not "docs only".
@@ -102,12 +104,6 @@ function sh(cmd, args) {
   return execFileSync(cmd, args, { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
 
-function workspacePackages() {
-  return JSON.parse(sh("pnpm", ["ls", "-r", "--depth", "-1", "--json"]))
-    .map((pkg) => ({ name: pkg.name, dir: relative(REPO_ROOT, pkg.path).split(sep).join("/") }))
-    .filter((pkg) => pkg.dir !== "");
-}
-
 function changedFiles(baseRef) {
   const head = process.env.HEAD_REF ?? "HEAD"; // overridable to classify a past commit locally
   const mergeBase = sh("git", ["merge-base", `origin/${baseRef}`, head]).trim();
@@ -116,11 +112,16 @@ function changedFiles(baseRef) {
     .filter(Boolean);
 }
 
-function classifyPullRequest(baseRef) {
+function classifyPullRequest(baseRef, findEdges = scanRepo) {
   const packages = workspacePackages();
   const files = changedFiles(baseRef);
   const result = classifyFiles(files, packages.map((pkg) => pkg.dir));
   if (result.scope !== "affected") return { ...result, unitFilters: [] };
+
+  const edges = findEdges();
+  if (edges.length > 0) {
+    return { scope: "full", reason: `undeclared cross-workspace import, ${edges[0]}`, packages: [], unitFilters: [] };
+  }
 
   // Changed packages plus everything that depends on them (pnpm's `...` selector).
   const selectors = result.packages.flatMap((dir) => ["--filter", `...{./${dir}}`]);
@@ -134,22 +135,25 @@ function classifyPullRequest(baseRef) {
   return { ...result, unitFilters: selectUnitFilters(chain, affectedNames) };
 }
 
-function main() {
-  const event = process.env.CI_EVENT ?? "";
-  let result;
+/** The scope for this run. Only a pull request is ever scoped down; anything that throws is `full`. */
+export function decide(env, classifyPr = classifyPullRequest) {
+  const event = env.CI_EVENT ?? "";
   if (event !== "pull_request") {
-    result = {
+    return {
       scope: "full",
       reason: `event "${event || "unknown"}" always runs everything (merge queue and main are the backstop)`,
       unitFilters: [],
     };
-  } else {
-    try {
-      result = classifyPullRequest(process.env.BASE_REF ?? "main");
-    } catch (error) {
-      result = { scope: "full", reason: `classifier error, failing safe: ${error.message}`, unitFilters: [] };
-    }
   }
+  try {
+    return classifyPr(env.BASE_REF ?? "main");
+  } catch (error) {
+    return { scope: "full", reason: `classifier error, failing safe: ${error.message}`, unitFilters: [] };
+  }
+}
+
+function main() {
+  const result = decide(process.env);
   console.log(`ci-scope: ${result.scope} -- ${result.reason}`);
   if (result.scope === "affected") {
     console.log(`ci-scope: unit packages: ${result.unitFilters.join(" ") || "(none in the curated chain)"}`);
