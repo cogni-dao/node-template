@@ -284,6 +284,99 @@ expectEqual(
   "unit test command"
 );
 
+// task.0127 AFFECTED_ON_PR_FULL_ON_QUEUE: the step-level `if:` expressions in ci.yaml ARE the
+// scoping policy, so pin their behaviour, not their text. Each condition is evaluated against
+// every (event, scope) the workflow can see. merge_group and push always get `full` from the
+// classifier; an empty scope is a crashed classifier and must also mean full.
+function evaluateIf(expression, context) {
+  const source = String(expression);
+  const tokens = [...source.matchAll(/\s*(&&|\|\||==|!=|'[^']*'|[A-Za-z_][\w.]*)\s*/gy)].map((m) => m[1]);
+  if (tokens.join("") !== source.replace(/\s+/g, "")) {
+    throw new Error(`unsupported syntax in ${JSON.stringify(source)}`);
+  }
+  let at = 0;
+  const operand = () => {
+    const token = tokens[at++];
+    if (token?.startsWith("'")) return token.slice(1, -1);
+    if (token && Object.hasOwn(context, token)) return context[token];
+    throw new Error(`unknown operand ${JSON.stringify(token)} in ${JSON.stringify(source)}`);
+  };
+  const comparison = () => {
+    const left = operand();
+    if (tokens[at] !== "==" && tokens[at] !== "!=") return left !== "";
+    const equal = tokens[at++] === "==";
+    return (left === operand()) === equal;
+  };
+  const conjunction = () => {
+    let value = comparison();
+    while (tokens[at] === "&&") {
+      at++;
+      value = comparison() && value;
+    }
+    return value;
+  };
+  let value = conjunction();
+  while (tokens[at] === "||") {
+    at++;
+    value = conjunction() || value;
+  }
+  if (at !== tokens.length) throw new Error(`unsupported syntax in ${JSON.stringify(source)}`);
+  return value;
+}
+
+function assertCiScopePolicy(workflow) {
+  const DOCS_ONLY_RUNS = {
+    static: ["pnpm ci:scope", "pnpm check:markdown-refs"],
+    unit: ["pnpm ci:scope"],
+    component: ["pnpm ci:scope"],
+  };
+  const SETUP_ACTIONS = ["actions/checkout@", "pnpm/action-setup@", "actions/setup-node@"];
+  const cases = [
+    ...["merge_group", "push"].flatMap((event) => ["full", ""].map((scope) => ({ event, scope }))),
+    ...["full", "", "affected", "docs-only"].map((scope) => ({ event: "pull_request", scope })),
+  ];
+  const label = (step) => step.run ?? step.uses;
+  for (const [jobId, docsOnlyRuns] of Object.entries(DOCS_ONLY_RUNS)) {
+    const steps = Array.isArray(workflow?.jobs?.[jobId]?.steps) ? workflow.jobs[jobId].steps : [];
+    const classify = steps.find((step) => step?.id === "scope");
+    if (classify?.run !== "pnpm ci:scope" || Object.hasOwn(classify, "if") || classify["continue-on-error"] !== true) {
+      fail(CI_WORKFLOW_PATH, `${jobId} must run \`pnpm ci:scope\` as step id "scope", ungated and with continue-on-error: true`);
+    }
+    if (jobId === "static") {
+      const markdown = steps.find((step) => step?.run === "pnpm check:markdown-refs");
+      if (!markdown || Object.hasOwn(markdown, "if")) {
+        fail(CI_WORKFLOW_PATH, "static must run `pnpm check:markdown-refs` on every event and scope (no `if`)");
+      }
+    }
+    for (const { event, scope } of cases) {
+      const where = `${jobId} on ${event} with scope ${JSON.stringify(scope)}`;
+      const context = { "github.event_name": event, "steps.scope.outputs.scope": scope };
+      let skipped;
+      try {
+        skipped = steps.filter((step) => Object.hasOwn(step, "if") && !evaluateIf(step.if, context));
+      } catch (error) {
+        fail(CI_WORKFLOW_PATH, `${where}: cannot evaluate step conditions: ${error.message}`);
+        return;
+      }
+      // `full` and a crashed classifier run everything except the affected-only unit step.
+      const expected =
+        scope === "docs-only"
+          ? steps.filter(
+              (step) =>
+                !SETUP_ACTIONS.some((action) => String(step.uses ?? "").startsWith(action)) &&
+                !docsOnlyRuns.includes(step.run)
+            )
+          : steps.filter((step) => step.run === (scope === "affected" ? "pnpm test:ci" : "pnpm test:affected"));
+      const got = skipped.map(label);
+      const want = expected.map(label);
+      if (JSON.stringify(got) !== JSON.stringify(want)) {
+        fail(CI_WORKFLOW_PATH, `${where} must skip exactly ${JSON.stringify(want)}; it skips ${JSON.stringify(got)}`);
+      }
+    }
+  }
+}
+assertCiScopePolicy(ciWorkflow);
+
 expectEqual(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow?.name, "PR Build", "workflow name");
 expectTrigger(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow, "pull_request");
 expectTrigger(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow, "merge_group");
