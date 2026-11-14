@@ -85,6 +85,7 @@ export const KpiReasonSchema = z.enum([
 	"source_failed",
 	"source_timeout",
 	"incomplete_or_invalid_source",
+	"provider_rate_limited",
 	"unit_mismatch",
 	"no_reading_at_evaluation",
 	"evaluation_not_due",

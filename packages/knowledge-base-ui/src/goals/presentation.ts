@@ -70,6 +70,8 @@ export const REASON_TEXT = {
   source_failed: "The data source returned an error.",
   source_timeout: "The data source timed out.",
   incomplete_or_invalid_source: "The source returned incomplete or invalid data.",
+  provider_rate_limited:
+    "The data provider refused the read for quota; it retries next tick.",
   unit_mismatch: "The reading's unit does not match the target's unit.",
   no_reading_at_evaluation: "No reading existed at the deadline.",
   evaluation_not_due: "The evaluation date has not arrived yet.",

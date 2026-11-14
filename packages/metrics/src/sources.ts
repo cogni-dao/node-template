@@ -76,7 +76,19 @@ async function fetchProviderJson(
 		},
 		cache: "no-store",
 	});
-	if (!response.ok || !response.body) throw new Error("provider_unavailable");
+	if (!response.ok) {
+		// 403 and 429 are the provider's quota answers; a 200 that spent the last request is still data.
+		if (
+			response.status === 429 ||
+			response.status === 403 ||
+			response.headers.get("x-ratelimit-remaining") === "0"
+		) {
+			await response.body?.cancel();
+			throw new ProviderRateLimited("provider_rate_limited");
+		}
+		throw new Error("provider_unavailable");
+	}
+	if (!response.body) throw new Error("provider_unavailable");
 	const reader = response.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let size = 0;
@@ -141,6 +153,7 @@ export interface GithubActionsParams {
 	quantile?: number | undefined;
 }
 
+/** Fields every run needs to be counted at all; the rest are read only for the runs that give a verdict. */
 interface WorkflowRun {
 	id: number;
 	head_sha: string;
@@ -151,31 +164,100 @@ interface WorkflowRun {
 	updated_at: string;
 }
 
-const isWorkflowRun = (r: any): r is WorkflowRun =>
+const isRunEntry = (r: any): boolean =>
 	!!r &&
 	Number.isSafeInteger(r.id) &&
-	typeof r.head_sha === "string" &&
-	(r.conclusion === null || typeof r.conclusion === "string") &&
-	Number.isInteger(r.run_attempt) &&
-	[r.created_at, r.run_started_at, r.updated_at].every(
-		(t) => typeof t === "string" && Number.isFinite(Date.parse(t)),
-	);
+	(r.conclusion === null || typeof r.conclusion === "string");
 
 const runFailed = (r: WorkflowRun) =>
 	r.conclusion === "failure" ||
 	r.conclusion === "startup_failure" ||
 	r.conclusion === "timed_out";
 
+const givesVerdict = (r: WorkflowRun) =>
+	r.conclusion === "success" || runFailed(r);
+
+/** Fields the rates need from a run that gives a verdict. */
+const hasVerdictFields = (r: WorkflowRun) =>
+	typeof r.head_sha === "string" &&
+	Number.isInteger(r.run_attempt) &&
+	Number.isFinite(Date.parse(r.created_at));
+
+/** The provider refused the read for quota (403/429): a wait, not a fault. */
+class ProviderRateLimited extends Error {}
+
+/** One page read for a window and the verdict on whether it covers the window. */
+type LoadedRuns =
+	| { kind: "ok"; runs: WorkflowRun[]; asOf: string | null }
+	| { kind: "incomplete"; counts: string; asOf: string | null }
+	| { kind: "rate_limited"; asOf: string | null };
+
+/** Runs one shared page read; `key` names the read, `fn` performs it with its own signal. */
+export type SharedRead = <T>(
+	key: string,
+	fn: (signal: AbortSignal) => Promise<T>,
+	signal: AbortSignal,
+) => Promise<T>;
+const unshared: SharedRead = (_key, fn, signal) => fn(signal);
+
+async function loadWorkflowRuns(
+	url: (page: number) => string,
+	signal: AbortSignal,
+	maxResponseBytes: number,
+): Promise<LoadedRuns> {
+	const cap = GITHUB_ACTIONS_MAX_PAGES * GITHUB_ACTIONS_PAGE_SIZE;
+	const runs = new Map<number, WorkflowRun>();
+	let asOf: string | null = null;
+	let total = Number.POSITIVE_INFINITY;
+	try {
+		for (
+			let page = 1;
+			page <= GITHUB_ACTIONS_MAX_PAGES && runs.size < total;
+			page++
+		) {
+			const got = await fetchProviderJson(url(page), signal, maxResponseBytes);
+			asOf ??= got.date;
+			const pageRuns = got.body?.workflow_runs;
+			if (
+				!Array.isArray(pageRuns) ||
+				!Number.isSafeInteger(got.body.total_count) ||
+				!pageRuns.every(isRunEntry)
+			)
+				return { kind: "incomplete", counts: `malformed-page=${page}`, asOf };
+			total = got.body.total_count;
+			if (total > cap)
+				return { kind: "incomplete", counts: `total=${total},cap=${cap}`, asOf };
+			for (const run of pageRuns) runs.set(run.id, run);
+			if (pageRuns.length === 0) break;
+		}
+	} catch (error) {
+		if (error instanceof ProviderRateLimited)
+			return { kind: "rate_limited", asOf };
+		throw error;
+	}
+	if (runs.size < total)
+		return {
+			kind: "incomplete",
+			counts: `read=${runs.size},total=${total}`,
+			asOf,
+		};
+	return { kind: "ok", runs: [...runs.values()], asOf };
+}
+
 /**
  * CI health of one workflow over the half-open window [start, end), read from
  * the provider's Actions REST API without credentials. The population is
  * completed runs that succeeded or failed (`startup_failure` and `timed_out`
  * count as failure); cancelled, skipped, neutral, stale and action_required
- * runs are no verdict on the code and are left out. A flaky head SHA has a
- * passing retry (`run_attempt > 1`) or both a failed and a passing run. More
- * runs than `GITHUB_ACTIONS_MAX_PAGES` pages hold, a malformed page or an
- * empty population is unknown, never a partial value or a 0. `read` is the
- * budgeted source call; each page is one call.
+ * runs are no verdict on the code and are left out, whatever their fields hold.
+ * A flaky head SHA has a passing retry (`run_attempt > 1`) or both a failed and
+ * a passing run. More runs than `GITHUB_ACTIONS_MAX_PAGES` pages hold, a
+ * malformed page or an empty population is unknown, never a partial value or a
+ * 0; a quota refusal is unknown with `provider_rate_limited`. `read` is the
+ * budgeted source call (the whole page read is one call). `share` lets
+ * calculators that read the same workflow list inside one tick pay for it once;
+ * the list is requested from the minute the window starts and trimmed to the
+ * exact window here, so every reading sees the same runs.
  */
 export async function readGithubActions(
 	p: GithubActionsParams,
@@ -183,68 +265,60 @@ export async function readGithubActions(
 	read: <T>(
 		source: (signal: AbortSignal, budget: Readonly<MetricBudget>) => Promise<T>,
 	) => Promise<T>,
+	share: SharedRead = unshared,
 ): Promise<MetricSample> {
 	const start = Date.parse(window.start);
 	const end = Date.parse(window.end);
 	const unit = p.output === "duration" ? "min" : "%";
 	const workflowUrl = `https://github.com/${p.owner}/${p.repo}/actions/workflows/${p.workflow}`;
-	const created = window.start.replace(/\.\d+Z$/, "Z");
+	const created = new Date(Math.floor(start / 60000) * 60000)
+		.toISOString()
+		.replace(/\.\d+Z$/, "Z");
 	const query =
 		`created=${encodeURIComponent(`>=${created}`)}` +
 		`&status=completed&per_page=${GITHUB_ACTIONS_PAGE_SIZE}&exclude_pull_requests=true` +
 		(p.event ? `&event=${p.event}` : "");
 	const url = (page: number) =>
 		`https://api.github.com/repos/${encodeURIComponent(p.owner)}/${encodeURIComponent(p.repo)}/actions/workflows/${encodeURIComponent(p.workflow)}/runs?${query}&page=${page}`;
-	let asOf: string | null = null;
+	const loaded = await read((signal, budget) =>
+		share(
+			url(1),
+			(sharedSignal) =>
+				loadWorkflowRuns(url, sharedSignal, budget.maxResponseBytes),
+			signal,
+		),
+	);
 	const sample = (
 		value: number,
 		complete: boolean,
 		counts: string,
-		reason?: "incomplete_or_invalid_source" | "zero_denominator",
+		reason?:
+			| "incomplete_or_invalid_source"
+			| "zero_denominator"
+			| "provider_rate_limited",
 	): MetricSample => ({
 		value,
 		unit,
 		complete,
 		...(reason ? { reason } : {}),
-		sourceWatermarks: [{ source: "github.actions", asOf }],
+		sourceWatermarks: [{ source: "github.actions", asOf: loaded.asOf }],
 		evidenceRefs: [
 			workflowUrl,
 			`github:actions:${p.repo}/${p.workflow}:${counts}`,
 		],
 	});
+	if (loaded.kind === "rate_limited")
+		return sample(0, false, "rate-limited", "provider_rate_limited");
+	if (loaded.kind === "incomplete")
+		return sample(0, false, loaded.counts, "incomplete_or_invalid_source");
 
-	const cap = GITHUB_ACTIONS_MAX_PAGES * GITHUB_ACTIONS_PAGE_SIZE;
-	const runs = new Map<number, WorkflowRun>();
-	let fetched = 0;
-	let total = Number.POSITIVE_INFINITY;
-	for (let page = 1; page <= GITHUB_ACTIONS_MAX_PAGES && fetched < total; page++) {
-		const got = await read((signal, budget) =>
-			fetchProviderJson(url(page), signal, budget.maxResponseBytes),
-		);
-		asOf ??= got.date;
-		const pageRuns = got.body?.workflow_runs;
-		if (
-			!Array.isArray(pageRuns) ||
-			!Number.isSafeInteger(got.body.total_count) ||
-			!pageRuns.every(isWorkflowRun)
-		)
-			return sample(0, false, `malformed-page=${page}`, "incomplete_or_invalid_source");
-		total = got.body.total_count;
-		if (total > cap)
-			return sample(0, false, `total=${total},cap=${cap}`, "incomplete_or_invalid_source");
-		for (const run of pageRuns) runs.set(run.id, run);
-		fetched += pageRuns.length;
-		if (pageRuns.length === 0) break;
-	}
-	if (fetched < total)
-		return sample(0, false, `read=${fetched},total=${total}`, "incomplete_or_invalid_source");
-
-	const population = [...runs.values()].filter((r) => {
+	const inWindow = loaded.runs.filter((r) => {
 		const at = Date.parse(r.created_at);
-		return (
-			at >= start && at < end && (r.conclusion === "success" || runFailed(r))
-		);
+		return givesVerdict(r) && !(at < start || at >= end);
 	});
+	if (!inWindow.every(hasVerdictFields))
+		return sample(0, false, "malformed-run", "incomplete_or_invalid_source");
+	const population = inWindow;
 	const bySha = new Map<string, WorkflowRun[]>();
 	for (const r of population) {
 		const group = bySha.get(r.head_sha);
@@ -258,19 +332,27 @@ export async function readGithubActions(
 	).length;
 	const failures = population.filter(runFailed).length;
 	const counts = `runs=${population.length},failures=${failures},shas=${bySha.size},flakyShas=${flakyShas}`;
-	if (population.length === 0) return sample(0, false, counts, "zero_denominator");
+	if (population.length === 0)
+		return sample(0, false, counts, "zero_denominator");
 
 	if (p.output === "failure_rate")
 		return sample((failures / population.length) * 100, true, counts);
 	if (p.output === "flake_rate")
 		return sample((flakyShas / bySha.size) * 100, true, counts);
+	// A run whose timings are missing or run backwards has no duration; it is skipped, not a reason to void the reading.
 	const minutes = population
-		.map((r) => (Date.parse(r.updated_at) - Date.parse(r.run_started_at)) / 60000)
+		.map(
+			(r) => (Date.parse(r.updated_at) - Date.parse(r.run_started_at)) / 60000,
+		)
+		.filter((m) => Number.isFinite(m) && m >= 0)
 		.sort((a, b) => a - b);
-	if (minutes[0] === undefined || minutes[0] < 0)
+	if (minutes.length === 0)
 		return sample(0, false, counts, "incomplete_or_invalid_source");
-	const rank = Math.max(0, Math.ceil((p.quantile ?? 0.95) * minutes.length) - 1);
-	return sample(minutes[rank] as number, true, counts);
+	// Nearest rank in integer basis points, so 0.55 x 100 ranks 55, not 56.
+	const rank = Math.ceil(
+		(Math.round((p.quantile ?? 0.95) * 10000) * minutes.length) / 10000,
+	);
+	return sample(minutes[Math.max(0, rank - 1)] as number, true, counts);
 }
 
 const SYNTHETIC_LABELS = (column: string) =>

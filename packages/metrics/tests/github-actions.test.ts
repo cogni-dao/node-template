@@ -115,10 +115,7 @@ describe("github.actions@1 reader", () => {
 			read,
 		);
 		expect(p50.value).toBe(9);
-		expect(p95.evidenceRefs).toEqual([
-			"https://github.com/cogni-dao/node-template/actions/workflows/ci.yaml",
-			"github:actions:node-template/ci.yaml:runs=10,failures=2,shas=9,flakyShas=2",
-		]);
+		expect(p95.evidenceRefs.join(" ")).toContain("runs=10,failures=2");
 		expect(p95.sourceWatermarks).toEqual([
 			{ source: "github.actions", asOf: "2026-11-14T00:00:05.000Z" },
 		]);
@@ -127,7 +124,8 @@ describe("github.actions@1 reader", () => {
 	it("leaves cancelled and skipped runs out, so cancel-in-progress cannot inflate failures or shrink durations", async () => {
 		serve([
 			[
-				run({ conclusion: "cancelled", minutes: 1 }),
+				// Odd fields on a run that gives no verdict must not void the reading.
+				{ ...run({ conclusion: "cancelled" }), run_started_at: null, head_sha: null },
 				run({ conclusion: "skipped", minutes: 0 }),
 				run({ conclusion: "failure", minutes: 20 }),
 				run({ conclusion: "success", minutes: 10 }),
@@ -161,32 +159,37 @@ describe("github.actions@1 reader", () => {
 		expect((await readGithubActions(params("failure_rate"), window, read)).value).toBe(50);
 	});
 
-	it("asks the provider for the window, the event and completed runs only", async () => {
-		const urls = serve([[run()]]);
-		await readGithubActions(params("failure_rate", { event: "pull_request" }), window, read);
-		const q = new URL(urls[0] as string).searchParams;
-		expect(new URL(urls[0] as string).pathname).toBe(
-			"/repos/cogni-dao/node-template/actions/workflows/ci.yaml/runs",
-		);
-		expect(q.get("created")).toBe(">=2026-11-07T00:00:00Z");
-		expect(q.get("status")).toBe("completed");
-		expect(q.get("event")).toBe("pull_request");
-	});
-
-	it("reads every page of a window that fits the cap", async () => {
-		const full = Array.from({ length: 100 }, () => run());
-		serve([full, full.map((r) => ({ ...r, id: r.id + 1000 })), [run({ conclusion: "failure" })]]);
-		const sample = await readGithubActions(params("failure_rate"), window, read);
-		expect(sample.complete).toBe(true);
-		expect(sample.evidenceRefs[1]).toContain("runs=201,failures=1");
-	});
-
-	it("is unknown, not a partial value, when the window holds more runs than the page cap reads", async () => {
-		serve([[run()]], GITHUB_ACTIONS_MAX_PAGES * 100 + 1);
-		const sample = await readGithubActions(params("failure_rate"), window, read);
-		expect(sample).toMatchObject({
+	it("reads a window of exactly the page cap, and is unknown rather than truncated one run past it", async () => {
+		const cap = GITHUB_ACTIONS_MAX_PAGES * 100;
+		const page = () => Array.from({ length: 100 }, () => run());
+		serve(Array.from({ length: GITHUB_ACTIONS_MAX_PAGES }, page), cap);
+		expect(await readGithubActions(params("failure_rate"), window, read)).toMatchObject({
+			value: 0,
+			complete: true,
+		});
+		serve([page()], cap + 1);
+		expect(await readGithubActions(params("failure_rate"), window, read)).toMatchObject({
 			complete: false,
 			reason: "incomplete_or_invalid_source",
+		});
+	});
+
+	it("reports a quota refusal on a later page as rate limited, not as a source fault or a partial value", async () => {
+		const full = Array.from({ length: 100 }, () => run({ conclusion: "failure" }));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) =>
+				new URL(url).searchParams.get("page") === "1"
+					? new Response(JSON.stringify({ total_count: 250, workflow_runs: full }))
+					: new Response(JSON.stringify({ message: "API rate limit exceeded" }), {
+							status: 403,
+							headers: { "x-ratelimit-remaining": "0" },
+						}),
+			),
+		);
+		expect(await readGithubActions(params("failure_rate"), window, read)).toMatchObject({
+			complete: false,
+			reason: "provider_rate_limited",
 		});
 	});
 

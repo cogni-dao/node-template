@@ -229,18 +229,23 @@ export function createGoalMetrics(deps: {
 			(p) => p.quantile === undefined || p.output === "duration",
 			{ message: "quantile applies only to output duration" },
 		),
-		// One call per page of 100 runs. A 7-day window on this repo is about 620
-		// runs (7 pages, ~1.4 MB and 1.5-3 s each, measured), so the 10-page cap
-		// leaves headroom; more runs than the cap is unknown, never truncated.
+		// The whole page read is one source call of at most 10 requests, shared by
+		// every calculator of a tick that names the same workflow list. A 7-day
+		// window on this repo is about 620 runs (7 pages, ~1.4 MB and 1.5-3 s each,
+		// measured), so the 10-page cap leaves headroom; more runs than the cap is
+		// unknown, never truncated.
 		budget: {
 			timeoutMs: 45000,
-			maxSourceCalls: GITHUB_ACTIONS_MAX_PAGES,
+			maxSourceCalls: 1,
 			maxRows: GITHUB_ACTIONS_MAX_PAGES * 100,
 			maxResponseBytes: GITHUB_ACTIONS_MAX_PAGE_BYTES,
 		},
 		compute: async (params, ctx) =>
-			readGithubActions(actionsParams.parse(params), ctx.window, (source) =>
-				ctx.read(source),
+			readGithubActions(
+				actionsParams.parse(params),
+				ctx.window,
+				(source) => ctx.read(source),
+				tick.shareOnce,
 			),
 	});
 	const noInlineHistoryParams = z.discriminatedUnion("measure", [
