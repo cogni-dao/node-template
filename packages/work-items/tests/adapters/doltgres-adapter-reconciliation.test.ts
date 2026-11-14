@@ -18,6 +18,32 @@ import {
 
 type Rows = ReadonlyArray<Record<string, unknown>>;
 
+/** An orphan operation branch that holds one `work_item_artifacts` insert (task.0028). */
+interface ArtifactBranch {
+  /** The full commit message; default names item task.0001, actor reviewer-1 and artifact wia-1. */
+  readonly message?: string;
+  /** Columns of the added row, over the matching default. */
+  readonly row?: Record<string, unknown>;
+  /** The table the diff summary names; default is the artifact table. */
+  readonly summaryTable?: string;
+}
+
+const artifactRow = {
+  id: "wia-1",
+  item_id: "task.0001",
+  seq: 1,
+  item_revision: 0,
+  kind: "implementation_review",
+  subject: "https://github.com/cogni-dao/node-template/pull/9@" + "a".repeat(40),
+  verdict: "approve",
+  rows: null,
+  url: "https://github.com/cogni-dao/node-template/pull/9#issuecomment-1",
+  author: "reviewer-1",
+  created_at: "2026-10-03T00:00:00.000Z",
+};
+const artifactMessage =
+  "work-items: artifact task.0001 by actor:reviewer-1\nReason: Record implementation_review artifact with verdict approve\nArtifact: wia-1\nSeq: 1";
+
 interface ReconciliationState {
   branch?: string;
   readonly deleteError?: Error;
@@ -27,6 +53,7 @@ interface ReconciliationState {
   readonly mergeBase: string;
   readonly listError?: Error;
   readonly proofError?: Error;
+  readonly artifact?: ArtifactBranch;
   readonly queries: string[];
   merged: boolean;
 }
@@ -57,6 +84,7 @@ function makeReconciliationHarness({
   withProvableSibling = false,
   deleteError,
   deleteLeavesRef = false,
+  artifact,
 }: {
   readonly branchCommit?: string;
   readonly mergeBase: string;
@@ -71,6 +99,8 @@ function makeReconciliationHarness({
   readonly deleteError?: Error;
   /** With `deleteError`, the ref survives: the delete genuinely did not land. */
   readonly deleteLeavesRef?: boolean;
+  /** The branch holds an artifact insert instead of a work-item create. */
+  readonly artifact?: ArtifactBranch;
 }) {
   const state: ReconciliationState = {
     branch: "work-item-op/restart-evidence",
@@ -82,6 +112,7 @@ function makeReconciliationHarness({
     listError,
     unprovableTransition,
     proofError,
+    artifact,
     queries: [],
     merged: false,
   };
@@ -135,7 +166,9 @@ function makeReconciliationHarness({
           // That is precisely the quarantinable arm, and the only one.
           message: state.unprovableTransition
             ? "unrelated commit with no work-item proof"
-            : "work-items: create work item by actor:principal-1",
+            : state.artifact
+              ? (state.artifact.message ?? artifactMessage)
+              : "work-items: create work item by actor:principal-1",
           date: "2026-10-03T00:01:00.000Z",
         },
       ];
@@ -150,10 +183,13 @@ function makeReconciliationHarness({
       ];
     }
     if (query.startsWith("SELECT * FROM dolt_diff_summary")) {
+      const table = state.artifact
+        ? (state.artifact.summaryTable ?? "public.work_item_artifacts")
+        : "public.work_items";
       return [
         {
-          from_table_name: "public.work_items",
-          to_table_name: "public.work_items",
+          from_table_name: table,
+          to_table_name: table,
           schema_change: false,
           data_change: false,
         },
@@ -163,7 +199,11 @@ function makeReconciliationHarness({
       return [
         {
           ...Object.fromEntries(
-            Object.entries(recoveredRow).map(([key, value]) => [
+            Object.entries(
+              state.artifact
+                ? { ...artifactRow, ...state.artifact.row }
+                : recoveredRow
+            ).map(([key, value]) => [
               `to_${key}`,
               value,
             ])
@@ -199,6 +239,9 @@ function makeReconciliationHarness({
       if (deleted === state.extraBranch) state.extraBranch = undefined;
       else state.branch = undefined;
       return [{ dolt_branch: [0, ""] }];
+    }
+    if (query.startsWith("SELECT id FROM work_item_artifacts WHERE id = 'wia-1'")) {
+      return state.merged ? [{ id: "wia-1" }] : [];
     }
     if (query.startsWith("SELECT * FROM work_items WHERE id = 'task.0001'")) {
       return state.merged ? [recoveredRow] : [];
@@ -459,6 +502,83 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     expect(q[0]?.fields.quarantinedAs).toBe(
       "work-item-quarantine/restart-evidence"
     );
+  });
+
+  // task.0028: the sweep recognises an orphan artifact insert by its commit message and proves it on its own table.
+  describe("an orphan artifact insert (task.0028)", () => {
+    const probe = (adapter: DoltgresWorkItemAdapter) =>
+      adapter.patch(
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        "principal-1"
+      );
+
+    it("merges forward an orphan branch with no in-memory proof, proves the row and deletes the ref", async () => {
+      const { adapter, state, logs } = makeReconciliationHarness({
+        mergeBase: "main-commit",
+        artifact: {},
+      });
+
+      await expect(probe(adapter)).rejects.toThrow(/Work item not found/);
+
+      expect(state.queries.some((q) => q.includes("FROM dolt_diff_summary"))).toBe(true);
+      expect(
+        state.queries.some((q) => q.includes("dolt_diff(") && q.includes("'work_item_artifacts')"))
+      ).toBe(true);
+      expect(state.queries.some((q) => q.includes("FROM dolt_merge("))).toBe(true);
+      // Merge proof reads the artifact table, never work_items.
+      expect(
+        state.queries.some((q) => q.startsWith("SELECT id FROM work_item_artifacts WHERE id = 'wia-1'"))
+      ).toBe(true);
+      expect(state.queries.some((q) => q.startsWith("SELECT * FROM work_items WHERE id = 'task.0001'"))).toBe(false);
+      expect(state.branch).toBeUndefined();
+      expect(logs.find((e) => e.fields.classification === "merged_verified")?.fields).toMatchObject({
+        verb: "artifact",
+        itemId: "task.0001",
+      });
+    });
+
+    it.each([
+      ["an Artifact: line that names another row", { message: artifactMessage.replace("wia-1", "wia-2") }],
+      ["no Artifact: line", { message: artifactMessage.split("\n").filter((l) => !l.startsWith("Artifact:")).join("\n") }],
+      ["no Seq: line", { message: artifactMessage.split("\n").slice(0, 3).join("\n") }],
+      ["a Seq: line that is not the row's seq", { message: artifactMessage.replace("Seq: 1", "Seq: 2") }],
+      ["a row with no seq", { row: { seq: null } }],
+      ["an author other than the commit's actor", { row: { author: "someone-else" } }],
+      ["an item other than the commit's item", { row: { item_id: "task.0002" } }],
+      ["an unknown kind", { row: { kind: "approval" } }],
+      ["a design_waiver kind (removed)", { row: { kind: "design_waiver" } }],
+      ["no item revision", { row: { item_revision: null } }],
+    ] as const)("quarantines a structurally verified branch with %s, never merging or deleting it", async (_name, artifact) => {
+      const { adapter, state, logs } = makeReconciliationHarness({
+        mergeBase: "main-commit",
+        artifact: artifact as ArtifactBranch,
+      });
+
+      // Writes recover: the probe gets past reconciliation and fails only on its own missing row.
+      await expect(probe(adapter)).rejects.toThrow(/Work item not found/);
+
+      const rename = state.queries.find((q) => q.includes("dolt_branch('-m'"));
+      expect(rename).toContain("work-item-quarantine/restart-evidence");
+      expect(state.queries.some((q) => q.includes("FROM dolt_merge("))).toBe(false);
+      expect(state.queries.some((q) => q.startsWith("SELECT dolt_branch('-D'"))).toBe(false);
+      expect(
+        logs.filter((e) => e.fields.classification === "quarantined_unprovable")
+      ).toHaveLength(1);
+    });
+
+    it("fails a write busy and keeps the branch when the diff summary names the wrong table", async () => {
+      const { adapter, state } = makeReconciliationHarness({
+        mergeBase: "main-commit",
+        artifact: { summaryTable: "public.work_items" },
+      });
+
+      await expect(probe(adapter)).rejects.toBeInstanceOf(WorkItemsBusyError);
+
+      expect(state.branch).toBe("work-item-op/restart-evidence");
+      expect(state.queries.some((q) => q.includes("FROM dolt_merge("))).toBe(false);
+      expect(state.queries.some((q) => q.includes("dolt_branch('-m'"))).toBe(false);
+      expect(state.queries.some((q) => q.startsWith("SELECT dolt_branch('-D'"))).toBe(false);
+    });
   });
 
   it("reads never reconcile even provable sibling branches", async () => {

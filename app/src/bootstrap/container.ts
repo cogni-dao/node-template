@@ -51,6 +51,7 @@ import {
 } from "@cogni/knowledge-store";
 import {
 	buildDoltgresClient,
+	createDoltgresContributionAuthors,
 	createDoltgresEntryResolver,
 	createDoltgresPusher,
 	DoltBranchSessionRunner,
@@ -72,7 +73,11 @@ import {
 import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
-import { type WorkItemQueryPort, withWorkItemLeases } from "@cogni/work-items";
+import {
+	type WorkItemArtifactDeps,
+	type WorkItemQueryPort,
+	withWorkItemLeases,
+} from "@cogni/work-items";
 import { createDoltgresWorkItemStore } from "@cogni/work-items/adapters/doltgres";
 import { PostgresWorkItemLeaseAdapter } from "@cogni/work-items/adapters/postgres";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
@@ -301,6 +306,8 @@ export interface Container {
 	workItemQuery: WorkItemQueryPort;
 	/** Node-local Doltgres work-item query/create/patch/delete surface. */
 	doltgresWorkItems: WorkItemsDoltgresPort;
+	/** Review and validation artifacts of work items (task.0028): the item store, the insert-only artifact store and the inbox author port. Undefined when DOLTGRES_URL is unset. */
+	workItemArtifacts: WorkItemArtifactDeps | undefined;
 	/** Run event streaming — publish/subscribe via Redis Streams */
 	runStream: RunStreamPort;
 	/** Node-level event streaming — undefined when REDIS_URL not set */
@@ -787,6 +794,7 @@ function createContainer(): Container {
 	const nodeAdmin = createApproversNodeAdminAuthority();
 	let knowledgeStorePort: KnowledgeStorePort | undefined;
 	let doltgresWorkItems: WorkItemsDoltgresPort;
+	let workItemArtifacts: WorkItemArtifactDeps | undefined;
 	if (env.DOLTGRES_URL) {
 		const doltClient = buildDoltgresClient({
 			connectionString: env.DOLTGRES_URL,
@@ -825,6 +833,17 @@ function createContainer(): Container {
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log }),
 		);
+		// task.0028: artifacts go through the work-items writer path; an inbox subject's author is read
+		// through the knowledge-store port on the knowledge pool, never on the writer connection.
+		workItemArtifacts = doltgresWorkItems.artifacts
+			? {
+					items: doltgresWorkItems,
+					artifacts: doltgresWorkItems.artifacts,
+					inboxes: createDoltgresContributionAuthors(doltClient),
+					// A story validation names its origin; only this hub's own is accepted.
+					ownOrigin: env.APP_BASE_URL,
+				}
+			: undefined;
 		const createKnowledgeBranchClient = () =>
 			buildDoltgresClient({
 				connectionString: env.DOLTGRES_URL as string,
@@ -1165,6 +1184,7 @@ function createContainer(): Container {
 		attributionStore: new DrizzleAttributionAdapter(serviceDb, getScopeId()),
 		workItemQuery: workItemAdapter,
 		doltgresWorkItems,
+		workItemArtifacts,
 		runStream,
 		nodeStream,
 		get webhookRegistrations() {

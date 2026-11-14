@@ -13,7 +13,12 @@
  * @public
  */
 
-export type { NewWorkItemRow, WorkItemRow } from "./schema.js";
+export type {
+  NewWorkItemArtifactRow,
+  NewWorkItemRow,
+  WorkItemArtifactRow,
+  WorkItemRow,
+} from "./schema.js";
 // Schema (Drizzle table definitions — drizzle-kit owns migrations). The base
 // bundle carries every table that every knowledge-capable node uses unchanged:
 // the 4 core knowledge tables + the contribution-flow metadata tables + the
@@ -26,6 +31,7 @@ export {
   knowledgeContributionCommits,
   knowledgeContributions,
   sources,
+  workItemArtifacts,
   workItems,
 } from "./schema.js";
 

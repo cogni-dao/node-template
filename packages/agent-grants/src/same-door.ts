@@ -36,7 +36,7 @@ export interface SameDoorRoute {
 export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
   core__work_item_update: {
     scope: "work_item:transition",
-    routes: ["work.items.patch"],
+    routes: ["work.items.patch", "work.items.artifacts.create"],
   },
   core__schedule_manage: {
     scope: "schedule:manage",

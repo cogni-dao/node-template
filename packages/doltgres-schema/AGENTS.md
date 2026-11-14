@@ -12,7 +12,7 @@
 
 Pure re-exports of the Drizzle table definitions from `@cogni/knowledge-base`, scoped to the node-template `knowledge_node_template` database. Owned by and namespaced to the node-template node. Mirrors `@cogni/operator-doltgres-schema` shape verbatim so every fork starts with the same versioned knowledge plane + work-items source-of-truth.
 
-Contents: re-exports from `@cogni/knowledge-base` of the 6 syntropy-seed tables (citations, domains, knowledge, sources, knowledge_contributions, knowledge_contribution_commits — task.0425 contribution flow promoted to base in spike.5004) + the `work_items` table (task.0423-shape parity, also promoted to base in spike.5004). No local table definitions — `SCHEMA_GENERIC_CONTENT_SPECIFIC` makes column-shape divergence between nodes an anti-pattern.
+Contents: re-exports from `@cogni/knowledge-base` of the 6 syntropy-seed tables (citations, domains, knowledge, sources, knowledge_contributions, knowledge_contribution_commits — task.0425 contribution flow promoted to base in spike.5004) + the `work_items` table (task.0423-shape parity, also promoted to base in spike.5004) + the insert-only `work_item_artifacts` table (task.0028: immutable review and validation verdicts; migration `0006_work_item_artifacts`). No local table definitions — `SCHEMA_GENERIC_CONTENT_SPECIFIC` makes column-shape divergence between nodes an anti-pattern.
 
 ## Pointers
 
@@ -46,7 +46,7 @@ Contents: re-exports from `@cogni/knowledge-base` of the 6 syntropy-seed tables 
 
 - **Subpath exports:**
   - `@cogni/node-template-doltgres-schema` — root barrel re-exports every slice
-  - `@cogni/node-template-doltgres-schema/work-items` — `work_items` table + `WorkItemRow` / `NewWorkItemRow` inferred types
+  - `@cogni/node-template-doltgres-schema/work-items` — `work_items` and `work_item_artifacts` tables + `WorkItemRow` / `NewWorkItemRow` / `WorkItemArtifactRow` / `NewWorkItemArtifactRow` inferred types
   - `@cogni/node-template-doltgres-schema/knowledge` — `knowledge_contributions` + `knowledge_contribution_commits` tables + syntropy seed re-exports from `@cogni/knowledge-base`
 
 ## Responsibilities

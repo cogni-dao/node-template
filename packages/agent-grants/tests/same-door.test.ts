@@ -9,6 +9,7 @@ import {
   guardTools,
   offeredToolIds,
   ROUTE_ONLY_CAPABILITIES,
+  SAME_DOOR_ROUTES,
   type TerminalDenial,
   type ToolRequires,
 } from "../src";
@@ -180,5 +181,17 @@ describe("DENIAL_IS_TERMINAL", () => {
     );
     await expect(g.write_tool!.exec(1 as never, undefined as never, undefined as never)).resolves.toBe("ok");
     expect(onTerminalDenial).not.toHaveBeenCalled();
+  });
+});
+
+describe("work item artifacts (task.0028)", () => {
+  it("the artifact write rides the work_item:transition door beside PATCH; no review scope exists", () => {
+    expect(SAME_DOOR_ROUTES.core__work_item_update).toEqual({
+      scope: "work_item:transition",
+      routes: ["work.items.patch", "work.items.artifacts.create"],
+    });
+    const scopes = Object.values(ROUTE_ONLY_CAPABILITIES).map((c) => c.requires.scope);
+    expect(scopes).not.toContain("work_item:review");
+    expect(Object.values(ROUTE_ONLY_CAPABILITIES).flatMap((c) => c.routes)).not.toContain("work.items.artifacts.create");
   });
 });
