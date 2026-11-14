@@ -11,6 +11,7 @@
  *   - HUMAN_ROUTES_SESSION_ONLY: any `Authorization` header (a bearer agent, an admin with a key) is 403 `human_session_required`, before any read or write.
  *   - ONE_GATE / APPROVER_FOLLOWS_RESOURCE: the account owner alone decides an account row; a node-admin session adds nothing and takes nothing away.
  *   - PROFILE_NEVER_SHOWS_NODE_ROWS: GET returns this person's account rows only.
+ *   - SCOPE_KIND_PICKS_THE_PLANE: a direct On names a scope this node declares with kind `account`; any other scope is 400 `invalid_scope` before anything is read or written.
  *   - NON_DISCLOSING: a token that is wrong-kind, used, expired or unknown, and a row on someone else's account, answer `changed: false`, never a reason.
  *   - HUMAN_SURFACE_TOKENLESS: the token travels in the body only (the page read it from the link fragment); the response never carries one.
  * Side-effects: IO (service-role database read and write), logs `agent_role.*`
@@ -53,7 +54,7 @@ function mapError(error: unknown, ctx: { log: { error: (f: Record<string, unknow
   if (error instanceof AgentRolesError) {
     // A person who owns no account and a request that names no usable row are the same quiet no. Only a bad shape is a 400.
     if (error.code === "not_allowed") return json({ changed: false });
-    if (error.code === "invalid_days" || error.code === "invalid_scope") return json({ error: error.code }, 400);
+    if (error.code === "invalid_days" || error.code === "invalid_scope" || error.code === "wrong_kind") return json({ error: error.code }, 400);
     if (error.code === "principal_not_found" || error.code === "not_pending") return json({ error: error.code }, 409);
   }
   ctx.log.error(
@@ -91,6 +92,10 @@ export const POST = wrapRouteHandlerWithLogging(
     }
     const parsed = agentMineOnOperation.input.safeParse(body);
     if (!parsed.success) return json({ error: "invalid input", issues: parsed.error.issues }, 400);
+    // The scope must be one this node declares with kind `account` (SCOPE_KIND_PICKS_THE_PLANE): a node scope is an admin's, never written from the profile.
+    const authority = getContainer().agentAuthority;
+    if (parsed.data.scope !== undefined && authority.scopeKinds[parsed.data.scope] !== "account")
+      return json({ error: "invalid_scope" }, 400);
     try {
       const input =
         parsed.data.token !== undefined
@@ -100,7 +105,7 @@ export const POST = wrapRouteHandlerWithLogging(
               scope: parsed.data.scope as string,
               days: parsed.data.days,
             };
-      const result = await getContainer().agentAuthority.turnMineOn(person.me, input);
+      const result = await authority.turnMineOn(person.me, input);
       return json(agentMineOnOperation.output.parse(result));
     } catch (error) {
       return mapError(error, ctx);

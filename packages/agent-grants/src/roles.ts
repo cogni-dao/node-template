@@ -42,7 +42,8 @@ export type RolesErrorCode =
   | "too_many_requests"
   | "no_external_door"
   | "not_allowed"
-  | "invalid_days";
+  | "invalid_days"
+  | "wrong_kind";
 
 export class AgentRolesError extends Error {
   readonly code: RolesErrorCode;
@@ -91,6 +92,22 @@ async function resolveRef(
     (p) => p.userId === ref.principalUserId
   );
   return { userId: ref.principalUserId, internal };
+}
+
+/** The declared kind of every scope. A scope missing here is `node` (the default kind), so an account decision on it is refused. */
+export type ScopeKinds = Readonly<Record<string, ScopeKind>>;
+
+/**
+ * SCOPE_KIND_PICKS_THE_PLANE: an account decision (direct On, an owner's yes, a revoke) is only for a scope that declares kind `account`; a node decision
+ * (an admin's yes, no, take-back) is only for a scope that does NOT. Without this, a person could write an account row for a node scope and take the
+ * one open-row slot of that (AI, scope), or an admin could write a node row for an account scope.
+ */
+function requireKind(scopeKinds: ScopeKinds, scope: string, account: boolean): void {
+  if ((scopeKinds[scope] === "account") !== account)
+    throw new AgentRolesError(
+      "wrong_kind",
+      account ? "an account decision needs an account permission" : "a node decision needs a node permission"
+    );
 }
 
 /** What an ask returns. `approvalPath` is present while the row waits (a new token on every ask); the node adds its public origin. */
@@ -152,10 +169,11 @@ export async function listOwnAccess(
  */
 export async function grantRole(
   store: AgentGrantsStore,
-  input: PrincipalRef & { scope: string; me: ApprovalCaller; declaredScopes: readonly string[] }
+  input: PrincipalRef & { scope: string; me: ApprovalCaller; declaredScopes: readonly string[]; scopeKinds: ScopeKinds }
 ): Promise<{ principalUserId: string; created: boolean }> {
   if (!input.declaredScopes.includes(input.scope))
     throw new AgentRolesError("invalid_scope", "scope is not declared");
+  requireKind(input.scopeKinds, input.scope, false);
   const { userId, internal } = await resolveRef(store, input);
   if (userId === input.me.userId)
     throw new AgentRolesError("self_approval", "an approver cannot approve its own row");
@@ -179,8 +197,9 @@ export async function grantRole(
 /** The admin turns a live NODE row OFF. */
 export async function revokeRole(
   store: AgentGrantsStore,
-  input: PrincipalRef & { scope: string; me: ApprovalCaller }
+  input: PrincipalRef & { scope: string; me: ApprovalCaller; scopeKinds: ScopeKinds }
 ): Promise<{ principalUserId: string; revoked: boolean }> {
+  requireKind(input.scopeKinds, input.scope, false);
   const { userId } = await resolveRef(store, input);
   if (!(await canApprove(store, input.me, { resource: "node", principalUserId: userId })))
     throw new AgentRolesError("not_allowed", "only a node admin decides a node permission");
@@ -191,8 +210,9 @@ export async function revokeRole(
 /** The admin dismisses a pending NODE ask (the x). The agent sees `denied`. */
 export async function denyRequest(
   store: AgentGrantsStore,
-  input: PrincipalRef & { scope: string; me: ApprovalCaller }
+  input: PrincipalRef & { scope: string; me: ApprovalCaller; scopeKinds: ScopeKinds }
 ): Promise<{ principalUserId: string; denied: boolean }> {
+  requireKind(input.scopeKinds, input.scope, false);
   const { userId } = await resolveRef(store, input);
   if (!(await canApprove(store, input.me, { resource: "node", principalUserId: userId })))
     throw new AgentRolesError("not_allowed", "only a node admin decides a node permission");
@@ -258,10 +278,18 @@ export async function denyAccountAsk(
  */
 export async function grantInternalOnAccount(
   store: AgentGrantsStore,
-  input: { me: ApprovalCaller; principalUserId: string; scope: string; declaredScopes: readonly string[]; days?: number | undefined }
+  input: {
+    me: ApprovalCaller;
+    principalUserId: string;
+    scope: string;
+    declaredScopes: readonly string[];
+    scopeKinds: ScopeKinds;
+    days?: number | undefined;
+  }
 ): Promise<{ principalUserId: string; created: boolean }> {
   if (!input.declaredScopes.includes(input.scope))
     throw new AgentRolesError("invalid_scope", "scope is not declared");
+  requireKind(input.scopeKinds, input.scope, true);
   const days = daysOrDefault(input.days);
   const { internal } = await resolveRef(store, { principalUserId: input.principalUserId });
   if (!internal) throw new AgentRolesError("not_pending", "an outside agent must ask first");

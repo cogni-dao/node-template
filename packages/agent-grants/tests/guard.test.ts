@@ -83,7 +83,7 @@ describe("guardTools", () => {
     const store = memoryStore({ roles: [{ principal: "p", scope: "knowledge:write" }], principals: { "node-ai": "p" } });
     const g = guardTools(runtimes(), requiresById, { principalId: "p", subjectUserId: "admin" }, deps(store));
     await expect(g.write_tool!.exec(1 as never, undefined as never, undefined as never)).resolves.toBe("write-ok");
-    await revokeRole(store, { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN });
+    await revokeRole(store, { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN, scopeKinds: {} });
     expect((await denial(g.write_tool!.exec(1 as never, undefined as never, undefined as never))).code).toBe("policy_denied");
   });
 
@@ -113,15 +113,15 @@ describe("roles", () => {
   const base = () => memoryStore({ principals: { "node-ai": "u-node-ai" } });
   it("grants once and is idempotent", async () => {
     const store = base();
-    const input = { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN, declaredScopes: ["knowledge:write"] };
+    const input = { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN, declaredScopes: ["knowledge:write"], scopeKinds: {} };
     expect(await grantRole(store, input)).toEqual({ principalUserId: "u-node-ai", created: true });
     expect((await grantRole(store, input)).created).toBe(false);
     expect(await store.hasLiveRole("u-node-ai", "knowledge:write")).toBe(true);
   });
   it("rejects an undeclared scope and an unknown principal before any write", async () => {
     const store = base();
-    await expect(grantRole(store, { principalSlug: "node-ai", scope: "made:up", me: { userId: "a", admin: {} }, declaredScopes: ["knowledge:write"] })).rejects.toMatchObject({ code: "invalid_scope" });
-    await expect(grantRole(store, { principalSlug: "ghost", scope: "knowledge:write", me: { userId: "a", admin: {} }, declaredScopes: ["knowledge:write"] })).rejects.toBeInstanceOf(AgentRolesError);
+    await expect(grantRole(store, { principalSlug: "node-ai", scope: "made:up", me: { userId: "a", admin: {} }, declaredScopes: ["knowledge:write"], scopeKinds: {} })).rejects.toMatchObject({ code: "invalid_scope" });
+    await expect(grantRole(store, { principalSlug: "ghost", scope: "knowledge:write", me: { userId: "a", admin: {} }, declaredScopes: ["knowledge:write"], scopeKinds: {} })).rejects.toBeInstanceOf(AgentRolesError);
     expect(store.roles).toHaveLength(0);
   });
   it("resolves a seeded principal and returns null for a missing seed row", async () => {
@@ -129,7 +129,7 @@ describe("roles", () => {
     expect(await resolveInternalPrincipal(base(), "ghost")).toBeNull();
   });
   it("revoke reports false when no live role exists", async () => {
-    expect((await revokeRole(base(), { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN })).revoked).toBe(false);
+    expect((await revokeRole(base(), { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN, scopeKinds: {} })).revoked).toBe(false);
   });
 });
 

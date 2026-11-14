@@ -68,26 +68,18 @@ beforeEach(() => {
 // functions and the memory store (the SQL itself is proven in the component suite over real Postgres).
 import * as pkg from "@cogni/agent-grants";
 function wire() {
-  const declaredScopes = ["account:read"];
+  const declaredScopes = ["account:read", "work_item:transition"];
+  const scopeKinds = { "account:read": "account", "work_item:transition": "node" } as const;
   const declarations = { "account:read": { label: "Read your credit balance", description: "See the credit balance of the account it acts for." } };
   fake.authority = {
     previewAsk: async ({ token, resource }: { token: string; resource: "node" | "account" }) => {
       const ask = await pkg.previewAsk(store, { token, resource });
       return ask ? pkg.buildAskView(ask, declarations) : null;
     },
-    listMine: async (userId: string) => {
-      const accountId = await store.accountOf(userId);
-      const rows = accountId ? await store.listAccountRoleRows(accountId, 50) : [];
-      return { permissions: pkg.buildAccountAiView({ declarations, scopesByPrincipal: { "node-ai": ["account:read"] }, internal: await store.listInternalPrincipals(), rows, ask: null }), more: 0 };
-    },
-    turnMineOn: async (me: pkg.ApprovalCaller, input: { token: string; days?: number } | { principalUserId: string; scope: string; days?: number }) => {
-      if ("token" in input) return { changed: (await pkg.approveAccountAsk(store, { me, token: input.token, days: input.days })).approved };
-      return { changed: (await pkg.grantInternalOnAccount(store, { me, ...input, declaredScopes })).created };
-    },
-    turnMineOff: async (me: pkg.ApprovalCaller, input: { rowId: string } | { token: string }) =>
-      "rowId" in input
-        ? { changed: (await pkg.revokeAccountRow(store, { me, rowId: input.rowId })).revoked }
-        : { changed: (await pkg.denyAccountAsk(store, { me, token: input.token })).denied },
+    listMine: (userId: string) => pkg.listMine(store, { userId, declarations, scopesByPrincipal: { "node-ai": ["account:read"] } }),
+    scopeKinds,
+    turnMineOn: async (me: pkg.ApprovalCaller, on: pkg.MineOnInput) => ({ changed: (await pkg.turnMineOn(store, { me, on, declaredScopes, scopeKinds })).changed }),
+    turnMineOff: async (me: pkg.ApprovalCaller, off: pkg.MineOffInput) => ({ changed: (await pkg.turnMineOff(store, { me, off })).changed }),
   };
 }
 const ask = async (principal: string) => {
@@ -196,5 +188,8 @@ describe("the person's own table and decisions", () => {
     expect((await post({ token: await ask("ext-1"), principalUserId: "ai-1", scope: "account:read" })).status).toBe(400);
     expect((await post({ principalUserId: "ai-1", scope: "account:read", days: 31 })).status).toBe(400);
     expect((await post({ principalUserId: "ai-1", scope: "made:up" })).status).toBe(400);
+    // A declared NODE scope is an admin's: the profile route refuses it, and nothing is written (SCOPE_KIND_PICKS_THE_PLANE).
+    expect((await post({ principalUserId: "ai-1", scope: "work_item:transition" })).status).toBe(400);
+    expect(store.roles.some((r) => r.scope === "work_item:transition")).toBe(false);
   });
 });

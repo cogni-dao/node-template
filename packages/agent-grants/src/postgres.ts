@@ -184,10 +184,15 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND r.expires_at > now()
         ORDER BY r.created_at DESC
         LIMIT ${limit}`;
-      return rows.flatMap((row) => {
+      const total = await sql`
+        SELECT count(*)::int AS n FROM agent_roles r
+        WHERE r.resource = 'account' AND r.account_id = ${accountId}
+          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND r.expires_at > now()`;
+      const listed = rows.flatMap((row) => {
         const mapped = toRow(row);
         return mapped ? [mapped] : [];
       });
+      return { rows: listed, more: Math.max(0, Number(total[0]?.n ?? 0) - rows.length) };
     },
     async listOwnRoles(principalUserId) {
       const rows = await sql`
@@ -246,7 +251,21 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId}, ${resource}, ${link.hash}, ${link.expiresAt})
         ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
-      return inserted.length > 0 ? "created" : "pending";
+      if (inserted.length > 0) return "created";
+      // A concurrent ask took the open slot between our read and our insert. Whatever we answer, the link we hand back must be stored: rotate it
+      // onto the winner's pending row, or report that row as already live. If neither exists (it ended in between) the ask failed: say so, never
+      // return a link whose hash was not written.
+      const rotated = await sql`
+        UPDATE agent_roles SET link_hash = ${link.hash}, link_expires_at = ${link.expiresAt}, link_consumed_at = NULL
+        WHERE principal_user_id = ${principalUserId} AND scope = ${scope} AND resource = ${resource}
+          AND approved_by IS NULL AND revoked_at IS NULL
+        RETURNING id`;
+      if (rotated.length > 0) return "pending";
+      const live = await sql`
+        SELECT 1 AS ok FROM agent_roles
+        WHERE principal_user_id = ${principalUserId} AND scope = ${scope} AND approved_by IS NOT NULL AND revoked_at IS NULL LIMIT 1`;
+      if (live.length > 0) return "granted";
+      throw new Error("ask_raced");
     },
     async approvePending({ principalUserId, scope, approvedBy }) {
       const rows = await sql`

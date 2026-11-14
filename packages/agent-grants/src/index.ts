@@ -10,6 +10,18 @@
  */
 
 export {
+  type CatalogEntryLike,
+  listMine,
+  MAX_ACCOUNT_ROWS,
+  type MineListInput,
+  type MineOffInput,
+  type MineOnInput,
+  type MineOnResult,
+  scopesByPrincipalOf,
+  turnMineOff,
+  turnMineOn,
+} from "./account-access";
+export {
   ACCOUNT_GRANT_DAYS,
   type AccountGrantDays,
   APPROVAL_FRAGMENT_KEY,
@@ -74,6 +86,7 @@ export {
   resolveInternalPrincipal,
   revokeAccountRow,
   revokeRole,
+  type ScopeKinds,
 } from "./roles";
 export type {
   AccountAccess,

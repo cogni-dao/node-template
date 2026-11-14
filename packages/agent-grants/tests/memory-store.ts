@@ -171,11 +171,8 @@ export function memoryStore(init?: {
       return { rows: [...mine, ...outside.slice(0, limit)], more: Math.max(0, outside.length - limit) };
     },
     async listAccountRoleRows(accountId, limit) {
-      return roles
-        .filter((r) => r.accountId === accountId && liveAccount(r))
-        .sort((a, b) => b.seq - a.seq)
-        .slice(0, limit)
-        .map(toView);
+      const all = roles.filter((r) => r.accountId === accountId && liveAccount(r)).sort((a, b) => b.seq - a.seq);
+      return { rows: all.slice(0, limit).map(toView), more: Math.max(0, all.length - limit) };
     },
     async listOwnRoles(principalUserId) {
       const seen = new Set<string>();

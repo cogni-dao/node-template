@@ -134,7 +134,7 @@ export async function GET(request: Request) {
 		// Scopes an outside agent can ask for (requestPermission). Derived from the declarations, not listed here.
 		permissions,
 		permissionsHow:
-			"Ask with requestPermission. The answer carries approvalUrl: one link, one-time, 24 hours. Give it to the person who decides: a node admin for a node permission, the account owner for an account permission (signed in, on their profile). Poll listMyPermissions for the state.",
+			"Ask with requestPermission. The answer carries approvalUrl: one link, one-time, 24 hours. Give it to the person who decides: a node admin for a node permission, the account owner for an account permission (signed in, on their profile). A person who is signed out signs in first, then opens the link again (the link is a URL fragment and does not survive the sign-in redirect). Poll listMyPermissions for the state.",
 		actions: {
 			register: {
 				method: "POST",

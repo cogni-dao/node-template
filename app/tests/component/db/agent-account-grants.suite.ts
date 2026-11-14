@@ -234,6 +234,63 @@ describe("account grants (real Postgres, real roles)", () => {
     });
   });
 
+  // 2b. CURRENT_USER in migration 0041 is the app role only while the migrating role is the runtime role.
+  describe("the migrating role is the runtime role (migration 0041 grants TO CURRENT_USER)", () => {
+    it("the table and the function are owned by the role the app connects as, so CURRENT_USER in the migration was the app role", async () => {
+      const [appRole] = await app`SELECT current_user AS who`;
+      const [serviceRole] = await service`SELECT current_user AS who`;
+      const [table] = await service`SELECT tableowner FROM pg_tables WHERE tablename = 'agent_roles'`;
+      const [fn] = await service`SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname = 'agent_has_scope'`;
+      expect(table?.tableowner).toBe(appRole?.who);
+      expect(fn?.owner).toBe(appRole?.who);
+      expect(table?.tableowner).not.toBe(serviceRole?.who);
+    });
+  });
+
+  // 2c. A concurrent ask never returns a link that was not stored.
+  describe("a concurrent re-ask rotates onto the winner's row (no unstored link)", () => {
+    it("when the insert loses the race, the new hash is written to the pending row; when the row went live meanwhile it is reported granted; when it ended, the ask fails", async () => {
+      const agent = await makeUser();
+      const link = (hash: string) => ({ hash, expiresAt: new Date(Date.now() + 60_000) });
+      const ask = (store: ReturnType<typeof createPostgresAgentGrantsStore>, hash: string) =>
+        store.requestRole({ principalUserId: agent, scope: "work_item:transition", resource: "node", link: link(hash), maxPending: 3, maxPendingTotal: 1000 });
+      const first = randomUUID().replaceAll("-", "").padEnd(64, "0");
+      expect(await ask(storeOf(), first)).toBe("created");
+      // A store that does not see the winner's row on its first open-row read (the race window), then behaves normally.
+      const blind = (): ReturnType<typeof createPostgresAgentGrantsStore> => {
+        let hidden = false;
+        const tag = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+          const text = strings.join("?");
+          if (!hidden && text.includes("SELECT id, approved_by FROM agent_roles")) {
+            hidden = true;
+            return Promise.resolve([]);
+          }
+          return (service as unknown as SqlTag)(strings, ...values);
+        }) as unknown as SqlTag;
+        return createPostgresAgentGrantsStore(tag);
+      };
+      const second = randomUUID().replaceAll("-", "").padEnd(64, "1");
+      expect(await ask(blind(), second)).toBe("pending");
+      const [row] = await service`SELECT link_hash FROM agent_roles WHERE principal_user_id = ${agent} AND scope = 'work_item:transition'`;
+      expect(row?.link_hash).toBe(second); // the link the caller holds is the one stored
+      // The winner was approved in the meantime: the loser reports granted and writes no link.
+      const admin = await makeUser();
+      await service`UPDATE agent_roles SET approved_by = ${admin}, granted_at = now(), link_hash = NULL WHERE principal_user_id = ${agent} AND scope = 'work_item:transition'`;
+      expect(await ask(blind(), randomUUID().replaceAll("-", "").padEnd(64, "2"))).toBe("granted");
+      // The row ended in the meantime: nothing is stored, so the ask fails rather than hand back a dead link.
+      await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${agent} AND scope = 'work_item:transition'`;
+      let gone = false;
+      const ghost = createPostgresAgentGrantsStore(((strings: TemplateStringsArray, ...values: unknown[]) => {
+        const text = strings.join("?");
+        if (text.includes("INSERT INTO agent_roles")) return Promise.resolve([]); // the insert reports a conflict, but nothing open exists
+        gone = true;
+        return (service as unknown as SqlTag)(strings, ...values);
+      }) as unknown as SqlTag);
+      await expect(ask(ghost, randomUUID().replaceAll("-", "").padEnd(64, "3"))).rejects.toThrow("ask_raced");
+      expect(gone).toBe(true);
+    });
+  });
+
   // 3. The CHECKs hold the shape even for a writer that skips the package.
   describe("the row shape is enforced by the database", () => {
     it("refuses a node row with an account, an approved account row with no account or end, an end over 30 days, and self approval", async () => {
