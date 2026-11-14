@@ -65,10 +65,12 @@ describe("requires guard", () => {
     ).toEqual(["core__new_writer", "core__new_effect"]);
   });
 
-  it("never puts requires on a read_only tool", () => {
+  it("puts requires on a read_only tool only when it reads one account's data (kind account)", () => {
     expect(
-      contracts.filter((c) => c.effect === "read_only" && c.requires)
-    ).toEqual([]);
+      contracts
+        .filter((c) => c.effect === "read_only" && c.requires)
+        .map((c) => [c.name, c.requires?.kind])
+    ).toEqual([["core__account_credits_read", "account"]]);
   });
 
   it("declares the intended scope map", () => {
@@ -94,7 +96,8 @@ describe("requires guard", () => {
       const r = c.requires!;
       expect(r.description.length, c.name).toBeGreaterThan(15);
       expect(r.description.length, c.name).toBeLessThan(90);
-      expect(r.description, c.name).not.toMatch(/[:/_]|\bcore\b|http|token|curl|\bjobs?\b/i);
+      // A colon is punctuation here (`owns: credits`), but a scope string is `word:word`, which stays forbidden.
+      expect(r.description, c.name).not.toMatch(/\w:\w|[/_]|\bcore\b|http|token|curl|\bjobs?\b/i);
       expect(seen.get(r.scope) ?? r.description, r.scope).toBe(r.description);
       seen.set(r.scope, r.description);
     }

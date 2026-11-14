@@ -360,6 +360,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         runId,
         principalId,
         subjectUserId: scope.subjectUserId,
+        // The account the run acts on (R13): an account-kind tool opens only for a principal with a live row for exactly this account.
+        accountId: scope.billing.billingAccountId,
         payer: scope.billing.billingAccountId,
       };
       const guardBase = this.authority?.guardDeps ?? DENY_ALL_GUARD_DEPS;

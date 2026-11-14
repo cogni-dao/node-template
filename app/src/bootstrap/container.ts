@@ -157,6 +157,7 @@ import {
 	derivePrometheusQueryUrl,
 } from "@/bootstrap/capabilities/metrics";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
+import { createAccountCreditsCapability } from "@/bootstrap/capabilities/account-credits";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createGithubReadVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
@@ -978,6 +979,10 @@ function createContainer(): Container {
 		vcsCapability: createGithubReadVcsCapability(),
 		runningBuildSha: env.APP_BUILD_SHA,
 		workItemCapability,
+		accountCreditsCapability: createAccountCreditsCapability({
+			accountsForUser: (userId: UserId) =>
+				new UserDrizzleAccountService(db, userId, financialLedger),
+		}),
 	});
 	const goalProgress = createGoalProgressReader({
 		// knowledgeStorePort uses doltClient, not the reserved knowledgeWriter.
@@ -1116,6 +1121,15 @@ function createContainer(): Container {
 		nodeAdmin,
 		log,
 		toolBundle: [...CORE_TOOL_BUNDLE],
+		// The owner join in an account decision needs the person's account to exist; it is created on their first decision.
+		ensureBillingAccount: async (userId) =>
+			(
+				await new UserDrizzleAccountService(
+					db,
+					toUserId(userId),
+					financialLedger,
+				).getOrCreateBillingAccountForUser({ userId })
+			).id,
 	});
 
 	return {

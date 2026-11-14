@@ -92,7 +92,8 @@ export interface ToolContract<
   readonly effect: ToolEffect;
   /**
    * Authority the tool needs. REQUIRED for every non-read_only contract
-   * (CI: tests/requires-guard.test.ts); a read_only tool needs only the graph lock.
+   * (CI: tests/requires-guard.test.ts); a read_only tool needs only the graph lock, EXCEPT one that reads one account's data:
+   * it declares `kind: "account"` and is then checked against the run's account (task.5465; CI allows `requires` on a read_only tool only for that kind).
    */
   readonly requires?: ToolRequires;
   /**

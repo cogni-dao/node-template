@@ -7,12 +7,15 @@ import {
   type AuthzEvent,
   grantRole,
   guardTools,
+  offeredToolIds,
   resolveInternalPrincipal,
   revokeRole,
   ToolAuthorityError,
   type ToolRequires,
 } from "../src";
 import { memoryStore } from "./memory-store";
+
+const ADMIN = { userId: "admin", admin: {} };
 
 const requiresById: Record<string, ToolRequires> = {
   write_tool: { scope: "knowledge:write", kind: "node", subject: "admin" },
@@ -48,7 +51,7 @@ describe("guardTools", () => {
     const store = memoryStore({ roles: [{ principal: "node-ai-user", scope: "knowledge:write" }] });
     const g = guardTools(rt, requiresById, { principalId: "node-ai-user", subjectUserId: "admin", payer: "ba-1" }, deps(store, events));
     await expect(g.write_tool!.exec(1 as never, { runId: "r1" } as never, {} as never)).resolves.toBe("write-ok");
-    expect(events).toEqual([{ principal: "node-ai-user", subject: "admin", payer: "ba-1", tool: "write_tool", decision: "allow", code: "allowed", reason: "role", runId: "r1" }]);
+    expect(events).toEqual([{ principal: "node-ai-user", subject: "admin", payer: "ba-1", tool: "write_tool", decision: "allow", code: "allowed", reason: "role", runId: "r1", account: null }]);
   });
 
   it("denies a non-admin subject with receipt policy_denied", async () => {
@@ -80,7 +83,7 @@ describe("guardTools", () => {
     const store = memoryStore({ roles: [{ principal: "p", scope: "knowledge:write" }], principals: { "node-ai": "p" } });
     const g = guardTools(runtimes(), requiresById, { principalId: "p", subjectUserId: "admin" }, deps(store));
     await expect(g.write_tool!.exec(1 as never, undefined as never, undefined as never)).resolves.toBe("write-ok");
-    await revokeRole(store, { principalSlug: "node-ai", scope: "knowledge:write" });
+    await revokeRole(store, { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN, scopeKinds: {} });
     expect((await denial(g.write_tool!.exec(1 as never, undefined as never, undefined as never))).code).toBe("policy_denied");
   });
 
@@ -96,7 +99,7 @@ describe("guardTools", () => {
     });
     await g.read_tool!.exec(1 as never, undefined as never, undefined as never);
     await g.write_tool!.exec(1 as never, undefined as never, undefined as never);
-    expect(seen).toEqual([{ principalId: "p", subjectUserId: "admin" }, { principalId: "p", subjectUserId: "admin" }]);
+    expect(seen).toEqual([{ principalId: "p", subjectUserId: "admin", accountId: undefined }, { principalId: "p", subjectUserId: "admin", accountId: undefined }]);
   });
 
   it("never discloses the reason in the thrown message", async () => {
@@ -110,15 +113,15 @@ describe("roles", () => {
   const base = () => memoryStore({ principals: { "node-ai": "u-node-ai" } });
   it("grants once and is idempotent", async () => {
     const store = base();
-    const input = { principalSlug: "node-ai", scope: "knowledge:write", approvedBy: "admin", declaredScopes: ["knowledge:write"] };
+    const input = { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN, declaredScopes: ["knowledge:write"], scopeKinds: {} };
     expect(await grantRole(store, input)).toEqual({ principalUserId: "u-node-ai", created: true });
     expect((await grantRole(store, input)).created).toBe(false);
     expect(await store.hasLiveRole("u-node-ai", "knowledge:write")).toBe(true);
   });
   it("rejects an undeclared scope and an unknown principal before any write", async () => {
     const store = base();
-    await expect(grantRole(store, { principalSlug: "node-ai", scope: "made:up", approvedBy: "a", declaredScopes: ["knowledge:write"] })).rejects.toMatchObject({ code: "invalid_scope" });
-    await expect(grantRole(store, { principalSlug: "ghost", scope: "knowledge:write", approvedBy: "a", declaredScopes: ["knowledge:write"] })).rejects.toBeInstanceOf(AgentRolesError);
+    await expect(grantRole(store, { principalSlug: "node-ai", scope: "made:up", me: { userId: "a", admin: {} }, declaredScopes: ["knowledge:write"], scopeKinds: {} })).rejects.toMatchObject({ code: "invalid_scope" });
+    await expect(grantRole(store, { principalSlug: "ghost", scope: "knowledge:write", me: { userId: "a", admin: {} }, declaredScopes: ["knowledge:write"], scopeKinds: {} })).rejects.toBeInstanceOf(AgentRolesError);
     expect(store.roles).toHaveLength(0);
   });
   it("resolves a seeded principal and returns null for a missing seed row", async () => {
@@ -126,6 +129,48 @@ describe("roles", () => {
     expect(await resolveInternalPrincipal(base(), "ghost")).toBeNull();
   });
   it("revoke reports false when no live role exists", async () => {
-    expect((await revokeRole(base(), { principalSlug: "node-ai", scope: "knowledge:write" })).revoked).toBe(false);
+    expect((await revokeRole(base(), { principalSlug: "node-ai", scope: "knowledge:write", me: ADMIN, scopeKinds: {} })).revoked).toBe(false);
+  });
+});
+
+describe("an account-kind READ tool (task.5465, R6 R13)", () => {
+  const credits: ToolRequires = { scope: "account:read", kind: "account", subject: "member" };
+  const rt = () => ({ credits_tool: { id: "credits_tool", effect: "read_only", exec: vi.fn(async () => "credits-ok") } });
+  const withGrant = () =>
+    memoryStore({ roles: [{ principal: "ai", scope: "account:read", resource: "account", accountId: "acct-1" }] });
+
+  it("is offered and runs only when the principal holds a live row for exactly the run's account", async () => {
+    const store = withGrant();
+    const offer = (accountId: string | undefined) =>
+      offeredToolIds([{ id: "credits_tool", effect: "read_only" }], { credits_tool: credits }, { principalId: "ai", subjectUserId: "u", accountId }, { withStore: (fn) => fn(store) });
+    expect((await offer("acct-1")).offered).toEqual(["credits_tool"]);
+    expect((await offer("acct-2")).offered).toEqual([]); // another account
+    expect((await offer(undefined)).excluded[0]).toMatchObject({ reason: "no_account" }); // a run with no account
+    const g = guardTools(rt(), { credits_tool: credits }, { principalId: "ai", subjectUserId: "u", accountId: "acct-1" }, deps(store));
+    await expect(g.credits_tool!.exec(1 as never, undefined as never, undefined as never)).resolves.toBe("credits-ok");
+  });
+
+  it("after Off (revoke) the exec-time check denies, and the denial is terminal", async () => {
+    const store = withGrant();
+    const seen: string[] = [];
+    const g = guardTools(rt(), { credits_tool: credits }, { principalId: "ai", subjectUserId: "u", accountId: "acct-1" }, {
+      ...deps(store),
+      onTerminalDenial: (d) => seen.push(d.reason),
+    });
+    store.roles[0]!.revoked = true;
+    expect((await denial(g.credits_tool!.exec(1 as never, undefined as never, undefined as never))).code).toBe("policy_denied");
+    expect(seen).toEqual(["no_role"]);
+  });
+
+  it("a node row for the same scope never opens it", async () => {
+    const store = memoryStore({ roles: [{ principal: "ai", scope: "account:read" }] });
+    const g = guardTools(rt(), { credits_tool: credits }, { principalId: "ai", subjectUserId: "u", accountId: "acct-1" }, deps(store));
+    expect((await denial(g.credits_tool!.exec(1 as never, undefined as never, undefined as never))).code).toBe("policy_denied");
+  });
+
+  it("an outage at the run-start filter withholds the tool as authz_unavailable", async () => {
+    const out = await offeredToolIds([{ id: "credits_tool", effect: "read_only" }], { credits_tool: credits }, { principalId: "ai", accountId: "acct-1" }, { withStore: (fn) => fn(memoryStore({ failing: true })) });
+    expect(out.offered).toEqual([]);
+    expect(out.excluded[0]).toMatchObject({ code: "authz_unavailable" });
   });
 });

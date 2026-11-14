@@ -77,6 +77,18 @@ type AuthRequiredOptions = {
    * a signed-in human passes the subject rules. Declared once in `SAME_DOOR_ROUTES` (`@cogni/agent-grants`).
    */
   sameDoor?: string;
+  /**
+   * An ACCOUNT door (task.5465): the name of the route param that carries the account id (`accountId`). The same-door check then decides this
+   * account: the owner by session, or a bearer agent with a live grant for exactly this account. Every deny except an outage is ONE 404
+   * (`not_found`), so a foreign, expired, revoked and missing account cannot be told apart (ACCOUNT_404_NON_DISCLOSING).
+   */
+  sameDoorAccountParam?: string;
+  /**
+   * An OPTIONAL account door for a route that reads the caller's own account by default (task.5465): the name of a QUERY parameter that may carry another
+   * account id. With the parameter present the same account door runs (the owner by session, or a bearer agent with a live `account:read` grant for exactly that
+   * account; every other answer is the one 404). Absent, the route reads the caller's own account as before and no door runs.
+   */
+  sameDoorAccountQuery?: string;
   auth: {
     mode: "required";
     getSessionUser: () => Promise<SessionUser | null>;
@@ -257,19 +269,33 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           }
 
           const sameDoor = "sameDoor" in options ? options.sameDoor : undefined;
-          if (sameDoor && sessionUser) {
+          const pathAccountParam = "sameDoorAccountParam" in options ? options.sameDoorAccountParam : undefined;
+          const queryAccountParam = "sameDoorAccountQuery" in options ? options.sameDoorAccountQuery : undefined;
+          const queryAccountId = queryAccountParam ? new URL(request.url).searchParams.get(queryAccountParam) : null;
+          // An optional query door runs only when the caller names an account; otherwise the route's own-account read needs no door.
+          const accountParam = pathAccountParam ?? (queryAccountId !== null ? queryAccountParam : undefined);
+          if (sameDoor && sessionUser && (!queryAccountParam || pathAccountParam || queryAccountId !== null)) {
+            let accountId: string | undefined;
+            if (queryAccountParam && !pathAccountParam) accountId = queryAccountId ?? "";
+            else if (pathAccountParam) {
+              const params = (await (context as { params?: Promise<Record<string, string | string[] | undefined>> } | undefined)?.params) ?? {};
+              const raw = params[pathAccountParam];
+              accountId = typeof raw === "string" ? raw : undefined;
+            }
             const decision = await container.agentAuthority.authorizeRoute({
               toolId: sameDoor,
               routeId: options.routeId,
               userId: sessionUser.id,
               // Fail closed: only an identity that says `session` takes the human rules; an absent or unknown `via` is strict.
               via: sessionUser.via === "session" ? "session" : "bearer",
+              ...(accountParam ? { accountId: accountId ?? "" } : {}),
             });
             if (decision.decision === "deny") {
               const unavailable = decision.code === "authz_unavailable";
-              responseStatus = unavailable ? 503 : 403;
+              // An account door answers every non-outage deny with the same 404.
+              responseStatus = unavailable ? 503 : accountParam ? 404 : 403;
               return NextResponse.json(
-                { error: decision.code, code: decision.code },
+                accountParam && !unavailable ? { error: "not_found" } : { error: decision.code, code: decision.code },
                 { status: responseStatus, headers: { "cache-control": "no-store" } }
               );
             }

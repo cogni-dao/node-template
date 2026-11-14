@@ -3,9 +3,11 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/agent-access/agent-access-section`
- * Purpose: "AI access": one compact table where a DAO admin says yes or no to what each AI can do.
+ * Purpose: "AI access": one compact table where the approver says yes or no to what each AI can do.
  *   Columns: Who · Can do · Until · On. One row = one grant row, in three blocks: asks waiting, this node's AI, outside agents.
- * Scope: Presentation over `useAgentAccess`. Renders nothing for a non-admin.
+ *   Two mounts share it (TWO_STARTS, ONE_TABLE): the Admin page (`mode="admin"`, a node-admin, node permissions) and the profile (`mode="account"`,
+ *   any signed-in person, the AIs that may act on their own account). Both render the SAME table: a grant lasts until Off, so there is no Until control.
+ * Scope: Presentation over `useAgentAccess`. In admin mode it renders nothing for a non-admin.
  * Invariants:
  *   - ONE_CONTROL_ONE_DECISION: the switch is the whole decision, both directions. No "are you sure" step. A pending ask also
  *     has an x that dismisses it.
@@ -13,8 +15,11 @@
  *     name with the outside badge and binding. All the human words are in "Can do".
  *   - DECLARED_ONCE_SHOWN_EVERYWHERE: "Can do" shows the name and the one-line description the server sends from the
  *     declaration. This file holds no copy table.
- *   - NON_ADMIN_SEES_NOTHING: renders `null` while loading and for every state except a confirmed admin view (`ready`)
+ *   - NON_ADMIN_SEES_NOTHING (admin mode): renders `null` while loading and for every state except a confirmed admin view (`ready`)
  *     or a confirmed 503 (`unavailable`). No heading or skeleton shows to a non-admin.
+ *   - PROFILE_NEVER_SHOWS_NODE_ROWS / ADMIN_NEVER_SHOWS_ACCOUNT_ROWS: the section also drops any row of the other resource, so a server that sent one would
+ *     still not put it on the wrong page.
+ *   - LINK_HIGHLIGHT: a row an AI's one-time link opened is scrolled to and highlighted; a link that opens nothing shows one neutral line.
  *   - A click in flight replaces that row's switch with a Skeleton. A switch is never shown dimmed.
  *   - HUMAN_SURFACE_TOKENLESS: the text holds no token, id, key, scope string or API path.
  *   - PLAIN_NAMES: a grant gives a permission. No other noun, no risk labels.
@@ -29,18 +34,24 @@ import type { AccessSection, NodeAiPermissionView } from "@cogni/agent-grants";
 
 import { cn } from "../cn.js";
 import { Skeleton } from "../ui/skeleton.js";
+import { HIGHLIGHT_CLASS, HIGHLIGHT_DOM_ID, useScrollToHighlight } from "./highlight.js";
 import {
   type AgentAccessEndpoints,
+  type AgentAccessMode,
+  LINK_INVALID_COPY,
+  rowKey,
   UNAVAILABLE_COPY,
   useAgentAccess,
 } from "./use-agent-access.js";
 
 export interface AgentAccessSectionProps {
   readonly endpoints: AgentAccessEndpoints;
+  /** `admin` (default): a node-admin's node permissions. `account`: a person's own account, shown to every signed-in person. */
+  readonly mode?: AgentAccessMode;
+  /** The one-time link token the page read from the URL fragment (`useApprovalFragment`), or null. */
+  readonly token?: string | null;
   readonly className?: string;
 }
-
-const keyOf = (row: NodeAiPermissionView) => `${row.principalUserId}|${row.scope}`;
 
 const BLOCKS: ReadonlyArray<{ section: AccessSection; title: string }> = [
   { section: "pending", title: "Asks waiting" },
@@ -48,8 +59,33 @@ const BLOCKS: ReadonlyArray<{ section: AccessSection; title: string }> = [
   { section: "outside", title: "Outside agents" },
 ];
 
-export function AgentAccessSection({ endpoints, className }: AgentAccessSectionProps) {
-  const { state, busy, error, allow, remove, dismiss, reload } = useAgentAccess(endpoints);
+/** A date for the end of an account grant: day and month, from the ISO the server sent. */
+function untilDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+export function AgentAccessSection({ endpoints, mode = "admin", token = null, className }: AgentAccessSectionProps) {
+  const { state, busy, error, highlight, linkInvalid, allow, remove, dismiss, reload } = useAgentAccess(endpoints, { mode, token });
+  const ready = state.status === "ready";
+  const permissions: readonly NodeAiPermissionView[] = ready
+    ? state.view.permissions.filter((r) => (mode === "account" ? r.resource === "account" : r.resource !== "account"))
+    : [];
+  useScrollToHighlight(ready && highlight !== null && permissions.some((r) => rowKey(r) === highlight));
+
+  if (state.status === "loading" && mode === "account") {
+    // A person always has a profile table: show its shape while it loads (admin mode shows nothing until the server confirms an admin).
+    return (
+      <section aria-label="AI access" className={className}>
+        <div className="pt-8 pb-2">
+          <Skeleton className="h-6 w-32" />
+          <div className="mt-2 border-border border-b" />
+        </div>
+        <Skeleton className="mt-3 h-10 w-full" />
+        <Skeleton className="mt-2 h-10 w-full" />
+      </section>
+    );
+  }
 
   // No flash: nothing renders until the server confirms an admin view or a 503.
   if (state.status === "hidden" || state.status === "loading") return null;
@@ -62,6 +98,12 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
         </h2>
         <div className="mt-2 border-border border-b" />
       </div>
+
+      {linkInvalid && (
+        <p className="pt-3 text-muted-foreground text-sm" role="status">
+          {LINK_INVALID_COPY}
+        </p>
+      )}
 
       {state.status === "unavailable" && (
         <p className="flex items-center gap-3 py-3 text-destructive text-sm" role="alert">
@@ -84,7 +126,7 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
               {state.view.more} more outside {state.view.more === 1 ? "row is" : "rows are"} not shown. Clear some to see them.
             </p>
           )}
-          {state.view.permissions.length === 0 ? (
+          {permissions.length === 0 ? (
             <p className="py-2 text-muted-foreground text-sm">Nothing to manage.</p>
           ) : (
             <table className="w-full text-left text-sm">
@@ -97,7 +139,7 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                 </tr>
               </thead>
               {BLOCKS.map(({ section, title }) => {
-                const rows = state.view.permissions.filter((r) => r.section === section);
+                const rows = permissions.filter((r) => r.section === section);
                 if (rows.length === 0) return null;
                 return (
                   <tbody key={section} className="divide-y divide-border">
@@ -111,10 +153,16 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                       </th>
                     </tr>
                     {rows.map((row) => {
-                      const key = keyOf(row);
+                      const key = rowKey(row);
                       const saving = busy === key;
+                      const highlighted = highlight === key;
                       return (
-                        <tr key={key} aria-busy={saving || undefined}>
+                        <tr
+                          key={key}
+                          id={highlighted ? HIGHLIGHT_DOM_ID : undefined}
+                          aria-busy={saving || undefined}
+                          className={highlighted ? HIGHLIGHT_CLASS : undefined}
+                        >
                           <td className="py-2 pr-3 align-top text-foreground">
                             {row.outside ? (
                               // An outside agent chose its own name. The badge comes first, the name is quoted, and the proven
@@ -139,7 +187,7 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                             <div className="text-muted-foreground text-xs">{row.description}</div>
                           </td>
                           <td className="whitespace-nowrap py-2 pr-3 align-top text-muted-foreground">
-                            {row.section === "pending" ? "—" : (row.until ?? "No end")}
+                            {row.section === "pending" ? "—" : row.until ? `Until ${untilDate(row.until)}` : "No end"}
                           </td>
                           <td className="h-10 py-2 text-right align-top">
                             {saving ? (

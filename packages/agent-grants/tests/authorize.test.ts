@@ -70,15 +70,29 @@ describe("authorize: own scope", () => {
   });
 });
 
-describe("authorize: account scope is out of scope", () => {
+describe("authorize: account scope needs the run's account", () => {
   const account: ToolRequires = { scope: "account:read", kind: "account", subject: "member" };
-  it("denies an account tool with policy_denied, even with a live role and a subject", async () => {
+  const day = 86_400_000;
+  it("denies an account tool with no account, even with a live node row and a subject", async () => {
     const store = memoryStore({ roles: [{ principal: "p1", scope: "account:read" }] });
-    expect(await authorize(store, allowAdmin, { principalId: "p1", subjectUserId: "u1", requires: account })).toMatchObject({
-      decision: "deny",
-      code: "policy_denied",
-      reason: "account_scope_unsupported",
-    });
+    expect(await authorize(store, allowAdmin, { principalId: "p1", subjectUserId: "u1", requires: account })).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_account" });
+  });
+  it("a NODE row for the same scope never opens an account tool, even with an account", async () => {
+    const store = memoryStore({ roles: [{ principal: "p1", scope: "account:read" }] });
+    expect(await authorize(store, allowAdmin, { principalId: "p1", subjectUserId: "u1", accountId: "acct-1", requires: account })).toMatchObject({ decision: "deny", reason: "no_role" });
+  });
+  it("allows only a live account row for exactly this account; another account, an ended row and a revoked row deny", async () => {
+    const live = memoryStore({ roles: [{ principal: "p1", scope: "account:read", resource: "account", accountId: "acct-1", expiresInMs: day }] });
+    expect(await authorize(live, allowAdmin, { principalId: "p1", subjectUserId: "u1", accountId: "acct-1", requires: account })).toEqual({ decision: "allow", basis: "role" });
+    expect(await authorize(live, allowAdmin, { principalId: "p1", subjectUserId: "u1", accountId: "acct-2", requires: account })).toMatchObject({ decision: "deny", reason: "no_role" });
+    live.clock.now += 2 * day; // the row ended
+    expect(await authorize(live, allowAdmin, { principalId: "p1", subjectUserId: "u1", accountId: "acct-1", requires: account })).toMatchObject({ decision: "deny", reason: "no_role" });
+    const revoked = memoryStore({ roles: [{ principal: "p1", scope: "account:read", resource: "account", accountId: "acct-1", revoked: true }] });
+    expect(await authorize(revoked, allowAdmin, { principalId: "p1", subjectUserId: "u1", accountId: "acct-1", requires: account })).toMatchObject({ decision: "deny" });
+  });
+  it("an account row never opens a node tool", async () => {
+    const store = memoryStore({ roles: [{ principal: "p1", scope: "work_item:transition", resource: "account", accountId: "acct-1" }] });
+    expect(await authorize(store, allowAdmin, { principalId: "p1", subjectUserId: "u1", requires: node() })).toMatchObject({ decision: "deny", reason: "no_role" });
   });
 });
 

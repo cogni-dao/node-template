@@ -24,11 +24,11 @@ describe("authorizePrincipalLock", () => {
     const store = memoryStore({ roles: [{ principal: "p", scope: "schedule:manage" }] });
     expect(await authorizePrincipalLock(store, { principalId: "p", requires: own })).toEqual({ decision: "allow", basis: "role" });
   });
-  it("denies with no principal, no role, an account scope, an unknown kind, and reports an outage", async () => {
+  it("denies with no principal, no role, an account scope with no account, an unknown kind, and reports an outage", async () => {
     const store = memoryStore();
     expect(await authorizePrincipalLock(store, { requires: node() })).toMatchObject({ reason: "no_principal" });
     expect(await authorizePrincipalLock(store, { principalId: "p", requires: node() })).toMatchObject({ reason: "no_role" });
-    expect(await authorizePrincipalLock(store, { principalId: "p", requires: { ...node(), kind: "account" } })).toMatchObject({ reason: "account_scope_unsupported" });
+    expect(await authorizePrincipalLock(store, { principalId: "p", requires: { ...node(), kind: "account" } })).toMatchObject({ reason: "no_account" });
     expect(await authorizePrincipalLock(store, { principalId: "p", requires: { ...node(), kind: "weird" as never } })).toMatchObject({ reason: "unknown_contract_value" });
     expect(await authorizePrincipalLock(memoryStore({ failing: true }), { principalId: "p", requires: node() })).toMatchObject({ code: "authz_unavailable" });
   });
@@ -180,5 +180,28 @@ describe("DENIAL_IS_TERMINAL", () => {
     );
     await expect(g.write_tool!.exec(1 as never, undefined as never, undefined as never)).resolves.toBe("ok");
     expect(onTerminalDenial).not.toHaveBeenCalled();
+  });
+});
+
+describe("authorizeCaller: an account scope (ONE_ACCOUNT_DOOR)", () => {
+  const account: ToolRequires = { scope: "account:read", kind: "account", subject: "member" };
+  const store = () =>
+    memoryStore({
+      accounts: { owner: "acct-1" },
+      roles: [{ principal: "agent", scope: "account:read", resource: "account", accountId: "acct-1" }],
+    });
+  it("the owner passes by session; a stranger, a person with no account and a missing account are denied", async () => {
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "owner", via: "session", requires: account, accountId: "acct-1" })).toEqual({ decision: "allow", basis: "owner" });
+    expect(await authorizeCaller(store(), allowAdmin, { userId: "stranger", via: "session", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny", reason: "no_account_access" });
+    expect(await authorizeCaller(store(), allowAdmin, { userId: "owner", via: "session", requires: account })).toMatchObject({ decision: "deny", reason: "no_account" });
+  });
+  it("a bearer agent passes with a live row for exactly this account, and not for another or for a node grant", async () => {
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "bearer", requires: account, accountId: "acct-1" })).toEqual({ decision: "allow", basis: "delegated" });
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "bearer", requires: account, accountId: "acct-2" })).toMatchObject({ decision: "deny" });
+    const nodeOnly = memoryStore({ roles: [{ principal: "agent", scope: "account:read" }] });
+    expect(await authorizeCaller(nodeOnly, denyAdmin, { userId: "agent", via: "bearer", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny" });
+  });
+  it("a session never takes the delegated path: a person who is not the owner is denied even if they hold a row", async () => {
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "session", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny" });
   });
 });
