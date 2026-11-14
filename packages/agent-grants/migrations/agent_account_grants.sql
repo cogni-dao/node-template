@@ -21,7 +21,9 @@ CREATE POLICY "agent_roles_account_self_read" ON "agent_roles" AS PERMISSIVE FOR
 --> statement-breakpoint
 -- Hand-written below: functions, grants and policies on other tables are outside Drizzle's DDL scope.
 -- The one select policy above shows an app-role connection only the account rows that name it as the principal; the policy alone grants nothing, so the
--- table privilege is stated too (the migrating role is the app role). agent_roles stays ENABLE + FORCE RLS; there is no write policy.
+-- table privilege is stated too. CURRENT_USER is the app role BY CONSTRUCTION: scripts/db/migrate.mjs connects with DATABASE_URL, the very URL the app's
+-- RLS-subject client uses; the service role (DATABASE_SERVICE_URL) never migrates. Keep that true in a fork, or grant to the app role by name.
+-- agent_roles stays ENABLE + FORCE RLS; there is no write policy.
 GRANT SELECT ON "agent_roles" TO CURRENT_USER;--> statement-breakpoint
 -- The ONE live predicate for an account grant, in SQL. SECURITY INVOKER (it sees only what the agent_roles policy lets the caller see).
 -- `hasLiveAccountGrant` in the package uses the same test, so the app check and row-level security cannot disagree.

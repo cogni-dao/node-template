@@ -143,10 +143,10 @@ export interface AgentGrantsStore {
    */
   listRoleRows(limit: number): Promise<{ rows: RoleRow[]; more: number }>;
   /**
-   * The live account rows on the one account `accountId` (its owner's view), newest first, bounded. Internal AI and outside agents
-   * alike. An ended row (revoked or past `expires_at`) is not listed.
+   * The live account rows on the one account `accountId` (its owner's view), newest first, bounded by `limit`. Internal AI and outside agents
+   * alike. An ended row (revoked or past `expires_at`) is not listed. `more` counts the live rows not returned.
    */
-  listAccountRoleRows(accountId: string, limit: number): Promise<RoleRow[]>;
+  listAccountRoleRows(accountId: string, limit: number): Promise<{ rows: RoleRow[]; more: number }>;
   /**
    * The caller's own rows, newest state per (scope, account) (bounded). `expired` is derived (R14): an approved row whose `expires_at`
    * is not after the moment it was revoked or now.

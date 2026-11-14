@@ -47,6 +47,7 @@ function fakeSql(state: {
     state.queries += 1;
     if (state.down) throw new Error("db down");
     const text = strings.join("?");
+    if (text.includes("INSERT INTO agent_roles")) return [{ id: "row-1" }]; // an ask's insert lands
     if (text.includes("FROM billing_accounts") && text.includes("owner_user_id"))
       return state.owners?.has(`${values[0]}|${values[1]}`) ? [{ ok: 1 }] : [];
     if (text.includes("FROM agent_roles") && text.includes("resource = 'account'"))

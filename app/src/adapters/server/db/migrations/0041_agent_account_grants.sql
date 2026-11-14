@@ -19,7 +19,10 @@ CREATE POLICY "agent_roles_account_self_read" ON "agent_roles" AS PERMISSIVE FOR
 -- targets are kept, so a pod on the previous release keeps working while this migration is applied.
 --
 -- R11: agent_roles stays ENABLE + FORCE RLS. The one select policy above shows an app-role connection only the account rows that name it
--- as the principal. The policy alone grants nothing, so the table privilege is stated here too (the migrating role is the app role).
+-- as the principal. The policy alone grants nothing, so the table privilege is stated here too.
+-- CURRENT_USER is the app role BY CONSTRUCTION: the migrating role equals the runtime role. scripts/db/migrate.mjs (the initContainer, copied to
+-- /app/app/migrate.mjs) connects with DATABASE_URL, the very URL the app's RLS-subject client uses (drizzle.client.ts); the service role is
+-- DATABASE_SERVICE_URL and never migrates. app/tests/unit/app/migration-role.test.ts and the component suite fail if the two ever differ.
 GRANT SELECT ON "agent_roles" TO CURRENT_USER;--> statement-breakpoint
 -- The ONE live predicate for an account grant, in SQL. SECURITY INVOKER: it runs with the caller's rights and sees only what the
 -- agent_roles policy lets that caller see, so RLS cannot be widened by the function. `authorizeAccount()` in @cogni-dao/agent-grants
