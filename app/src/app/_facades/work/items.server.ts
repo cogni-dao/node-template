@@ -10,7 +10,7 @@
  * Evaluation: preserves scores in DTOs. Write errors pass through unchanged; `workItemWriteErrorResponse` (@cogni/work-items) maps them to HTTP in the route (task.0097).
  * Moves (story.0033): create and patch resolve new metric links and pin baselines. Detail and bounded summary reads add authorized observations and directional verdicts. Null-direction writes remain gated until reader rollout completes.
  * Envelope (task.0118): `getWorkItem` is the one single-item read; each move also carries its metric, KPI and goal, and `includeLinks` adds the first page of citation links. List and summary reads stay summary-sized.
- * Artifacts (task.0028): `getWorkItem` also adds `artifacts`, the latest review or validation of each kind from one bounded read; a failed read is `artifacts: { unavailable: true }`, never an empty answer.
+ * Artifacts (task.0028): `getWorkItem` also adds `artifacts`, the latest triage, review or validation of each kind (no `body`) from one bounded read; a failed read is `artifacts: { unavailable: true }`, never an empty answer.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
@@ -372,7 +372,7 @@ async function withItemEnvelope(dto: WorkItemDto, options?: WorkItemReadOptions)
     {
       readings,
       links: createCitationLinksPort(() => container.knowledgeStorePort),
-      // task.0028: the latest review or validation of each kind, one bounded read.
+      // task.0028: the latest artifact of each kind, without body, one bounded read.
       artifacts: artifactStore ? { latest: (id) => artifactStore.latest(id) } : undefined,
       log: (event) => container.log.warn(event, "work.items.envelope_degraded"),
     },

@@ -840,6 +840,8 @@ function createContainer(): Container {
 					items: doltgresWorkItems,
 					artifacts: doltgresWorkItems.artifacts,
 					inboxes: createDoltgresContributionAuthors(doltClient),
+					// A story validation names its origin; only this hub's own is accepted.
+					ownOrigin: env.APP_BASE_URL,
 				}
 			: undefined;
 		const createKnowledgeBranchClient = () =>

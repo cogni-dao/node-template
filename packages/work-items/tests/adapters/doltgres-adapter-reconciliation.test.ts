@@ -31,6 +31,7 @@ interface ArtifactBranch {
 const artifactRow = {
   id: "wia-1",
   item_id: "task.0001",
+  item_revision: 0,
   kind: "implementation_review",
   subject: "https://github.com/cogni-dao/node-template/pull/9@" + "a".repeat(40),
   verdict: "approve",
@@ -541,6 +542,8 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
       ["an author other than the commit's actor", { row: { author: "someone-else" } }],
       ["an item other than the commit's item", { row: { item_id: "task.0002" } }],
       ["an unknown kind", { row: { kind: "approval" } }],
+      ["a design_waiver kind (removed)", { row: { kind: "design_waiver" } }],
+      ["no item revision", { row: { item_revision: null } }],
     ] as const)("quarantines a structurally verified branch with %s, never merging or deleting it", async (_name, artifact) => {
       const { adapter, state, logs } = makeReconciliationHarness({
         mergeBase: "main-commit",

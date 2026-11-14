@@ -1,10 +1,13 @@
 CREATE TABLE "work_item_artifacts" (
 	"id" text PRIMARY KEY NOT NULL,
 	"item_id" text NOT NULL,
+	"item_revision" integer NOT NULL,
 	"kind" text NOT NULL,
 	"subject" text NOT NULL,
 	"verdict" text NOT NULL,
 	"rows" jsonb,
+	"note" text,
+	"body" text,
 	"url" text,
 	"author" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL

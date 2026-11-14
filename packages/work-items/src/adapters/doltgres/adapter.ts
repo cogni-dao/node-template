@@ -315,6 +315,9 @@ type MutationVerb =
 
 /** The table an `artifact` operation inserts into; every other verb writes `work_items`. */
 const ARTIFACT_TABLE = "work_item_artifacts";
+/** Every artifact column but `body`: the item read never pays for a 16 KB review it does not return. */
+const ARTIFACT_SUMMARY_COLUMNS =
+  'id, item_id, item_revision, kind, subject, verdict, "rows", note, url, author, created_at';
 
 interface MutationProof {
   readonly verb: MutationVerb;
@@ -548,13 +551,18 @@ function jsonArrayOf<T>(value: unknown): readonly T[] {
 function rowToArtifact(row: Record<string, unknown>): WorkItemArtifact {
   const rows = jsonArrayOf<ScorecardRow>(row.rows);
   const url = optionalString(row.url);
+  const note = optionalString(row.note);
+  const body = optionalString(row.body);
   return {
     id: String(row.id),
     itemId: String(row.item_id),
+    itemRevision: Number(row.item_revision),
     kind: String(row.kind) as ArtifactKind,
     subject: String(row.subject),
     verdict: String(row.verdict),
     ...(rows.length ? { rows: [...rows] } : {}),
+    ...(note !== undefined ? { note } : {}),
+    ...(body !== undefined ? { body } : {}),
     ...(url !== undefined ? { url } : {}),
     author: String(row.author),
     createdAt:
@@ -1060,6 +1068,10 @@ function validateArtifactInsert(
     (ARTIFACT_KINDS as readonly string[]).includes(String(row.kind ?? "")) &&
     String(row.subject ?? "").length > 0 &&
     String(row.verdict ?? "").length > 0 &&
+    row.item_revision !== null &&
+    row.item_revision !== undefined &&
+    Number.isInteger(Number(row.item_revision)) &&
+    Number(row.item_revision) >= 0 &&
     row.created_at !== null &&
     row.created_at !== undefined
   );
@@ -3478,8 +3490,14 @@ export class DoltgresWorkItemAdapter
       `artifact ${itemId}`,
       principal,
       async (conn, proof) => {
+        // ITEM_REVISION_IS_STAMPED: read under the writer lock, on the operation branch cut from main,
+        // so no patch can move the item between this read and the insert's commit.
+        const item = (await conn.unsafe(
+          `SELECT revision FROM work_items WHERE id = ${escapeValue(itemId)} LIMIT 1`
+        )) as ReadonlyArray<Record<string, unknown>>;
+        if (!item[0]) throw new Error(`Work item not found: ${itemId}`);
         const rows = await conn.unsafe(
-          `INSERT INTO ${ARTIFACT_TABLE} (id, item_id, kind, subject, verdict, "rows", url, author) VALUES (${escapeValue(id)}, ${escapeValue(itemId)}, ${escapeValue(input.kind)}, ${escapeValue(input.subject)}, ${escapeValue(input.verdict)}, ${escapeValue(input.rows ?? null)}, ${escapeValue(input.url ?? null)}, ${escapeValue(principal)}) RETURNING *`
+          `INSERT INTO ${ARTIFACT_TABLE} (id, item_id, item_revision, kind, subject, verdict, "rows", note, body, url, author) VALUES (${escapeValue(id)}, ${escapeValue(itemId)}, ${escapeValue(Number(item[0].revision ?? 0))}, ${escapeValue(input.kind)}, ${escapeValue(input.subject)}, ${escapeValue(input.verdict)}, ${escapeValue(input.rows ?? null)}, ${escapeValue(input.note ?? null)}, ${escapeValue(input.body ?? null)}, ${escapeValue(input.url ?? null)}, ${escapeValue(principal)}) RETURNING *`
         );
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) throw new Error("INSERT returned no artifact row");
@@ -3509,13 +3527,13 @@ export class DoltgresWorkItemAdapter
     });
   }
 
-  /** The newest artifact of each kind, in ONE query (at most one row per kind, so at most four). */
+  /** The newest artifact of each kind, in ONE query (at most one row per kind, so at most four), without `body`. */
   private async latestArtifacts(
     itemId: string
   ): Promise<readonly WorkItemArtifact[]> {
     const branches = ARTIFACT_KINDS.map(
       (kind) =>
-        `(SELECT * FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} AND kind = ${escapeValue(kind)} ORDER BY created_at DESC, id DESC LIMIT 1)`
+        `(SELECT ${ARTIFACT_SUMMARY_COLUMNS} FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} AND kind = ${escapeValue(kind)} ORDER BY created_at DESC, id DESC LIMIT 1)`
     );
     return this.readOnCleanMain(async (conn) => {
       const rows = await conn.unsafe(

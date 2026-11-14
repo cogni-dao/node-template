@@ -9,7 +9,8 @@
  *   No database, no web framework. The Doltgres insert path is not exercised here.
  * Invariants:
  *   - An artifact from the subject's author is refused 409 `artifact_author_not_independent`; so is one whose author history cannot show.
- *   - `design_waiver` from a caller is refused 400 and nothing is stored.
+ *   - A review or validation with neither `url` nor `body` is refused 400; a story validation's origin must be this hub's own.
+ *   - Triage has no independence rule; the item read carries the latest of each kind without `body`.
  *   - A malformed scorecard is refused 400 and nothing is stored.
  *   - PASS-grade: no FAIL or DRIFT row, a reason on each UNPROVEN or INDIRECT row, `fail` never.
  *   - Recording never touches the item.
@@ -77,6 +78,7 @@ interface World {
 function world(
   options: {
     item?: { revision: number; pr?: string } | null;
+    ownOrigin?: string | null;
     history?: readonly HistoryEntry[] | "absent" | "throws";
     inbox?: Record<string, string> | "absent" | "throws";
     insertThrows?: boolean;
@@ -107,6 +109,9 @@ function world(
     itemReads,
     deps: {
       items,
+      ...(options.ownOrigin === null
+        ? {}
+        : { ownOrigin: options.ownOrigin ?? "https://node-template-test.cognidao.org" }),
       artifacts: {
         insert: async (input) => {
           if (options.insertError) throw options.insertError;
@@ -115,10 +120,13 @@ function world(
           return {
             id: `wia-${stored.length}`,
             itemId: input.itemId,
+            itemRevision: item?.revision ?? 0,
             kind: input.kind,
             subject: input.subject,
             verdict: input.verdict,
             ...(input.rows ? { rows: [...input.rows] } : {}),
+            ...(input.note ? { note: input.note } : {}),
+            ...(input.body ? { body: input.body } : {}),
             ...(input.url ? { url: input.url } : {}),
             author: input.author,
             createdAt: "2026-11-13T12:00:00.000Z",
@@ -144,7 +152,7 @@ function world(
 describe("parseArtifactSubject", () => {
   it.each([
     [`knowledge:contrib-derek-1@${COMMIT}`, "knowledge"],
-    ["work:task.0028@12", "work"],
+    ["work:task.0028", "work"],
     [`${PR}@${SHA}`, "pr"],
     [`https://node-template-test.cognidao.org@${SHA}`, "build"],
   ])("accepts %s as a %s subject", (subject, form) => {
@@ -154,7 +162,9 @@ describe("parseArtifactSubject", () => {
   it.each([
     "knowledge:contrib-x@short",
     `knowledge:not-a-contrib@${COMMIT}`,
+    "work:task.0028@12",
     "work:task.0028@twelve",
+    "work:",
     `${PR}@${"a".repeat(39)}`,
     `${PR}@${"A".repeat(40)}`,
     `https://github.com/cogni-dao/node-template/issues/3@${SHA}`,
@@ -229,28 +239,51 @@ describe("recordWorkItemArtifact: the write contract", () => {
     expect(named.status).toBe(400);
   });
 
-  it("400: a design_waiver from a caller is refused, with the reason, and nothing is stored", async () => {
+  it("400: design_waiver is not a kind, and a body that names an author or an item revision is refused", async () => {
     const w = world();
-    const result = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", {
+    const waiver = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", {
       kind: "design_waiver",
-      subject: "work:task.0028@4",
+      subject: "work:task.0028",
       verdict: "waived",
       url: COMMENT,
     });
-    expect(result.status).toBe(400);
-    expect(result.body).toEqual({
-      error: "invalid input",
-      errorCode: "invalid_input",
-      issues: [{ path: ["kind"], message: "design_waiver is written only by the server" }],
-    });
+    expect(waiver.status).toBe(400);
+    expect((waiver.body as { issues: { path: string[] }[] }).issues[0]?.path).toEqual(["kind"]);
+    for (const extra of [{ author: "someone-else" }, { itemRevision: 0 }]) {
+      const r = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", { ...designReview, ...extra });
+      expect(r.status).toBe(400);
+    }
     expect(w.stored).toEqual([]);
     expect(w.itemReads).toEqual([]);
-    expect(result.log).toMatchObject({
-      event: "work.items.artifact_refused",
-      status: 400,
-      errorCode: "invalid_input",
-      kind: "design_waiver",
+    expect(waiver.log).toMatchObject({ event: "work.items.artifact_refused", status: 400, errorCode: "invalid_input" });
+  });
+
+  it("400: a review or validation needs a url or a body; either alone is enough; note and body are bounded", async () => {
+    const w = world({ inbox: { "contrib-derek-1": "author-1" } });
+    const { url: _url, ...noUrl } = designReview;
+    const none = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", noUrl);
+    expect(none.status).toBe(400);
+    expect(none.body).toMatchObject({
+      issues: [{ path: ["url"], message: "a design_review needs a url or a body" }],
     });
+    // An inbox has no comment surface: the body alone holds the review.
+    const bodyOnly = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", {
+      ...noUrl,
+      body: "Findings:\n1. one\n2. two",
+      note: "Request one change",
+    });
+    expect(bodyOnly.status).toBe(201);
+    expect(w.stored[0]).toMatchObject({ body: "Findings:\n1. one\n2. two", note: "Request one change" });
+    expect(w.stored[0]?.url).toBeUndefined();
+    // Bounds: 240 characters of note, 16000 of body, one line of note.
+    const edge = (extra: Record<string, unknown>) =>
+      recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", { ...designReview, ...extra });
+    expect((await edge({ note: "n".repeat(240) })).status).toBe(201);
+    expect((await edge({ note: "n".repeat(241) })).status).toBe(400);
+    expect((await edge({ note: "two\nlines" })).status).toBe(400);
+    expect((await edge({ body: "b".repeat(16_000) })).status).toBe(201);
+    expect((await edge({ body: "b".repeat(16_001) })).status).toBe(400);
+    expect((await edge({ body: "" })).status).toBe(400);
   });
 
   it("400: a malformed scorecard is refused and nothing is stored", async () => {
@@ -294,6 +327,15 @@ describe("recordWorkItemArtifact: the write contract", () => {
     expect(
       await issuesOf({ ...designReview, subject: `https://example.org@${SHA}` })
     ).toEqual(["subject"]);
+    // the work:<id>@<revision> brief form is gone: a design review judges an inbox
+    expect(
+      await issuesOf({ ...designReview, subject: "work:task.0028@3" })
+    ).toEqual(["subject"]);
+    expect(await issuesOf({ ...designReview, subject: "work:task.0028" })).toEqual(["subject"]);
+    // a triage verdict is research, design or implement
+    expect(
+      await issuesOf({ kind: "triage", subject: "work:task.0028", verdict: "approve" })
+    ).toEqual(["verdict"]);
     expect(w.stored).toEqual([]);
   });
 
@@ -495,27 +537,29 @@ describe("recordWorkItemArtifact: independence", () => {
     expect((await recordWorkItemArtifact(unlinked.deps, "task.0028", "reviewer-1", prReview)).status).toBe(400);
   });
 
-  it("work-brief subject: the principal that last moved the item to needs_design_review may not review it", async () => {
-    const history = [
-      entry("editor-1", "status", "needs_design"),
-      entry("designer-1", "status", "needs_design_review"),
-    ];
-    const w = world({ history });
-    const brief = {
-      kind: "design_review",
-      subject: "work:task.0028@3",
-      verdict: "request_changes",
-      url: COMMENT,
+  it("triage has NO independence rule: the router may be the one who moved the item, and history may be absent", async () => {
+    const triage = {
+      kind: "triage",
+      subject: "work:task.0028",
+      verdict: "implement",
+      note: "Measurement gap: no KPI reads artifacts until task.0103",
     };
-    expect((await recordWorkItemArtifact(w.deps, "task.0028", "designer-1", brief)).status).toBe(409);
-    expect((await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", brief)).status).toBe(201);
-    // A brief of a different item, or a revision the item has not reached, is not this item's brief.
-    expect(
-      (await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", { ...brief, subject: "work:task.0099@3" })).status
-    ).toBe(400);
-    expect(
-      (await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", { ...brief, subject: "work:task.0028@5" })).status
-    ).toBe(400);
+    const moved = world({ history: [entry("router-1", "status", "needs_triage")] });
+    const own = await recordWorkItemArtifact(moved.deps, "task.0028", "router-1", triage);
+    expect(own.status).toBe(201);
+    expect(moved.stored[0]).toMatchObject({ kind: "triage", verdict: "implement", author: "router-1" });
+    expect(moved.stored[0]?.url).toBeUndefined();
+    // No history reader, no inbox reader, a throwing history: none of them matters to triage.
+    for (const w of [
+      world({ history: "absent", inbox: "absent" }),
+      world({ history: "throws", inbox: "throws" }),
+    ]) {
+      expect((await recordWorkItemArtifact(w.deps, "task.0028", "router-1", triage)).status).toBe(201);
+    }
+    // It still must name THIS item.
+    const other = await recordWorkItemArtifact(moved.deps, "task.0028", "router-1", { ...triage, subject: "work:task.0099" });
+    expect(other.status).toBe(400);
+    expect(other.body).toMatchObject({ issues: [{ path: ["subject"], message: "subject names a different work item" }] });
   });
 
   it("build subject (a story): the principal that last moved it to needs_validation may not validate it", async () => {
@@ -530,16 +574,47 @@ describe("recordWorkItemArtifact: independence", () => {
     expect((await recordWorkItemArtifact(w.deps, "story.0047", "owner-1", live)).status).toBe(409);
     expect((await recordWorkItemArtifact(w.deps, "story.0047", "validator-1", live)).status).toBe(201);
   });
+
+  it("build subject: only this hub's own origin is accepted (case and a trailing slash in the config do not matter)", async () => {
+    const live = (origin: string) => ({
+      kind: "validation",
+      subject: `${origin}@${SHA}`,
+      verdict: "pass",
+      rows: [row()],
+      url: COMMENT,
+    });
+    const history = [entry("owner-1", "status", "needs_validation")];
+    const refusal = {
+      error: "invalid input",
+      errorCode: "invalid_input",
+      issues: [{ path: ["subject"], message: "subject origin is not this hub's own origin" }],
+    };
+    const own = world({ history, ownOrigin: "HTTPS://Node-Template-Test.cognidao.org/" });
+    expect(
+      (await recordWorkItemArtifact(own.deps, "story.0047", "validator-1", live("https://node-template-test.cognidao.org"))).status
+    ).toBe(201);
+    const other = await recordWorkItemArtifact(own.deps, "story.0047", "validator-1", live("https://cognidao.org"));
+    expect(other.status).toBe(400);
+    expect(other.body).toEqual(refusal);
+    expect(own.stored).toHaveLength(1);
+    // With no origin configured nothing matches: fail closed.
+    const none = world({ history, ownOrigin: null });
+    expect((await recordWorkItemArtifact(none.deps, "story.0047", "validator-1", live("https://node-template-test.cognidao.org"))).body).toEqual(refusal);
+    expect(none.stored).toEqual([]);
+  });
 });
 
 describe("reads", () => {
   const stored = (kind: WorkItemArtifact["kind"], id: string, verdict: string): WorkItemArtifact => ({
     id,
     itemId: "task.0028",
+    itemRevision: 3,
     kind,
     subject: "s",
     verdict,
     author: "a",
+    body: `full review ${id}`,
+    note: "one line",
     createdAt: "2026-11-13T00:00:00.000Z",
     ...(kind === "validation" ? { rows: [row()] } : {}),
   });
@@ -555,6 +630,11 @@ describe("reads", () => {
     expect(latest.validation?.id).toBe("v2");
     expect(latest.validation?.passGrade).toBe(false);
     expect(latest.implementation_review).toBeUndefined();
+    // The item read never carries the full review.
+    for (const artifact of Object.values(latest)) {
+      expect(artifact).not.toHaveProperty("body");
+      expect(artifact).toMatchObject({ itemRevision: 3, note: "one line" });
+    }
   });
 
   it("GET list: 200 newest-first from the store, 404 for a missing item, 503 on a store failure", async () => {
@@ -571,6 +651,8 @@ describe("reads", () => {
     const items = (ok.body as { items: WorkItemArtifact[] }).items;
     expect(items.map((a) => a.id)).toEqual(["v1", "d1"]);
     expect(items[0]?.passGrade).toBe(true);
+    // The list carries the body.
+    expect(items[0]?.body).toBe("full review v1");
     expect(ok.log).toMatchObject({ event: "work.items.artifacts_read", artifactCount: 2 });
     expect((await listWorkItemArtifacts(world({ item: null }).deps, "task.9")).status).toBe(404);
     const broken: WorkItemArtifactDeps = {
@@ -598,6 +680,8 @@ describe("reads", () => {
     });
     expect(calls).toEqual(["task.0028"]);
     expect(ok.artifacts?.implementation_review?.id).toBe("i1");
+    // The stored row had a body; the item read drops it.
+    expect(ok.artifacts?.implementation_review).not.toHaveProperty("body");
 
     const events: unknown[] = [];
     const down = await composeItemEnvelope(

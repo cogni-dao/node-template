@@ -1406,21 +1406,46 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				{ id: toWorkItemId(itemId), type: "task", title: "Review me" },
 				"artifact-creator",
 			);
+			// Triage: no url, a one-line note; the item's revision is stamped by the server (0 at create).
+			const triage = await adapter.artifacts.insert({
+				itemId,
+				kind: "triage",
+				subject: `work:${itemId}`,
+				verdict: "implement",
+				note: "Measurement gap: no KPI reads artifacts yet",
+				author: "artifact-router",
+			});
+			expect(triage).toMatchObject({ itemRevision: 0, kind: "triage", verdict: "implement" });
+			expect(triage.url).toBeUndefined();
+			await adapter.patch(
+				{
+					reason: "Move the item so the next artifact stamps a later revision.",
+					id: toWorkItemId(itemId),
+					set: { title: "Review me, revised" },
+				},
+				"artifact-creator",
+			);
+			// A review with a body and no url (an inbox has no comment surface); the revision follows the patch.
 			const review = await adapter.artifacts.insert({
 				itemId,
 				kind: "implementation_review",
 				subject: `${pr}@${"a".repeat(40)}`,
 				verdict: "request_changes",
-				url: `${pr}#issuecomment-1`,
+				body: "Full review: it's \"two\" findings.\nSecond line \u{1F534}",
+				note: "Rename the route",
 				author: "artifact-reviewer",
 			});
 			expect(review).toMatchObject({
 				itemId,
+				itemRevision: 1,
 				kind: "implementation_review",
 				verdict: "request_changes",
 				author: "artifact-reviewer",
+				note: "Rename the route",
+				body: "Full review: it's \"two\" findings.\nSecond line \u{1F534}",
 			});
 			expect(review.rows).toBeUndefined();
+			expect(review.url).toBeUndefined();
 			expect(review.id).toMatch(/^wia-/);
 			const first = await adapter.artifacts.insert({
 				itemId,
@@ -1444,20 +1469,29 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			expect(second.rows).toEqual(rows);
 
 			const listed = await adapter.artifacts.list(itemId);
-			expect(listed.map((a) => a.id)).toEqual([second.id, first.id, review.id]);
+			expect(listed.map((a) => a.id)).toEqual([second.id, first.id, review.id, triage.id]);
 			expect(listed[0]?.rows).toEqual(rows);
+			// The list carries the body.
+			expect(listed.find((a) => a.id === review.id)?.body).toBe(review.body);
 
 			// One query returns the newest of each kind that exists; kinds with none are absent.
 			const latest = await adapter.artifacts.latest(itemId);
 			expect(latest.map((a) => a.kind).sort()).toEqual([
 				"implementation_review",
+				"triage",
 				"validation",
 			]);
 			expect(latest.find((a) => a.kind === "validation")?.id).toBe(second.id);
+			// The item read's query never selects the review body.
+			for (const artifact of latest) expect(artifact.body).toBeUndefined();
+			expect(latest.find((a) => a.kind === "implementation_review")).toMatchObject({
+				note: "Rename the route",
+				itemRevision: 1,
+			});
 			expect(await adapter.artifacts.latest("task.9998")).toEqual([]);
 
 			// Insert-only on the real engine: every artifact is one Dolt commit with its actor, reason and id;
-			// the work item row was not touched.
+			// recording moved nothing on the item beyond the one patch above.
 			const log = await writerSql.unsafe(
 				`SELECT message FROM dolt_log WHERE message LIKE '%Artifact: ${second.id}'`,
 			);
@@ -1466,7 +1500,8 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				`work-items: artifact ${itemId} by actor:artifact-validator\nReason: Record validation artifact with verdict notes\nArtifact: ${second.id}`,
 			);
 			await expect(adapter.get(toWorkItemId(itemId))).resolves.toMatchObject({
-				revision: 0,
+				revision: 1,
+				title: "Review me, revised",
 				status: "needs_triage",
 			});
 			expect(await writerSql.unsafe("SELECT * FROM dolt_status")).toHaveLength(0);

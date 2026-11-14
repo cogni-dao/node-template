@@ -944,22 +944,30 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
   function artifactHarness(readRows: Record<string, unknown>[] = []) {
     const queries: string[] = [];
     const respond = (query: string) => {
+      // The item revision is read under the writer lock, on the operation branch, before the insert.
+      if (query === "SELECT revision FROM work_items WHERE id = 'task.0001' LIMIT 1")
+        return [{ revision: 7 }];
       if (query.startsWith("INSERT INTO work_item_artifacts")) {
         const values =
-          /VALUES \('([^']+)', '([^']+)', '([^']+)', '([^']*)', '([^']+)', (NULL|'.*?'::jsonb), (NULL|'[^']*'), '([^']+)'\) RETURNING/.exec(
+          /VALUES \('([^']+)', '([^']+)', (\d+), '([^']+)', '([^']*)', '([^']+)', (NULL|'.*?'::jsonb), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), '([^']+)'\) RETURNING/.exec(
             query
           );
-        const [, id, itemId, kind, subject, verdict, rows, url, author] =
+        const [, id, itemId, revision, kind, subject, verdict, rows, note, body, url, author] =
           values ?? [];
+        const text = (value: string | undefined) =>
+          value === "NULL" ? null : String(value).slice(1, -1).replace(/''/g, "'");
         return [
           {
             id,
             item_id: itemId,
+            item_revision: Number(revision),
             kind,
             subject,
             verdict,
             rows: rows === "NULL" ? null : JSON.parse(String(rows).slice(1, -8)),
-            url: url === "NULL" ? null : String(url).slice(1, -1),
+            note: text(note),
+            body: text(body),
+            url: text(url),
             author,
             created_at: "2026-10-03T00:00:00.000Z",
           },
@@ -984,6 +992,8 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     verdict: "pass",
     rows: ROWS as never,
     url: `${PR}#issuecomment-1`,
+    note: "Main change: it's fine",
+    body: "Full text, with a 'quote'",
     author: "validator-1",
   };
 
@@ -996,12 +1006,23 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
       kind: "validation",
       verdict: "pass",
       url: input.url,
+      note: "Main change: it's fine",
+      body: "Full text, with a 'quote'",
+      // Stamped from the item's revision read inside the lock, never from the caller.
+      itemRevision: 7,
       author: "validator-1",
       rows: ROWS,
     });
     expect(stored.id).toMatch(/^wia-[0-9a-f-]{36}$/);
     const insert = queries.find((q) => q.startsWith("INSERT INTO work_item_artifacts"));
-    expect(insert).toContain('(id, item_id, kind, subject, verdict, "rows", url, author)');
+    expect(insert).toContain(
+      '(id, item_id, item_revision, kind, subject, verdict, "rows", note, body, url, author)'
+    );
+    // The revision is read before the insert, in the same operation.
+    const queryOrder = queries.map((q) => q.slice(0, 40));
+    expect(queryOrder.findIndex((q) => q.startsWith("SELECT revision FROM work_items"))).toBeLessThan(
+      queryOrder.findIndex((q) => q.startsWith("INSERT INTO work_item_artifacts"))
+    );
     expect(branchCreated(queries)).toBe(true);
     expect(queries).toContain("SELECT dolt_add('work_item_artifacts')");
     expect(queries).not.toContain("SELECT dolt_add('work_items')");
@@ -1028,9 +1049,12 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
       id,
       item_id: "task.0001",
       kind,
+      item_revision: 2,
       subject: "s",
       verdict: "approve",
       rows: null,
+      note: null,
+      body: "full review",
       url: "https://example.org/x",
       author: "a",
       created_at: new Date("2026-10-03T00:00:00.000Z"),
@@ -1042,9 +1066,11 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
       {
         id: "wia-1",
         itemId: "task.0001",
+        itemRevision: 2,
         kind: "design_review",
         subject: "s",
         verdict: "approve",
+        body: "full review",
         url: "https://example.org/x",
         author: "a",
         createdAt: "2026-10-03T00:00:00.000Z",
@@ -1060,15 +1086,15 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     expect(latestQueries).toHaveLength(1);
     const latest = latestQueries[0] as string;
     expect(latest.startsWith("WITH latest AS (")).toBe(true);
-    for (const kind of [
-      "design_review",
-      "implementation_review",
-      "validation",
-      "design_waiver",
-    ]) {
+    // The item read never pays for the review body: every branch lists the columns but `body`.
+    expect(latest).not.toMatch(/\bbody\b/);
+    expect(latest).not.toContain("(SELECT *");
+    for (const kind of ["triage", "design_review", "implementation_review", "validation"]) {
       expect(latest).toContain(`kind = '${kind}' ORDER BY created_at DESC, id DESC LIMIT 1)`);
     }
     expect(latest.match(/UNION ALL/g)).toHaveLength(3);
+    // The list does carry it.
+    expect(queries.some((q) => q.startsWith("SELECT * FROM work_item_artifacts"))).toBe(true);
   });
 
   it("is insert-only: the adapter holds no UPDATE or DELETE of the artifact table", async () => {

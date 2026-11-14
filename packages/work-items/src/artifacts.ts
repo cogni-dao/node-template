@@ -10,18 +10,20 @@
  * Invariants:
  *   - INSERT_ONLY: the store has no update or delete; a later verdict is a new row, never an edit.
  *   - AUTHOR_IS_STAMPED: the caller never names the author; the handler stamps the authenticated principal.
- *   - INDEPENDENCE_IS_HERE: the package refuses an artifact from the subject's author; the route is a shell. An inbox
- *     subject's author is the inbox `principalId` (through the port). A PR subject's author is the principal that last
- *     set the item's `pr`; a work-brief subject's, the principal that last moved the item to needs_design_review; a
- *     build subject's (a story), the principal that last moved it to needs_validation. History says who; if it cannot
- *     show an author the write is refused (fail closed), for every subject.
- *   - WAIVER_IS_SERVER_ONLY: a caller may never write `design_waiver`; only the server stamps one (task.0122).
+ *   - INDEPENDENCE_IS_HERE: the package refuses a review or validation from the subject's author; the route is a shell.
+ *     An inbox subject's author is the inbox `principalId` (through the port). A PR subject's author is the principal
+ *     that last set the item's `pr`; a build subject's (a story), the principal that last moved it to needs_validation.
+ *     History says who; if it cannot show an author the write is refused (fail closed). A `triage` artifact has NO
+ *     independence rule: it names who routed.
+ *   - ITEM_REVISION_IS_STAMPED: the store stamps the item's revision, read inside the writer lock, never the caller.
+ *   - OWN_ORIGIN_ONLY: a build subject (`<origin>@<buildSha>`) must name this hub's own origin (`deps.ownOrigin`); with none configured it is refused.
+ *   - BODY_STAYS_OFF_THE_ITEM_READ: the item read carries the latest artifact of each kind without `body`; the list may carry it.
  *   - PASS_GRADE_IS_COMPUTED: `isPassGrade` decides from `rows` and the headline; a caller never sends a grade.
  *   - NEVER_THROWS: every handler failure becomes a status; a missing item is 404, a failed read or write 503. A write whose outcome is unknown (`WorkItemWriteOutcomeUnknownError`) is a distinct 409 `work_item_write_outcome_unknown`, `retryable: false`: the caller must inspect, never replay into a duplicate.
  *   - ONE_EVENT_PER_REFUSAL: every non-success write (400, 404, 409, 503) logs `work.items.artifact_refused`; `work.items.artifact_recorded` is a success only.
  *   - RECORDING_NEVER_MOVES_STATUS: this module never reads or writes an item's status.
  * Side-effects: IO (through the injected ports)
- * Links: hub work-cicd-gates-design (The artifact record), change-history-design
+ * Links: hub work-item-artifacts, work-status-ladder, change-history-design
  * @public
  */
 
@@ -34,38 +36,33 @@ import { toWorkItemId, type WorkItemId } from "./types.js";
 import { workItemWriteErrorResponse } from "./write-errors.js";
 
 export const ARTIFACT_KINDS = [
+  "triage",
   "design_review",
   "implementation_review",
   "validation",
-  "design_waiver",
 ] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
-/** The kinds a caller may write. `design_waiver` is stamped by the server only. */
-export const CALLER_ARTIFACT_KINDS = [
-  "design_review",
-  "implementation_review",
-  "validation",
-] as const;
-
+export const TRIAGE_VERDICTS = ["research", "design", "implement"] as const;
 export const REVIEW_VERDICTS = ["approve", "request_changes"] as const;
 export const VALIDATION_VERDICTS = ["pass", "notes", "fail"] as const;
-export const WAIVER_VERDICTS = ["waived"] as const;
 
 /** The verdicts each kind accepts. */
 export const VERDICTS_BY_KIND: Readonly<
   Record<ArtifactKind, readonly string[]>
 > = {
+  triage: TRIAGE_VERDICTS,
   design_review: REVIEW_VERDICTS,
   implementation_review: REVIEW_VERDICTS,
   validation: VALIDATION_VERDICTS,
-  design_waiver: WAIVER_VERDICTS,
 };
 
 /** Most artifacts a list returns, and most scorecard rows one validation holds. */
 export const ARTIFACTS_LIST_MAX = 50;
 export const ARTIFACT_ROWS_MAX = 50;
 export const ARTIFACT_URL_MAX = 2048;
+export const ARTIFACT_NOTE_MAX = 240;
+export const ARTIFACT_BODY_MAX = 16_000;
 const TWEAK_MAX = 200;
 const REASON_MAX = 500;
 
@@ -135,11 +132,10 @@ const WORK_ID = /^[a-z][a-z0-9._-]{0,127}$/;
 const PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[0-9]+$/;
 const ORIGIN = /^https?:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/;
 const GIT_SHA = /^[0-9a-f]{40}$/;
-const REVISION = /^[0-9]{1,9}$/;
 
 export type ArtifactSubject =
   | { readonly form: "knowledge"; readonly contribution: string; readonly head: string }
-  | { readonly form: "work"; readonly itemId: string; readonly revision: number }
+  | { readonly form: "work"; readonly itemId: string }
   | { readonly form: "pr"; readonly url: string; readonly head: string }
   | { readonly form: "build"; readonly origin: string; readonly buildSha: string };
 
@@ -149,17 +145,21 @@ export type SubjectForm = ArtifactSubject["form"];
 export const SUBJECT_FORMS_BY_KIND: Readonly<
   Record<ArtifactKind, readonly SubjectForm[]>
 > = {
-  design_review: ["knowledge", "work"],
+  triage: ["work"],
+  design_review: ["knowledge"],
   implementation_review: ["pr", "knowledge"],
   validation: ["pr", "build"],
-  design_waiver: ["work"],
 };
 
 /**
- * `knowledge:<contrib-id>@<head commit>`, `work:<itemId>@<revision>`, `<PR URL>@<40-hex head>` or
+ * `work:<itemId>` (triage), `knowledge:<contrib-id>@<head commit>`, `<PR URL>@<40-hex head>` or
  * `<origin>@<40-hex buildSha>`; `undefined` for anything else.
  */
 export function parseArtifactSubject(subject: string): ArtifactSubject | undefined {
+  if (subject.startsWith("work:")) {
+    const itemId = subject.slice("work:".length);
+    return WORK_ID.test(itemId) ? { form: "work", itemId } : undefined;
+  }
   const at = subject.lastIndexOf("@");
   if (at < 1) return undefined;
   const left = subject.slice(0, at);
@@ -168,12 +168,6 @@ export function parseArtifactSubject(subject: string): ArtifactSubject | undefin
     const contribution = left.slice("knowledge:".length);
     return CITE_CONTRIBUTION_PATTERN.test(contribution) && CITE_COMMIT_PATTERN.test(right)
       ? { form: "knowledge", contribution, head: right }
-      : undefined;
-  }
-  if (left.startsWith("work:")) {
-    const itemId = left.slice("work:".length);
-    return WORK_ID.test(itemId) && REVISION.test(right)
-      ? { form: "work", itemId, revision: Number(right) }
       : undefined;
   }
   if (PR_URL.test(left)) {
@@ -194,9 +188,18 @@ const UrlSchema = z
   .max(ARTIFACT_URL_MAX)
   .regex(/^https?:\/\/[^\s]+$/, "url must be an http(s) link with no whitespace");
 
+const NoteSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(ARTIFACT_NOTE_MAX)
+  .refine((value) => !/[\r\n\u0085\u2028\u2029]/.test(value), "note is one line")
+  .refine(noNul, "no NUL");
+const BodySchema = z.string().min(1).max(ARTIFACT_BODY_MAX).refine(noNul, "no NUL");
+
 /**
- * The body of `POST /api/v1/work/items/{id}/artifacts`. The author is never in it: the server stamps the
- * authenticated principal. `design_waiver` parses (so the refusal can say why) and is refused by the handler.
+ * The body of `POST /api/v1/work/items/{id}/artifacts`. The author and the item revision are never in it: the
+ * server stamps the authenticated principal and the item's current revision.
  */
 export const WorkItemArtifactInputSchema = z
   .object({
@@ -204,18 +207,12 @@ export const WorkItemArtifactInputSchema = z
     subject: z.string().min(3).max(512),
     verdict: z.string().min(1).max(32),
     rows: z.array(ScorecardRowSchema).max(ARTIFACT_ROWS_MAX).optional(),
-    url: UrlSchema,
+    note: NoteSchema.optional(),
+    body: BodySchema.optional(),
+    url: UrlSchema.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.kind === "design_waiver") {
-      ctx.addIssue({
-        code: "custom",
-        path: ["kind"],
-        message: "design_waiver is written only by the server",
-      });
-      return;
-    }
     if (!VERDICTS_BY_KIND[value.kind].includes(value.verdict)) {
       ctx.addIssue({
         code: "custom",
@@ -229,7 +226,7 @@ export const WorkItemArtifactInputSchema = z
         code: "custom",
         path: ["subject"],
         message:
-          "subject must be knowledge:<contrib-id>@<head commit>, work:<itemId>@<revision>, <PR URL>@<40-hex head> or <origin>@<40-hex buildSha>",
+          "subject must be work:<itemId> (triage), knowledge:<contrib-id>@<head commit>, <PR URL>@<40-hex head> or <origin>@<40-hex buildSha>",
       });
     } else if (!SUBJECT_FORMS_BY_KIND[value.kind].includes(subject.form)) {
       ctx.addIssue({
@@ -253,6 +250,14 @@ export const WorkItemArtifactInputSchema = z
         message: "rows belong to a validation only",
       });
     }
+    // A review or validation must point at its full text: a PR comment or scorecard (`url`), or `body` when none exists.
+    if (value.kind !== "triage" && value.url === undefined && value.body === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["url"],
+        message: `a ${value.kind} needs a url or a body`,
+      });
+    }
   });
 export type WorkItemArtifactInput = z.infer<typeof WorkItemArtifactInputSchema>;
 
@@ -260,34 +265,45 @@ export type WorkItemArtifactInput = z.infer<typeof WorkItemArtifactInputSchema>;
 export const WorkItemArtifactSchema = z.object({
   id: z.string(),
   itemId: z.string(),
+  /** The item's revision when this was written, stamped by the server. */
+  itemRevision: z.number().int(),
   kind: z.enum(ARTIFACT_KINDS),
   subject: z.string(),
   verdict: z.string(),
   rows: z.array(ScorecardRowSchema).optional(),
   passGrade: z.boolean().optional(),
+  note: z.string().optional(),
+  /** The full review, when no PR comment holds it. The list and the write answer carry it; the item read does not. */
+  body: z.string().optional(),
   url: z.string().optional(),
   author: z.string(),
   createdAt: z.string(),
 });
 export type WorkItemArtifact = z.infer<typeof WorkItemArtifactSchema>;
 
-/** The latest artifact of each kind, for the item read. `unavailable` is never an empty answer. */
+/** An artifact as the item read carries it: everything but `body`. */
+export const WorkItemArtifactSummarySchema = WorkItemArtifactSchema.omit({ body: true });
+export type WorkItemArtifactSummary = z.infer<typeof WorkItemArtifactSummarySchema>;
+
+/** The latest artifact of each kind, for the item read, without `body`. `unavailable` is never an empty answer. */
 export const WorkItemArtifactsLatestSchema = z.object({
-  design_review: WorkItemArtifactSchema.optional(),
-  implementation_review: WorkItemArtifactSchema.optional(),
-  validation: WorkItemArtifactSchema.optional(),
-  design_waiver: WorkItemArtifactSchema.optional(),
+  triage: WorkItemArtifactSummarySchema.optional(),
+  design_review: WorkItemArtifactSummarySchema.optional(),
+  implementation_review: WorkItemArtifactSummarySchema.optional(),
+  validation: WorkItemArtifactSummarySchema.optional(),
   unavailable: z.literal(true).optional(),
 });
 export type WorkItemArtifactsLatest = z.infer<typeof WorkItemArtifactsLatestSchema>;
 
-/** The row a store inserts. `author` is the stamped principal. */
+/** The row a store inserts. `author` is the stamped principal; the store stamps `itemRevision` inside its writer lock. */
 export interface NewWorkItemArtifact {
   readonly itemId: string;
   readonly kind: ArtifactKind;
   readonly subject: string;
   readonly verdict: string;
   readonly rows?: readonly ScorecardRow[] | undefined;
+  readonly note?: string | undefined;
+  readonly body?: string | undefined;
   readonly url?: string | undefined;
   readonly author: string;
 }
@@ -298,7 +314,7 @@ export interface WorkItemArtifactStore {
   insert(row: NewWorkItemArtifact): Promise<WorkItemArtifact>;
   /** Newest first, at most `ARTIFACTS_LIST_MAX`. */
   list(itemId: string): Promise<readonly WorkItemArtifact[]>;
-  /** The newest artifact of each kind, in one read. */
+  /** The newest artifact of each kind, in one read, without `body`. */
   latest(itemId: string): Promise<readonly WorkItemArtifact[]>;
 }
 
@@ -313,9 +329,12 @@ export function withPassGrade(artifact: WorkItemArtifact): WorkItemArtifact {
 export function toLatestArtifacts(
   artifacts: readonly WorkItemArtifact[]
 ): WorkItemArtifactsLatest {
-  const latest: { -readonly [K in ArtifactKind]?: WorkItemArtifact } = {};
+  const latest: { -readonly [K in ArtifactKind]?: WorkItemArtifactSummary } = {};
   for (const artifact of artifacts) {
-    if (!latest[artifact.kind]) latest[artifact.kind] = withPassGrade(artifact);
+    if (latest[artifact.kind]) continue;
+    // BODY_STAYS_OFF_THE_ITEM_READ: the full review is on the list, never on the item.
+    const { body: _body, ...summary } = withPassGrade(artifact);
+    latest[artifact.kind] = summary;
   }
   return latest;
 }
@@ -340,6 +359,8 @@ export interface WorkItemArtifactDeps {
   readonly artifacts: WorkItemArtifactStore;
   /** Without it an inbox subject has no known author, so the write is refused. */
   readonly inboxes?: ContributionAuthorPort | undefined;
+  /** This hub's own public origin (the app's configured one). A build subject must name it; with none, a build subject is refused. */
+  readonly ownOrigin?: string | undefined;
 }
 
 type AuthorOutcome =
@@ -390,7 +411,8 @@ async function subjectAuthor(
     case "pr":
       return lastActor(history, "pr", (after) => after === item.pr);
     case "work":
-      return lastActor(history, "status", (after) => after === "needs_design_review");
+      // Triage has no independence rule; the handler never asks.
+      return { ok: false, reason: "author_unknown" };
     case "build":
       return lastActor(history, "status", (after) => after === "needs_validation");
   }
@@ -553,10 +575,20 @@ const invalid = (
   },
 });
 
+/** Same origin, ignoring case and a trailing slash. No configured origin matches nothing. */
+function isOwnOrigin(origin: string, own: string | undefined): boolean {
+  if (!own) return false;
+  try {
+    return new URL(origin).origin === new URL(own).origin;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Records one artifact on item `itemId` as `principalId`. The caller's body is parsed, `design_waiver` is
- * refused, the subject must belong to the item, and the author must not be the subject's author. Recording
- * never changes the item's status.
+ * Records one artifact on item `itemId` as `principalId`. The caller's body is parsed, the subject must belong
+ * to the item (a build subject to this hub's own origin), and a review or validation must not come from the
+ * subject's author. Triage has no independence rule. Recording never changes the item's status.
  */
 export async function recordWorkItemArtifact(
   deps: WorkItemArtifactDeps,
@@ -597,21 +629,23 @@ export async function recordWorkItemArtifact(
   // The subject must belong to this item, so its author is the right one to compare against.
   const mismatch = (message: string): ArtifactResult =>
     invalid(itemId, [{ path: ["subject"], message }], base);
-  if (subject.form === "work") {
-    if (subject.itemId !== itemId) return mismatch("subject names a different work item");
-    if (subject.revision > item.revision)
-      return mismatch(`subject revision is ahead of the item (revision ${item.revision})`);
-  }
+  if (subject.form === "work" && subject.itemId !== itemId)
+    return mismatch("subject names a different work item");
   if (subject.form === "pr" && subject.url !== item.pr)
     return mismatch("subject is not this item's pr");
+  if (subject.form === "build" && !isOwnOrigin(subject.origin, deps.ownOrigin))
+    return mismatch("subject origin is not this hub's own origin");
 
-  let author: AuthorOutcome;
-  try {
-    author = await subjectAuthor(deps, itemId, item, subject);
-  } catch (error) {
-    return unavailable(itemId, RECORDED, error, base);
+  // Triage has no independence rule: the artifact names who routed.
+  let author: AuthorOutcome = { ok: true, author: "" };
+  if (subject.form !== "work") {
+    try {
+      author = await subjectAuthor(deps, itemId, item, subject);
+    } catch (error) {
+      return unavailable(itemId, RECORDED, error, base);
+    }
   }
-  if (!author.ok || author.author === principalId) {
+  if (subject.form !== "work" && (!author.ok || author.author === principalId)) {
     const reason = author.ok ? "same_principal" : author.reason;
     return {
       status: 409,
@@ -640,7 +674,9 @@ export async function recordWorkItemArtifact(
         subject: input.subject,
         verdict: input.verdict,
         ...(input.rows ? { rows: input.rows } : {}),
-        url: input.url,
+        ...(input.note !== undefined ? { note: input.note } : {}),
+        ...(input.body !== undefined ? { body: input.body } : {}),
+        ...(input.url !== undefined ? { url: input.url } : {}),
         author: principalId,
       })
     );
@@ -692,7 +728,7 @@ export const workItemsArtifactsCreateOperation = {
   id: "work.items.artifacts.create.v1",
   summary: "Record a review or validation artifact on a work item",
   description:
-    "Writes one immutable artifact: a design review, an implementation review or a validation (with the canonical scorecard rows). The author is the authenticated principal and must not be the subject's author. The server computes PASS-grade from the rows. Recording never changes the item's status. `design_waiver` is refused.",
+    "Writes one immutable artifact: a triage (routes research, design or implement), a design review, an implementation review or a validation (with the canonical scorecard rows). The author is the authenticated principal; a review or validation must not come from the subject's author (triage has no such rule). The server stamps the item's revision and computes PASS-grade from the rows. A review or validation needs a `url` or a `body`. Recording never changes the item's status.",
   input: WorkItemArtifactInputSchema,
   output: z.object({ artifact: WorkItemArtifactSchema }),
 } as const;
@@ -700,7 +736,7 @@ export const workItemsArtifactsCreateOperation = {
 export const workItemsArtifactsListOperation = {
   id: "work.items.artifacts.list.v1",
   summary: "List a work item's artifacts",
-  description: "Newest first, at most 50.",
+  description: "Newest first, at most 50, each with its `body` when it has one.",
   input: z.object({ id: z.string() }),
   output: z.object({ items: z.array(WorkItemArtifactSchema).max(ARTIFACTS_LIST_MAX) }),
 } as const;

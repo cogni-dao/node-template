@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/work/items/[id]/artifacts`
- * Purpose: POST records an immutable review or validation artifact on a work item; GET lists them, newest first (task.0028).
+ * Purpose: POST records an immutable triage, review or validation artifact on a work item; GET lists them, newest first (task.0028).
  * Scope: Thin shells: session check, id, body parse, one `@cogni/work-items` handler call, one log event, response. The independence check, PASS-grade and the insert live in the package.
  * Invariants:
  *   - SAME_DOOR: POST needs the `work_item:transition` grant, the same door `PATCH /work/items/{id}` runs (route id `work.items.artifacts.create` listed beside `work.items.patch` under `core__work_item_update`); a signed-in human passes. A granular review grant is a later story. GET needs a session, like history.

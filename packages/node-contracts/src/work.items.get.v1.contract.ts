@@ -9,7 +9,7 @@
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
  *   - Additive envelope (task.0118): `moves` entries carry metric, kpi and goal; `?include=links` adds `links`. Both derive from the one WorkItemDtoSchema.
- *   - Artifacts (task.0028): the read adds `artifacts`, the latest review or validation of each kind (WorkItemReadDtoSchema, owned by @cogni-dao/work-items).
+ *   - Artifacts (task.0028): the read adds `artifacts`, the latest triage, review or validation of each kind, without `body` (WorkItemReadDtoSchema, owned by @cogni-dao/work-items).
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/work-items-port.md
  * @internal
@@ -25,7 +25,7 @@ export const workItemsGetOperation = {
   id: "work.items.get.v1",
   summary: "Get a work item by ID",
   description:
-    "Returns a single work item by its ID, or 404 if not found. Each moves entry carries its metric, the KPI it serves and the goal (task.0118). include=links adds the first page of citation links. `artifacts` holds the latest design review, implementation review, validation and design waiver (task.0028); `artifacts.unavailable` means they could not be read, not that there are none.",
+    "Returns a single work item by its ID, or 404 if not found. Each moves entry carries its metric, the KPI it serves and the goal (task.0118). include=links adds the first page of citation links. `artifacts` holds the latest triage, design review, implementation review and validation, without their `body` (task.0028); `artifacts.unavailable` means they could not be read, not that there are none.",
   input: z.object({
     id: z.string(),
     include: z.array(z.enum(WORK_ITEM_INCLUDES)).optional(),

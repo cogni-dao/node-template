@@ -26,7 +26,7 @@
 import {
   toLatestArtifacts,
   type WorkItemArtifact,
-  WorkItemArtifactSchema,
+  WorkItemArtifactSummarySchema,
   type WorkItemArtifactsLatest,
 } from "./artifacts.js";
 import type { WorkItemLinks } from "./contracts.js";
@@ -124,7 +124,7 @@ export async function composeItemEnvelope<T extends { id: string; moves?: WorkIt
     try {
       const stored = await runBounded((signal) => port.latest(item.id, signal), options);
       // A stored row the wire cannot carry degrades the part; it never fails the item read (a 500).
-      const rows = stored.map((row) => WorkItemArtifactSchema.safeParse(row));
+      const rows = stored.map((row) => WorkItemArtifactSummarySchema.safeParse(row));
       if (rows.some((row) => !row.success)) {
         emit({ part: "artifacts", workItemId: item.id, reason: "invalid_row" });
         return UNAVAILABLE_ARTIFACTS;
