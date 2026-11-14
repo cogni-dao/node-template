@@ -1,5 +1,5 @@
 {
-  "id": "b5ce2f24-d653-42b4-900c-0649b1692a00",
+  "id": "db15b14e-35d4-4ad8-a2c2-5d65bd09eca5",
   "prevId": "fc38aab2-6f00-4456-acc8-2a33358159a9",
   "version": "7",
   "dialect": "postgresql",
@@ -734,12 +734,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "item_revision": {
-          "name": "item_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
         "kind": {
           "name": "kind",
           "type": "text",
@@ -761,18 +755,6 @@
         "rows": {
           "name": "rows",
           "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "body": {
-          "name": "body",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

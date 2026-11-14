@@ -31,6 +31,7 @@ interface ArtifactBranch {
 const artifactRow = {
   id: "wia-1",
   item_id: "task.0001",
+  seq: 1,
   item_revision: 0,
   kind: "implementation_review",
   subject: "https://github.com/cogni-dao/node-template/pull/9@" + "a".repeat(40),
@@ -41,7 +42,7 @@ const artifactRow = {
   created_at: "2026-10-03T00:00:00.000Z",
 };
 const artifactMessage =
-  "work-items: artifact task.0001 by actor:reviewer-1\nReason: Record implementation_review artifact with verdict approve\nArtifact: wia-1";
+  "work-items: artifact task.0001 by actor:reviewer-1\nReason: Record implementation_review artifact with verdict approve\nArtifact: wia-1\nSeq: 1";
 
 interface ReconciliationState {
   branch?: string;
@@ -538,7 +539,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     it.each([
       ["an Artifact: line that names another row", { message: artifactMessage.replace("wia-1", "wia-2") }],
-      ["no Artifact: line", { message: artifactMessage.split("\n").slice(0, 2).join("\n") }],
+      ["no Artifact: line", { message: artifactMessage.split("\n").filter((l) => !l.startsWith("Artifact:")).join("\n") }],
+      ["no Seq: line", { message: artifactMessage.split("\n").slice(0, 3).join("\n") }],
+      ["a Seq: line that is not the row's seq", { message: artifactMessage.replace("Seq: 1", "Seq: 2") }],
+      ["a row with no seq", { row: { seq: null } }],
       ["an author other than the commit's actor", { row: { author: "someone-else" } }],
       ["an item other than the commit's item", { row: { item_id: "task.0002" } }],
       ["an unknown kind", { row: { kind: "approval" } }],

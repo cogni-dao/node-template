@@ -943,23 +943,31 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
 
   function artifactHarness(readRows: Record<string, unknown>[] = []) {
     const queries: string[] = [];
+    // The highest seq per item, as the table would hold it once an insert merged.
+    const highest = new Map<string, number>();
     const respond = (query: string) => {
+      const sequence = /SELECT COALESCE\(MAX\(seq\), 0\) \+ 1 AS next_seq FROM work_item_artifacts WHERE item_id = '([^']+)'$/.exec(query);
+      if (sequence) return [{ next_seq: (highest.get(sequence[1] as string) ?? 0) + 1 }];
       // The item revision is read under the writer lock, on the operation branch, before the insert.
-      if (query === "SELECT revision FROM work_items WHERE id = 'task.0001' LIMIT 1")
+      if (query.startsWith("SELECT revision FROM work_items WHERE id = 'task.missing'"))
+        return [];
+      if (query.startsWith("SELECT revision FROM work_items WHERE id = 'task."))
         return [{ revision: 7 }];
       if (query.startsWith("INSERT INTO work_item_artifacts")) {
         const values =
-          /VALUES \('([^']+)', '([^']+)', (\d+), '([^']+)', '([^']*)', '([^']+)', (NULL|'.*?'::jsonb), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), '([^']+)'\) RETURNING/.exec(
+          /VALUES \('([^']+)', '([^']+)', (\d+), (\d+), '([^']+)', '([^']*)', '([^']+)', (NULL|'.*?'::jsonb), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), '([^']+)'\) RETURNING/.exec(
             query
           );
-        const [, id, itemId, revision, kind, subject, verdict, rows, note, body, url, author] =
+        const [, id, itemId, seq, revision, kind, subject, verdict, rows, note, body, url, author] =
           values ?? [];
+        highest.set(String(itemId), Number(seq));
         const text = (value: string | undefined) =>
           value === "NULL" ? null : String(value).slice(1, -1).replace(/''/g, "'");
         return [
           {
             id,
             item_id: itemId,
+            seq: Number(seq),
             item_revision: Number(revision),
             kind,
             subject,
@@ -1010,14 +1018,27 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
       body: "Full text, with a 'quote'",
       // Stamped from the item's revision read inside the lock, never from the caller.
       itemRevision: 7,
+      seq: 1,
       author: "validator-1",
       rows: ROWS,
     });
     expect(stored.id).toMatch(/^wia-[0-9a-f-]{36}$/);
     const insert = queries.find((q) => q.startsWith("INSERT INTO work_item_artifacts"));
     expect(insert).toContain(
-      '(id, item_id, item_revision, kind, subject, verdict, "rows", note, body, url, author)'
+      '(id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, body, url, author)'
     );
+    // The sequence is read under the same lock, after the revision and before the insert, and rides the commit.
+    const orderOf = (prefix: string) => queries.findIndex((q) => q.startsWith(prefix));
+    expect(orderOf("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq")).toBeGreaterThan(
+      orderOf("SELECT revision FROM work_items")
+    );
+    expect(orderOf("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq")).toBeLessThan(
+      orderOf("INSERT INTO work_item_artifacts")
+    );
+    // Both reads are the preflight: under the lock, before any operation branch exists.
+    const branchAt = queries.findIndex((q) => q.includes("dolt_checkout('-b'"));
+    expect(orderOf("SELECT revision FROM work_items")).toBeLessThan(branchAt);
+    expect(orderOf("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq")).toBeLessThan(branchAt);
     // The revision is read before the insert, in the same operation.
     const queryOrder = queries.map((q) => q.slice(0, 40));
     expect(queryOrder.findIndex((q) => q.startsWith("SELECT revision FROM work_items"))).toBeLessThan(
@@ -1027,11 +1048,47 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     expect(queries).toContain("SELECT dolt_add('work_item_artifacts')");
     expect(queries).not.toContain("SELECT dolt_add('work_items')");
     expect(queries).toContain(
-      `SELECT dolt_commit('-m', 'work-items: artifact task.0001 by actor:validator-1\nReason: Record validation artifact with verdict pass\nArtifact: ${stored.id}')`
+      `SELECT dolt_commit('-m', 'work-items: artifact task.0001 by actor:validator-1\nReason: Record validation artifact with verdict pass\nArtifact: ${stored.id}\nSeq: 1')`
     );
     // The operation branch was proven (exact one-row added diff) and merged.
     expect(queries.some((q) => q.includes("FROM dolt_merge("))).toBe(true);
     expect(queries.some((q) => q.startsWith("SELECT id FROM work_item_artifacts WHERE id"))).toBe(true);
+  });
+
+  it("assigns seq 1, 2, 3 per item under the lock, each commit naming its seq; another item starts at 1", async () => {
+    const { adapter, queries } = artifactHarness();
+    const seqs: number[] = [];
+    for (const verdict of ["approve", "request_changes", "approve"]) {
+      const stored = await adapter.artifacts.insert({
+        ...input,
+        kind: "implementation_review",
+        verdict,
+        rows: undefined,
+      });
+      seqs.push(stored.seq);
+    }
+    expect(seqs).toEqual([1, 2, 3]);
+    const other = await adapter.artifacts.insert({
+      ...input,
+      itemId: "task.0002",
+      kind: "implementation_review",
+      verdict: "approve",
+      rows: undefined,
+    });
+    expect(other.seq).toBe(1);
+    const messages = queries.filter((q) => q.startsWith("SELECT dolt_commit"));
+    expect(messages.map((q) => /\nSeq: (\d+)'\)$/.exec(q)?.[1])).toEqual(["1", "2", "3", "1"]);
+  });
+
+  it("a missing item is a clean admission failure: no branch, no commit, and the lock is free for the next write", async () => {
+    const { adapter, queries } = artifactHarness();
+    await expect(
+      adapter.artifacts.insert({ ...input, itemId: "task.missing" })
+    ).rejects.toThrow("Work item not found: task.missing");
+    expect(branchCreated(queries)).toBe(false);
+    expect(committed(queries)).toBe(false);
+    expect(queries.some((q) => q.startsWith("SELECT pg_advisory_unlock"))).toBe(true);
+    await expect(adapter.artifacts.insert(input)).resolves.toMatchObject({ seq: 1 });
   });
 
   it("refuses an unknown kind or an empty author before any SQL is sent", async () => {
@@ -1049,6 +1106,7 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
       id,
       item_id: "task.0001",
       kind,
+      seq: 4,
       item_revision: 2,
       subject: "s",
       verdict: "approve",
@@ -1066,6 +1124,7 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
       {
         id: "wia-1",
         itemId: "task.0001",
+        seq: 4,
         itemRevision: 2,
         kind: "design_review",
         subject: "s",
@@ -1077,7 +1136,7 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
       },
     ]);
     expect(queries.at(-1)).toBe(
-      "SELECT * FROM work_item_artifacts WHERE item_id = 'task.0001' ORDER BY created_at DESC, id DESC LIMIT 50"
+      "SELECT * FROM work_item_artifacts WHERE item_id = 'task.0001' ORDER BY seq DESC LIMIT 50"
     );
 
     const before = queries.length;
@@ -1090,9 +1149,12 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     expect(latest).not.toMatch(/\bbody\b/);
     expect(latest).not.toContain("(SELECT *");
     for (const kind of ["triage", "design_review", "implementation_review", "validation"]) {
-      expect(latest).toContain(`kind = '${kind}' ORDER BY created_at DESC, id DESC LIMIT 1)`);
+      expect(latest).toContain(`kind = '${kind}' ORDER BY seq DESC LIMIT 1)`);
     }
     expect(latest.match(/UNION ALL/g)).toHaveLength(3);
+    // Order is the per-item sequence, never the clock: timestamps tie.
+    expect(latest).toContain("SELECT * FROM latest ORDER BY seq DESC");
+    expect(latest).not.toContain("created_at DESC");
     // The list does carry it.
     expect(queries.some((q) => q.startsWith("SELECT * FROM work_item_artifacts"))).toBe(true);
   });

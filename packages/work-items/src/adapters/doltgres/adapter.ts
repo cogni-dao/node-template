@@ -317,7 +317,7 @@ type MutationVerb =
 const ARTIFACT_TABLE = "work_item_artifacts";
 /** Every artifact column but `body`: the item read never pays for a 16 KB review it does not return. */
 const ARTIFACT_SUMMARY_COLUMNS =
-  'id, item_id, item_revision, kind, subject, verdict, "rows", note, url, author, created_at';
+  'id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, url, author, created_at';
 
 interface MutationProof {
   readonly verb: MutationVerb;
@@ -338,6 +338,8 @@ interface MutationProof {
   cites?: readonly HistoryCite[];
   /** `artifact` only (task.0028): the id of the one inserted `work_item_artifacts` row; written as an `Artifact:` commit line. */
   readonly artifactId?: string;
+  /** `artifact` only: the row's `seq`, assigned inside the lock before the insert; written as a `Seq:` commit line and required by the branch proof. */
+  artifactSeq?: number;
 }
 
 interface MutationOptions<T> {
@@ -556,6 +558,7 @@ function rowToArtifact(row: Record<string, unknown>): WorkItemArtifact {
   return {
     id: String(row.id),
     itemId: String(row.item_id),
+    seq: Number(row.seq),
     itemRevision: Number(row.item_revision),
     kind: String(row.kind) as ArtifactKind,
     subject: String(row.subject),
@@ -901,6 +904,7 @@ function commitMessage(
   const lines = [`${COMMIT_TAG}: ${message} by actor:${principalId}`];
   if (proof.reason) lines.push(`Reason: ${proof.reason}`);
   if (proof.artifactId) lines.push(`Artifact: ${proof.artifactId}`);
+  if (proof.artifactSeq !== undefined) lines.push(`Seq: ${proof.artifactSeq}`);
   if (proof.cites?.length) lines.push(`Cites: ${formatCitesTrailer(proof.cites)}`);
   return lines.join("\n");
 }
@@ -1045,11 +1049,14 @@ function artifactProofFromCommitMessage(
   const named = rest.find((line) => line.startsWith("Artifact: "));
   if (!artifactId || named?.slice("Artifact: ".length) !== artifactId)
     return undefined;
+  const seqLine = rest.find((line) => line.startsWith("Seq: "))?.slice("Seq: ".length);
+  if (seqLine === undefined || !/^[1-9][0-9]{0,8}$/.test(seqLine)) return undefined;
   return {
     verb: "artifact",
     principal: match[2],
     itemId: match[1],
     artifactId,
+    artifactSeq: Number(seqLine),
   };
 }
 
@@ -1062,6 +1069,13 @@ function validateArtifactInsert(
     proof.verb === "artifact" &&
     proof.artifactId !== undefined &&
     String(row.id ?? "") === proof.artifactId &&
+    // The row carries exactly the seq the writer assigned under the lock.
+    proof.artifactSeq !== undefined &&
+    Number.isInteger(proof.artifactSeq) &&
+    proof.artifactSeq >= 1 &&
+    row.seq !== null &&
+    row.seq !== undefined &&
+    Number(row.seq) === proof.artifactSeq &&
     String(row.item_id ?? "") === (proof.itemId ?? "") &&
     String(row.author ?? "") === proof.principal &&
     proof.principal.length > 0 &&
@@ -3486,18 +3500,15 @@ export class DoltgresWorkItemAdapter
     const reason = normalizeChangeReason(
       `Record ${input.kind} artifact with verdict ${input.verdict}`
     );
+    // Read in the preflight: under the writer lock, on main, before any branch exists.
+    let itemRevision = 0;
+    let seq = 0;
     return this.mutate<WorkItemArtifact>(
       `artifact ${itemId}`,
       principal,
-      async (conn, proof) => {
-        // ITEM_REVISION_IS_STAMPED: read under the writer lock, on the operation branch cut from main,
-        // so no patch can move the item between this read and the insert's commit.
-        const item = (await conn.unsafe(
-          `SELECT revision FROM work_items WHERE id = ${escapeValue(itemId)} LIMIT 1`
-        )) as ReadonlyArray<Record<string, unknown>>;
-        if (!item[0]) throw new Error(`Work item not found: ${itemId}`);
+      async (conn) => {
         const rows = await conn.unsafe(
-          `INSERT INTO ${ARTIFACT_TABLE} (id, item_id, item_revision, kind, subject, verdict, "rows", note, body, url, author) VALUES (${escapeValue(id)}, ${escapeValue(itemId)}, ${escapeValue(Number(item[0].revision ?? 0))}, ${escapeValue(input.kind)}, ${escapeValue(input.subject)}, ${escapeValue(input.verdict)}, ${escapeValue(input.rows ?? null)}, ${escapeValue(input.note ?? null)}, ${escapeValue(input.body ?? null)}, ${escapeValue(input.url ?? null)}, ${escapeValue(principal)}) RETURNING *`
+          `INSERT INTO ${ARTIFACT_TABLE} (id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, body, url, author) VALUES (${escapeValue(id)}, ${escapeValue(itemId)}, ${escapeValue(seq)}, ${escapeValue(itemRevision)}, ${escapeValue(input.kind)}, ${escapeValue(input.subject)}, ${escapeValue(input.verdict)}, ${escapeValue(input.rows ?? null)}, ${escapeValue(input.note ?? null)}, ${escapeValue(input.body ?? null)}, ${escapeValue(input.url ?? null)}, ${escapeValue(principal)}) RETURNING *`
         );
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) throw new Error("INSERT returned no artifact row");
@@ -3511,33 +3522,51 @@ export class DoltgresWorkItemAdapter
           artifactId: id,
           reason,
         },
+        // ITEM_REVISION_IS_STAMPED and SEQ_ORDERS_ARTIFACTS: both read here, inside the writer lock and
+        // before the branch is cut, so no patch or artifact can land between these reads and the insert's
+        // commit, and a missing item is a clean admission failure (lock released, nothing written, no branch
+        // to recover). The unique (item_id, seq) index is the backstop.
+        preflight: async (conn, proof) => {
+          const item = (await conn.unsafe(
+            `SELECT revision FROM work_items WHERE id = ${escapeValue(itemId)} LIMIT 1`
+          )) as ReadonlyArray<Record<string, unknown>>;
+          if (!item[0]) throw new Error(`Work item not found: ${itemId}`);
+          const next = (await conn.unsafe(
+            `SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)}`
+          )) as ReadonlyArray<Record<string, unknown>>;
+          seq = Number(next[0]?.next_seq);
+          if (!Number.isInteger(seq) || seq < 1)
+            throw new Error(`Artifact sequence for ${itemId} is not a positive integer`);
+          itemRevision = Number(item[0].revision ?? 0);
+          proof.artifactSeq = seq;
+        },
       }
     );
   }
 
-  /** Newest first, at most `ARTIFACTS_LIST_MAX`. */
+  /** Highest `seq` first, at most `ARTIFACTS_LIST_MAX`. */
   private async listArtifacts(
     itemId: string
   ): Promise<readonly WorkItemArtifact[]> {
     return this.readOnCleanMain(async (conn) => {
       const rows = await conn.unsafe(
-        `SELECT * FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} ORDER BY created_at DESC, id DESC LIMIT ${ARTIFACTS_LIST_MAX}`
+        `SELECT * FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} ORDER BY seq DESC LIMIT ${ARTIFACTS_LIST_MAX}`
       );
       return rows.map(rowToArtifact);
     });
   }
 
-  /** The newest artifact of each kind, in ONE query (at most one row per kind, so at most four), without `body`. */
+  /** The highest-seq artifact of each kind, in ONE query (at most one row per kind, so at most four), without `body`. */
   private async latestArtifacts(
     itemId: string
   ): Promise<readonly WorkItemArtifact[]> {
     const branches = ARTIFACT_KINDS.map(
       (kind) =>
-        `(SELECT ${ARTIFACT_SUMMARY_COLUMNS} FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} AND kind = ${escapeValue(kind)} ORDER BY created_at DESC, id DESC LIMIT 1)`
+        `(SELECT ${ARTIFACT_SUMMARY_COLUMNS} FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} AND kind = ${escapeValue(kind)} ORDER BY seq DESC LIMIT 1)`
     );
     return this.readOnCleanMain(async (conn) => {
       const rows = await conn.unsafe(
-        `WITH latest AS (${branches.join(" UNION ALL ")}) SELECT * FROM latest ORDER BY created_at DESC, id DESC`
+        `WITH latest AS (${branches.join(" UNION ALL ")}) SELECT * FROM latest ORDER BY seq DESC`
       );
       return rows.map(rowToArtifact);
     });

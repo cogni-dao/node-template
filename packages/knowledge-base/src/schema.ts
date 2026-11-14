@@ -337,9 +337,11 @@ export const workItems = pgTable(
  * (validation only, the canonical scorecard rows) say what was found; `note` is one line (the
  * triage measurement gap or the main change requested); `body` holds the full review when no PR
  * comment does (an inbox has none); `url` points at the comment or scorecard that does;
- * `item_revision` is the item's revision when written, stamped by the server inside the writer
- * lock; `author` is the principal the server stamped. Insert-only: a later verdict is a new row,
- * never an edit, and the latest decides. `item_id` has no FK: work_items rows are patched in
+ * `seq` is the artifact's place in its item's sequence (1, 2, 3...), assigned by the server
+ * inside the writer lock as the item's highest `seq` plus one, and unique per item: the highest
+ * `seq` of a kind is the latest, never the clock (timestamps tie); `item_revision` is the item's
+ * revision when written, stamped by the server in the same place; `author` is the principal the
+ * server stamped. Insert-only: a later verdict is a new row, never an edit, and the latest decides. `item_id` has no FK: work_items rows are patched in
  * place and a verdict must survive any edit of its item.
  */
 export const workItemArtifacts = pgTable(
@@ -347,7 +349,10 @@ export const workItemArtifacts = pgTable(
   {
     id: text("id").primaryKey(),
     itemId: text("item_id").notNull(),
-    itemRevision: integer("item_revision").notNull(),
+    // seq and item_revision came in migration 0007 on top of 0006 (already applied on candidate-a): the DEFAULT 0
+    // protects any row written before it. The server always writes seq >= 1 and the item's real revision.
+    seq: integer("seq").notNull().default(0),
+    itemRevision: integer("item_revision").notNull().default(0),
     kind: text("kind").notNull(),
     subject: text("subject").notNull(),
     verdict: text("verdict").notNull(),
@@ -362,7 +367,10 @@ export const workItemArtifacts = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("idx_work_item_artifacts_item_created").on(t.itemId, t.createdAt)]
+  (t) => [
+    index("idx_work_item_artifacts_item_created").on(t.itemId, t.createdAt),
+    uniqueIndex("uniq_work_item_artifacts_item_seq").on(t.itemId, t.seq),
+  ]
 );
 
 export type WorkItemArtifactRow = typeof workItemArtifacts.$inferSelect;

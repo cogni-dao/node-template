@@ -1415,7 +1415,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				note: "Measurement gap: no KPI reads artifacts yet",
 				author: "artifact-router",
 			});
-			expect(triage).toMatchObject({ itemRevision: 0, kind: "triage", verdict: "implement" });
+			expect(triage).toMatchObject({ seq: 1, itemRevision: 0, kind: "triage", verdict: "implement" });
 			expect(triage.url).toBeUndefined();
 			await adapter.patch(
 				{
@@ -1437,6 +1437,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			});
 			expect(review).toMatchObject({
 				itemId,
+				seq: 2,
 				itemRevision: 1,
 				kind: "implementation_review",
 				verdict: "request_changes",
@@ -1465,22 +1466,58 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				url: `${pr}#issuecomment-3`,
 				author: "artifact-validator",
 			});
+			// The sequence is per item and gapless: 1, 2, 3, 4.
+			expect([triage.seq, review.seq, first.seq, second.seq]).toEqual([1, 2, 3, 4]);
 			// Emoji jsonb comes back losslessly, quotes included, through RETURNING and a read.
 			expect(second.rows).toEqual(rows);
+			// An approve then a request_changes at the SAME item revision: the later seq decides, not the clock.
+			const inbox = `knowledge:contrib-artifact-case@${"0".repeat(32)}`;
+			const approved = await adapter.artifacts.insert({
+				itemId,
+				kind: "design_review",
+				subject: inbox,
+				verdict: "approve",
+				body: "Looks right.",
+				author: "artifact-reviewer",
+			});
+			const changed = await adapter.artifacts.insert({
+				itemId,
+				kind: "design_review",
+				subject: inbox,
+				verdict: "request_changes",
+				body: "One more thing.",
+				author: "artifact-reviewer",
+			});
+			expect([approved.seq, changed.seq]).toEqual([5, 6]);
+			expect(changed.itemRevision).toBe(approved.itemRevision);
 
 			const listed = await adapter.artifacts.list(itemId);
-			expect(listed.map((a) => a.id)).toEqual([second.id, first.id, review.id, triage.id]);
-			expect(listed[0]?.rows).toEqual(rows);
+			expect(listed.map((a) => a.seq)).toEqual([6, 5, 4, 3, 2, 1]);
+			expect(listed.map((a) => a.id)).toEqual([
+				changed.id,
+				approved.id,
+				second.id,
+				first.id,
+				review.id,
+				triage.id,
+			]);
+			expect(listed.find((a) => a.id === second.id)?.rows).toEqual(rows);
 			// The list carries the body.
 			expect(listed.find((a) => a.id === review.id)?.body).toBe(review.body);
 
 			// One query returns the newest of each kind that exists; kinds with none are absent.
 			const latest = await adapter.artifacts.latest(itemId);
 			expect(latest.map((a) => a.kind).sort()).toEqual([
+				"design_review",
 				"implementation_review",
 				"triage",
 				"validation",
 			]);
+			expect(latest.find((a) => a.kind === "design_review")).toMatchObject({
+				id: changed.id,
+				verdict: "request_changes",
+				seq: 6,
+			});
 			expect(latest.find((a) => a.kind === "validation")?.id).toBe(second.id);
 			// The item read's query never selects the review body.
 			for (const artifact of latest) expect(artifact.body).toBeUndefined();
@@ -1497,7 +1534,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			);
 			expect(log).toHaveLength(1);
 			expect(String(log[0]?.message)).toBe(
-				`work-items: artifact ${itemId} by actor:artifact-validator\nReason: Record validation artifact with verdict notes\nArtifact: ${second.id}`,
+				`work-items: artifact ${itemId} by actor:artifact-validator\nReason: Record validation artifact with verdict notes\nArtifact: ${second.id}\nSeq: 4`,
 			);
 			await expect(adapter.get(toWorkItemId(itemId))).resolves.toMatchObject({
 				revision: 1,

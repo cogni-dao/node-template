@@ -16,6 +16,7 @@
  *     History says who; if it cannot show an author the write is refused (fail closed). A `triage` artifact has NO
  *     independence rule: it names who routed.
  *   - ITEM_REVISION_IS_STAMPED: the store stamps the item's revision, read inside the writer lock, never the caller.
+ *   - SEQ_ORDERS_ARTIFACTS: the store assigns `seq` (the item's highest plus one) inside the writer lock; the latest artifact of a kind is the one with the highest `seq`, never the newest timestamp (timestamps tie).
  *   - OWN_ORIGIN_ONLY: a build subject (`<origin>@<buildSha>`) must name this hub's own origin (`deps.ownOrigin`); with none configured it is refused.
  *   - BODY_STAYS_OFF_THE_ITEM_READ: the item read carries the latest artifact of each kind without `body`; the list may carry it.
  *   - PASS_GRADE_IS_COMPUTED: `isPassGrade` decides from `rows` and the headline; a caller never sends a grade.
@@ -265,6 +266,8 @@ export type WorkItemArtifactInput = z.infer<typeof WorkItemArtifactInputSchema>;
 export const WorkItemArtifactSchema = z.object({
   id: z.string(),
   itemId: z.string(),
+  /** This artifact's place in its item's sequence (1, 2, 3...), assigned by the server. The highest `seq` of a kind is the latest. */
+  seq: z.number().int(),
   /** The item's revision when this was written, stamped by the server. */
   itemRevision: z.number().int(),
   kind: z.enum(ARTIFACT_KINDS),
@@ -312,9 +315,9 @@ export interface NewWorkItemArtifact {
 export interface WorkItemArtifactStore {
   /** Inserts one row inside the store's writer path; resolves with the stored row. */
   insert(row: NewWorkItemArtifact): Promise<WorkItemArtifact>;
-  /** Newest first, at most `ARTIFACTS_LIST_MAX`. */
+  /** Highest `seq` first, at most `ARTIFACTS_LIST_MAX`. */
   list(itemId: string): Promise<readonly WorkItemArtifact[]>;
-  /** The newest artifact of each kind, in one read, without `body`. */
+  /** The highest-`seq` artifact of each kind, in one read, without `body`. */
   latest(itemId: string): Promise<readonly WorkItemArtifact[]>;
 }
 
@@ -325,13 +328,14 @@ export function withPassGrade(artifact: WorkItemArtifact): WorkItemArtifact {
     : artifact;
 }
 
-/** One artifact per kind, the newest of each (a store returns at most one of a kind; the first wins). */
+/** One artifact per kind: the highest `seq` of each, whatever the input order or timestamps. */
 export function toLatestArtifacts(
   artifacts: readonly WorkItemArtifact[]
 ): WorkItemArtifactsLatest {
   const latest: { -readonly [K in ArtifactKind]?: WorkItemArtifactSummary } = {};
   for (const artifact of artifacts) {
-    if (latest[artifact.kind]) continue;
+    const held = latest[artifact.kind];
+    if (held && held.seq >= artifact.seq) continue;
     // BODY_STAYS_OFF_THE_ITEM_READ: the full review is on the list, never on the item.
     const { body: _body, ...summary } = withPassGrade(artifact);
     latest[artifact.kind] = summary;
@@ -393,7 +397,7 @@ async function subjectAuthor(
   deps: WorkItemArtifactDeps,
   itemId: string,
   item: { readonly pr?: string | undefined },
-  subject: ArtifactSubject
+  subject: Exclude<ArtifactSubject, { readonly form: "work" }>
 ): Promise<AuthorOutcome> {
   if (subject.form === "knowledge") {
     if (!deps.inboxes) return { ok: false, reason: "author_unknown" };
@@ -410,9 +414,6 @@ async function subjectAuthor(
   switch (subject.form) {
     case "pr":
       return lastActor(history, "pr", (after) => after === item.pr);
-    case "work":
-      // Triage has no independence rule; the handler never asks.
-      return { ok: false, reason: "author_unknown" };
     case "build":
       return lastActor(history, "status", (after) => after === "needs_validation");
   }
@@ -496,7 +497,7 @@ const unavailable = (
   if (mapped?.errorCode === "work_item_write_outcome_unknown") {
     return {
       status: 409,
-      body: mapped.body,
+      body: { ...mapped.body, errorCode: mapped.errorCode },
       log: {
         event: refusedEvent(event),
         status: 409,
@@ -636,34 +637,34 @@ export async function recordWorkItemArtifact(
   if (subject.form === "build" && !isOwnOrigin(subject.origin, deps.ownOrigin))
     return mismatch("subject origin is not this hub's own origin");
 
-  // Triage has no independence rule: the artifact names who routed.
-  let author: AuthorOutcome = { ok: true, author: "" };
+  // Triage (a `work:` subject) has no independence rule: the artifact names who routed.
   if (subject.form !== "work") {
+    let author: AuthorOutcome;
     try {
       author = await subjectAuthor(deps, itemId, item, subject);
     } catch (error) {
       return unavailable(itemId, RECORDED, error, base);
     }
-  }
-  if (subject.form !== "work" && (!author.ok || author.author === principalId)) {
-    const reason = author.ok ? "same_principal" : author.reason;
-    return {
-      status: 409,
-      body: {
-        error: "artifact author is not independent of the subject's author",
-        errorCode: "artifact_author_not_independent",
-        reason,
-      },
-      log: {
-        event: REFUSED,
+    if (!author.ok || author.author === principalId) {
+      const reason = author.ok ? "same_principal" : author.reason;
+      return {
         status: 409,
-        outcome: "refused",
-        workItemId: itemId,
-        ...base,
-        errorCode: "artifact_author_not_independent",
-        reason,
-      },
-    };
+        body: {
+          error: "artifact author is not independent of the subject's author",
+          errorCode: "artifact_author_not_independent",
+          reason,
+        },
+        log: {
+          event: REFUSED,
+          status: 409,
+          outcome: "refused",
+          workItemId: itemId,
+          ...base,
+          errorCode: "artifact_author_not_independent",
+          reason,
+        },
+      };
+    }
   }
 
   try {
@@ -694,6 +695,9 @@ export async function recordWorkItemArtifact(
       },
     };
   } catch (error) {
+    // The item vanished between the handler's read and the store's (the store checks again under its lock).
+    if (/^Work item not found: /.test((error as Error | undefined)?.message ?? ""))
+      return notFound(itemId, RECORDED);
     return unavailable(itemId, RECORDED, error, base);
   }
 }
@@ -736,7 +740,7 @@ export const workItemsArtifactsCreateOperation = {
 export const workItemsArtifactsListOperation = {
   id: "work.items.artifacts.list.v1",
   summary: "List a work item's artifacts",
-  description: "Newest first, at most 50, each with its `body` when it has one.",
+  description: "Highest `seq` (newest) first, at most 50, each with its `body` when it has one.",
   input: z.object({ id: z.string() }),
   output: z.object({ items: z.array(WorkItemArtifactSchema).max(ARTIFACTS_LIST_MAX) }),
 } as const;

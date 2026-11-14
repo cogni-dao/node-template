@@ -120,6 +120,7 @@ function world(
           return {
             id: `wia-${stored.length}`,
             itemId: input.itemId,
+            seq: stored.length,
             itemRevision: item?.revision ?? 0,
             kind: input.kind,
             subject: input.subject,
@@ -418,6 +419,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({
       error: "work_item_write_outcome_unknown",
+      errorCode: "work_item_write_outcome_unknown",
       retryable: false,
       lookup: { operationId: "op-1", branch: "work-item-op/x", commitHash: "c1", itemId: "task.0028" },
     });
@@ -426,6 +428,14 @@ describe("recordWorkItemArtifact: the write contract", () => {
       status: 409,
       errorCode: "work_item_write_outcome_unknown",
     });
+  });
+
+  it("404: an item that vanishes between the handler's read and the store's is not found, not unavailable", async () => {
+    const w = world({ inbox: { "contrib-derek-1": "author-1" }, insertError: new Error("Work item not found: task.0028") });
+    const result = await recordWorkItemArtifact(w.deps, "task.0028", "r", designReview);
+    expect(result.status).toBe(404);
+    expect(result.body).toEqual({ error: "Work item not found: task.0028", errorCode: "not_found" });
+    expect(result.log).toMatchObject({ event: "work.items.artifact_refused", status: 404 });
   });
 
   it("an invalid JSON body and a node with no artifact store are logged refusals with an errorCode", () => {
@@ -608,6 +618,7 @@ describe("reads", () => {
   const stored = (kind: WorkItemArtifact["kind"], id: string, verdict: string): WorkItemArtifact => ({
     id,
     itemId: "task.0028",
+    seq: 1,
     itemRevision: 3,
     kind,
     subject: "s",
@@ -635,6 +646,18 @@ describe("reads", () => {
       expect(artifact).not.toHaveProperty("body");
       expect(artifact).toMatchObject({ itemRevision: 3, note: "one line" });
     }
+  });
+
+  it("the latest of a kind is the highest seq, not the newest timestamp: approve then request_changes at one revision and one instant", () => {
+    const at = { itemRevision: 3, createdAt: "2026-11-13T00:00:00.000Z" };
+    const approve = { ...stored("implementation_review", "i1", "approve"), seq: 1, ...at };
+    const changes = { ...stored("implementation_review", "i2", "request_changes"), seq: 2, ...at };
+    const later = { ...stored("implementation_review", "i3", "approve"), seq: 3, ...at };
+    // Whatever order a store hands them back in, the highest seq wins.
+    expect(toLatestArtifacts([approve, changes]).implementation_review?.verdict).toBe("request_changes");
+    expect(toLatestArtifacts([changes, approve]).implementation_review?.verdict).toBe("request_changes");
+    expect(toLatestArtifacts([changes, later, approve]).implementation_review?.id).toBe("i3");
+    expect(toLatestArtifacts([later, approve, changes]).implementation_review?.seq).toBe(3);
   });
 
   it("GET list: 200 newest-first from the store, 404 for a missing item, 503 on a store failure", async () => {
