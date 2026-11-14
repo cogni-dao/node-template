@@ -63,7 +63,10 @@ export const EVENT_NAMES = {
 	AGENT_CREDENTIAL_INVALID_DENIED: "agent.credential.invalid_denied",
 	/** A client went over the per-IP limit on credential lookups: 429, no store read. Carries routeId only. */
 	AGENT_CREDENTIAL_RATE_LIMITED: "agent.credential.rate_limited",
-	/** The roles route could not decide or list (store or admin check down), or refused a non-admin write. No secrets. */
+	/**
+	 * An agent-grants route or the grant authority failed and answered 503 `authz_unavailable` (store down, a SQL error, a bad response shape). Carries routeId and
+	 * the failure fields `errorName`, `errorCode` (SQLSTATE or Node code), `constraint`, `table`, `column`: never a message, detail, token, hash or key.
+	 */
 	AGENT_ROLES_UNAVAILABLE: "agent.roles.unavailable",
 	AGENT_ROLES_LIST_FAILED: "agent.roles.list_failed",
 	AGENT_ROLES_REFUSED: "agent.roles.refused",

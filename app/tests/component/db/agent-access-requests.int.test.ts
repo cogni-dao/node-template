@@ -18,7 +18,7 @@ import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { MAX_PENDING_PER_AGENT, MAX_PENDING_TOTAL } from "@cogni/agent-grants";
 import { NextRequest } from "next/server";
 import pino from "pino";
-import postgres, { type Sql } from "postgres";
+import type { Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const session = vi.hoisted(() => ({ user: null as unknown }));
@@ -37,6 +37,7 @@ import {
   createAgentToolAuthority,
   MAX_ADMIN_OUTSIDE_ROWS,
 } from "@/bootstrap/agent-authority";
+import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 
 import { runAccountGrantSuites } from "./agent-account-grants.suite";
@@ -98,7 +99,9 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
   };
 
   beforeAll(async () => {
-    service = postgres(process.env.DATABASE_SERVICE_URL as string, { max: 4 });
+    // The PRODUCTION service client (`getServiceDb().$client`, what the container hands the authority), not a bare postgres.js client: drizzle replaces its
+    // timestamp serializers, so a JS Date parameter that a bare client accepts fails on this one (the 503 on candidate-a).
+    service = getServiceDb().$client as unknown as Sql;
     admin = await mkUser("req-admin", ADMIN_WALLET);
     agent = await mkUser("Helper bot");
     other = await mkUser("Other bot");
@@ -118,9 +121,9 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
   });
   afterAll(async () => {
     await service?.unsafe("DELETE FROM agent_roles WHERE principal_user_id = ANY($1) OR approved_by = ANY($1)", [users]);
+    await service?.unsafe("DELETE FROM agent_principals WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM user_bindings WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM users WHERE id = ANY($1)", [users]);
-    await service?.end({ timeout: 1 });
   });
 
   it("the whole loop: ask -> pending row, closed door -> admin sees it and flips ON -> door opens -> flips OFF -> door closes", async () => {
@@ -303,6 +306,77 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     expect(await res.json()).toEqual({ error: "not_pending" });
     expect((await roles(rolesPost, { scope: SCOPE })).status).toBe(400);
     expect((await roles(rolesPost, { principal: "node-ai", principalUserId: none, scope: SCOPE })).status).toBe(400);
+  });
+
+  // The candidate-a failure (11-13): every bearer ask was a 503 and Loki showed nothing. Drive the REAL route and the REAL production service client against a
+  // database that carries the reverted #366 leftovers and ordinary pending node asks from other agents.
+  describe("an ask on a database with the #366 leftovers and other agents' pending asks", () => {
+    let ddl: Sql;
+    const lines2 = lines;
+    beforeAll(async () => {
+      ddl = (await import("postgres")).default(process.env.DATABASE_URL as string, { max: 1 });
+      // What #366 left behind (and 0041 deliberately keeps): columns, tables. The stale CHECKs are gone, as after the real migration.
+      await ddl.unsafe(`ALTER TABLE agent_roles ADD COLUMN IF NOT EXISTS resource_kind text DEFAULT 'node' NOT NULL, ADD COLUMN IF NOT EXISTS owner_user_id text`);
+      await ddl.unsafe(`ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS owner_user_id text`);
+      await ddl.unsafe(`CREATE TABLE IF NOT EXISTS agent_claims (id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL, agent_user_id text NOT NULL, created_at timestamptz DEFAULT now() NOT NULL, expires_at timestamptz NOT NULL)`);
+      await ddl.unsafe(`CREATE TABLE IF NOT EXISTS agent_spawn_grants (id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL, issuer_user_id text NOT NULL, token_hash text NOT NULL, expires_at timestamptz NOT NULL)`);
+    });
+    afterAll(async () => {
+      await ddl.unsafe(`DROP TABLE IF EXISTS agent_claims, agent_spawn_grants`);
+      await ddl.unsafe(`ALTER TABLE agent_principals DROP COLUMN IF EXISTS owner_user_id`);
+      await ddl.unsafe(`ALTER TABLE agent_roles DROP COLUMN IF EXISTS resource_kind, DROP COLUMN IF EXISTS owner_user_id`);
+      await ddl.end({ timeout: 1 });
+    });
+
+    it("a freshly registered agent's ask is 201 with approvalUrl for a node scope and an account scope, and lists as pending; the failure class would be logged", async () => {
+      // Ordinary pending node asks from other agents (old shape: no link), so the global and per-agent counts are in play.
+      const others: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const id = await mkUser(`pending-${i}`);
+        others.push(id);
+        await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by) VALUES (${id}, 'edo:write', NULL, ${id})`;
+      }
+      const fresh = await mkUser("Freshly registered");
+      await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('external', NULL, ${fresh})`;
+      as(fresh, "bearer");
+      const node = await ask("knowledge:read", { "x-forwarded-host": "node.example", "x-forwarded-proto": "https" });
+      expect(node.status).toBe(201);
+      expect(await node.json()).toMatchObject({ scope: "knowledge:read", state: "pending", created: true, approvalUrl: expect.stringMatching(/^https:\/\/node\.example\/admin\/ai-access#agent-request=[\w-]{43}$/) });
+      const account = await ask("account:read", { "x-forwarded-host": "node.example", "x-forwarded-proto": "https" });
+      expect(account.status).toBe(201);
+      expect(await account.json()).toMatchObject({ scope: "account:read", state: "pending", created: true, approvalUrl: expect.stringMatching(/^https:\/\/node\.example\/profile#agent-request=[\w-]{43}$/) });
+      const listed = (await (await mine()).json()) as { requests: Array<{ scope: string; state: string; accountId: string | null }> };
+      expect(listed.requests.map((r) => `${r.scope}:${r.state}`).sort()).toEqual(["account:read:pending", "knowledge:read:pending"]);
+      // Neither the happy path nor the other agents' rows logged an unavailable event.
+      expect(lines2.filter((l) => l.event === "agent.roles.unavailable")).toEqual([]);
+    });
+
+    it("a failure the route turns into a 503 is LOGGED with its class (name, code, constraint, table, column) and never a message or token", async () => {
+      const broken = createAgentToolAuthority({
+        sql: Object.assign(
+          (() => Promise.reject(Object.assign(new Error("duplicate key value violates (link_hash)=(SECRET-HASH)"), { name: "PostgresError", code: "23505", constraint_name: "agent_roles_link_hash_unique", table_name: "agent_roles", column_name: "link_hash" }))) as never,
+          { begin: async () => { throw Object.assign(new Error("Key (link_hash)=(SECRET-HASH) already exists"), { name: "PostgresError", code: "23505", constraint_name: "agent_roles_link_hash_unique", table_name: "agent_roles", column_name: "link_hash" }); } }
+        ) as unknown as AgentAuthoritySql,
+        nodeAdmin: { check: async () => ({ ok: false as const, errorCode: "authz_denied" as const }) },
+        log: (holder.container as { log: never }).log,
+        toolBundle: [...CORE_TOOL_BUNDLE],
+      });
+      const before = lines2.length;
+      const saved = holder.container as Record<string, unknown>;
+      holder.container = { ...saved, agentAuthority: broken };
+      try {
+        as(await mkUser("Logged failure"), "bearer");
+        const res = await ask("knowledge:read");
+        expect(res.status).toBe(503);
+        expect(await res.json()).toEqual({ error: "authz_unavailable" });
+      } finally {
+        holder.container = saved;
+      }
+      const logged = lines2.slice(before).filter((l) => l.event === "agent.roles.unavailable");
+      expect(logged.length).toBeGreaterThanOrEqual(1);
+      expect(logged).toContainEqual(expect.objectContaining({ routeId: "agent.access.requests.create", errorName: "PostgresError", errorCode: "23505", constraint: "agent_roles_link_hash_unique", table: "agent_roles", column: "link_hash" }));
+      expect(JSON.stringify(logged)).not.toMatch(/SECRET-HASH|duplicate key|already exists/);
+    });
   });
 });
 

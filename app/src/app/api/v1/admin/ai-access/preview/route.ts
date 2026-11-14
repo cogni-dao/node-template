@@ -21,6 +21,7 @@ import { NextResponse } from "next/server";
 import { requireAdminSession } from "@/app/(admin)/_lib/admin-session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,7 +31,7 @@ const json = (body: unknown, status = 200) => NextResponse.json(body, { status, 
 
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "admin.ai-access.preview", auth: { mode: "none" } },
-  async (_ctx, request) => {
+  async (ctx, request) => {
     const admin = await requireAdminSession(request, "ai_access.preview");
     if (!admin.ok) return admin.response;
     let body: unknown;
@@ -46,7 +47,8 @@ export const POST = wrapRouteHandlerWithLogging(
       const permission = await getContainer().nodeAdminPort.previewAiRequest(admin.session, parsed.data.token);
       if (!permission) return json({ error: "not_found" }, 404);
       return json(agentPreviewOperation.output.parse({ permission }));
-    } catch {
+    } catch (error) {
+      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "admin.ai-access.preview", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
       return json({ error: "authz_unavailable" }, 503);
     }
   }

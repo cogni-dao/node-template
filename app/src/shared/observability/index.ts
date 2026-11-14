@@ -28,6 +28,8 @@ export const EVENT_NAMES = {
   MONEY_PLANE_SNAPSHOT: "money_plane.snapshot"
 } as const;
 
+export { type FailureFields, failureFields } from "./db-error-fields";
+
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
 
 export const KNOWLEDGE_READ_ERROR_CODES = {

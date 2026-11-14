@@ -33,6 +33,7 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { publicOrigin } from "@/app/_lib/public-origin";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -42,7 +43,7 @@ const json = (body: unknown, status = 200) => NextResponse.json(body, { status, 
 
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "agent.access.requests.create", auth: { mode: "required", getSessionUser } },
-  async (_ctx, request, sessionUser) => {
+  async (ctx, request, sessionUser) => {
     // AI plane: a bearer only. A browser session gets 404, as if the route did not exist for it.
     if (sessionUser.via !== "bearer") return json({ error: "not_found" }, 404);
 
@@ -77,6 +78,8 @@ export const POST = wrapRouteHandlerWithLogging(
         if (error.code === "no_external_door") return json({ error: "no_external_door" }, 400);
         if (error.code === "too_many_requests") return json({ error: "too_many_requests" }, 429);
       }
+      // A 503 must never be silent: log the failure class (name, SQLSTATE, constraint, table, column), never a message, token or hash.
+      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "agent.access.requests.create", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
       return json({ error: "authz_unavailable" }, 503);
     }
   }
@@ -84,12 +87,13 @@ export const POST = wrapRouteHandlerWithLogging(
 
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "agent.access.requests.list", auth: { mode: "required", getSessionUser } },
-  async (_ctx, _request, sessionUser) => {
+  async (ctx, _request, sessionUser) => {
     if (sessionUser.via !== "bearer") return json({ error: "not_found" }, 404);
     try {
       const requests = await getContainer().agentAuthority.listOwnAccess(sessionUser.id);
       return json(agentAccessRequestListOperation.output.parse({ requests }));
-    } catch {
+    } catch (error) {
+      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "agent.access.requests.list", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
       return json({ error: "authz_unavailable" }, 503);
     }
   }

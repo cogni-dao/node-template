@@ -22,6 +22,7 @@ import { refuseNonSession } from "@/app/_lib/auth/human-plane";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,7 +49,8 @@ export const POST = wrapRouteHandlerWithLogging(
       const permission = await getContainer().agentAuthority.previewAsk({ token: parsed.data.token, resource: "account" });
       if (!permission) return json({ error: "not_found" }, 404);
       return json(agentPreviewOperation.output.parse({ permission }));
-    } catch {
+    } catch (error) {
+      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "agent.mine.preview", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
       return json({ error: "authz_unavailable" }, 503);
     }
   }
