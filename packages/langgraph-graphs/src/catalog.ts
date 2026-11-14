@@ -177,6 +177,7 @@ export const NODE_LANGGRAPH_CATALOG = {
    * work-ledger steward, which already holds `work_item:transition`.
    */
   [WORK_CLOSEOUT_GRAPH_NAME]: {
+    guidanceId: "graph-work-closeout",
     displayName: "Work Closeout",
     description:
       "Closes items whose merged pull request is live in this build: done and deployVerified, or changes nothing",
