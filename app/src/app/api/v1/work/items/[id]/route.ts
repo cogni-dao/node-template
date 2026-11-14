@@ -161,6 +161,23 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       // conflict, write outcome unknown, resolver and baseline failures) and matches by name.
       const mapped = workItemWriteErrorResponse(e, "patch");
       if (mapped) {
+        // Every refusal is findable in Loki beside the success event (task.0122): the code and what was missing, never a body.
+        const { from, to, missing } = mapped.body as {
+          from?: unknown;
+          to?: unknown;
+          missing?: unknown;
+        };
+        ctx.log.info(
+          {
+            workItemId: id,
+            status: mapped.status,
+            errorCode: mapped.errorCode,
+            ...(typeof from === "string" ? { from } : {}),
+            ...(typeof to === "string" ? { to } : {}),
+            ...(typeof missing === "string" ? { missing } : {}),
+          },
+          "work.items.patch_refused"
+        );
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
       if (e instanceof WorkItemNotFoundError) {

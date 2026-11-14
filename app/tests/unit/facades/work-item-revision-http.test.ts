@@ -169,6 +169,58 @@ describe("work-item revision HTTP boundary", () => {
     expect(info).toHaveBeenCalledWith({ workItemId: "task.0001", citeCount: 2 }, "work.items.patch_success");
   });
 
+  it("maps a gate refusal to 409 gate_unmet and a failed gate read to 503, and logs each (task.0122)", async () => {
+    const info = vi.fn();
+    const call = (reason: string) =>
+      (PATCH as unknown as Handler)(
+        { log: { info } },
+        new Request("http://localhost/api/v1/work/items/task.0001", {
+          method: "PATCH",
+          body: JSON.stringify({ reason, set: { status: "done" } }),
+        }),
+        { id: "principal-1" },
+        { params: Promise.resolve({ id: "task.0001" }) }
+      );
+    patch.mockRejectedValue(
+      Object.assign(new Error("gate"), {
+        name: "WorkItemGateUnmetError",
+        from: "needs_merge",
+        to: "done",
+        missing: "implementation_review",
+      })
+    );
+    const refused = await call("close it");
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({
+      errorCode: "gate_unmet",
+      from: "needs_merge",
+      to: "done",
+      missing: "implementation_review",
+    });
+    expect(info).toHaveBeenCalledWith(
+      {
+        workItemId: "task.0001",
+        status: 409,
+        errorCode: "gate_unmet",
+        from: "needs_merge",
+        to: "done",
+        missing: "implementation_review",
+      },
+      "work.items.patch_refused"
+    );
+    patch.mockRejectedValue(
+      Object.assign(new Error("pr read"), {
+        name: "WorkItemGateFactsUnavailableError",
+        from: "needs_validation",
+        to: "needs_merge",
+        missing: "pr",
+      })
+    );
+    const unavailable = await call("merge it");
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.json()).toMatchObject({ errorCode: "gate_facts_unavailable" });
+  });
+
   it("maps an unresolved cite to 400 cite_unresolved with the ids, and a resolver failure to 503", async () => {
     patch.mockRejectedValue(new EntryUnresolvedError(["ghost"]));
     const unresolved = await request({ reason: "r", cites: [{ id: "ghost" }], set: { summary: "x" } });

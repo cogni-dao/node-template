@@ -162,6 +162,32 @@ const MAPPERS: Readonly<Record<string, Mapper>> = {
       message,
     },
   }),
+  WorkItemGateUnmetError: ({ raw, message }) => ({
+    status: 409,
+    errorCode: "gate_unmet",
+    message,
+    body: {
+      error: "gate_unmet",
+      errorCode: "gate_unmet",
+      from: raw.from ?? null,
+      to: raw.to ?? null,
+      missing: raw.missing ?? null,
+      message,
+    },
+  }),
+  WorkItemGateFactsUnavailableError: ({ raw, message }) => ({
+    status: 503,
+    errorCode: "gate_facts_unavailable",
+    message,
+    body: {
+      error: "gate_facts_unavailable",
+      errorCode: "gate_facts_unavailable",
+      from: raw.from ?? null,
+      to: raw.to ?? null,
+      missing: raw.missing ?? null,
+      message,
+    },
+  }),
   WorkItemAlreadyExistsError: ({ message }) => ({
     status: 409,
     errorCode: "work_item_exists",

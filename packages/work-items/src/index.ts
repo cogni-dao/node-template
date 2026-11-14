@@ -164,7 +164,32 @@ export {
   parseWorkItemCommitMessage,
   shapeHistory,
 } from "./history.js";
+export type {
+  Deliverable,
+  GateArtifact,
+  GateArtifactKind,
+  GateFacts,
+  GateItem,
+  GateMissing,
+  GateNeeds,
+  InboxFacts,
+  MoveResult,
+  InboxStatePort,
+  PrFacts,
+  PrFactsPort,
+} from "./gates.js";
 export {
+  classifyDeliverable,
+  evaluateMove,
+  GATE_CHILDREN_MAX,
+  gateNeeds,
+  parsePullRequestUrl,
+  refusesPathChange,
+  TRIAGE_SCORE_AXES,
+} from "./gates.js";
+export {
+  WorkItemGateFactsUnavailableError,
+  WorkItemGateUnmetError,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
   WorkItemsCapacityError,
@@ -194,7 +219,21 @@ export {
   WORK_ITEM_SCORES_MAX_AXES,
   WORK_ITEM_SCORES_MAX_BYTES,
 } from "./scores.js";
-export { isValidTransition, VALID_TRANSITIONS } from "./transitions.js";
+export type {
+  DeliverableState,
+  Placement,
+  PlacementInput,
+} from "./placement.js";
+export { PLACEMENT_REASONS, placementFor } from "./placement.js";
+export {
+  FORWARD_TARGETS,
+  isLegacyStatus,
+  isValidTransition,
+  LEGACY_STATUSES,
+  STATUS_ORDER,
+  statusRank,
+  VALID_TRANSITIONS,
+} from "./transitions.js";
 export type {
   ActorKind,
   ExternalRef,

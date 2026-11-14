@@ -284,11 +284,11 @@ describe("agent authority (real Postgres)", () => {
         toolBundle: bundle as never,
       });
       const runtime = {
-        id: "core__work_item_transition",
+        id: "core__work_item_update",
         effect: "state_change",
         exec: async () => "ran",
       };
-      const requiresById = { core__work_item_transition: { scope: "work_item:transition", kind: "node" as const, subject: "member" as const } };
+      const requiresById = { core__work_item_update: { scope: "work_item:transition", kind: "node" as const, subject: "member" as const } };
       const guarded = (principalId?: string) =>
         guardTools({ [runtime.id]: runtime } as never, requiresById, { principalId, subjectUserId: undefined, payer: "payer-1" }, authority.guardDeps)[runtime.id]!;
       const call = (principalId?: string) =>

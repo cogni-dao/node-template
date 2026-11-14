@@ -47,6 +47,59 @@ const PATCHED = {
 const capability = (patch: WorkItemCapability["patch"]) =>
   ({ patch }) as unknown as WorkItemCapability;
 
+describe("gate refusals are results, not thrown errors (task.0122)", () => {
+  const input = {
+    id: "task.0001",
+    reason: "advance",
+    set: { status: "needs_merge" as const },
+  };
+  const capability = (error: Error) =>
+    ({ patch: async () => { throw error; } }) as unknown as WorkItemCapability;
+
+  it("returns code gate_unmet with from, to and the missing artifact kind", async () => {
+    const error = Object.assign(new Error("gate"), {
+      name: "WorkItemGateUnmetError",
+      from: "needs_validation",
+      to: "needs_merge",
+      missing: "validation",
+    });
+    const out = await createWorkItemUpdateImplementation({
+      workItemCapability: capability(error),
+    }).execute(input);
+    expect(out).toMatchObject({
+      success: false,
+      id: "task.0001",
+      code: "gate_unmet",
+      from: "needs_validation",
+      to: "needs_merge",
+      missing: "validation",
+    });
+    expect(WorkItemUpdateOutputSchema.safeParse(out).success).toBe(true);
+  });
+
+  it("returns gate_facts_unavailable as a retryable result", async () => {
+    const error = Object.assign(new Error("pr"), {
+      name: "WorkItemGateFactsUnavailableError",
+      from: "needs_validation",
+      to: "needs_merge",
+      missing: "pr",
+    });
+    const out = await createWorkItemUpdateImplementation({
+      workItemCapability: capability(error),
+    }).execute(input);
+    expect(out).toMatchObject({ success: false, code: "gate_facts_unavailable", missing: "pr" });
+    expect(WorkItemUpdateOutputSchema.safeParse(out).success).toBe(true);
+  });
+
+  it("still throws any other error", async () => {
+    await expect(
+      createWorkItemUpdateImplementation({
+        workItemCapability: capability(new Error("boom")),
+      }).execute(input)
+    ).rejects.toThrow("boom");
+  });
+});
+
 describe("core__work_item_update", () => {
   it("takes the PATCH route's input schema, not a copy", () => {
     expect(workItemUpdateContract.inputSchema).toBe(WorkItemPatchInputSchema);

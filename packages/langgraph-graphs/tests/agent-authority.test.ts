@@ -19,7 +19,8 @@ import {
 import {
   type CatalogBoundTool,
   getCurrentTimeBoundTool,
-  workItemTransitionBoundTool,
+  workItemArtifactRecordBoundTool,
+  workItemUpdateBoundTool,
 } from "@cogni/ai-tools";
 import { guardTools } from "@cogni/agent-grants";
 import { toBoundToolRuntime } from "@cogni/ai-tools";
@@ -32,7 +33,7 @@ import {
 } from "../src/catalog";
 import { createDevToolExecFn } from "../src/runtime/core/dev-tool-exec";
 
-const WRITE_ARGS = { action: "patch", id: "task.1", reason: "test change", priority: 3 };
+const WRITE_ARGS = { id: "task.1", reason: "test change", set: { priority: 3 } };
 
 describe("catalog principals (N4)", () => {
   it("names prioritizer for work-prioritizer and node-ai for cogni", () => {
@@ -45,7 +46,6 @@ describe("catalog principals (N4)", () => {
   it("gives work-prioritizer the guarded triage writer", () => {
     const ids = LANGGRAPH_CATALOG["work-prioritizer"]?.toolIds ?? [];
     expect(ids).toContain("core__work_item_update");
-    expect(ids).not.toContain("core__work_item_transition");
   });
 
   it("gives work-closeout the guarded update writer and PR reads, as the prioritizer principal", () => {
@@ -60,7 +60,6 @@ describe("catalog principals (N4)", () => {
   it("gives cogni no domain writer: its only write tool arranges schedules", () => {
     const ids = LANGGRAPH_CATALOG.cogni?.toolIds ?? [];
     expect(ids).toContain("core__schedule_manage");
-    expect(ids).not.toContain("core__work_item_transition");
     expect(ids).not.toContain("core__work_item_update");
     expect(ids).not.toContain("core__metric_compute");
     expect(ids).not.toContain("core__knowledge_write");
@@ -76,7 +75,7 @@ describe("catalog principals (N4)", () => {
 describe("dev runner guard (N6)", () => {
   const tools: Record<string, CatalogBoundTool> = {
     core__get_current_time: getCurrentTimeBoundTool as CatalogBoundTool,
-    core__work_item_transition: workItemTransitionBoundTool as CatalogBoundTool,
+    core__work_item_update: workItemUpdateBoundTool as CatalogBoundTool,
   };
 
   it("runs a read_only tool and denies a scoped tool with no run scope", async () => {
@@ -84,7 +83,7 @@ describe("dev runner guard (N6)", () => {
     const read = await exec("core__get_current_time", {}, "t1");
     expect(read.ok).toBe(true);
     const write = await exec(
-      "core__work_item_transition",
+      "core__work_item_update",
       WRITE_ARGS,
       "t2"
     );
@@ -92,12 +91,65 @@ describe("dev runner guard (N6)", () => {
   });
 });
 
-describe("denial receipt through the real ai-core runner (V1)", () => {
-  it("returns the fixed message with {code, retryable:false, lookup}", async () => {
-    const runtime = toBoundToolRuntime(workItemTransitionBoundTool as CatalogBoundTool);
+describe("core__work_item_artifact_record is guarded like the PATCH twin (task.0122)", () => {
+  const ARTIFACT_ARGS = {
+    id: "task.1",
+    artifact: { kind: "triage", subject: "work:task.1", verdict: "implement" },
+  };
+
+  it("needs the same work_item:transition scope, no new scope", () => {
+    expect(workItemArtifactRecordBoundTool.contract.requires).toEqual(
+      workItemUpdateBoundTool.contract.requires
+    );
+    expect(workItemArtifactRecordBoundTool.contract.requires?.scope).toBe("work_item:transition");
+  });
+
+  it("is refused with no run scope and by the real runner without a grant", async () => {
+    const exec = createDevToolExecFn({
+      core__work_item_artifact_record: workItemArtifactRecordBoundTool as CatalogBoundTool,
+    });
+    expect((await exec("core__work_item_artifact_record", ARTIFACT_ARGS, "t1")).ok).toBe(false);
+
+    const runtime = toBoundToolRuntime(workItemArtifactRecordBoundTool as CatalogBoundTool);
     const guarded = guardTools(
       { [runtime.id]: runtime },
-      { [runtime.id]: workItemTransitionBoundTool.contract.requires! },
+      { [runtime.id]: workItemArtifactRecordBoundTool.contract.requires! },
+      {},
+      {
+        withStore: async () => {
+          throw new Error("unused");
+        },
+        adminCheck: async () => "unavailable",
+      }
+    );
+    const runner = createToolRunner(
+      createStaticToolSourceFromRecord(guarded),
+      () => {},
+      { policy: createToolAllowlistPolicy([runtime.id]), ctx: { runId: "r" } }
+    );
+    expect(await runner.exec(runtime.id, ARTIFACT_ARGS, { modelToolCallId: "c1" })).toMatchObject({
+      ok: false,
+      safeMessage: "Tool call denied by policy",
+      receipt: {
+        code: "policy_denied",
+        lookup: { tool: runtime.id, scope: "work_item:transition" },
+      },
+    });
+  });
+
+  it("the prioritizer has it beside the guarded writer", () => {
+    const ids = LANGGRAPH_CATALOG["work-prioritizer"]?.toolIds ?? [];
+    expect(ids).toContain("core__work_item_update");
+    expect(ids).toContain("core__work_item_artifact_record");
+  });
+});
+
+describe("denial receipt through the real ai-core runner (V1)", () => {
+  it("returns the fixed message with {code, retryable:false, lookup}", async () => {
+    const runtime = toBoundToolRuntime(workItemUpdateBoundTool as CatalogBoundTool);
+    const guarded = guardTools(
+      { [runtime.id]: runtime },
+      { [runtime.id]: workItemUpdateBoundTool.contract.requires! },
       {},
       {
         withStore: async () => {
@@ -130,10 +182,10 @@ describe("denial receipt through the real ai-core runner (V1)", () => {
   });
 
   it("returns authz_unavailable on an outage", async () => {
-    const runtime = toBoundToolRuntime(workItemTransitionBoundTool as CatalogBoundTool);
+    const runtime = toBoundToolRuntime(workItemUpdateBoundTool as CatalogBoundTool);
     const guarded = guardTools(
       { [runtime.id]: runtime },
-      { [runtime.id]: workItemTransitionBoundTool.contract.requires! },
+      { [runtime.id]: workItemUpdateBoundTool.contract.requires! },
       { principalId: "p1" },
       {
         withStore: async () => {

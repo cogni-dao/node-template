@@ -35,6 +35,7 @@ import {
   WORK_SUMMARY_PAGE_DEFAULT,
   WORK_SUMMARY_PAGE_MAX,
   WORK_SUMMARY_TEXT_MAX,
+  WORK_TEXT_SCAN_MAX_ROWS,
   WorkSummaryPageSchema,
   type WorkSummaryPage,
   type WorkSummaryQuery,
@@ -239,12 +240,20 @@ describe("loadWorkBoardColumns", () => {
   it("clamps the column budget and never exceeds the status set", async () => {
     const { list } = fixtureReader(500);
     const board = await loadWorkBoardColumns(list, {}, WORK_BOARD_STATUSES, { perColumn: 5_000 });
-    expect(list.mock.calls.length).toBe(WORK_BOARD_STATUSES.length);
+    // The shared rows-scanned budget (task.0122: twelve status columns now) can end the read before the last column.
+    const readable = Math.min(
+      WORK_BOARD_STATUSES.length,
+      Math.floor(WORK_TEXT_SCAN_MAX_ROWS / WORK_SUMMARY_PAGE_MAX),
+    );
+    expect(list.mock.calls.length).toBe(readable);
     expect(
       list.mock.calls.every(([query]) => query.limit === WORK_SUMMARY_PAGE_MAX),
     ).toBe(true);
-    expect(board.columns.every((c) => c.items.length === WORK_SUMMARY_PAGE_MAX))
-      .toBe(true);
+    expect(
+      board.columns
+        .filter((c) => c.state === "loaded")
+        .every((c) => c.items.length === WORK_SUMMARY_PAGE_MAX),
+    ).toBe(true);
   });
 
   it("stops before the next column read once the signal aborts", async () => {

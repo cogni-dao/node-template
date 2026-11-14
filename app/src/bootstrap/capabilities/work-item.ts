@@ -7,7 +7,7 @@
  * Scope: Creates WorkItemCapability that delegates to hexagonal ports. Does not implement transport.
  * Invariants:
  *   - PORTS_ARE_AUTHORITY: All operations delegate to WorkItemQueryPort/WorkItemCommandPort
- *   - TRANSITION_TABLE_ENFORCED: CommandPort validates transitions
+ *   - STATUS_GATES_ARE_THE_STORE'S (task.0122): a status write is `patch`; the Doltgres store runs the one gate predicate, so this capability has no separate transition (`core__work_item_transition` is removed)
  *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096, mirrors cogni): when `backlogWriter` is wired, `patch`
  *     goes through the Doltgres `patch` attributed to `backlogWriter.principalId`; the store's own
  *     authority applies unchanged. A principal callback resolves the authenticated run actor at invocation
@@ -32,7 +32,6 @@ import {
   type WorkItemInfo,
   WorkItemPatchConflictError,
   type WorkItemQueryParams,
-  type WorkItemTransitionResult,
 } from "@cogni/ai-tools";
 import { isPrivilegedPriority } from "@cogni/knowledge-store";
 import type {
@@ -43,6 +42,11 @@ import type {
   WorkItemType,
 } from "@cogni/work-items";
 import type { EnvelopeDegradedEvent, ItemLinksPort, MoveReadingPort } from "@cogni/work-items";
+import {
+  type WorkItemArtifactDeps,
+  artifactsNotConfigured,
+  recordWorkItemArtifact,
+} from "@cogni/work-items";
 import {
   composeItemEnvelope,
   judgeMoveSummaries,
@@ -78,6 +82,15 @@ export interface WorkItemCapabilityDeps {
   readonly links?: ItemLinksPort | undefined;
   /** One event per degraded envelope part (chain or links). */
   readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
+  /**
+   * ARTIFACTS_ARE_THE_ROUTES (task.0122): `recordArtifact` is the `POST /api/v1/work/items/{id}/artifacts` handler, called with the
+   * run's principal (resolved at invocation, never at construction). `deps` is read at call time because the artifact store is
+   * built after this capability; undefined means this node serves no artifacts (a 503, nothing written).
+   */
+  readonly artifacts?: {
+    readonly deps: () => WorkItemArtifactDeps | undefined;
+    readonly principalId: () => string;
+  };
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
     readonly principalId: string | (() => string);
@@ -174,26 +187,16 @@ export function createWorkItemCapability(
       };
     },
 
-    async transitionStatus(input): Promise<WorkItemTransitionResult> {
-      const current = await workItemQuery.get(toWorkItemId(input.id));
-      if (!current) {
-        throw new Error(`Work item not found: ${input.id}`);
-      }
-
-      const updated = await workItemCommand.transitionStatus({
-        id: toWorkItemId(input.id),
-        expectedRevision: String(current.revision),
-        toStatus: input.toStatus as WorkItemStatus,
-        ...(input.reason && { reason: input.reason }),
-      });
-
-      return {
-        id: updated.id,
-        previousStatus: current.status,
-        newStatus: updated.status,
-        revision: updated.revision as number,
-      };
-    },
+    ...(deps.artifacts && {
+      async recordArtifact(input: { id: string; body: unknown }) {
+        const artifacts = deps.artifacts as NonNullable<typeof deps.artifacts>;
+        const stores = artifacts.deps();
+        const result = stores
+          ? await recordWorkItemArtifact(stores, input.id, artifacts.principalId(), input.body)
+          : artifactsNotConfigured(input.id, "write");
+        return { status: result.status, body: result.body };
+      },
+    }),
 
     async patch(input): Promise<WorkItemInfo> {
       // P0P1_IS_NODE_ADMIN (story.5101): node admin is a wallet-bearing human

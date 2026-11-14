@@ -6,7 +6,7 @@
  * Purpose: The supported way for a node to build the Doltgres work-item store (task.0097).
  * Scope: One factory. It adds no behavior to the adapter; it makes the cite and moves wiring an explicit choice.
  * Invariants:
- *   - WIRING_IS_A_CHOICE: `entryResolver` and `metricBaseline` are required options. A port turns the capability on; `null` says this node serves none. A forgotten option is a type error at the version bump.
+ *   - WIRING_IS_A_CHOICE: `entryResolver`, `metricBaseline`, `prFacts` and `inboxes` are required options. A port turns the capability on; `null` says this node serves none. A forgotten option is a type error at the version bump.
  *   - BASELINE_NEEDS_A_RESOLVER: a baseline port without a resolver cannot pin a move, so construction throws. A resolver without a baseline port is allowed: cites work, and a non-empty `moves` write is 400 `moves_unsupported`.
  *   - CONSTRUCTOR_STAYS_OPEN: `new DoltgresWorkItemAdapter(sql, options)` keeps its optional options for wrappers; only this factory checks the wiring.
  * Side-effects: none
@@ -17,6 +17,7 @@
 import type { Sql } from "postgres";
 
 import type { EntryResolver } from "../../cites.js";
+import type { InboxStatePort, PrFactsPort } from "../../gates.js";
 import type { MetricBaselinePort } from "../../moves.js";
 import {
   DoltgresWorkItemAdapter,
@@ -24,7 +25,20 @@ import {
 } from "./adapter.js";
 
 export interface DoltgresWorkItemStoreOptions
-  extends Omit<DoltgresWorkItemAdapterOptions, "entryResolver" | "metricBaseline"> {
+  extends Omit<
+    DoltgresWorkItemAdapterOptions,
+    "entryResolver" | "metricBaseline" | "prFacts" | "inboxes"
+  > {
+  /**
+   * PR head and merge state for the code gates (task.0122), read before the writer lock. `null`: this node reads no
+   * PRs; a move into needs_validation, needs_merge or done of a code item is 503 `gate_facts_unavailable`.
+   */
+  readonly prFacts: PrFactsPort | null;
+  /**
+   * Inbox head and merge state of this node's hub, a local read. `null`: a knowledge gate is 503
+   * `gate_facts_unavailable`. Build it with `createDoltgresContributionAuthors` from `@cogni-dao/knowledge-store`.
+   */
+  readonly inboxes: InboxStatePort | null;
   /**
    * Pins a patch's `cites` and a create or patch's new `moves` ids to commits. Build it with
    * `createDoltgresEntryResolver` from `@cogni-dao/knowledge-store` on a pool that is not the writer's.
@@ -42,11 +56,16 @@ export function createDoltgresWorkItemStore(
   sql: Sql,
   options: DoltgresWorkItemStoreOptions,
 ): DoltgresWorkItemAdapter {
-  const { entryResolver, metricBaseline, ...rest } = options;
+  const { entryResolver, metricBaseline, prFacts, inboxes, ...rest } = options;
   // The type already demands both; this catches a cast or a plain-JS caller at boot, not on the first write.
   if (entryResolver === undefined || metricBaseline === undefined) {
     throw new TypeError(
       "createDoltgresWorkItemStore: pass entryResolver and metricBaseline, each a port or null",
+    );
+  }
+  if (prFacts === undefined || inboxes === undefined) {
+    throw new TypeError(
+      "createDoltgresWorkItemStore: pass prFacts and inboxes, each a port or null (the status gates read them)",
     );
   }
   if (metricBaseline && !entryResolver) {
@@ -58,5 +77,7 @@ export function createDoltgresWorkItemStore(
     ...rest,
     ...(entryResolver && { entryResolver }),
     ...(metricBaseline && { metricBaseline }),
+    ...(prFacts && { prFacts }),
+    ...(inboxes && { inboxes }),
   });
 }

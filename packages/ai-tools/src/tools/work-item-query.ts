@@ -22,6 +22,7 @@ import {
   WORK_ITEM_SORT_DIRECTIONS,
   WORK_ITEM_SORT_FIELDS,
   WorkItemDtoSchema,
+  WorkItemPatchStatusSchema,
 } from "@cogni-dao/work-items";
 import { z } from "zod";
 
@@ -52,20 +53,9 @@ export const WorkItemQueryInputSchema = z.object({
     .describe(
       "Default descending for rankScore/dates; ascending for priority/rank. Unknowns always last.",
     ),
+  // The one status list (task.0122): the package's own enum, never re-declared here.
   statuses: z
-    .array(
-      z.enum([
-        "needs_triage",
-        "needs_research",
-        "needs_design",
-        "needs_implement",
-        "needs_closeout",
-        "needs_merge",
-        "done",
-        "blocked",
-        "cancelled",
-      ]),
-    )
+    .array(WorkItemPatchStatusSchema)
     .optional()
     .describe(
       "Filter by status. Omit for all statuses, including done/cancelled. Pass actionable statuses explicitly when finding work.",

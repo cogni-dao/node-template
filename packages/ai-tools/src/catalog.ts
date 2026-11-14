@@ -41,7 +41,7 @@ import { vcsPrReadBoundTool } from "./tools/vcs-pr-read";
 import { webSearchBoundTool } from "./tools/web-search";
 import { workItemQueryBoundTool } from "./tools/work-item-query";
 import { workItemReadBoundTool } from "./tools/work-item-read";
-import { workItemTransitionBoundTool } from "./tools/work-item-transition";
+import { workItemArtifactRecordBoundTool } from "./tools/work-item-artifact-record";
 import { workItemUpdateBoundTool } from "./tools/work-item-update";
 import type { BoundTool } from "./types";
 
@@ -138,7 +138,7 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   webSearchBoundTool as CatalogBoundTool,
   workItemQueryBoundTool as CatalogBoundTool,
   workItemReadBoundTool as CatalogBoundTool,
-  workItemTransitionBoundTool as CatalogBoundTool,
+  workItemArtifactRecordBoundTool as CatalogBoundTool,
   workItemUpdateBoundTool as CatalogBoundTool,
 ];
 

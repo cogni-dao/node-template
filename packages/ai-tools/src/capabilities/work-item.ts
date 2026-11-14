@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/ai-tools/capabilities/work-item`
  * Purpose: Generic work item capability interface for AI tools.
- * Scope: Defines WorkItemCapability — query + transition + patch over work items, and the store-agnostic patch conflict error. Does not contain implementations or app-domain concepts.
+ * Scope: Defines WorkItemCapability — query + read + patch over work items, and the store-agnostic patch conflict error. Does not contain implementations or app-domain concepts.
  * Invariants:
  *   - CAPABILITY_INJECTION: Implementation injected at bootstrap, not imported
  *   - PORTS_ARE_AUTHORITY: Delegates to WorkItemQueryPort + WorkItemCommandPort
@@ -64,22 +64,12 @@ export interface WorkItemQueryPage {
 }
 
 /**
- * Result of transitioning a work item.
- */
-export interface WorkItemTransitionResult {
-  readonly id: string;
-  readonly previousStatus: string;
-  readonly newStatus: string;
-  readonly revision: number;
-}
-
-/**
  * Generic work item capability for AI tools.
  *
  * Implementation is injected at bootstrap time (per CAPABILITY_INJECTION).
  * The implementation is responsible for:
  * - Delegating to WorkItemQueryPort and WorkItemCommandPort
- * - Enforcing valid transitions via the transition table
+ * - Enforcing the status gates: every status write goes through the Doltgres patch (task.0122)
  * - Resolving revision for optimistic concurrency
  */
 export interface WorkItemCapability {
@@ -103,12 +93,16 @@ export interface WorkItemCapability {
     options?: { readonly includeLinks?: boolean },
   ): Promise<WorkItemInfo | null>;
 
-  /** Transition a work item to a new status. */
-  transitionStatus(input: {
+  /**
+   * Record one immutable artifact (triage, review or validation) on an item: the same operation as
+   * `POST /api/v1/work/items/{id}/artifacts`, attributed to the run's principal. `body` is the route's request body; the answer
+   * is the route's status and body (201 `{ artifact }`, or a refusal: 400, 404, 409, 503). Optional: a node that serves no
+   * artifacts omits it.
+   */
+  recordArtifact?(input: {
     id: string;
-    toStatus: string;
-    reason?: string;
-  }): Promise<WorkItemTransitionResult>;
+    body: unknown;
+  }): Promise<{ readonly status: number; readonly body: unknown }>;
 
   /**
    * Patch work item fields (priority, rank, labels, summary, scores).

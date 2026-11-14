@@ -36,6 +36,22 @@ describe("createDoltgresContributionAuthors", () => {
     expect(queries[2]).toContain("'x''; DROP TABLE t; --'");
   });
 
+  it("stateOf reads the inbox head and says merged, open or closed without merging (task.0122)", async () => {
+    const authors = createDoltgresContributionAuthors({
+      unsafe: async (query) => {
+        if (query.includes("'contrib-open'")) return [{ state: "open", head_commit: "h1" }];
+        if (query.includes("'contrib-merged'")) return [{ state: "merged", head_commit: "h2" }];
+        if (query.includes("'contrib-closed'")) return [{ state: "closed", head_commit: null }];
+        return [];
+      },
+    });
+    const signal = new AbortController().signal;
+    expect(await authors.stateOf("contrib-open", signal)).toEqual({ head: "h1", merged: false, open: true });
+    expect(await authors.stateOf("contrib-merged", signal)).toEqual({ head: "h2", merged: true, open: false });
+    expect(await authors.stateOf("contrib-closed", signal)).toEqual({ head: null, merged: false, open: false });
+    expect(await authors.stateOf("contrib-none", signal)).toBeNull();
+  });
+
   it("rejects at the signal while the query hangs, and when it is already aborted", async () => {
     const authors = createDoltgresContributionAuthors({
       unsafe: () => new Promise(() => {}),

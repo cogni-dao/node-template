@@ -13,6 +13,8 @@
 
 export {
   WorkItemDeletionRetiredError,
+  WorkItemGateFactsUnavailableError,
+  WorkItemGateUnmetError,
   WorkItemScoresInvalidError,
   WorkItemWriteOutcomeUnknownError,
 } from "../../errors.js";

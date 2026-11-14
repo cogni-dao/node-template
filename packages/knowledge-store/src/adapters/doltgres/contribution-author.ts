@@ -22,9 +22,17 @@ export interface ContributionAuthorSql {
   unsafe(query: string): PromiseLike<readonly Record<string, unknown>[]>;
 }
 
-/** Structurally the work-items `ContributionAuthorPort`; this package does not import work-items. */
+/** Structurally the work-items `ContributionAuthorPort` and `InboxStatePort`; this package does not import work-items. */
 export interface ContributionAuthors {
   principalOf(contributionId: string, signal: AbortSignal): Promise<string | null>;
+  /**
+   * The inbox's current head commit and whether it merged (task.0122, the status gates). `null`: no such inbox. A throw is a
+   * failed read. `head` is the contribution's `head_commit`, the commit a review pins.
+   */
+  stateOf(
+    contributionId: string,
+    signal: AbortSignal
+  ): Promise<{ head: string | null; merged: boolean; open: boolean } | null>;
 }
 
 /** Rejects when `signal` aborts, so a hung read cannot hold the caller past its deadline. */
@@ -63,6 +71,22 @@ export function createDoltgresContributionAuthors(
       } finally {
         aborted.stop();
       }
+    },
+    async stateOf(contributionId, signal) {
+      signal.throwIfAborted();
+      const rows = await sql.unsafe(
+        `SELECT state, head_commit FROM knowledge_contributions WHERE id = ${escapeValue(contributionId)} LIMIT 1`
+      );
+      signal.throwIfAborted();
+      const row = rows[0];
+      if (!row) return null;
+      const head = row.head_commit;
+      return {
+        head: typeof head === "string" && head.length > 0 ? head : null,
+        merged: row.state === "merged",
+        // `knowledge_contributions.state` is open, merged or closed: closed without merging is neither.
+        open: row.state === "open",
+      };
     },
   };
 }

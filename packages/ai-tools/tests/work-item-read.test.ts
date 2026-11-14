@@ -27,9 +27,6 @@ const item: WorkItemInfo = {
 function reader(current: WorkItemInfo) {
   const capability: WorkItemCapability = {
     query: async ({ ids }) => (ids?.includes(current.id) ? [current] : []),
-    transitionStatus: async () => {
-      throw new Error("unexpected write");
-    },
     patch: async () => {
       throw new Error("unexpected write");
     },
@@ -54,9 +51,6 @@ describe("single-item envelope (task.0118)", () => {
       read: async (id, options) => {
         calls.push(options);
         return read(id, options);
-      },
-      transitionStatus: async () => {
-        throw new Error("unexpected write");
       },
       patch: async () => {
         throw new Error("unexpected write");

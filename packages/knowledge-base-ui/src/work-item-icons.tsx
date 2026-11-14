@@ -24,10 +24,13 @@ import {
   ClipboardCheck,
   Code,
   CornerDownRight,
+  Eye,
   FlaskConical,
   GitMerge,
+  ListChecks,
   Pencil,
   Search,
+  ShieldCheck,
   XCircle,
 } from "lucide-react";
 import type { ReactElement } from "react";
@@ -90,10 +93,25 @@ const STATUS_ICON_MAP: Record<
     colorClass: "text-warning",
     label: "Needs design",
   },
+  needs_design_review: {
+    icon: Eye,
+    colorClass: "text-warning",
+    label: "Needs design review",
+  },
   needs_implement: {
     icon: Code,
     colorClass: "text-info",
     label: "Needs implement",
+  },
+  needs_implementation_review: {
+    icon: ListChecks,
+    colorClass: "text-info",
+    label: "Needs implementation review",
+  },
+  needs_validation: {
+    icon: ShieldCheck,
+    colorClass: "text-info",
+    label: "Needs validation",
   },
   needs_closeout: {
     icon: ClipboardCheck,

@@ -47,9 +47,24 @@ export const WorkItemUpdateConflictSchema = z.object({
   currentRevision: z.number().int(),
   message: z.string(),
 });
+/**
+ * The tool's version of the route's 409 `gate_unmet` and 503 `gate_facts_unavailable` (task.0122): the status step lacks
+ * the artifact or fact it needs, and nothing was written. `missing` names it (an artifact kind such as design_review,
+ * implementation_review or validation, or pr, pr_merged, children, brief_edit ...), so the agent knows what to obtain.
+ */
+export const WorkItemUpdateGateSchema = z.object({
+  success: z.literal(false),
+  id: z.string(),
+  code: z.enum(["gate_unmet", "gate_facts_unavailable"]),
+  from: z.string(),
+  to: z.string(),
+  missing: z.string(),
+  message: z.string(),
+});
 export const WorkItemUpdateOutputSchema = z.union([
   WorkItemUpdateSuccessSchema,
   WorkItemUpdateConflictSchema,
+  WorkItemUpdateGateSchema,
 ]);
 export type WorkItemUpdateInput = WorkItemPatchInput;
 export type WorkItemUpdateOutput = z.infer<typeof WorkItemUpdateOutputSchema>;
@@ -65,6 +80,7 @@ export const workItemUpdateContract: ToolContract<
     "Update a work item: the same operation as PATCH /api/v1/work/items/{id}; it returns the updated item. " +
     "Input { id, expectedRevision?, reason, cites?, set }. `set` holds the fields to change (status, scores, labels, ...); " +
     "`scores` replaces the whole object. " +
+    "A status moves forward one stage at a time and only with the exit artifact of the stage it leaves, recorded by someone other than the author (triage: a triage artifact, six scores, a goal label, moves or a gap; design review: an approve; implement: pr; implementation review: an approve at the current head; validation: PASS-grade at the approved head; merge: the PR merged at the approved head). Without it the result is success=false, code='gate_unmet' with from, to and missing (the artifact kind or fact to obtain), and nothing is written; code='gate_facts_unavailable' means a fact could not be read, so retry. Moving back (to needs_triage or an earlier stage on the item's path) or cancelling needs only a reason; blocked is not a stage. " +
     "`set.moves` (optional) names the metrics this work moves: at most 3 of { metricId, direction: 'up'|'down' }; it replaces the whole list and [] means the item moves no metric (say why in the reason). " +
     "Use a metric id from core__metric_list or core__goal_progress; an unknown or deprecated NEW id fails the write, while an entry already on the item is kept. Set moves when you file an item too (POST create takes the same `moves`). Never send a baseline: the server pins each new metric's baseline once and keeps it. " +
     "With expectedRevision the write lands only if the item is still at that " +
@@ -77,8 +93,8 @@ export const workItemUpdateContract: ToolContract<
     scope: "work_item:transition",
     kind: "node",
     subject: "member",
-    label: "Update work items (status, scores, labels and other PATCH fields)",
-    description: "Change a work item's status, scores, labels and the other fields its PATCH allows.",
+    label: "Update work items and record their reviews",
+    description: "Change a work item's status, scores and labels, and record its triage and reviews.",
   },
   inputSchema: WorkItemPatchInputSchema,
   outputSchema: WorkItemUpdateOutputSchema,
@@ -89,6 +105,9 @@ export const workItemUpdateContract: ToolContract<
     "success",
     "code",
     "currentRevision",
+    "from",
+    "to",
+    "missing",
     "message",
   ] as never,
 };
@@ -114,6 +133,24 @@ export function createWorkItemUpdateImplementation(
         });
         return WorkItemUpdateSuccessSchema.parse(updated);
       } catch (e) {
+        // By name: the package error may come from a second bundled copy of the class.
+        const name = (e as { name?: unknown } | null)?.name;
+        if (name === "WorkItemGateUnmetError" || name === "WorkItemGateFactsUnavailableError") {
+          const gate = e as { from?: unknown; to?: unknown; missing?: unknown };
+          const unmet = name === "WorkItemGateUnmetError";
+          const to = String(gate.to ?? input.set.status ?? "");
+          return {
+            success: false as const,
+            id: input.id,
+            code: unmet ? ("gate_unmet" as const) : ("gate_facts_unavailable" as const),
+            from: String(gate.from ?? ""),
+            to,
+            missing: String(gate.missing ?? ""),
+            message: unmet
+              ? `Not updated: ${input.id} cannot move from ${String(gate.from ?? "its stage")} to ${to}; ${String(gate.missing ?? "its artifact")} is missing or stale. Nothing was written; obtain it (recorded by someone other than the author) and retry, or move back.`
+              : `Not updated: a fact the gate reads (${String(gate.missing ?? "unknown")}) could not be read. Nothing was written; retry shortly.`,
+          };
+        }
         if (!(e instanceof WorkItemPatchConflictError)) throw e;
         return {
           success: false as const,

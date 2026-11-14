@@ -14,6 +14,8 @@ import {
 import type { ReservedSql, Sql } from "postgres";
 import {
   WorkItemDeletionRetiredError,
+  WorkItemGateFactsUnavailableError,
+  WorkItemGateUnmetError,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
   WorkItemsBusyError,
@@ -74,6 +76,22 @@ import {
   pinMoves,
   type WorkItemMove,
 } from "../../moves.js";
+import {
+  classifyDeliverable,
+  type Deliverable,
+  evaluateMove,
+  GATE_CHILDREN_MAX,
+  type GateFacts,
+  type GateItem,
+  gateNeeds,
+  parsePullRequestUrl,
+  refusesPathChange,
+  type InboxFacts,
+  type InboxStatePort,
+  type PrFacts,
+  type PrFactsPort,
+} from "../../gates.js";
+import { type Placement, placementFor, type DeliverableState } from "../../placement.js";
 import { parseWorkItemScores } from "../../scores.js";
 import {
   formatCitesTrailer,
@@ -180,6 +198,16 @@ const SETTLE_GRACE_MS = 15_000;
 const SETTLE_WAIT_MS = 5_000;
 /** A multi-hour hold must not log every refused request: one `writer_refused` line per window, with a count. */
 const REFUSAL_LOG_MS = 10_000;
+/** The PR read a forward move takes before the writer lock: one timeout, one cache window per PR URL (task.0122). */
+const PR_FACTS_TIMEOUT_MS = 5_000;
+const PR_FACTS_CACHE_MS = 60_000;
+/** A failed PR read is remembered this long, so a down or rate-limited GitHub is not hammered (60 reads an hour). */
+const PR_FACTS_FAILURE_CACHE_MS = 10_000;
+/**
+ * The statuses the placement job moves an item out of (hub work-status-ladder, Cutover). needs_merge is never a source: the
+ * migration moves every needs_merge item to needs_closeout first, so no write can place an item out of a ladder stage.
+ */
+const PLACEABLE_FROM: readonly string[] = ["needs_closeout", "blocked"];
 
 /** Only content commands own a branch session and reconcile interrupted writes. */
 type BranchReconciliation = "required" | "skipped";
@@ -244,6 +272,21 @@ export interface DoltgresWorkItemAdapterOptions {
    * `moves: []` still works.
    */
   readonly metricBaseline?: MetricBaselinePort;
+  /**
+   * PR head and merge state for the forward moves out of implementation review, validation and merge of a code item
+   * (task.0122). Read BEFORE the writer lock, with a 5 s timeout, a 60 s cache per PR URL and a 10 s failure cache; a failed
+   * read is 503 and nothing is written. Without it those moves answer 503 (a fact is never guessed).
+   */
+  readonly prFacts?: PrFactsPort;
+  /** Inbox head and merge state, a local read inside the gate. Without it a knowledge move answers 503. */
+  readonly inboxes?: InboxStatePort;
+  /**
+   * `owner/repo` of the repositories whose pull requests are code deliverables (case-insensitive). Unset or empty, a pull
+   * request of any github.com repository is.
+   */
+  readonly prRepos?: readonly string[];
+  /** This hub's own origin: a story validation must name it. Unset, a story validation is refused (fail closed). */
+  readonly hubOrigin?: string;
 }
 
 interface OperationContext {
@@ -777,6 +820,7 @@ const PERSISTED_WORK_ITEM_COLUMNS = [
   "pr",
   "reviewer",
   "revision",
+  "status_revision",
   "blocked_by",
   "deploy_verified",
   "claimed_by_run",
@@ -797,6 +841,7 @@ type PersistedColumn = (typeof PERSISTED_WORK_ITEM_COLUMNS)[number];
 /** Columns every write bumps; history omits them from `changed` (task.0052). */
 const HISTORY_IGNORED_COLUMNS: ReadonlySet<string> = new Set([
   "revision",
+  "status_revision",
   "updated_at",
 ]);
 type RowSnapshot = Record<PersistedColumn, unknown>;
@@ -1158,7 +1203,7 @@ function validateTransitionMatrix(
     case "patch": {
       const requestedColumns = proof.patchValues
         ? Object.keys(proof.patchValues)
-        : [...PATCH_DB_COLUMNS];
+        : [...PATCH_DB_COLUMNS, "status_revision"];
       const allowed = new Set<string>([
         ...requestedColumns,
         "revision",
@@ -1183,9 +1228,13 @@ function validateTransitionMatrix(
         changed.has("updated_at") &&
         onlyAllowedChanges(changed, allowed) &&
         revisionAdvanced &&
+        // STATUS_REVISION: a status change stamps the new revision; a patch that leaves the status alone leaves it alone.
+        (changed.has("status")
+          ? asRevision(after.status_revision) === afterRevision
+          : !changed.has("status_revision")) &&
         Object.entries(proof.patchValues ?? {}).every(
           ([column, value]) =>
-            PATCH_DB_COLUMNS.has(column) &&
+            (PATCH_DB_COLUMNS.has(column) || column === "status_revision") &&
             canonicalJson(after[column as PersistedColumn]) ===
               canonicalJson(normalizedPersistedValue(value))
         )
@@ -1303,6 +1352,25 @@ function doltBoolean(rows: unknown, field: string): boolean {
   return raw === true || raw === 1 || String(raw).toLowerCase() === "true";
 }
 
+/** Runs one read under a deadline: the signal aborts at `ms`, and a port that ignores it is still cut off. */
+async function withDeadline<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  ms: number
+): Promise<T> {
+  const signal = AbortSignal.timeout(ms);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run(signal),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("deadline exceeded")), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -1380,6 +1448,13 @@ export class DoltgresWorkItemAdapter
   private readonly queryTimeoutMs: number;
   private readonly entryResolver: EntryResolver | undefined;
   private readonly metricBaseline: MetricBaselinePort | undefined;
+  private readonly prFacts: PrFactsPort | undefined;
+  private readonly inboxes: InboxStatePort | undefined;
+  private readonly prRepos: readonly string[] | undefined;
+  private readonly hubOrigin: string | undefined;
+  /** PR facts by PR URL, each good for `PR_FACTS_CACHE_MS`; failures by URL for `PR_FACTS_FAILURE_CACHE_MS`. */
+  private readonly prFactsCache = new Map<string, { at: number; facts: PrFacts }>();
+  private readonly prFactsFailures = new Map<string, number>();
   private readonly branchTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
@@ -1413,6 +1488,10 @@ export class DoltgresWorkItemAdapter
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
     this.entryResolver = options.entryResolver;
     this.metricBaseline = options.metricBaseline;
+    this.prFacts = options.prFacts;
+    this.inboxes = options.inboxes;
+    this.prRepos = options.prRepos;
+    this.hubOrigin = options.hubOrigin;
     this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.settleBaseMs = options.settleBaseMs ?? SETTLE_BASE_MS;
@@ -3560,16 +3639,22 @@ export class DoltgresWorkItemAdapter
   private async latestArtifacts(
     itemId: string
   ): Promise<readonly WorkItemArtifact[]> {
+    return this.readOnCleanMain((conn) => this.latestArtifactsWith(conn, itemId));
+  }
+
+  /** The same read on any connection; the move gate calls it inside the writer lock. */
+  private async latestArtifactsWith(
+    conn: WorkItemConnection,
+    itemId: string
+  ): Promise<readonly WorkItemArtifact[]> {
     const branches = ARTIFACT_KINDS.map(
       (kind) =>
         `(SELECT ${ARTIFACT_SUMMARY_COLUMNS} FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} AND kind = ${escapeValue(kind)} ORDER BY seq DESC LIMIT 1)`
     );
-    return this.readOnCleanMain(async (conn) => {
-      const rows = await conn.unsafe(
-        `WITH latest AS (${branches.join(" UNION ALL ")}) SELECT * FROM latest ORDER BY seq DESC`
-      );
-      return rows.map(rowToArtifact);
-    });
+    const rows = await conn.unsafe(
+      `WITH latest AS (${branches.join(" UNION ALL ")}) SELECT * FROM latest ORDER BY seq DESC`
+    );
+    return rows.map(rowToArtifact);
   }
 
   async list(query: WorkQuery = {}) {
@@ -3869,6 +3954,15 @@ export class DoltgresWorkItemAdapter
     principalId: string
   ): Promise<WorkItem> {
     const principal = requirePrincipal(principalId);
+    // CREATE_IS_TRIAGE_ONLY (task.0122): a new item enters at needs_triage.
+    if (input.status !== undefined && input.status !== "needs_triage") {
+      throw new WorkItemGateUnmetError(
+        input.id ? String(input.id) : `${input.type} (new)`,
+        "create",
+        input.status,
+        "path"
+      );
+    }
     const scores =
       input.scores === undefined
         ? undefined
@@ -3998,6 +4092,96 @@ export class DoltgresWorkItemAdapter
     input: WorkItemsPatchInput,
     principalId: string
   ): Promise<WorkItem> {
+    return this.patchWith(input, principalId, false);
+  }
+
+  /**
+   * The cutover's plan for one item (hub work-status-ladder, Cutover): where `place` would put it, from facts THIS store reads, or
+   * `undefined` when the item is not in needs_closeout or blocked, or its PR or inbox state cannot be read as merged or open. A PR
+   * is read through the PR-facts port and an inbox through the inbox port: merged, or closed without merging (`open: false`), or
+   * open (the default when a port does not say). Read-only.
+   */
+  async planPlacement(
+    id: WorkItemId
+  ): Promise<(Placement & { readonly from: WorkItemStatus; readonly pr: string }) | undefined> {
+    const current = await this.readOnCleanMain((conn) => this.getWith(conn, id));
+    if (!current) return undefined;
+    const from = String(current.status) as WorkItemStatus;
+    if (!PLACEABLE_FROM.includes(from)) return undefined;
+    const pr = optionalString(current.pr)?.trim() ?? "";
+    let state: DeliverableState | undefined;
+    if (pr && from === "needs_closeout") {
+      const parsed = parsePullRequestUrl(pr);
+      const deliverable = classifyDeliverable(pr);
+      if (parsed) {
+        const facts = await this.readPrFacts(String(id), from, "placement", pr);
+        state = facts.merged ? "merged" : facts.open === false ? "closed" : "open";
+      } else if (deliverable?.kind === "inbox" && this.inboxes) {
+        const inboxPort = this.inboxes;
+        const contribution = deliverable.contribution;
+        let inbox: InboxFacts | null;
+        try {
+          inbox = await withDeadline(
+            (signal) => inboxPort.stateOf(contribution, signal),
+            this.queryTimeoutMs
+          );
+        } catch {
+          throw new WorkItemGateFactsUnavailableError(String(id), from, "placement", "inbox");
+        }
+        state = !inbox
+          ? "unknown"
+          : inbox.merged
+            ? "merged"
+            : inbox.open === false
+              ? "closed"
+              : "open";
+      } else {
+        state = "unknown";
+      }
+    }
+    const placement = placementFor({
+      type: String(current.type) as WorkItemType,
+      status: from,
+      pr,
+      state,
+    });
+    return placement ? { ...placement, from, pr } : undefined;
+  }
+
+  /**
+   * One-shot cutover (hub work-status-ladder, Cutover): moves an item out of needs_closeout or blocked to the stage the facts THIS
+   * store reads name (`planPlacement`), through the same writer path as any patch but WITHOUT the exit-artifact gate. The caller's
+   * `to` is a claim, not an instruction: it must equal the plan or the move is refused, so `done` is reached only when this store
+   * itself read the PR (or inbox) merged, `needs_research` only for a spike, and `blocked` goes to `needs_triage` only. Any other
+   * source (needs_merge included: the migration moves it to needs_closeout) or destination is refused. The fixed reason comes from
+   * the plan. It stamps `status_revision` like every status change; the lock re-checks that the item is still in the planned
+   * status with the planned `pr`. The predicate (`evaluateMove`) has no legacy case.
+   */
+  async place(
+    input: { readonly id: WorkItemId; readonly to: WorkItemStatus },
+    principalId: string
+  ): Promise<WorkItem> {
+    const plan = await this.planPlacement(input.id);
+    if (!plan || plan.to !== input.to) {
+      throw new WorkItemGateUnmetError(
+        String(input.id),
+        plan?.from ?? "legacy",
+        input.to,
+        "path"
+      );
+    }
+    return this.patchWith(
+      { id: input.id, reason: plan.reason, set: { status: plan.to } } as WorkItemsPatchInput,
+      principalId,
+      { from: plan.from, pr: plan.pr }
+    );
+  }
+
+  private async patchWith(
+    input: WorkItemsPatchInput,
+    principalId: string,
+    placement: false | { readonly from: string; readonly pr: string }
+  ): Promise<WorkItem> {
     const principal = requirePrincipal(principalId);
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
@@ -4051,6 +4235,23 @@ export class DoltgresWorkItemAdapter
       });
     }
 
+    if (set.deployVerified !== undefined) {
+      // The fleet cohort turns this into an explicit 400; until then it is loud, never silently dropped (task.0122).
+      this.logger.warn(
+        {
+          event: "adapter.work_items.deploy_verified_write",
+          workItemId: id,
+          principal,
+          deployVerified: set.deployVerified,
+        },
+        "work_items deploy_verified written; it is retired and never counts as validation"
+      );
+    }
+    // PR facts are read BEFORE the writer lock (5 s timeout, 60 s cache per PR URL). A failed read is a 503 and nothing is written.
+    const prefetched = placement ? undefined : await this.prefetchPrFacts(id, set);
+    // Stamped inside the lock, once the row being replaced is read: a status change restamps `status_revision`.
+    let statusRevisionClause: string | undefined;
+
     const where = [`id = ${escapeValue(id)}`];
     if (expectedRevision !== undefined) {
       where.push(`revision = ${escapeValue(expectedRevision)}`);
@@ -4060,6 +4261,7 @@ export class DoltgresWorkItemAdapter
       principal,
       async (conn, proof) => {
         if (movesClause) clauses.push(movesClause);
+        if (statusRevisionClause) clauses.push(statusRevisionClause);
         clauses.push("revision = revision + 1", "updated_at = NOW()");
         const rows = await conn.unsafe(
           `UPDATE work_items SET ${clauses.join(", ")} WHERE ${where.join(" AND ")} RETURNING *`
@@ -4092,6 +4294,14 @@ export class DoltgresWorkItemAdapter
           const conflict = revisionConflict(current);
           if (conflict) throw conflict;
           proof.beforeRow = current;
+          // GATE_IS_ONE_PREDICATE: the move this patch makes must be allowed (task.0122).
+          if (placement) this.assertPlaceable(current, set, placement);
+          else await this.enforceGate(conn, current, set, prefetched);
+          if (this.gateMove(current, set)) {
+            // STATUS_REVISION: the revision at which the item entered its stage; the new revision is this one plus one.
+            statusRevisionClause = "status_revision = revision + 1";
+            patchValues.status_revision = Number(current.revision ?? 0) + 1;
+          }
           // Inside the writer lock and before the branch checkout, so a resolver
           // failure is a clean admission failure: lock released, nothing written.
           if (cites.length && this.entryResolver) {
@@ -4118,6 +4328,217 @@ export class DoltgresWorkItemAdapter
     );
     if (result instanceof WorkItemRevisionConflictError) throw result;
     return result;
+  }
+
+  /** The move a patch makes: a status change, or `undefined` for none. */
+  private gateMove(
+    current: Record<string, unknown>,
+    set: WorkItemsPatchSet
+  ): { readonly from: WorkItemStatus; readonly to: WorkItemStatus } | undefined {
+    const from = String(current.status) as WorkItemStatus;
+    return set.status !== undefined && set.status !== from
+      ? { from, to: set.status as WorkItemStatus }
+      : undefined;
+  }
+
+  /** The row after a patch, as the gate judges it; `statusRevision` is the revision the item entered its stage at. */
+  private gateItemAfter(
+    current: Record<string, unknown>,
+    set: WorkItemsPatchSet
+  ): GateItem {
+    const stored = rowToWorkItem(current);
+    return {
+      id: String(current.id),
+      type: String(current.type) as WorkItemType,
+      pr: set.pr !== undefined ? set.pr : stored.pr,
+      labels: set.labels ?? stored.labels,
+      scores: set.scores !== undefined ? set.scores : (stored.scores ?? null),
+      moves: set.moves !== undefined ? set.moves : (stored.moves ?? []),
+      statusRevision: Number(current.status_revision ?? 0),
+    };
+  }
+
+  /**
+   * Reads the PR facts a forward move needs, before any lock. Only a move out of implementation review, validation or merge
+   * of a code item reads them: about three reads per item, each cached for 60 s.
+   */
+  private async prefetchPrFacts(
+    id: string,
+    set: WorkItemsPatchSet
+  ): Promise<{ readonly url: string; readonly facts: PrFacts } | undefined> {
+    if (set.status === undefined) return undefined;
+    const current = await this.readOnCleanMain((conn) =>
+      this.getWith(conn, toWorkItemId(id))
+    );
+    const move = current ? this.gateMove(current, set) : undefined;
+    if (!current || !move) return undefined;
+    const item = this.gateItemAfter(current, set);
+    const deliverable = classifyDeliverable(item.pr, this.prRepos);
+    const needs = gateNeeds(item, move.from, move.to, deliverable);
+    if (!needs.pr || deliverable?.kind !== "pr") return undefined;
+    return {
+      url: deliverable.url,
+      facts: await this.readPrFacts(id, move.from, move.to, deliverable.url),
+    };
+  }
+
+  /** One PR read: cached for 60 s per URL, 5 s timeout, a failure cached 10 s. A failure is `WorkItemGateFactsUnavailableError` (503). */
+  private async readPrFacts(
+    id: string,
+    from: string,
+    to: string,
+    url: string
+  ): Promise<PrFacts> {
+    const hit = this.prFactsCache.get(url);
+    if (hit && Date.now() - hit.at < PR_FACTS_CACHE_MS) return hit.facts;
+    const failedAt = this.prFactsFailures.get(url);
+    if (failedAt !== undefined && Date.now() - failedAt < PR_FACTS_FAILURE_CACHE_MS)
+      throw new WorkItemGateFactsUnavailableError(id, from, to, "pr");
+    const port = this.prFacts;
+    if (!port) throw new WorkItemGateFactsUnavailableError(id, from, to, "pr");
+    try {
+      const facts = await withDeadline(
+        (signal) => port.read(url, signal),
+        PR_FACTS_TIMEOUT_MS
+      );
+      if (
+        !/^[0-9a-f]{40}$/.test(facts.head) ||
+        typeof facts.merged !== "boolean" ||
+        (facts.open !== undefined && typeof facts.open !== "boolean")
+      )
+        throw new Error("unreadable PR facts");
+      if (this.prFactsCache.size >= 500) {
+        const now = Date.now();
+        for (const [key, entry] of this.prFactsCache)
+          if (now - entry.at >= PR_FACTS_CACHE_MS) this.prFactsCache.delete(key);
+        for (const [key, at] of this.prFactsFailures)
+          if (now - at >= PR_FACTS_FAILURE_CACHE_MS) this.prFactsFailures.delete(key);
+      }
+      this.prFactsCache.set(url, { at: Date.now(), facts });
+      this.prFactsFailures.delete(url);
+      return facts;
+    } catch (error) {
+      this.prFactsFailures.set(url, Date.now());
+      this.logger.warn(
+        {
+          event: "adapter.work_items.gate_pr_read_failed",
+          workItemId: id,
+          errorName: error instanceof Error ? error.name : "Error",
+        },
+        "work_items gate could not read PR facts; nothing written"
+      );
+      throw new WorkItemGateFactsUnavailableError(id, from, to, "pr");
+    }
+  }
+
+  /**
+   * The gate of a status change, inside the writer lock and before the branch: reads this item's artifacts, the inbox heads
+   * they name and a story's children, then asks `evaluateMove`. A refusal throws and nothing is written.
+   */
+  private async enforceGate(
+    conn: WorkItemConnection,
+    current: Record<string, unknown>,
+    set: WorkItemsPatchSet,
+    prefetched: { readonly url: string; readonly facts: PrFacts } | undefined
+  ): Promise<void> {
+    // PATH_CHANGES_ONLY_VIA_TRIAGE: a `pr` of another kind (PR or inbox) at implementation review or later is refused,
+    // with or without a status change, unless the patch moves the item back to needs_implement or earlier.
+    const heldAt = String(current.status) as WorkItemStatus;
+    if (
+      refusesPathChange(
+        heldAt,
+        (set.status ?? heldAt) as WorkItemStatus,
+        optionalString(current.pr),
+        set.pr,
+        this.prRepos
+      )
+    ) {
+      throw new WorkItemGateUnmetError(
+        String(current.id),
+        heldAt,
+        String(set.status ?? heldAt),
+        "path"
+      );
+    }
+    const move = this.gateMove(current, set);
+    if (!move) return;
+    const { from, to } = move;
+    const item = this.gateItemAfter(current, set);
+    const deliverable: Deliverable | undefined = classifyDeliverable(
+      item.pr,
+      this.prRepos
+    );
+    const needs = gateNeeds(item, from, to, deliverable);
+    let pr: PrFacts | undefined;
+    if (needs.pr && deliverable?.kind === "pr") {
+      // `pr` changed between the pre-lock read and the lock: the fact is not the one the gate needs. Retry.
+      if (prefetched?.url !== deliverable.url)
+        throw new WorkItemGateFactsUnavailableError(item.id, from, to, "pr");
+      pr = prefetched.facts;
+    }
+    const artifacts = needs.artifacts
+      ? await this.latestArtifactsWith(conn, item.id)
+      : [];
+    const inboxes: Record<string, InboxFacts | null> = {};
+    const inboxPort = this.inboxes;
+    if (needs.artifacts && inboxPort) {
+      const contributions = new Set<string>();
+      if (deliverable?.kind === "inbox") contributions.add(deliverable.contribution);
+      for (const artifact of artifacts) {
+        const knowledge = /^knowledge:(contrib-[a-z0-9-]{1,200})@/.exec(artifact.subject);
+        if (knowledge?.[1]) contributions.add(knowledge[1]);
+      }
+      // ONE_DEADLINE (change-history-design): every inbox read shares a single `queryTimeoutMs` budget and one signal.
+      try {
+        const ids = [...contributions];
+        const states = await withDeadline(
+          (signal) =>
+            Promise.all(ids.map((id) => inboxPort.stateOf(id, signal))),
+          this.queryTimeoutMs
+        );
+        ids.forEach((id, index) => {
+          inboxes[id] = states[index] ?? null;
+        });
+      } catch {
+        throw new WorkItemGateFactsUnavailableError(item.id, from, to, "inbox");
+      }
+    }
+    let children: { readonly statuses: readonly string[] } | undefined;
+    if (needs.children) {
+      const rows = await conn.unsafe(
+        `SELECT status FROM work_items WHERE parent_id = ${escapeValue(item.id)} LIMIT ${GATE_CHILDREN_MAX + 1}`
+      );
+      children = { statuses: rows.map((row) => String(row.status)) };
+    }
+    const facts: GateFacts = {
+      deliverable,
+      pr,
+      inboxes,
+      children,
+      hubOrigin: this.hubOrigin,
+    };
+    const result = evaluateMove(item, from, to, artifacts, facts);
+    if (!result.ok) {
+      throw result.code === "gate_unmet"
+        ? new WorkItemGateUnmetError(item.id, from, to, result.missing)
+        : new WorkItemGateFactsUnavailableError(item.id, from, to, result.missing);
+    }
+  }
+
+  /** Inside the lock: the item is still in the planned legacy status with the planned `pr`; anything else is refused. */
+  private assertPlaceable(
+    current: Record<string, unknown>,
+    set: WorkItemsPatchSet,
+    placement: { readonly from: string; readonly pr: string }
+  ): void {
+    const from = String(current.status);
+    if (
+      !PLACEABLE_FROM.includes(from) ||
+      from !== placement.from ||
+      (optionalString(current.pr)?.trim() ?? "") !== placement.pr
+    ) {
+      throw new WorkItemGateUnmetError(String(current.id), from, String(set.status ?? ""), "path");
+    }
   }
 
   /** The entries a write stores: new ids resolved and baselined, stored ones kept (see `pinMoves`). */
