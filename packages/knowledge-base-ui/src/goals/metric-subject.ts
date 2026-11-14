@@ -22,6 +22,7 @@ import type {
   KpiBinding,
   KpiReason,
   KpiStatus,
+  MetricBrief,
   MetricDisplay,
   MetricHistory,
   MetricReadResponse,
@@ -64,6 +65,8 @@ export interface MetricSubject {
   readonly ownSeries: boolean;
   /** How a supporting metric relates to its KPI, as secondary metadata only. */
   readonly role: MetricServesRole | null;
+  /** What it is, how it is computed, why it matters and how it accrues; null when none is declared. */
+  readonly brief: MetricBrief | null;
   readonly flags: readonly MetricFlag[];
 }
 
@@ -91,6 +94,7 @@ export function kpiSubject(kpi: GoalKpi): MetricSubject {
     recent: kpi.recent ?? null,
     ownSeries: false,
     role: null,
+    brief: kpi.metric?.brief ?? null,
     flags: [],
   };
 }
@@ -118,6 +122,7 @@ export function rowSubject(row: MetricRow): MetricSubject {
     recent: null,
     ownSeries: true,
     role: row.role,
+    brief: row.brief,
     flags: row.flags,
   };
 }
@@ -162,6 +167,7 @@ export function readSubject(read: MetricReadResponse, fallbackId: string): Metri
     recent: null,
     ownSeries: true,
     role: definition?.serves?.role ?? null,
+    brief: definition?.brief ?? null,
     flags: [],
   };
 }

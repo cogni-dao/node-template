@@ -16,6 +16,7 @@ import {
 	type KpiBinding,
 	type KpiReason,
 	type MetricAction,
+	type MetricBrief,
 	type MetricCalculator,
 	type MetricDefinition,
 	type MetricDefinitionsPort,
@@ -141,6 +142,7 @@ export interface GoalKpiResult {
 		cadenceSeconds: number | null;
 		maxAgeSeconds: number;
 		display?: MetricDisplay;
+		brief?: MetricBrief;
 	} | null;
 	assessment: KpiAssessment;
 	trend: MetricHistory | null;
@@ -1079,7 +1081,12 @@ export function createMetricService(deps: {
 					} catch {
 						// servingRow already marked this row unreadable; never reuse it.
 					}
-					if (d.serves || d.annexInvalid?.length) items.push(row);
+					// A bad brief changes no relationship, so it never lists a metric as served or orphaned.
+					if (
+						d.serves ||
+						d.annexInvalid?.some((bad) => bad.field !== "brief")
+					)
+						items.push(row);
 					if (
 						!d.serves &&
 						!d.annexInvalid?.some((bad) => bad.field === "serves")
@@ -1245,6 +1252,7 @@ export function createMetricService(deps: {
 				calculatorId: definition.spec.calculatorId,
 				cadenceSeconds: definition.spec.cadenceSeconds ?? null,
 				maxAgeSeconds: definition.spec.maxAgeSeconds,
+				...(current.brief ? { brief: current.brief } : {}),
 			};
 			let shape: ReturnType<typeof calculatorShape>;
 			let display: MetricDisplay | undefined;
