@@ -20,10 +20,10 @@ import {
 } from "./graphs/mission/cogni-decide";
 import { createMissionGraph } from "./graphs/mission/graph";
 import {
-  createNodeOperatorGraph,
-  NODE_OPERATOR_TOOL_IDS,
-} from "./graphs/node-operator/graph";
-import { nodeOperatorCatalogPrompt } from "./graphs/node-operator/prompts";
+  createCoordinatorGraph,
+  COORDINATOR_TOOL_IDS,
+} from "./graphs/coordinator/graph";
+import { coordinatorCatalogPrompt } from "./graphs/coordinator/prompts";
 import {
   createWorkCloseoutGraph,
   WORK_CLOSEOUT_GRAPH_NAME,
@@ -34,7 +34,7 @@ import {
   VCS_PR_READ,
 } from "./graphs/work-closeout/receipts";
 import { WORK_PRIORITIZER_GRAPH_NAME } from "./graphs/work-prioritizer/graph";
-import type { WorkflowGuidance } from "./graphs/node-operator/guidance";
+import type { WorkflowGuidance } from "./graphs/coordinator/guidance";
 import type { CreateReactAgentGraphOptions } from "./graphs/types";
 import type { CreateGraphFn } from "./inproc/types";
 
@@ -54,7 +54,7 @@ export interface CatalogEntry {
   /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
   readonly program?: "cogni" | "work-review" | "work-closeout";
   /**
-   * Recurring duty this workflow can own. The node operator reads it to decide, from goals and evidence,
+   * Recurring duty this workflow can own. The node coordinator reads it to decide, from goals and evidence,
    * which jobs to keep: no duty is named in the operator prompt. `purpose` is the stable job purpose.
    */
   readonly duty?: {
@@ -125,14 +125,14 @@ export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
 
 /** Bind guidance from the trusted registry; return the native compiled graph directly. */
 function createCatalogCogniGraph(opts: CreateReactAgentGraphOptions) {
-  return createNodeOperatorGraph({ ...opts, workflowGuidance: catalogWorkflowGuidance() });
+  return createCoordinatorGraph({ ...opts, workflowGuidance: catalogWorkflowGuidance() });
 }
 function catalogWorkflowGuidance(): WorkflowGuidance[] {
   return Object.entries(NODE_LANGGRAPH_CATALOG).flatMap(([id, entry]: [string, CatalogEntry]) =>
     entry.guidanceId ? [{ graphId: `langgraph:${id}`, guidanceId: entry.guidanceId }] : [],
   );
 }
-createCatalogCogniGraph.createRunHooks = createNodeOperatorGraph.createRunHooks;
+createCatalogCogniGraph.createRunHooks = createCoordinatorGraph.createRunHooks;
 
 /**
  * Node runtime LangGraph catalog — the graphs every sovereign node runs: `cogni` (the node
@@ -206,11 +206,11 @@ export const NODE_LANGGRAPH_CATALOG = {
     displayName: "Cogni",
     principal: NODE_AI_PRINCIPAL,
     description:
-      "Node operator: reads goals and work, manages authorized recurring jobs, and verifies effects",
-    toolIds: NODE_OPERATOR_TOOL_IDS,
+      "Node coordinator: reads goals and work, manages authorized recurring jobs, and verifies effects",
+    toolIds: COORDINATOR_TOOL_IDS,
     graphFactory: createCatalogCogniGraph,
     get systemPrompt(): string {
-      return nodeOperatorCatalogPrompt(
+      return coordinatorCatalogPrompt(
         Object.entries(NODE_LANGGRAPH_CATALOG).map(([id, entry]) => ({
           id: `langgraph:${id}`,
           description: entry.description,

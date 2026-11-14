@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import { LANGGRAPH_CATALOG } from "../../src/catalog";
 import {
 	createNodeScheduleGuard,
-	NodeOperatorReceipts,
-} from "../../src/graphs/node-operator/guidance";
+	CoordinatorReceipts,
+} from "../../src/graphs/coordinator/guidance";
 import { OPEN_STATUSES } from "../../src/graphs/work-prioritizer/tools";
 import { createInProcGraphRunner } from "../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../src/inproc/types";
@@ -230,7 +230,7 @@ describe("native coordinator workflow guidance", () => {
 
 describe("program schedule creation guard", () => {
 	it("does not admit filtered, partial-page or undersized backlog queries", () => {
-		const receipts = new NodeOperatorReceipts();
+		const receipts = new CoordinatorReceipts();
 		for (const extra of [
 			{ text: "absent" },
 			{ ids: [] },
@@ -255,7 +255,7 @@ describe("program schedule creation guard", () => {
 		expect(receipts.contextRead.has("core__work_item_query")).toBe(true);
 	});
 	it("requires exact host lookup and successful complete selected-card receipts", async () => {
-		const receipts = new NodeOperatorReceipts();
+		const receipts = new CoordinatorReceipts();
 		let writes = 0;
 		const writer = new DynamicStructuredTool({
 			name: "core__schedule_manage",

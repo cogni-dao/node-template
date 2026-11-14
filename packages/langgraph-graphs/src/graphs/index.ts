@@ -14,7 +14,7 @@
  * @public
  */
 
-// Cogni node-operator harness
+// Cogni coordinator harness
 export {
 	type AgentProfile,
 	cogniProfile,

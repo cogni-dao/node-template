@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import { NODE_LANGGRAPH_CATALOG } from "../src/catalog";
-import { NODE_OPERATOR_PROMPT } from "../src/graphs/node-operator/prompts";
+import { COORDINATOR_PROMPT } from "../src/graphs/coordinator/prompts";
 
 describe("catalog duties", () => {
   it("lists each duty with its purpose, instruction and schedulability in the operator prompt", () => {
@@ -24,7 +24,7 @@ describe("catalog duties", () => {
   });
 
   it("names no specific duty in the operator prompt itself", () => {
-    expect(NODE_OPERATOR_PROMPT).not.toContain("node-work-triage");
-    expect(NODE_OPERATOR_PROMPT).not.toContain("langgraph:work-prioritizer");
+    expect(COORDINATOR_PROMPT).not.toContain("node-work-triage");
+    expect(COORDINATOR_PROMPT).not.toContain("langgraph:work-prioritizer");
   });
 });

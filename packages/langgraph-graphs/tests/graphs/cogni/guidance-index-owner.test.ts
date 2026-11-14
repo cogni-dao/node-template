@@ -4,7 +4,7 @@ import { tool } from "@langchain/core/tools";
 import { FakeListChatModel } from "@langchain/core/utils/testing";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createNodeOperatorGraph } from "../../../src/graphs/node-operator/graph";
+import { createCoordinatorGraph } from "../../../src/graphs/coordinator/graph";
 
 const t = (name: string) =>
 	tool(async () => "{}", { name, description: name, schema: z.object({}).passthrough() });
@@ -16,7 +16,7 @@ describe("Cogni guidance index has one owner", () => {
 			useWhen: "a reader decision ".repeat(8),
 		}));
 		const build = () =>
-			createNodeOperatorGraph({
+			createCoordinatorGraph({
 				llm: new FakeListChatModel({ responses: ["x"] }) as never,
 				tools: ["core__knowledge_read", "core__goal_list"].map(t) as never,
 				program: "cogni",

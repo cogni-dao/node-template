@@ -2,16 +2,16 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@cogni-dao/langgraph-graphs/tests/graphs/node-operator-step-budget`
- * Purpose: An operate tick that hits the step limit ends in a report of its actual schedule writes.
+ * Module: `@cogni-dao/langgraph-graphs/tests/graphs/coordinator-step-budget`
+ * Purpose: A coordinating tick that hits the step limit ends in a report of its actual schedule writes.
  */
 
 import { describe, expect, it } from "vitest";
-import { createNodeOperatorRunHooks } from "../../src/graphs/node-operator/graph";
+import { createCoordinatorRunHooks } from "../../src/graphs/coordinator/graph";
 
 describe("node operator step budget", () => {
   it("reports only successful schedule writes", () => {
-    const hooks = createNodeOperatorRunHooks();
+    const hooks = createCoordinatorRunHooks();
     hooks.observeTool(
       "core__schedule_manage",
       { action: "enable", scheduleId: "s1" },
@@ -27,7 +27,7 @@ describe("node operator step budget", () => {
   });
 
   it("says none when the tick changed nothing", () => {
-    expect(createNodeOperatorRunHooks().projectStepBudget().answer).toContain(
+    expect(createCoordinatorRunHooks().projectStepBudget().answer).toContain(
       "Schedule changes: none",
     );
   });
