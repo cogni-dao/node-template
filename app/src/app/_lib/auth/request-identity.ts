@@ -129,7 +129,7 @@ function isSameOrigin(origin: string | null, host: string | null): boolean {
   }
 }
 
-/** A cookie session identity, marked `via: "session"` (logging only). */
+/** A cookie session identity, marked `via: "session"`: logging and the DENY_BY_DEFAULT write gate (a session passes it; anything else is treated as a bearer). */
 async function resolveSessionIdentity(): Promise<SessionUser | null> {
   const user = await getServerSessionUser();
   return user ? { ...user, via: "session" } : null;

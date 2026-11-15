@@ -88,7 +88,7 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
     routes: [
       "knowledge.contributions.create",
       "knowledge.contributions.commits.append",
-      // An external agent registers the domain its contribution needs (DOMAIN_REGISTER_BEARER_OR_SESSION), so it holds the same scope as the contribution itself.
+      // An external agent registers the domain its contribution needs (domain register is behind this scope: a bearer needs knowledge:contribute), so it holds the same scope as the contribution itself.
       "knowledge.domains.create",
     ],
   },
@@ -131,6 +131,36 @@ export const OPEN_BY_DESIGN_ROUTES: Readonly<Record<string, string>> = {
   "agent.access.requests.create": "the ask door is open by design; NO_SELF_APPROVAL protects activation (only an admin session approves)",
   "agent.register": "the anonymous onboarding door that mints an agent identity and key (bug.0297, an invitation token is tracked there); an identity alone opens no route: only an admin's yes does",
 };
+
+/** Methods that only read. Every other method is a write for DENY_BY_DEFAULT. */
+export const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+
+export interface BearerWriteInput {
+  /** The request's HTTP method. */
+  readonly method: string;
+  /** How the request authenticated. Fail closed: anything but `session` is treated as a bearer. */
+  readonly via: "bearer" | "session";
+  /** True only when the route's `sameDoor` check will actually run for this request (a skipped optional query door does not count). */
+  readonly doorRuns: boolean;
+  /** The route's `bearerWrite` reason (a route that touches only the caller's own data), if it declared one. */
+  readonly bearerWrite?: string | undefined;
+  /** The route's id, matched against `OPEN_BY_DESIGN_ROUTES`. */
+  readonly routeId: string;
+}
+
+/**
+ * DENY_BY_DEFAULT (bug.0045): the one pure decision a node's route wrapper calls before the handler. A bearer write (any method but GET, HEAD, OPTIONS)
+ * needs a door that runs, a `bearerWrite` reason, or an `OPEN_BY_DESIGN_ROUTES` entry; anything else is refused with `bearer_write_undeclared`
+ * (the node answers 403). A human session and every read pass. Returns `null` to let the request go on.
+ */
+export function bearerWriteRefusal(input: BearerWriteInput): null | { readonly code: "bearer_write_undeclared" } {
+  if (input.via === "session") return null;
+  if (SAFE_METHODS.has(input.method.toUpperCase())) return null;
+  if (input.doorRuns) return null;
+  if (input.bearerWrite) return null;
+  if (input.routeId in OPEN_BY_DESIGN_ROUTES) return null;
+  return { code: "bearer_write_undeclared" };
+}
 
 export interface CallerInput {
   readonly userId: string;

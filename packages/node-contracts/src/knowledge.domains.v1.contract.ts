@@ -8,7 +8,7 @@
  * Invariants:
  *   - DOMAIN_HTTP_REQUIRES_PRINCIPAL (route enforces, contract does not): GET list
  *     and GET item accept any authenticated principal (DOMAIN_READ_REQUIRES_PRINCIPAL);
- *     POST register accepts bearer or session (DOMAIN_REGISTER_BEARER_OR_SESSION).
+ *     POST register accepts a signed-in human, or a bearer agent holding the knowledge:contribute role (DOMAIN_REGISTER_NEEDS_CONTRIBUTE).
  *   - DOMAIN_MUTATION_HUMAN_ONLY (route enforces): PATCH and DELETE accept a signed-in
  *     human; a bearer agent is refused 403 `bearer_write_undeclared` (deny by default, bug.0045).
  *   - DOMAIN_ID_IS_IMMUTABLE: the update input has no `id` change; rename is `name` only.

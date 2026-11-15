@@ -18,7 +18,7 @@
  * @public
  */
 
-import { OPEN_BY_DESIGN_ROUTES } from "@cogni/agent-grants";
+import { bearerWriteRefusal } from "@cogni/agent-grants";
 import {
   CredentialRateLimitedError,
   CredentialStoreUnavailableError,
@@ -55,9 +55,6 @@ function logCredentialRefusal(log: RequestContext["log"], error: unknown, routeI
     log.warn({ event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE, routeId, ...storeFailureFields(error) }, EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE);
   }
 }
-
-/** Methods that only read. Every other method is a write for DENY_BY_DEFAULT. */
-const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 
 type AuthRequiredHandler<TContext = unknown> = (
   ctx: RequestContext,
@@ -286,16 +283,19 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           const accountParam = pathAccountParam ?? (queryAccountId !== null ? queryAccountParam : undefined);
           // The door counts only when it will actually run for this request.
           const doorRuns = Boolean(sameDoor) && (!queryAccountParam || Boolean(pathAccountParam) || queryAccountId !== null);
-          // DENY_BY_DEFAULT (bug.0045): a bearer write needs a door that runs, an own-data reason, or an open-by-design entry. Anything else is refused before any handler.
+          // FAIL_CLOSED: any signed-in identity not proven `via: "session"` is a bearer, for the gate and the door alike. Every resolver sets `via`
+          // (request-identity.ts for bearers and cookies, getServerSessionUser for cookie-only routes).
+          const via = sessionUser?.via === "session" ? "session" : "bearer";
+          // DENY_BY_DEFAULT (bug.0045): the decision is `bearerWriteRefusal` in @cogni-dao/agent-grants; the wrapper owns only the response and the log.
           if (
-            // FAIL_CLOSED: any signed-in identity not proven `via: "session"` is treated as a bearer, like the door below. Every resolver sets `via`
-            // (request-identity.ts for bearers and cookies, getServerSessionUser for cookie-only routes).
             sessionUser !== null &&
-            sessionUser.via !== "session" &&
-            !SAFE_METHODS.has(request.method) &&
-            !doorRuns &&
-            !("bearerWrite" in options && options.bearerWrite) &&
-            !(options.routeId in OPEN_BY_DESIGN_ROUTES)
+            bearerWriteRefusal({
+              method: request.method,
+              via,
+              doorRuns,
+              bearerWrite: "bearerWrite" in options ? options.bearerWrite : undefined,
+              routeId: options.routeId,
+            })
           ) {
             ctx.log.warn(
               {
@@ -331,8 +331,7 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
               toolId: sameDoor,
               routeId: options.routeId,
               userId: sessionUser.id,
-              // Fail closed: only an identity that says `session` takes the human rules; an absent or unknown `via` is strict.
-              via: sessionUser.via === "session" ? "session" : "bearer",
+              via,
               ...(accountParam ? { accountId: accountId ?? "" } : {}),
             });
             if (decision.decision === "deny") {

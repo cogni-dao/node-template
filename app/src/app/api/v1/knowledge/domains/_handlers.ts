@@ -8,7 +8,7 @@
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_LIST_REQUIRES_PRINCIPAL
  *   (any authenticated principal — session human or bearer agent — may list
  *   domains, mirroring KNOWLEDGE_READ_NEEDS_GRANT on /knowledge),
- *   DOMAIN_REGISTER_BEARER_OR_SESSION (federation: external bearer agents may
+ *   DOMAIN_REGISTER_NEEDS_CONTRIBUTE (federation: external bearer agents holding knowledge:contribute may
  *   register a domain on-demand so that downstream writes — knowledge
  *   contributions, EDO hypothesize/decide/record-outcome — can proceed against
  *   the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant without requiring a UI

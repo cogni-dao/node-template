@@ -104,7 +104,7 @@ Bootstrap application runtime dependencies.
 
 - Environment validation before startup
 - Clean dependency injection patterns
-- DENY_BY_DEFAULT (bug.0045): `http/wrapRouteHandlerWithLogging.ts` refuses a bearer write (any method but GET, HEAD, OPTIONS; any identity not `via: "session"`) with 403 `bearer_write_undeclared` unless the route declares a running `sameDoor`, a `bearerWrite` reason, or is in `OPEN_BY_DESIGN_ROUTES`. `app/tests/unit/app/bearer-write-deny-by-default.test.ts` fails on an undeclared bearer-capable write route.
+- DENY_BY_DEFAULT (bug.0045): `http/wrapRouteHandlerWithLogging.ts` calls `bearerWriteRefusal` from `@cogni-dao/agent-grants` (the decision lives in the package) and answers 403 for a bearer write (any method but GET, HEAD, OPTIONS; any identity not `via: "session"`) with 403 `bearer_write_undeclared` unless the route declares a running `sameDoor`, a `bearerWrite` reason, or is in `OPEN_BY_DESIGN_ROUTES`. `app/tests/unit/app/bearer-write-deny-by-default.test.ts` fails on an undeclared bearer-capable write route.
 
 ## Dependencies
 

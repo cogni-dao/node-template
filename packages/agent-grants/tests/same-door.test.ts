@@ -6,9 +6,12 @@ import {
   type AdminCheck,
   authorizeCaller,
   authorizePrincipalLock,
+  bearerWriteRefusal,
   guardTools,
+  OPEN_BY_DESIGN_ROUTES,
   offeredToolIds,
   ROUTE_ONLY_CAPABILITIES,
+  SAFE_METHODS,
   type TerminalDenial,
   type ToolRequires,
 } from "../src";
@@ -203,5 +206,36 @@ describe("authorizeCaller: an account scope (ONE_ACCOUNT_DOOR)", () => {
   });
   it("a session never takes the delegated path: a person who is not the owner is denied even if they hold a row", async () => {
     expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "session", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny" });
+  });
+});
+
+// bug.0045: DENY_BY_DEFAULT is one pure decision a node's wrapper calls, so every fork that calls it gets the same rule.
+describe("bearerWriteRefusal (DENY_BY_DEFAULT)", () => {
+  const base = { method: "POST", via: "bearer" as const, doorRuns: false, routeId: "some.write" };
+  const refused = { code: "bearer_write_undeclared" };
+
+  it("a bearer write that declares nothing is refused", () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) expect(bearerWriteRefusal({ ...base, method })).toEqual(refused);
+  });
+  it("a safe method passes (GET, HEAD, OPTIONS, any case)", () => {
+    expect([...SAFE_METHODS].sort()).toEqual(["GET", "HEAD", "OPTIONS"]);
+    for (const method of ["GET", "HEAD", "OPTIONS", "get"]) expect(bearerWriteRefusal({ ...base, method })).toBeNull();
+  });
+  it("a session passes", () => {
+    expect(bearerWriteRefusal({ ...base, via: "session" })).toBeNull();
+  });
+  it("fails closed: a `via` that is not session is a bearer (undefined at runtime is refused on a write)", () => {
+    expect(bearerWriteRefusal({ ...base, via: undefined as unknown as "bearer" })).toEqual(refused);
+  });
+  it("a door that runs passes; a door that does not run does not", () => {
+    expect(bearerWriteRefusal({ ...base, doorRuns: true })).toBeNull();
+    expect(bearerWriteRefusal({ ...base, doorRuns: false })).toEqual(refused);
+  });
+  it("a bearerWrite reason passes; an empty one does not", () => {
+    expect(bearerWriteRefusal({ ...base, bearerWrite: "the caller's own data" })).toBeNull();
+    expect(bearerWriteRefusal({ ...base, bearerWrite: "" })).toEqual(refused);
+  });
+  it("an open-by-design route passes", () => {
+    for (const routeId of Object.keys(OPEN_BY_DESIGN_ROUTES)) expect(bearerWriteRefusal({ ...base, routeId })).toBeNull();
   });
 });
