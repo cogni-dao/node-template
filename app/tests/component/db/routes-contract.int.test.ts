@@ -77,6 +77,7 @@ describe.skip("Payment Routes HTTP Contract Tests", () => {
     testSessionUser = {
       id: seeded.user.id,
       walletAddress: seeded.user.walletAddress,
+      via: "session",
     };
   });
 

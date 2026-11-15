@@ -194,7 +194,7 @@ export const GET = wrapRouteHandlerWithLogging(
  * the dolt_log commit message (AUTHOR_ATTRIBUTED).
  */
 export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "work.items.create", auth: { mode: "required", getSessionUser } },
+  { routeId: "work.items.create", sameDoor: "core__work_item_update", auth: { mode: "required", getSessionUser } },
   async (ctx, request, sessionUser) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });

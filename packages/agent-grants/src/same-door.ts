@@ -36,7 +36,8 @@ export interface SameDoorRoute {
 export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
   core__work_item_update: {
     scope: "work_item:transition",
-    routes: ["work.items.patch"],
+    // One scope covers the whole work-item lifecycle an agent drives: file (create), take (claim), give back (release), keep alive (heartbeat), and change (patch).
+    routes: ["work.items.patch", "work.items.create", "work.items.claim", "work.items.release", "work.items.heartbeat"],
   },
   core__schedule_manage: {
     scope: "schedule:manage",
@@ -87,6 +88,8 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
     routes: [
       "knowledge.contributions.create",
       "knowledge.contributions.commits.append",
+      // An external agent registers the domain its contribution needs (domain register is behind this scope: a bearer needs knowledge:contribute), so it holds the same scope as the contribution itself.
+      "knowledge.domains.create",
     ],
   },
 };
@@ -107,21 +110,16 @@ export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
 
 /**
  * Write routes on this node that sit next to a gated capability but are NOT the same capability, so they carry no
- * door yet. Each names the design item that decides it. The route enumeration test (app/tests/unit/app/same-door-routes.test.ts)
+ * door yet. A bearer agent is refused on each: the route wrapper's DENY_BY_DEFAULT answers 403 `bearer_write_undeclared` (bug.0045). Each names the design item that decides it. The route enumeration test (app/tests/unit/app/same-door-routes.test.ts)
  * fails when a write handler under the work, schedules, edo, knowledge or metrics routes is in neither this list nor
  * `SAME_DOOR_ROUTES` / `ROUTE_ONLY_CAPABILITIES`.
  */
 export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
-  "work.items.create": "creating an item is not work_item:transition; open question for task.5466 (ask-for-access) / task.5465",
   "work.items.delete": "retired (HTTP 410); no capability to gate",
-  "work.items.claim": "coordination, not work_item:transition; task.5465",
-  "work.items.release": "coordination, not work_item:transition; task.5465",
-  "work.items.heartbeat": "coordination, not work_item:transition; task.5465",
-  "knowledge.contributions.close": "contribution lifecycle; C2 design question (task.5465)",
-  "knowledge.contributions.merge": "already admin-session gated in the service; C2 design question (task.5465)",
-  "knowledge.domains.create": "domain registry writes; C2 design question (task.5465)",
-  "knowledge.domains.update": "domain registry writes; C2 design question (task.5465)",
-  "knowledge.domains.delete": "domain registry writes; C2 design question (task.5465)",
+  "knowledge.contributions.close": "contribution lifecycle; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
+  "knowledge.contributions.merge": "already admin-session gated in the service; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
+  "knowledge.domains.update": "domain registry writes; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
+  "knowledge.domains.delete": "domain registry writes; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
 };
 
 /**
@@ -133,6 +131,36 @@ export const OPEN_BY_DESIGN_ROUTES: Readonly<Record<string, string>> = {
   "agent.access.requests.create": "the ask door is open by design; NO_SELF_APPROVAL protects activation (only an admin session approves)",
   "agent.register": "the anonymous onboarding door that mints an agent identity and key (bug.0297, an invitation token is tracked there); an identity alone opens no route: only an admin's yes does",
 };
+
+/** Methods that only read. Every other method is a write for DENY_BY_DEFAULT. */
+export const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+
+export interface BearerWriteInput {
+  /** The request's HTTP method. */
+  readonly method: string;
+  /** How the request authenticated. Fail closed: anything but `session` is treated as a bearer. */
+  readonly via: "bearer" | "session";
+  /** True only when the route's `sameDoor` check will actually run for this request (a skipped optional query door does not count). */
+  readonly doorRuns: boolean;
+  /** The route's `bearerWrite` reason (a route that touches only the caller's own data), if it declared one. */
+  readonly bearerWrite?: string | undefined;
+  /** The route's id, matched against `OPEN_BY_DESIGN_ROUTES`. */
+  readonly routeId: string;
+}
+
+/**
+ * DENY_BY_DEFAULT (bug.0045): the one pure decision a node's route wrapper calls before the handler. A bearer write (any method but GET, HEAD, OPTIONS)
+ * needs a door that runs, a `bearerWrite` reason, or an `OPEN_BY_DESIGN_ROUTES` entry; anything else is refused with `bearer_write_undeclared`
+ * (the node answers 403). A human session and every read pass. Returns `null` to let the request go on.
+ */
+export function bearerWriteRefusal(input: BearerWriteInput): null | { readonly code: "bearer_write_undeclared" } {
+  if (input.via === "session") return null;
+  if (SAFE_METHODS.has(input.method.toUpperCase())) return null;
+  if (input.doorRuns) return null;
+  if (input.bearerWrite) return null;
+  if (input.routeId in OPEN_BY_DESIGN_ROUTES) return null;
+  return { code: "bearer_write_undeclared" };
+}
 
 export interface CallerInput {
   readonly userId: string;

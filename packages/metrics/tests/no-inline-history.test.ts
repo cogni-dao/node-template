@@ -274,6 +274,7 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 			"work.convergence@1",
 			"github.stars@1",
 			"no-inline-history@1",
+			"knowledge.merge-review@1",
 		]);
 		expect(PACKAGE_CALCULATOR_IDS).not.toContain("brief.conformance@1");
 		expect(RESERVED_CALCULATOR_FAMILIES.has("brief.conformance")).toBe(true);

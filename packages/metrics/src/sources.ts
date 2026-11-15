@@ -200,6 +200,68 @@ export async function readWorkKpiLinked(
 	};
 }
 
+/**
+ * One statement: knowledge contributions merged in [start, end) (`merged`),
+ * those whose resolver is not the author (`reviewed`) and those with no
+ * resolver (`unresolved`). Static text with the window inside it, so every
+ * output of `knowledge.merge-review@1` shares one read per refresh tick.
+ * Scalar subqueries, as `work.convergence` uses: Doltgres runs with
+ * only_full_group_by and refuses NOW() beside a bare aggregate.
+ */
+function knowledgeMergesSql(start: string, end: string): string {
+	const merged = `FROM knowledge_contributions WHERE state = 'merged' AND resolved_at >= '${start}' AND resolved_at < '${end}'`;
+	return `SELECT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS as_of, (SELECT COUNT(*) ${merged}) AS merged, (SELECT COUNT(*) ${merged} AND resolved_by <> principal_id) AS reviewed, (SELECT COUNT(*) ${merged} AND resolved_by IS NULL) AS unresolved`;
+}
+
+/**
+ * Merges in [start, end) and, for `share`, the fraction resolved by someone
+ * other than the author. No merges is `zero_denominator`; a merge with no
+ * resolver (neither proves nor disproves review) or inconsistent counts is
+ * `incomplete_or_invalid_source`; the raw `merged` count stays readable then.
+ */
+export async function readKnowledgeMerges(
+	sql: Sql,
+	output: "share" | "merged",
+	window: { start: string; end: string },
+	signal: AbortSignal,
+): Promise<MetricSample> {
+	const start = doltInstant(window.start);
+	const end = doltInstant(window.end);
+	if (!start || !end) throw new Error("invalid_window");
+	const rows = await run(sql, knowledgeMergesSql(start, end), signal);
+	const first = rows[0];
+	const merged = Number(first?.merged);
+	const reviewed = Number(first?.reviewed);
+	const unresolved = Number(first?.unresolved);
+	const counted =
+		rows.length === 1 &&
+		[merged, reviewed, unresolved].every(
+			(n) => Number.isInteger(n) && n >= 0,
+		) &&
+		reviewed + unresolved <= merged;
+	const common = {
+		unit: output === "share" ? "ratio" : "items",
+		sourceWatermarks: [
+			{ source: "node.doltgres.main", asOf: doltInstant(first?.as_of) },
+		],
+		evidenceRefs: [
+			`node:knowledge_contributions:window-resolved_at:${start}..${end}`,
+			`counts:merged=${merged};reviewed=${reviewed};unresolved=${unresolved}`,
+		],
+	};
+	const unknown = (reason: MetricSample["reason"]): MetricSample => ({
+		...common,
+		value: 0,
+		complete: false,
+		reason,
+	});
+	if (!counted) return unknown("incomplete_or_invalid_source");
+	if (output === "merged") return { ...common, value: merged, complete: true };
+	if (unresolved > 0) return unknown("incomplete_or_invalid_source");
+	if (merged === 0) return unknown("zero_denominator");
+	return { ...common, value: reviewed / merged, complete: true };
+}
+
 /** dolt_log.date is timestamp without time zone holding UTC wall time. */
 function doltUtc(iso: string): string {
 	return new Date(Date.parse(iso))

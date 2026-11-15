@@ -22,8 +22,8 @@ export interface SessionUser {
   displayName: string | null;
   avatarColor: string | null;
   /**
-   * How this request authenticated (`bearer` machine key or `session` cookie). For logging only: it never
-   * decides authority. Every authenticated caller is the run subject.
+   * How this request authenticated (`bearer` machine key or `session` cookie). Logging and the DENY_BY_DEFAULT write gate only:
+   * it is never a tool-authority input. Every resolver sets it; an identity not proven `session` is treated as a bearer.
    */
   via?: "bearer" | "session";
 }

@@ -276,7 +276,11 @@ function handleRouteError(
 }
 
 export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "ai.chat", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "ai.chat",
+    bearerWrite: "the caller's own chat turn; every tool the run calls still passes the tool guard",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, request, sessionUser) => {
     let input: ChatInput | undefined;
     try {

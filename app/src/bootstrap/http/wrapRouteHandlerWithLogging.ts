@@ -18,6 +18,7 @@
  * @public
  */
 
+import { bearerWriteRefusal } from "@cogni/agent-grants";
 import {
   CredentialRateLimitedError,
   CredentialStoreUnavailableError,
@@ -77,6 +78,12 @@ type AuthRequiredOptions = {
    * a signed-in human passes the subject rules. Declared once in `SAME_DOOR_ROUTES` (`@cogni/agent-grants`).
    */
   sameDoor?: string;
+  /**
+   * DENY_BY_DEFAULT (bug.0045): the reason a bearer agent may write here with no grant. Only a route that touches nothing but the caller's own data
+   * (its own chat turn, its own threads, its own credential) declares one. A write route that declares none of `sameDoor`, `bearerWrite` or an
+   * `OPEN_BY_DESIGN_ROUTES` entry answers a bearer 403 `bearer_write_undeclared`; a human session is never affected.
+   */
+  bearerWrite?: string;
   /**
    * An ACCOUNT door (task.5465): the name of the route param that carries the account id (`accountId`). The same-door check then decides this
    * account: the owner by session, or a bearer agent with a live grant for exactly this account. Every deny except an outage is ONE 404
@@ -274,7 +281,45 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           const queryAccountId = queryAccountParam ? new URL(request.url).searchParams.get(queryAccountParam) : null;
           // An optional query door runs only when the caller names an account; otherwise the route's own-account read needs no door.
           const accountParam = pathAccountParam ?? (queryAccountId !== null ? queryAccountParam : undefined);
-          if (sameDoor && sessionUser && (!queryAccountParam || pathAccountParam || queryAccountId !== null)) {
+          // The door counts only when it will actually run for this request.
+          const doorRuns = Boolean(sameDoor) && (!queryAccountParam || Boolean(pathAccountParam) || queryAccountId !== null);
+          // FAIL_CLOSED: any signed-in identity not proven `via: "session"` is a bearer, for the gate and the door alike. Every resolver sets `via`
+          // (request-identity.ts for bearers and cookies, getServerSessionUser for cookie-only routes).
+          const via = sessionUser?.via === "session" ? "session" : "bearer";
+          // DENY_BY_DEFAULT (bug.0045): the decision is `bearerWriteRefusal` in @cogni-dao/agent-grants; the wrapper owns only the response and the log.
+          if (
+            sessionUser !== null &&
+            bearerWriteRefusal({
+              method: request.method,
+              via,
+              doorRuns,
+              bearerWrite: "bearerWrite" in options ? options.bearerWrite : undefined,
+              routeId: options.routeId,
+            })
+          ) {
+            ctx.log.warn(
+              {
+                event: EVENT_NAMES.AGENT_TOOL_AUTHZ,
+                principal: sessionUser.id,
+                subject: null,
+                payer: null,
+                tool: null,
+                decision: "deny",
+                code: "bearer_write_undeclared",
+                reason: "no_declaration",
+                runId: null,
+                route: options.routeId,
+                account: null,
+              },
+              EVENT_NAMES.AGENT_TOOL_AUTHZ
+            );
+            responseStatus = 403;
+            return NextResponse.json(
+              { error: "bearer_write_undeclared", code: "bearer_write_undeclared" },
+              { status: responseStatus, headers: { "cache-control": "no-store" } }
+            );
+          }
+          if (doorRuns && sameDoor && sessionUser) {
             let accountId: string | undefined;
             if (queryAccountParam && !pathAccountParam) accountId = queryAccountId ?? "";
             else if (pathAccountParam) {
@@ -286,8 +331,7 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
               toolId: sameDoor,
               routeId: options.routeId,
               userId: sessionUser.id,
-              // Fail closed: only an identity that says `session` takes the human rules; an absent or unknown `via` is strict.
-              via: sessionUser.via === "session" ? "session" : "bearer",
+              via,
               ...(accountParam ? { accountId: accountId ?? "" } : {}),
             });
             if (decision.decision === "deny") {

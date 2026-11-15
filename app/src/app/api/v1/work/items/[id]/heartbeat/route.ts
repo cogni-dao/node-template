@@ -30,6 +30,7 @@ export const POST = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "work.items.heartbeat",
+    sameDoor: "core__work_item_update",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, context) => {

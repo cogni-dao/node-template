@@ -53,11 +53,14 @@ export {
 } from "./guard";
 export {
   authorizeCaller,
+  type BearerWriteInput,
+  bearerWriteRefusal,
   type CallerInput,
   DEFERRED_WRITE_ROUTES,
   NO_ROUTE_TWIN,
   OPEN_BY_DESIGN_ROUTES,
   ROUTE_ONLY_CAPABILITIES,
+  SAFE_METHODS,
   SAME_DOOR_ROUTES,
   type SameDoorRoute,
 } from "./same-door";

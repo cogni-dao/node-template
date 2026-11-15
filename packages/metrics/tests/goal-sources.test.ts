@@ -334,6 +334,7 @@ describe("@cogni-dao/metrics/knowledge", () => {
 			"work.convergence@1",
 			"github.stars@1",
 			"no-inline-history@1",
+			"knowledge.merge-review@1",
 		]);
 	});
 	describe("node calculators (task.5442)", () => {
