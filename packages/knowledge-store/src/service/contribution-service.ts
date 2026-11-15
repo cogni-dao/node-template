@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/service/contribution-service`
  * Purpose: Framework-agnostic typed handlers for the knowledge contribution flow.
  * Scope: Pure business logic — quotas, idempotency lookup, role gating, confidence cap. Does not contain HTTP, env, or lifecycle code; per-node `route.ts` files adapt these to Next.
- * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; APPEND_AUTHORITY_IS_THE_DOOR (bug.0019: append is gated by authorize() at the route, never by author equality); CONTRIBUTION_OWNER_CAN_CLOSE.
+ * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; MERGE_IS_NODE_ADMIN (bug.0044: merge, and close of another's inbox, need the node-admin authority); APPEND_AUTHORITY_IS_THE_DOOR (bug.0019: append is gated by authorize() at the route, never by author equality); CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none (delegates I/O to KnowledgeContributionPort)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-contribution-flow
  * @public
@@ -16,7 +16,6 @@ import {
   type NodeAdminActor,
   type NodeAdminAuthority,
   NodeAdminRequiredError,
-  touchesGoalLayer,
 } from "../domain/node-admin.js";
 import type {
   ContributionCitationDiffEntry,
@@ -100,10 +99,11 @@ export interface ContributionServiceDeps {
    */
   pushMainOnMerge?: () => Promise<void>;
   /**
-   * GOAL_CHANGE_IS_NODE_ADMIN: the node's one admin authority (OpenFGA
-   * `node.administer` on the operator, repo-spec admin wallets on a node
-   * without OpenFGA). A merge whose RAW diff touches the goal layer needs it;
-   * absent ⇒ such merges fail closed with `authz_unavailable`.
+   * MERGE_IS_NODE_ADMIN (bug.0044, subsumes GOAL_CHANGE_IS_NODE_ADMIN): the
+   * node's one admin authority (OpenFGA `node.administer` on the operator,
+   * repo-spec admin wallets on a node without OpenFGA). Every first merge, and
+   * a close of another principal's contribution, needs it; absent ⇒ both fail
+   * closed with `authz_unavailable` (503). A terminal-merge readback does not.
    */
   nodeAdmin?: NodeAdminAuthority;
 }
@@ -159,6 +159,8 @@ export interface ContributionService {
     principal: Principal;
     contributionId: string;
     reason: string;
+    /** The acting session for the node-admin check on another principal's inbox. */
+    actor?: NodeAdminActor;
   }): Promise<void>;
 }
 
@@ -232,6 +234,14 @@ export function createContributionService(
         `max open contributions per principal = ${deps.rateLimit.maxOpenPerPrincipal}`
       );
     }
+  }
+
+  async function requireNodeAdmin(
+    actor: NodeAdminActor,
+    action: string
+  ): Promise<void> {
+    const decision = await checkNodeAdmin(deps.nodeAdmin, actor);
+    if (!decision.ok) throw new NodeAdminRequiredError(decision, action);
   }
 
   return {
@@ -359,6 +369,13 @@ export function createContributionService(
       if (record?.state === "merged" && record.mergedCommit) {
         return deps.port.merge({ contributionId, principal, confidencePct });
       }
+      // MERGE_IS_NODE_ADMIN (bug.0044): a signed-in human is not enough. Every
+      // first merge needs the node's admin authority, goal-layer or not; absent
+      // authority fails closed 503. This subsumes the goal-layer check.
+      await requireNodeAdmin(
+        actor ?? { userId: principal.id },
+        "knowledge.contributions.merge"
+      );
       // MERGE_GATE_ON_RAW_DIFF + MERGE_EXPECTED_HEAD: gate on the raw ids at
       // the current head, then merge only if that head is still the branch head.
       const touched = await deps.port.touchedIds(contributionId);
@@ -383,18 +400,6 @@ export function createContributionService(
           "Contribution authorization diff is unproven"
         );
       }
-      if (touchesGoalLayer(touched)) {
-        const decision = await checkNodeAdmin(
-          deps.nodeAdmin,
-          actor ?? { userId: principal.id }
-        );
-        if (!decision.ok) {
-          throw new NodeAdminRequiredError(
-            decision,
-            "knowledge.contributions.merge.goal"
-          );
-        }
-      }
       const result = await deps.port.merge({
         contributionId,
         principal,
@@ -409,7 +414,7 @@ export function createContributionService(
       return result;
     },
 
-    async close({ principal, contributionId, reason }) {
+    async close({ principal, contributionId, reason, actor }) {
       const record = await deps.port.getById(contributionId);
       if (!record) {
         throw new ContributionNotFoundError(contributionId);
@@ -417,8 +422,16 @@ export function createContributionService(
       const ownsContribution =
         record.principalId === principal.id &&
         record.principalKind === principal.kind;
-      if (!ownsContribution && !deps.canMergeKnowledge(principal)) {
-        throw new ContributionForbiddenError("close requires admin session");
+      if (!ownsContribution) {
+        if (!deps.canMergeKnowledge(principal)) {
+          throw new ContributionForbiddenError("close requires admin session");
+        }
+        // MERGE_IS_NODE_ADMIN (bug.0044): closing another principal's inbox
+        // is a reviewer act, so it needs the node-admin authority too.
+        await requireNodeAdmin(
+          actor ?? { userId: principal.id },
+          "knowledge.contributions.close"
+        );
       }
       return deps.port.close({ contributionId, principal, reason });
     }

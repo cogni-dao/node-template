@@ -121,8 +121,8 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 429 });
   if (e instanceof DomainNotRegisteredError)
     return NextResponse.json({ error: e.message }, { status: 400 });
-  // GOAL_CHANGE_IS_NODE_ADMIN — the service refused a goal-layer merge before
-  // any side effect: 403 authz_denied, or 503 authz_unavailable when no
+  // MERGE_IS_NODE_ADMIN — the service refused a merge, or a close of another's
+  // inbox, before any side effect: 403 authz_denied, or 503 authz_unavailable when no
   // node-admin authority is wired.
   if (e instanceof NodeAdminRequiredError)
     return NextResponse.json(
@@ -473,6 +473,10 @@ export async function handleClose(
     await svc.close({
       principal,
       contributionId,
+      actor: {
+        userId: sessionUser.id,
+        walletAddress: sessionUser.walletAddress ?? null,
+      },
       reason: parsed.data.reason,
     });
     return NextResponse.json({ contributionId, closed: true });
