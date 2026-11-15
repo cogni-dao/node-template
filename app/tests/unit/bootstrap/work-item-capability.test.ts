@@ -107,13 +107,10 @@ describe("createWorkItemCapability", () => {
     expect(command.patch).not.toHaveBeenCalled();
   });
 
-  it("WRITES_NOT_WIDENED: transitionStatus/patch stay on workItemQuery + workItemCommand, never the backlogReader", async () => {
+  it("WRITES_NOT_WIDENED: patch stays on workItemQuery + workItemCommand, never the backlogReader", async () => {
     const item = storedItem;
     const markdown = { list: vi.fn(), get: vi.fn().mockResolvedValue(item) };
     const command = {
-      transitionStatus: vi
-        .fn()
-        .mockResolvedValue({ ...item, status: "done", revision: 4 }),
       patch: vi.fn().mockResolvedValue({
         ...item,
         type: "task",
@@ -128,10 +125,8 @@ describe("createWorkItemCapability", () => {
       workItemCommand: command as unknown as WorkItemCommandPort,
       backlogReader: backlog as unknown as Pick<WorkItemQueryPort, "list">,
     });
-    await cap.transitionStatus({ id: "task.5001", toStatus: "done" });
     await cap.patch({ reason: "test change", id: "task.5001", set: { priority: 3 } });
-    expect(markdown.get).toHaveBeenCalledTimes(2);
-    expect(command.transitionStatus).toHaveBeenCalledTimes(1);
+    expect(markdown.get).toHaveBeenCalledTimes(1);
     expect(command.patch).toHaveBeenCalledTimes(1);
     expect(backlog.list).not.toHaveBeenCalled();
   });
@@ -432,5 +427,64 @@ describe("createWorkItemCapability", () => {
         expect(read?.moves?.[0]).not.toHaveProperty("kpi");
       });
     });
+  });
+});
+
+describe("recordArtifact (task.0122)", () => {
+  const body = { kind: "triage", subject: "work:task.5001", verdict: "implement", note: "no KPI measures this yet" };
+  const ports = {
+    workItemQuery: { list: vi.fn(), get: vi.fn() } as unknown as WorkItemQueryPort,
+    workItemCommand: {} as unknown as WorkItemCommandPort,
+  };
+
+  it("is absent when no artifact wiring is given, so the tool fails loudly", () => {
+    expect(createWorkItemCapability(ports).recordArtifact).toBeUndefined();
+  });
+
+  it("calls the route's handler with the run's principal and returns its status and body", async () => {
+    const stored: unknown[] = [];
+    const cap = createWorkItemCapability({
+      ...ports,
+      artifacts: {
+        principalId: () => "agent-principal",
+        deps: () => ({
+          items: { get: async () => ({ revision: 3 }) },
+          artifacts: {
+            insert: async (row: Record<string, unknown>) => {
+              stored.push(row);
+              return { id: "wia-1", seq: 1, itemRevision: 3, createdAt: "2026-11-14T00:00:00.000Z", ...row };
+            },
+            list: async () => [],
+            latest: async () => [],
+          },
+        }) as never,
+      },
+    });
+    const result = await cap.recordArtifact?.({ id: "task.5001", body });
+    expect(result?.status).toBe(201);
+    expect(stored).toEqual([expect.objectContaining({ itemId: "task.5001", kind: "triage", author: "agent-principal" })]);
+    expect(result?.body).toMatchObject({ artifact: { id: "wia-1", kind: "triage" } });
+  });
+
+  it("answers 503 and writes nothing when this node serves no artifacts", async () => {
+    const cap = createWorkItemCapability({
+      ...ports,
+      artifacts: { principalId: () => "agent-principal", deps: () => undefined },
+    });
+    const result = await cap.recordArtifact?.({ id: "task.5001", body });
+    expect(result).toMatchObject({ status: 503, body: { errorCode: "artifacts_unavailable" } });
+  });
+
+  it("resolves the principal at call time: no run subject throws before any write", async () => {
+    const cap = createWorkItemCapability({
+      ...ports,
+      artifacts: {
+        principalId: () => {
+          throw new Error("a run subject or agent principal is required");
+        },
+        deps: () => ({ items: { get: async () => ({ revision: 3 }) }, artifacts: {} }) as never,
+      },
+    });
+    await expect(cap.recordArtifact?.({ id: "task.5001", body })).rejects.toThrow("principal is required");
   });
 });

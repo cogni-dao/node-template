@@ -22,7 +22,13 @@ import {
   EntryResolverUnavailableError,
   EntryUnresolvedError,
 } from "../src/cites.js";
-import { WorkItemRevisionConflictError, WorkItemScoresInvalidError, WorkItemWriteOutcomeUnknownError } from "../src/errors.js";
+import {
+  WorkItemGateFactsUnavailableError,
+  WorkItemGateUnmetError,
+  WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
+  WorkItemWriteOutcomeUnknownError,
+} from "../src/errors.js";
 import { ChangeReasonInvalidError } from "../src/history.js";
 import * as root from "../src/index.js";
 import {
@@ -184,6 +190,34 @@ const rows: Row[] = [
       retryable: false,
       lookup: { operationId: "op-1", branch: "branch-1", commitHash: "abc", itemId: "task.0001" },
       message: expect.stringContaining("op-1"),
+    },
+  },
+  {
+    name: "WorkItemGateUnmetError",
+    make: () => new WorkItemGateUnmetError("task.0001", "needs_merge", "done", "implementation_review"),
+    status: 409,
+    errorCode: "gate_unmet",
+    patchBody: {
+      error: "gate_unmet",
+      errorCode: "gate_unmet",
+      from: "needs_merge",
+      to: "done",
+      missing: "implementation_review",
+      message: expect.stringContaining("implementation_review"),
+    },
+  },
+  {
+    name: "WorkItemGateFactsUnavailableError",
+    make: () => new WorkItemGateFactsUnavailableError("task.0001", "needs_validation", "needs_merge", "pr"),
+    status: 503,
+    errorCode: "gate_facts_unavailable",
+    patchBody: {
+      error: "gate_facts_unavailable",
+      errorCode: "gate_facts_unavailable",
+      from: "needs_validation",
+      to: "needs_merge",
+      missing: "pr",
+      message: expect.stringContaining("retry"),
     },
   },
   {

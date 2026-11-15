@@ -70,6 +70,8 @@ function build(wiring: Pick<DoltgresWorkItemStoreOptions, "entryResolver" | "met
   return createDoltgresWorkItemStore(sql, {
     readClient: independentReadPool(sql),
     recreateClient: () => sql,
+    prFacts: null,
+    inboxes: null,
     ...wiring,
   });
 }
@@ -92,6 +94,10 @@ describe("createDoltgresWorkItemStore", () => {
     expect(() => createDoltgresWorkItemStore(sql, { metricBaseline: null } as never)).toThrow(TypeError);
     expect(() => createDoltgresWorkItemStore(sql, { entryResolver: null } as never)).toThrow(TypeError);
     expect(() => createDoltgresWorkItemStore(sql, {} as never)).toThrow(/entryResolver and metricBaseline/);
+    // task.0122: the status gates read PR and inbox facts, so those are a choice too.
+    expect(() =>
+      createDoltgresWorkItemStore(sql, { entryResolver: null, metricBaseline: null } as never)
+    ).toThrow(/prFacts and inboxes/);
   });
 
   it("throws when a baseline port has no resolver", () => {

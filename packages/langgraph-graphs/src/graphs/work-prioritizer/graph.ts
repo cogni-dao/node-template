@@ -5,7 +5,10 @@
  * The program binds core__work_item_update, the twin of PATCH /api/v1/work/items/{id} that an outside agent uses, behind a thin guard.
  * Program-owned receipts feed the guard and the cycle report.
  */
-import { WORK_ITEM_UPDATE_NAME } from "@cogni/ai-tools";
+import {
+  WORK_ITEM_ARTIFACT_RECORD_NAME,
+  WORK_ITEM_UPDATE_NAME,
+} from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
 import type { CreateReactAgentGraphOptions } from "../types";
 import { projectTriageAnswer, verifyTriageEffects } from "./completion";
@@ -22,6 +25,7 @@ import {
 import { RunReceipts } from "./receipts";
 import { projectMissionCycleReport, projectStepBudgetReport } from "./report";
 import { COGNI_READ_TOOL_IDS } from "./tools";
+import { createTriageArtifactGuard } from "./triage-artifact-guard";
 import { createTriageGuard } from "./triage-guard";
 
 export {
@@ -58,9 +62,23 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       (entry) => entry.id,
     ),
   });
+  const artifactWriter = opts.tools.find(
+    (tool) => tool.name === WORK_ITEM_ARTIFACT_RECORD_NAME,
+  );
   const guardedTools =
     deciding && receipts && writer
-      ? [createTriageGuard(receipts, writer, requiredGuidanceIds)]
+      ? [
+          createTriageGuard(receipts, writer, requiredGuidanceIds),
+          ...(artifactWriter
+            ? [
+                createTriageArtifactGuard(
+                  receipts,
+                  artifactWriter,
+                  requiredGuidanceIds,
+                ),
+              ]
+            : []),
+        ]
       : [];
   return createCogniProgram({
     ...opts,

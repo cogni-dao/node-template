@@ -34,6 +34,7 @@ import {
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -114,12 +115,33 @@ export const PATCH = wrapRouteHandlerWithLogging<{
     }
 
     const { id } = await context.params;
+    // Every refusal ends in ONE registered terminal event with its errorCode (task.0122): ids and codes, never the body.
+    const refuse = (
+      status: number,
+      errorCode: string,
+      body: unknown,
+      extra: Record<string, string> = {}
+    ): NextResponse => {
+      ctx.log.info(
+        {
+          event: EVENT_NAMES.WORK_ITEMS_PATCH_REFUSED,
+          routeId: "work.items.patch",
+          outcome: "refused",
+          workItemId: id,
+          status,
+          errorCode,
+          ...extra,
+        },
+        EVENT_NAMES.WORK_ITEMS_PATCH_REFUSED
+      );
+      return NextResponse.json(body, { status });
+    };
 
     let body: unknown;
     try {
       body = await request.json();
     } catch {
-      return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+      return refuse(400, "invalid_json", { error: "invalid JSON body" });
     }
 
     if (
@@ -129,10 +151,7 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       body.id !== undefined &&
       body.id !== id
     ) {
-      return NextResponse.json(
-        { error: "body id must match path id" },
-        { status: 400 }
-      );
+      return refuse(400, "id_mismatch", { error: "body id must match path id" });
     }
 
     const parseResult = workItemsPatchOperation.input.safeParse({
@@ -140,10 +159,10 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       id,
     });
     if (!parseResult.success) {
-      return NextResponse.json(
-        { error: "invalid input", issues: parseResult.error.issues },
-        { status: 400 }
-      );
+      return refuse(400, "invalid_input", {
+        error: "invalid input",
+        issues: parseResult.error.issues,
+      });
     }
 
     try {
@@ -161,22 +180,33 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       // conflict, write outcome unknown, resolver and baseline failures) and matches by name.
       const mapped = workItemWriteErrorResponse(e, "patch");
       if (mapped) {
-        return NextResponse.json(mapped.body, { status: mapped.status });
+        // What the gate found: the stage move and the missing artifact or fact, never a body.
+        const { from, to, missing } = mapped.body as {
+          from?: unknown;
+          to?: unknown;
+          missing?: unknown;
+        };
+        return refuse(mapped.status, mapped.errorCode, mapped.body, {
+          ...(typeof from === "string" ? { from } : {}),
+          ...(typeof to === "string" ? { to } : {}),
+          ...(typeof missing === "string" ? { missing } : {}),
+        });
       }
       if (e instanceof WorkItemNotFoundError) {
-        return NextResponse.json({ error: e.message }, { status: 404 });
+        return refuse(404, "not_found", { error: e.message });
       }
       if (e instanceof WorkItemForbiddenError) {
-        return NextResponse.json({ error: e.message }, { status: 403 });
+        return refuse(403, "forbidden", { error: e.message });
       }
       if (e instanceof NodeAdminRequiredError) {
-        return NextResponse.json(
-          { error: e.message, errorCode: e.errorCode, action: e.action },
-          { status: e.status }
-        );
+        return refuse(e.status, e.errorCode, {
+          error: e.message,
+          errorCode: e.errorCode,
+          action: e.action,
+        });
       }
       if (e instanceof WorkItemsBackendNotReadyError) {
-        return NextResponse.json({ error: e.message }, { status: 503 });
+        return refuse(503, "backend_unavailable", { error: e.message });
       }
       throw e;
     }

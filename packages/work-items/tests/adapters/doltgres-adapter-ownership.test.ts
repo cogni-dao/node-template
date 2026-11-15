@@ -106,7 +106,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
   it("stamps the immutable session principal on create", async () => {
     const { adapter, queries } = adapterWithQueries();
     await adapter.create(
-      { type: "task", title: "owned", status: "needs_implement" },
+      { type: "task", title: "owned", status: "needs_triage" },
       "principal-1"
     );
 

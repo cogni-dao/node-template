@@ -172,14 +172,14 @@ export const NODE_LANGGRAPH_CATALOG = {
     report: { event: "ai.work_prioritizer.cycle" },
   },
   /**
-   * Work Closeout (story.0035) closes items whose merged pull request is live in the running build, marking them
-   * done and deployVerified with the pull request as evidence. It acts as the `prioritizer` principal: the node's
+   * Work Closeout (story.0035) closes items whose merged pull request is live in the running build, setting them
+   * done with the pull request as evidence (never deployVerified; the store gate checks the review and validation first). It acts as the `prioritizer` principal: the node's
    * work-ledger steward, which already holds `work_item:transition`.
    */
   [WORK_CLOSEOUT_GRAPH_NAME]: {
     displayName: "Work Closeout",
     description:
-      "Closes items whose merged pull request is live in this build: done and deployVerified, or changes nothing",
+      "Closes items whose merged pull request is live in this build: done with the pull request, or changes nothing",
     principal: PRIORITIZER_PRINCIPAL,
     toolIds: [
       "core__work_item_query",

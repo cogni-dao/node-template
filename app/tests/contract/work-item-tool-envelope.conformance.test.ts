@@ -27,7 +27,7 @@ const item: WorkItemInfo = {
   reviewer: "independent", claimedByRun: "run-1", claimedAt: "2026-10-20T00:00:00Z", lastCommand: "implement",
   createdAt: "2026-10-18T00:00:00Z", updatedAt: "2026-10-20T00:00:00Z", deployVerified: true,
 };
-const capability: WorkItemCapability = { query: vi.fn().mockResolvedValue([item]), transitionStatus: vi.fn(), patch: vi.fn() };
+const capability: WorkItemCapability = { query: vi.fn().mockResolvedValue([item]), patch: vi.fn() };
 
 /**
  * Rule 3 (agent-tool-context-envelope): exhaustion minus a tiny, reviewed exclusion set, never a
@@ -114,7 +114,7 @@ describe("exhaustive-minus-exclusion guard (task.0118)", () => {
     };
     const read = vi.fn().mockResolvedValue(chainItem);
     const reader = createWorkItemReadImplementation({
-      workItemCapability: { query: vi.fn(), read, transitionStatus: vi.fn(), patch: vi.fn() },
+      workItemCapability: { query: vi.fn(), read, patch: vi.fn() },
     });
     const result = workItemReadContract.outputSchema.parse(await reader.execute({ id: item.id, includeLinks: true }));
     expect(read).toHaveBeenCalledWith(item.id, { includeLinks: true });

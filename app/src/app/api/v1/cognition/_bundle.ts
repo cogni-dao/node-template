@@ -212,7 +212,7 @@ function renderWith(input: RenderBundleInput): string {
 		"## Work items — this node's own ledger",
 		"",
 		`- Goal KPIs, live (NO_GOAL_PROGRESS in the bundle): \`GET ${origin}/api/v1/metrics/goals\`.`,
-		`- Top of the queue: \`GET ${origin}/api/v1/work/items?sortBy=rankScore&sortDirection=desc&limit=5&statuses=needs_triage,needs_research,needs_design,needs_implement,needs_closeout,needs_merge\`. Adopt over create.`,
+		`- Top of the queue: \`GET ${origin}/api/v1/work/items?sortBy=rankScore&sortDirection=desc&limit=5&statuses=needs_triage,needs_research,needs_design,needs_design_review,needs_implement,needs_implementation_review,needs_validation,needs_closeout,needs_merge\`. Adopt over create.`,
 		`- File one: \`POST ${origin}/api/v1/work/items\` \`{type,title,summary,outcome,moves}\` — \`type\` ∈ task|bug|story|spike|subtask; the server allocates the id and pins the KPI baseline.`,
 		`- Progress: \`PATCH ${origin}/api/v1/work/items/{id}\` \`{"reason":"<why, at most 25 words>","cites":[{"id":"<atom>"}],"set":{...}}\` — \`reason\` is required and lives in history; the wrapper is \`set\`. Schemas: \`GET ${origin}/.well-known/agent.json\`.`,
 		"",

@@ -9,7 +9,6 @@ import {
   GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   WORK_ITEM_QUERY_NAME,
-  WORK_ITEM_TRANSITION_NAME,
   WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 import {
@@ -56,14 +55,11 @@ const PATCH_FIELDS = [
 type Snapshot = Partial<Record<(typeof PATCH_FIELDS)[number], unknown>>;
 
 const same = isDeepStrictEqual;
-/** The triage writers: the deprecated transition tool and core__work_item_update (the PATCH route's twin). */
-const isWriter = (name: string | undefined) =>
-  name === WORK_ITEM_TRANSITION_NAME || name === WORK_ITEM_UPDATE_NAME;
-/** A landed write: the transition tool says success=true; the update tool returns the item (the PATCH route's DTO). */
-const landed = (name: string | undefined, v: Record<string, unknown>) =>
-  name === WORK_ITEM_UPDATE_NAME
-    ? typeof v.id === "string" && v.success !== false
-    : v.success === true;
+/** The triage writer: core__work_item_update (the PATCH route's twin; the transition tool is removed, task.0122). */
+const isWriter = (name: string | undefined) => name === WORK_ITEM_UPDATE_NAME;
+/** A landed write: the update tool returns the item (the PATCH route's DTO). */
+const landed = (_name: string | undefined, v: Record<string, unknown>) =>
+  typeof v.id === "string" && v.success !== false;
 
 /** Tool-call args keyed by tool_call id, from every AI message in the transcript. */
 function toolCallArgs(
@@ -172,12 +168,11 @@ export function cycleScores(messages: readonly BaseMessage[]) {
         queryReadIds.add(it.id);
       }
     } else if (isWriter(m.name) && landed(m.name, v)) {
-      // An update call carries its fields in `set`; read it as the flat patch the transition tool takes.
-      const args =
-        call?.name === WORK_ITEM_UPDATE_NAME
-          ? { action: "patch", ...((call.args.set as object | undefined) ?? {}) }
-          : call?.args;
-      if (args?.action !== "patch") continue;
+      // An update call carries its fields in `set`; read it as the flat patch.
+      if (call?.name !== WORK_ITEM_UPDATE_NAME) continue;
+      const args: Record<string, unknown> = {
+        ...((call.args.set as object | undefined) ?? {}),
+      };
       patches++;
       const prior = seen.get(String(v.id));
       const sent = PATCH_FIELDS.filter((f) => f in args);

@@ -39,6 +39,11 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
     // One scope covers the whole work-item lifecycle an agent drives: file (create), take (claim), give back (release), keep alive (heartbeat), and change (patch).
     routes: ["work.items.patch", "work.items.create", "work.items.claim", "work.items.release", "work.items.heartbeat"],
   },
+  // The artifact write rides the same door: one scope, no review grant (task.0028, task.0122).
+  core__work_item_artifact_record: {
+    scope: "work_item:transition",
+    routes: ["work.items.artifacts.create"],
+  },
   core__schedule_manage: {
     scope: "schedule:manage",
     routes: ["schedules.create", "schedules.update", "schedules.delete"],
@@ -96,8 +101,6 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
 
 /** Tools that have no node route, with the reason. A new tool must be added here or to `SAME_DOOR_ROUTES`. */
 export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
-  // Deprecated (task.0065): core__work_item_update twins work.items.patch; this tool keeps its scope but carries no route.
-  core__work_item_transition: "deprecated; core__work_item_update is the twin of work.items.patch",
   // These call the operator's API with the node's identity; the operator's own deploy roles (operator OpenFGA) gate them.
   // The tool writes straight to main. Its true twin (a direct-to-main knowledge write route) deliberately does not
   // exist: the node route an outside agent uses is the contribution proposal (`knowledge.contribute`). Whether the tool
