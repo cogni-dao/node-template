@@ -1075,6 +1075,20 @@ describe("createContributionService", () => {
       expect(port.lastMerge?.expectedHeadCommit).toBe("h1");
     });
 
+    it("pins the head read before the authority check, so a head that moves during it is not merged blind", async () => {
+      const { port, service } = make(
+        { headCommit: "h1", knowledgeIds: ["note-1"], citations: [] },
+        {
+          check: async () => {
+            port.touched = { headCommit: "h2", knowledgeIds: ["note-1"], citations: [] };
+            return { ok: true };
+          },
+        }
+      );
+      await service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" });
+      expect(port.lastMerge?.expectedHeadCommit).toBe("h1");
+    });
+
     it("gates a supersedes edge onto a goal; an admin merges a bet extending one", async () => {
       const retire = make(
         {

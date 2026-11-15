@@ -369,13 +369,6 @@ export function createContributionService(
       if (record?.state === "merged" && record.mergedCommit) {
         return deps.port.merge({ contributionId, principal, confidencePct });
       }
-      // MERGE_IS_NODE_ADMIN (bug.0044): a signed-in human is not enough. Every
-      // first merge needs the node's admin authority, goal-layer or not; absent
-      // authority fails closed 503. This subsumes the goal-layer check.
-      await requireNodeAdmin(
-        actor ?? { userId: principal.id },
-        "knowledge.contributions.merge"
-      );
       // MERGE_GATE_ON_RAW_DIFF + MERGE_EXPECTED_HEAD: gate on the raw ids at
       // the current head, then merge only if that head is still the branch head.
       const touched = await deps.port.touchedIds(contributionId);
@@ -400,6 +393,15 @@ export function createContributionService(
           "Contribution authorization diff is unproven"
         );
       }
+      // MERGE_IS_NODE_ADMIN (bug.0044): a signed-in human is not enough. Every
+      // first merge needs the node's admin authority, goal-layer or not; absent
+      // authority fails closed 503. Runs after the raw-diff read pins the head
+      // and before the merge, so a head that moves during the check is rejected
+      // by expectedHeadCommit. This subsumes the goal-layer check.
+      await requireNodeAdmin(
+        actor ?? { userId: principal.id },
+        "knowledge.contributions.merge"
+      );
       const result = await deps.port.merge({
         contributionId,
         principal,
