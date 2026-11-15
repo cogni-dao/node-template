@@ -13,7 +13,7 @@
  *   contributions, EDO hypothesize/decide/record-outcome — can proceed against
  *   the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant without requiring a UI
  *   roundtrip), DOMAIN_READ_REQUIRES_PRINCIPAL (item GET mirrors list),
- *   DOMAIN_MUTATION_BEARER_OR_SESSION (item PATCH/DELETE: any signed-in human;
+ *   DOMAIN_MUTATION_HUMAN_ONLY (item PATCH/DELETE: any signed-in human;
  *   a bearer agent is refused by the wrapper's deny-by-default, bug.0045, until
  *   a door is declared; register (POST) is behind the knowledge:contribute door),
  *   DOMAIN_ID_IS_IMMUTABLE, DOMAIN_DELETE_REFUSES_NONEMPTY (409, never cascade).

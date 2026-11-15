@@ -288,8 +288,10 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           const doorRuns = Boolean(sameDoor) && (!queryAccountParam || Boolean(pathAccountParam) || queryAccountId !== null);
           // DENY_BY_DEFAULT (bug.0045): a bearer write needs a door that runs, an own-data reason, or an open-by-design entry. Anything else is refused before any handler.
           if (
-            // Every bearer identity is built with via: "bearer" in request-identity.ts; session-only resolvers (getServerSessionUser) arrive with via undefined and must pass.
-            sessionUser?.via === "bearer" &&
+            // FAIL_CLOSED: any signed-in identity not proven `via: "session"` is treated as a bearer, like the door below. Every resolver sets `via`
+            // (request-identity.ts for bearers and cookies, getServerSessionUser for cookie-only routes).
+            sessionUser !== null &&
+            sessionUser.via !== "session" &&
             !SAFE_METHODS.has(request.method) &&
             !doorRuns &&
             !("bearerWrite" in options && options.bearerWrite) &&

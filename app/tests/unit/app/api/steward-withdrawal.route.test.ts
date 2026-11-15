@@ -71,7 +71,7 @@ describe("steward withdrawal route with fake wallet", () => {
     vi.resetAllMocks();
     vi.stubGlobal("fetch", fake.network);
     fake.steward.mockReturnValue({ address: steward });
-    fake.session.mockReturnValue({ walletAddress: steward.toUpperCase() });
+    fake.session.mockReturnValue({ walletAddress: steward.toUpperCase(), via: "session" });
     fake.container.mockReturnValue({
       operatorWallet: { withdrawToSteward: fake.withdraw },
     });
@@ -145,7 +145,7 @@ describe("steward withdrawal route with fake wallet", () => {
     undefined,
     "0x1111111111111111111111111111111111111111",
   ])("rejects missing or different caller wallet before touching the container: %s", async (walletAddress) => {
-    fake.session.mockReturnValue({ walletAddress });
+    fake.session.mockReturnValue({ walletAddress, via: "session" });
     expect((await post()).status).toBe(403);
     expect(fake.container).not.toHaveBeenCalled();
     expect(fake.withdraw).not.toHaveBeenCalled();

@@ -71,7 +71,7 @@ const SCHEDULE_DESCRIPTION = {
 describe("POST /api/v1/attribution/epochs/collect", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getSessionUser).mockResolvedValue(TEST_SESSION_USER_1);
+    vi.mocked(getSessionUser).mockResolvedValue({ ...TEST_SESSION_USER_1, via: "session" });
     mockScheduleControl.describeSchedule.mockResolvedValue(
       SCHEDULE_DESCRIPTION
     );

@@ -70,6 +70,16 @@ describe("DENY_BY_DEFAULT (real wrapper)", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it("fails closed: an identity with no `via` is treated as a bearer, so an undeclared write is 403 and a declared one passes", async () => {
+    const noVia = { id: "u-1", walletAddress: null, displayName: null, avatarColor: null } as SessionUser;
+    const res = await call({}, noVia);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "bearer_write_undeclared", code: "bearer_write_undeclared" });
+    expect(handler).not.toHaveBeenCalled();
+    expect((await call({ bearerWrite: "the caller's own data" }, noVia)).status).toBe(200);
+    expect((await call({}, noVia, "GET")).status).toBe(200);
+  });
+
   it.each(["GET", "HEAD", "OPTIONS"])("a bearer %s passes: only writes are denied by default", async (method) => {
     expect((await call({}, user("bearer"), method)).status).toBe(200);
   });
