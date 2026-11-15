@@ -279,11 +279,19 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           }
 
           const sameDoor = "sameDoor" in options ? options.sameDoor : undefined;
-          // DENY_BY_DEFAULT (bug.0045): a bearer write needs a door, an own-data reason, or an open-by-design entry. Anything else is refused before any handler.
+          const pathAccountParam = "sameDoorAccountParam" in options ? options.sameDoorAccountParam : undefined;
+          const queryAccountParam = "sameDoorAccountQuery" in options ? options.sameDoorAccountQuery : undefined;
+          const queryAccountId = queryAccountParam ? new URL(request.url).searchParams.get(queryAccountParam) : null;
+          // An optional query door runs only when the caller names an account; otherwise the route's own-account read needs no door.
+          const accountParam = pathAccountParam ?? (queryAccountId !== null ? queryAccountParam : undefined);
+          // The door counts only when it will actually run for this request.
+          const doorRuns = Boolean(sameDoor) && (!queryAccountParam || Boolean(pathAccountParam) || queryAccountId !== null);
+          // DENY_BY_DEFAULT (bug.0045): a bearer write needs a door that runs, an own-data reason, or an open-by-design entry. Anything else is refused before any handler.
           if (
+            // Every bearer identity is built with via: "bearer" in request-identity.ts; session-only resolvers (getServerSessionUser) arrive with via undefined and must pass.
             sessionUser?.via === "bearer" &&
             !SAFE_METHODS.has(request.method) &&
-            !sameDoor &&
+            !doorRuns &&
             !("bearerWrite" in options && options.bearerWrite) &&
             !(options.routeId in OPEN_BY_DESIGN_ROUTES)
           ) {
@@ -309,12 +317,7 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
               { status: responseStatus, headers: { "cache-control": "no-store" } }
             );
           }
-          const pathAccountParam = "sameDoorAccountParam" in options ? options.sameDoorAccountParam : undefined;
-          const queryAccountParam = "sameDoorAccountQuery" in options ? options.sameDoorAccountQuery : undefined;
-          const queryAccountId = queryAccountParam ? new URL(request.url).searchParams.get(queryAccountParam) : null;
-          // An optional query door runs only when the caller names an account; otherwise the route's own-account read needs no door.
-          const accountParam = pathAccountParam ?? (queryAccountId !== null ? queryAccountParam : undefined);
-          if (sameDoor && sessionUser && (!queryAccountParam || pathAccountParam || queryAccountId !== null)) {
+          if (doorRuns && sameDoor && sessionUser) {
             let accountId: string | undefined;
             if (queryAccountParam && !pathAccountParam) accountId = queryAccountId ?? "";
             else if (pathAccountParam) {

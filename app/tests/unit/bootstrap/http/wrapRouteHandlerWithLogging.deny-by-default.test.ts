@@ -92,6 +92,19 @@ describe("DENY_BY_DEFAULT (real wrapper)", () => {
     expect(await res.json()).toEqual({ error: "policy_denied", code: "policy_denied" });
   });
 
+  it("an optional query door that is not running (no account named) does not satisfy a write: bearer 403; naming the account runs the door", async () => {
+    const run = (query: string) =>
+      wrapRouteHandlerWithLogging(
+        { routeId: "some.write", sameDoor: "core__account_credits_read", sameDoorAccountQuery: "accountId", auth: { mode: "required", getSessionUser: async () => user("bearer") } },
+        handler
+      )(new NextRequest(`https://node.example/api/v1/x${query}`, { method: "POST" }));
+    const refused = await run("");
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: "bearer_write_undeclared", code: "bearer_write_undeclared" });
+    expect((await run("?accountId=acct-1")).status).toBe(200);
+    expect(authorizeRoute).toHaveBeenCalledTimes(1);
+  });
+
   it("401 still answers first when no identity resolves", async () => {
     const res = await call({}, null);
     expect(res.status).toBe(401);
