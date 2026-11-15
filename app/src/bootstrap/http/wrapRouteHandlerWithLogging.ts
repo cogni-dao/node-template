@@ -18,6 +18,7 @@
  * @public
  */
 
+import { OPEN_BY_DESIGN_ROUTES } from "@cogni/agent-grants";
 import {
   CredentialRateLimitedError,
   CredentialStoreUnavailableError,
@@ -55,6 +56,9 @@ function logCredentialRefusal(log: RequestContext["log"], error: unknown, routeI
   }
 }
 
+/** Methods that only read. Every other method is a write for DENY_BY_DEFAULT. */
+const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+
 type AuthRequiredHandler<TContext = unknown> = (
   ctx: RequestContext,
   request: NextRequest,
@@ -77,6 +81,12 @@ type AuthRequiredOptions = {
    * a signed-in human passes the subject rules. Declared once in `SAME_DOOR_ROUTES` (`@cogni/agent-grants`).
    */
   sameDoor?: string;
+  /**
+   * DENY_BY_DEFAULT (bug.0045): the reason a bearer agent may write here with no grant. Only a route that touches nothing but the caller's own data
+   * (its own chat turn, its own threads, its own credential) declares one. A write route that declares none of `sameDoor`, `bearerWrite` or an
+   * `OPEN_BY_DESIGN_ROUTES` entry answers a bearer 403 `bearer_write_undeclared`; a human session is never affected.
+   */
+  bearerWrite?: string;
   /**
    * An ACCOUNT door (task.5465): the name of the route param that carries the account id (`accountId`). The same-door check then decides this
    * account: the owner by session, or a bearer agent with a live grant for exactly this account. Every deny except an outage is ONE 404
@@ -269,6 +279,36 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           }
 
           const sameDoor = "sameDoor" in options ? options.sameDoor : undefined;
+          // DENY_BY_DEFAULT (bug.0045): a bearer write needs a door, an own-data reason, or an open-by-design entry. Anything else is refused before any handler.
+          if (
+            sessionUser?.via === "bearer" &&
+            !SAFE_METHODS.has(request.method) &&
+            !sameDoor &&
+            !("bearerWrite" in options && options.bearerWrite) &&
+            !(options.routeId in OPEN_BY_DESIGN_ROUTES)
+          ) {
+            ctx.log.warn(
+              {
+                event: EVENT_NAMES.AGENT_TOOL_AUTHZ,
+                principal: sessionUser.id,
+                subject: null,
+                payer: null,
+                tool: null,
+                decision: "deny",
+                code: "bearer_write_undeclared",
+                reason: "no_declaration",
+                runId: null,
+                route: options.routeId,
+                account: null,
+              },
+              EVENT_NAMES.AGENT_TOOL_AUTHZ
+            );
+            responseStatus = 403;
+            return NextResponse.json(
+              { error: "bearer_write_undeclared", code: "bearer_write_undeclared" },
+              { status: responseStatus, headers: { "cache-control": "no-store" } }
+            );
+          }
           const pathAccountParam = "sameDoorAccountParam" in options ? options.sameDoorAccountParam : undefined;
           const queryAccountParam = "sameDoorAccountQuery" in options ? options.sameDoorAccountQuery : undefined;
           const queryAccountId = queryAccountParam ? new URL(request.url).searchParams.get(queryAccountParam) : null;

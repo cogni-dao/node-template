@@ -73,7 +73,7 @@ const post = (handler: (r: NextRequest, c: never) => Promise<Response>, key: str
 };
 /** An ordinary bearer route: the real resolver decides. */
 const ordinary = wrapRouteHandlerWithLogging(
-  { routeId: "test.ordinary", auth: { mode: "required", getSessionUser } },
+  { routeId: "test.ordinary", bearerWrite: "a test route that only echoes the resolved identity", auth: { mode: "required", getSessionUser } },
   async (_ctx, _req, user) => NextResponse.json({ id: user.id, via: user.via, name: user.displayName })
 );
 const ping = (key: string | null) => post(ordinary as never, key);

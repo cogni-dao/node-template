@@ -31,6 +31,7 @@ export const GET = wrapRouteHandlerWithLogging(
 export const POST = wrapRouteHandlerWithLogging(
   {
     routeId: "knowledge.domains.create",
+    sameDoor: "knowledge.contribute",
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, request, sessionUser) => handleCreate(request, sessionUser)

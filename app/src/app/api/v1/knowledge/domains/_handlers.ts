@@ -13,9 +13,9 @@
  *   contributions, EDO hypothesize/decide/record-outcome — can proceed against
  *   the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant without requiring a UI
  *   roundtrip), DOMAIN_READ_REQUIRES_PRINCIPAL (item GET mirrors list),
- *   DOMAIN_MUTATION_BEARER_OR_SESSION (item PATCH/DELETE use the same auth as
- *   POST register: any authenticated principal, no extra authority; restrictions
- *   can be added later),
+ *   DOMAIN_MUTATION_BEARER_OR_SESSION (item PATCH/DELETE: any signed-in human;
+ *   a bearer agent is refused by the wrapper's deny-by-default, bug.0045, until
+ *   a door is declared; register (POST) is behind the knowledge:contribute door),
  *   DOMAIN_ID_IS_IMMUTABLE, DOMAIN_DELETE_REFUSES_NONEMPTY (409, never cascade).
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-domain-management, https://node-template.cognidao.org/knowledge/knowledge-write-contract

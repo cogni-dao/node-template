@@ -184,11 +184,11 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     ]);
   });
 
-  it("a route with no sameDoor option is untouched (the door is opt-in per route)", async () => {
+  it("a read route with no sameDoor option is untouched (the door is opt-in per route; writes are deny-by-default, see the deny-by-default test)", async () => {
     const res = await wrapRouteHandlerWithLogging(
       { routeId: "plain", auth: { mode: "required", getSessionUser: async () => user("bearer") } },
       handler
-    )(new NextRequest("https://node.example/api/v1/x", { method: "PATCH" }));
+    )(new NextRequest("https://node.example/api/v1/x", { method: "GET" }));
     expect(res.status).toBe(200);
     expect(state.queries).toBe(0);
   });
