@@ -12,6 +12,7 @@ import {
 } from "@cogni-dao/metrics/knowledge";
 import type { Sql } from "postgres";
 import { z } from "zod";
+import { readKnowledgeMerges } from "@/adapters/server/metrics/knowledge-merges.source";
 import {
 	RUN_CALLER_CLASSES,
 	readRunsByCaller,
@@ -58,6 +59,44 @@ function createRunsCountCalculator(observationsSql: Sql): MetricCalculator {
 	};
 }
 
+const mergeParams = z.strictObject({
+	output: z.enum(["share", "merged"]),
+	days: z.number().int().min(1).max(28),
+});
+
+/**
+ * Node-local calculator over this node's knowledge_contributions (Doltgres main).
+ * `share` is the ratio of merges in [end - days, end) resolved by someone other
+ * than the author; `merged` is the raw merge count (its guardrail).
+ * Design: https://node-template.cognidao.org/work/items/task.0131
+ */
+function createKnowledgeMergeCalculator(knowledgeSql: Sql): MetricCalculator {
+	return {
+		id: "knowledge.merge-review@1",
+		// Window edges are resolved_at event times inside [end - days, end).
+		historicalWindows: true,
+		unit: "ratio",
+		unitFor: (params) =>
+			mergeParams.parse(params).output === "share" ? "ratio" : "items",
+		displayFor: (params) =>
+			mergeParams.parse(params).output === "share" ? "progress" : "volume",
+		windowSeconds: (params) => mergeParams.parse(params).days * 86400,
+		paramsSchema: mergeParams,
+		budget: {
+			timeoutMs: 8000,
+			maxSourceCalls: 1,
+			maxRows: 1,
+			maxResponseBytes: 65536,
+		},
+		compute: async (params, ctx) => {
+			const parsed = mergeParams.parse(params);
+			return ctx.read((signal) =>
+				readKnowledgeMerges(knowledgeSql, parsed.output, ctx.window, signal),
+			);
+		},
+	};
+}
+
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
 	observationsSql: Sql;
@@ -67,6 +106,9 @@ export function createGoalMetrics(deps: {
 	return createPublishedGoalMetrics({
 		...deps,
 		node: getNodeId(),
-		nodeCalculators: [createRunsCountCalculator(deps.observationsSql)],
+		nodeCalculators: [
+			createRunsCountCalculator(deps.observationsSql),
+			createKnowledgeMergeCalculator(deps.knowledgeSql),
+		],
 	});
 }
