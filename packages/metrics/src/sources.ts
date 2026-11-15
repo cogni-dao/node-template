@@ -207,7 +207,7 @@ export async function readWorkKpiLinked(
  * output of `knowledge.merge-review@1` shares one read per refresh tick.
  */
 function knowledgeMergesSql(start: string, end: string): string {
-	return `SELECT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS as_of, COUNT(*) AS merged, COUNT(*) FILTER (WHERE resolved_by <> principal_id) AS reviewed, COUNT(*) FILTER (WHERE resolved_by IS NULL) AS unresolved FROM knowledge_contributions WHERE state = 'merged' AND resolved_at >= '${start}' AND resolved_at < '${end}'`;
+	return `SELECT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS as_of, COUNT(*) AS merged, CAST(COALESCE(SUM(CASE WHEN resolved_by <> principal_id THEN 1 ELSE 0 END), 0) AS BIGINT) AS reviewed, CAST(COALESCE(SUM(CASE WHEN resolved_by IS NULL THEN 1 ELSE 0 END), 0) AS BIGINT) AS unresolved FROM knowledge_contributions WHERE state = 'merged' AND resolved_at >= '${start}' AND resolved_at < '${end}'`;
 }
 
 /**
