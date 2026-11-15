@@ -13,6 +13,10 @@ import {
 import type { Sql } from "postgres";
 import { z } from "zod";
 import {
+	WORK_AUTHOR_CLASSES,
+	readValidatedByAuthor,
+} from "@/adapters/server/metrics/ledger.source";
+import {
 	RUN_CALLER_CLASSES,
 	readRunsByCaller,
 } from "@/adapters/server/metrics/runs.source";
@@ -58,6 +62,52 @@ function createRunsCountCalculator(observationsSql: Sql): MetricCalculator {
 	};
 }
 
+const ledgerParams = z.strictObject({
+	author: z.enum(WORK_AUTHOR_CLASSES),
+	mode: z.enum(["count", "share"]),
+	days: z.number().int().min(1).max(28),
+});
+
+/**
+ * Node-local calculator over this node's work ledger: validated items by
+ * work-author class. Design: hub work-author + validated-work-by-author.
+ */
+function createValidatedByAuthorCalculator(
+	knowledgeSql: Sql,
+	observationsSql: Sql,
+): MetricCalculator {
+	return {
+		id: "ledger.validated-by-author@1",
+		// Window edges are validation-commit times inside [end - days, end).
+		historicalWindows: true,
+		unit: "items",
+		unitFor: (params) =>
+			ledgerParams.parse(params).mode === "share" ? "ratio" : "items",
+		display: "volume",
+		displayFor: (params) =>
+			ledgerParams.parse(params).mode === "share" ? "progress" : "volume",
+		windowSeconds: (params) => ledgerParams.parse(params).days * 86400,
+		paramsSchema: ledgerParams,
+		// Clock (1) + internal principals (1) + validated window (1) + authors (1).
+		budget: {
+			timeoutMs: 8000,
+			maxSourceCalls: 4,
+			maxRows: 500,
+			maxResponseBytes: 262144,
+		},
+		compute: async (params, ctx) => {
+			const parsed = ledgerParams.parse(params);
+			return readValidatedByAuthor(
+				knowledgeSql,
+				observationsSql,
+				parsed,
+				ctx.window,
+				(source) => ctx.read((signal) => source(signal)),
+			);
+		},
+	};
+}
+
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
 	observationsSql: Sql;
@@ -67,6 +117,9 @@ export function createGoalMetrics(deps: {
 	return createPublishedGoalMetrics({
 		...deps,
 		node: getNodeId(),
-		nodeCalculators: [createRunsCountCalculator(deps.observationsSql)],
+		nodeCalculators: [
+			createRunsCountCalculator(deps.observationsSql),
+			createValidatedByAuthorCalculator(deps.knowledgeSql, deps.observationsSql),
+		],
 	});
 }
