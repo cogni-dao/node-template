@@ -42,7 +42,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 
 - **Exports (subpaths):**
   - `@cogni/langgraph-graphs` — Barrel re-export of common types plus:
-    - `LANGGRAPH_CATALOG` / `NODE_LANGGRAPH_CATALOG` — Graph catalog; publishes exactly two graphs: `cogni` (node operator, principal `node-ai`, default graph) and `work-prioritizer` (display "Work Prioritizer", principal `prioritizer`, scheduled triage program: the guarded `core__work_item_update` writer)
+    - `LANGGRAPH_CATALOG` / `NODE_LANGGRAPH_CATALOG` — Graph catalog; publishes exactly three graphs: `cogni` (node coordinator, principal `node-ai`, default graph), `work-prioritizer` (display "Work Prioritizer", principal `prioritizer`, scheduled triage program: the guarded `core__work_item_update` writer) and `work-closeout` (display "Work Closeout", principal `prioritizer`, scheduled closeout program: marks items with a live merged pull request done and deployVerified). A graph is schedulable only when it names a `guidanceId` graph card
     - `LANGGRAPH_GRAPH_IDS`, `DEFAULT_LANGGRAPH_GRAPH_ID` (`langgraph:cogni`) — Namespaced graph ids
     - `McpToolSource` — ToolSourcePort implementation for MCP-discovered tools
     - `loadMcpTools()`, `parseMcpConfigFromEnv()` — MCP client connection + config parsing
