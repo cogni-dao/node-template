@@ -68,7 +68,7 @@ describe("checkNodeAdmin", () => {
     expect(decision).toMatchObject({ ok: false, errorCode: "authz_unavailable" });
     const err = new NodeAdminRequiredError(
       decision as Exclude<typeof decision, { ok: true }>,
-      "knowledge.contributions.merge.goal"
+      "knowledge.contributions.merge"
     );
     expect(err.status).toBe(503);
     expect(err.message).not.toContain("ECONNREFUSED");

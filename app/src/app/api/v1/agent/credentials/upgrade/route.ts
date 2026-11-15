@@ -32,7 +32,11 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "agent.credentials.upgrade", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "agent.credentials.upgrade",
+    bearerWrite: "swaps the caller's own signed key for its own revocable key; touches no one else's data",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, _request, sessionUser) => {
     /** One log line per refusal; the status, body and headers come from the package's mapping. */
     const answer = (input: CredentialHttpInput) => {

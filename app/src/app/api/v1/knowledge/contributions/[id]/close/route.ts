@@ -4,8 +4,8 @@
 /**
  * Module: `@app/api/v1/knowledge/contributions/[id]/close/route`
  * Purpose: POST to reject + close a contribution without merging.
- * Scope: Auth-protected POST. Gated to admin-session principals only (v0).
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION.
+ * Scope: Auth-protected POST. Session users only (no bearer agents); closing another principal's contribution requires node admin.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION, MERGE_IS_NODE_ADMIN (bug.0044).
  * Side-effects: IO (HTTP response, Doltgres dolt_branch -D + UPDATE via container service)
  * @public
  */

@@ -4,8 +4,8 @@
 /**
  * Module: `@app/api/v1/knowledge/contributions/[id]/merge/route`
  * Purpose: POST to merge a contribution branch into main.
- * Scope: Auth-protected POST. Gated to admin-session principals only (v0).
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION.
+ * Scope: Auth-protected POST. Session users only (no bearer agents); merging requires node admin.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION, MERGE_IS_NODE_ADMIN (bug.0044).
  * Side-effects: IO (HTTP response, Doltgres dolt_merge + dolt_commit via container service)
  * @public
  */

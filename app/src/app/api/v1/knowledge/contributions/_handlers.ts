@@ -10,9 +10,10 @@ import { displayFits, KpiBindingsSchema, StoredMetricSpecSchema } from "@cogni-d
  *   SessionUser → Principal, and translates typed service errors to HTTP statuses.
  * Scope: Operator-side wiring only. Mirrors poly's identical handler set.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION,
- *   GOAL_CHANGE_IS_NODE_ADMIN (story.5101): a merge whose diff touches a `goal-*` row (or a
- *   goal-retiring edge) additionally requires node admin — enforced in ContributionService.merge
- *   on raw diff ids at the gated head; mapped here to 403 `authz_denied` / 503 `authz_unavailable`.
+ *   MERGE_IS_NODE_ADMIN (bug.0044, subsumes story.5101 GOAL_CHANGE_IS_NODE_ADMIN): every first
+ *   merge, and a close of another principal's contribution, requires node admin — enforced in
+ *   ContributionService (merge also gates raw diff ids at the head); mapped here to 403
+ *   `authz_denied` / 503 `authz_unavailable`.
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-contribution-flow, packages/knowledge-store
  * @internal
@@ -121,8 +122,8 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 429 });
   if (e instanceof DomainNotRegisteredError)
     return NextResponse.json({ error: e.message }, { status: 400 });
-  // GOAL_CHANGE_IS_NODE_ADMIN — the service refused a goal-layer merge before
-  // any side effect: 403 authz_denied, or 503 authz_unavailable when no
+  // MERGE_IS_NODE_ADMIN — the service refused a merge, or a close of another's
+  // inbox, before any side effect: 403 authz_denied, or 503 authz_unavailable when no
   // node-admin authority is wired.
   if (e instanceof NodeAdminRequiredError)
     return NextResponse.json(
@@ -409,8 +410,8 @@ export async function handleMerge(
 
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   try {
-    // GOAL_CHANGE_IS_NODE_ADMIN is enforced inside ContributionService.merge
-    // (raw diff ids + expected head); this passes the acting wallet.
+    // MERGE_IS_NODE_ADMIN is enforced inside ContributionService.merge
+    // (before the raw-diff gate and expected head); this passes the acting wallet.
     const result = await svc.merge({
       principal,
       contributionId,
@@ -473,6 +474,10 @@ export async function handleClose(
     await svc.close({
       principal,
       contributionId,
+      actor: {
+        userId: sessionUser.id,
+        walletAddress: sessionUser.walletAddress ?? null,
+      },
       reason: parsed.data.reason,
     });
     return NextResponse.json({ contributionId, closed: true });

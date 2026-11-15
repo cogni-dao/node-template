@@ -25,5 +25,6 @@ export async function getServerSessionUser(): Promise<SessionUser | null> {
     walletAddress: session?.user?.walletAddress ?? null,
     displayName: session?.user?.displayName ?? null,
     avatarColor: session?.user?.avatarColor ?? null,
+    via: "session",
   };
 }

@@ -63,7 +63,7 @@ describe("handleMerge — node-admin gate wiring (story.5101)", () => {
     merge.mockRejectedValue(
       new NodeAdminRequiredError(
         { ok: false, errorCode: "authz_denied" },
-        "knowledge.contributions.merge.goal"
+        "knowledge.contributions.merge"
       )
     );
     const res = await handleMerge(req(), "c1", session);
@@ -76,7 +76,7 @@ describe("handleMerge — node-admin gate wiring (story.5101)", () => {
     merge.mockRejectedValue(
       new NodeAdminRequiredError(
         { ok: false, errorCode: "authz_unavailable", reason: "ECONNREFUSED 10.0.0.7" },
-        "knowledge.contributions.merge.goal"
+        "knowledge.contributions.merge"
       )
     );
     const res = await handleMerge(req(), "c1", session);
