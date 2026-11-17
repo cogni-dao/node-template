@@ -269,6 +269,10 @@ for (const lane of LANES) {
   if (Object.hasOwn(job, "needs")) {
     fail(CI_WORKFLOW_PATH, `jobs.${lane} must run in parallel (no \`needs\`); got ${JSON.stringify(job.needs)}`);
   }
+  // A required job that cannot fail reports green whatever its steps did.
+  if (Object.hasOwn(job, "continue-on-error")) {
+    fail(CI_WORKFLOW_PATH, `jobs.${lane} must not set continue-on-error: it is a required check`);
+  }
   const steps = Array.isArray(job.steps) ? job.steps : [];
   const checkout = steps.find((step) => String(step?.uses ?? "").startsWith("actions/checkout@"));
   if (checkout?.with?.["fetch-depth"] !== 0) {
@@ -292,6 +296,21 @@ for (const lane of LANES) {
   expectEqual(CI_WORKFLOW_PATH, action.with?.node_version, "${{ env.NODE_VERSION }}", `${lane} node-ci node_version input`);
   if (Object.hasOwn(action, "if") || Object.hasOwn(action, "continue-on-error")) {
     fail(CI_WORKFLOW_PATH, `${lane} node-ci step must not be conditional or continue-on-error: it IS the required check`);
+  }
+  // node-template, the reference consumer, keeps the full gate: schema drift check on, and the
+  // real-Doltgres acceptance lane it owns. A fleet node sets its own inputs.
+  if (action.uses === CI_ACTION_LOCAL) {
+    if (lane === "static" && action.with?.db_check !== undefined && String(action.with.db_check) !== "true") {
+      fail(CI_WORKFLOW_PATH, 'static must run db:check in node-template (db_check must be unset or "true")');
+    }
+    if (lane === "component") {
+      expectEqual(
+        CI_WORKFLOW_PATH,
+        action.with?.doltgres_command,
+        "pnpm --filter @cogni/node-template-app test:doltgres",
+        "component doltgres_command input"
+      );
+    }
   }
 }
 // FORK_FREEDOM: CI runs without secrets.
@@ -387,7 +406,7 @@ function assertCiScopePolicy(steps) {
         // the build, db_check=false skips the schema check, and nothing else may be skipped.
         const expected =
           scope === "docs-only"
-            ? mine.filter((step) => isSetup(step) || step.id === "scope" || (lane === "static" && step.run === "pnpm check:markdown-refs"))
+            ? mine.filter((step) => isSetup(step) || step.name === "Validate inputs" || step.id === "scope" || (lane === "static" && step.run === "pnpm check:markdown-refs"))
             : mine.filter(
                 (step) =>
                   !(cacheHit === "true" && ["Build workspace packages", "Save workspace package build"].includes(step.name)) &&
@@ -431,13 +450,53 @@ function assertCiAction(actionFile) {
     fail(CI_ACTION_PATH, 'must run classify-ci-scope.mjs as step id "scope", ungated and with continue-on-error: true');
   }
 
-  // The build cache is exact-key only: restore-keys would hand a lane a build of different sources.
-  const cache = steps.find((step) => step?.id === "build_cache");
-  if (!String(cache?.uses ?? "").startsWith("actions/cache/restore@") || !String(cache?.with?.key ?? "").includes("hashFiles(")) {
-    fail(CI_ACTION_PATH, 'step id "build_cache" must be actions/cache/restore keyed on hashFiles(...) of the build inputs');
+  // Inputs are validated before anything else runs: a typo in `lane` would otherwise match no
+  // lane-gated step and the required job would pass having run only setup.
+  const first = steps[0];
+  if (
+    first?.name !== "Validate inputs" ||
+    !/static\|unit\|component/.test(String(first?.run ?? "")) ||
+    !/true\|false/.test(String(first?.run ?? ""))
+  ) {
+    fail(CI_ACTION_PATH, 'the first step must be "Validate inputs", failing unless lane is static|unit|component and db_check is true|false');
   }
-  if (Object.hasOwn(cache?.with ?? {}, "restore-keys")) {
-    fail(CI_ACTION_PATH, "build_cache must not use restore-keys: only an exact input hash may skip the build");
+
+  // The build cache. A restored build skips the build, so the key must cover every input that can
+  // change a build (an exact-key hit only: restore-keys would hand a lane a build of other sources),
+  // and only the static lane saves, from the key the restore computed, right after a build that passed.
+  const CACHE_PATHS = "packages/*/dist\npackages/*/*.tsbuildinfo\ngraphs/dist\ngraphs/*.tsbuildinfo\n";
+  const CACHE_KEY =
+    "node-ci-build-v1-${{ runner.os }}-node${{ inputs.node_version }}-${{ hashFiles('packages/**', 'graphs/**', '!**/node_modules/**', '!**/dist/**', '!**/*.tsbuildinfo', '!**/*.md', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'tsconfig.base.json') }}";
+  const cache = steps.find((step) => step?.id === "build_cache");
+  if (!String(cache?.uses ?? "").startsWith("actions/cache/restore@")) {
+    fail(CI_ACTION_PATH, 'step id "build_cache" must be actions/cache/restore');
+  }
+  expectEqual(CI_ACTION_PATH, cache?.with?.key, CACHE_KEY, "build_cache key");
+  expectEqual(CI_ACTION_PATH, cache?.with?.path, CACHE_PATHS, "build_cache path");
+  for (const option of ["restore-keys", "lookup-only", "fail-on-cache-miss"]) {
+    if (Object.hasOwn(cache?.with ?? {}, option)) {
+      fail(CI_ACTION_PATH, `build_cache must not set ${option}: only an exact input hash may skip the build`);
+    }
+  }
+  const buildAt = steps.findIndex((step) => step?.name === "Build workspace packages");
+  const saveAt = steps.findIndex((step) => step?.name === "Save workspace package build");
+  const save = steps[saveAt];
+  if (
+    saveAt < 0 ||
+    saveAt < buildAt ||
+    buildAt < 0 ||
+    !String(save?.uses ?? "").startsWith("actions/cache/save@") ||
+    save?.with?.key !== "${{ steps.build_cache.outputs.cache-primary-key }}" ||
+    save?.with?.path !== CACHE_PATHS ||
+    Object.hasOwn(save?.with ?? {}, "lookup-only") ||
+    save?.["continue-on-error"] === true ||
+    /always\(\)|failure\(\)|cancelled\(\)/.test(String(save?.if ?? "")) ||
+    !String(save?.if ?? "").includes("inputs.lane == 'static'")
+  ) {
+    fail(
+      CI_ACTION_PATH,
+      "\"Save workspace package build\" must be actions/cache/save, after the build, only in the static lane, with the restore's cache-primary-key, the same paths, and no always()/lookup-only"
+    );
   }
 
   for (const [name, run] of [

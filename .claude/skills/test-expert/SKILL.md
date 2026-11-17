@@ -7,9 +7,7 @@ description: Design, place, run, or diagnose Cogni tests and enforcement. Use wh
 
 This file is only the trigger. The knowledge hub is the authoritative, refinable contract.
 
-Read this node-template-owned entry with `COGNI_NODE_TEMPLATE_API_KEY` (on node-template itself, `COGNI_NODE_API_KEY`), then follow it:
-- `GET https://node-template.cognidao.org/api/v1/knowledge/node-test-contract`
-
-No key yet? Register once with `POST https://node-template.cognidao.org/api/v1/agent/register` and `{"name":"<agent name>"}`, then save the key in the gitignored `.env.cogni`.
+Read these operator-owned entries with the separate `COGNI_OPERATOR_NODE_API_KEY`, then follow them:
+- `GET https://cognidao.org/api/v1/knowledge/node-test-contract`
 
 Do not reconstruct or preserve a fallback copy in this repository.

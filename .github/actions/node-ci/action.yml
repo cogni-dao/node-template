@@ -47,6 +47,16 @@ inputs:
 runs:
   using: composite
   steps:
+    # A typo in `lane` would match no lane-gated step, and the required job would pass having run only setup.
+    - name: Validate inputs
+      shell: bash
+      env:
+        LANE: ${{ inputs.lane }}
+        DB_CHECK: ${{ inputs.db_check }}
+      run: |
+        case "$LANE" in static|unit|component) ;; *) echo "::error::lane must be static|unit|component, got '$LANE'"; exit 1 ;; esac
+        case "$DB_CHECK" in true|false) ;; *) echo "::error::db_check must be true|false, got '$DB_CHECK'"; exit 1 ;; esac
+
     - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
     - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

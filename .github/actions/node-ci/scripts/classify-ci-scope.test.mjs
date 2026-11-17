@@ -92,10 +92,13 @@ const CASES = [
   ["only an explicit affected scope runs a subset of the chain", () => {
     const chain = ["@x/a", "@x/b", "@x/c"];
     for (const scope of [undefined, "", "full", "docs-only"]) {
-      assert.deepEqual(selectUnitRun({ CI_SCOPE: scope, UNIT_FILTERS: "@x/b" }, chain).names, chain, `scope ${scope}`);
+      assert.equal(selectUnitRun({ CI_SCOPE: scope, UNIT_FILTERS: "@x/b" }, chain).mode, "full", `scope ${scope}`);
     }
-    assert.deepEqual(selectUnitRun({ CI_SCOPE: "affected", UNIT_FILTERS: "@x/c @x/a @x/zzz" }, chain).names, ["@x/a", "@x/c"]);
-    assert.equal(selectUnitRun({ CI_SCOPE: "full" }, null).mode, "serial");
+    const affected = selectUnitRun({ CI_SCOPE: "affected", UNIT_FILTERS: "@x/c @x/a @x/zzz" }, chain);
+    assert.equal(affected.mode, "affected");
+    assert.deepEqual(affected.names, ["@x/a", "@x/c"]);
+    // A chain the runner cannot read is never narrowed: it runs the node's own `pnpm test:ci`.
+    assert.equal(selectUnitRun({ CI_SCOPE: "affected", UNIT_FILTERS: "@x/a" }, null).mode, "full");
   }],
 ];
 
