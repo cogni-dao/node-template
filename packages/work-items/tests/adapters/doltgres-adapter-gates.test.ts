@@ -340,6 +340,16 @@ describe("PR facts", () => {
     expect(wrote(queries)).toBe(false);
   });
 
+  it("a back move never reads the inbox: an inbox that times out cannot 503 it", async () => {
+    const stateOf = vi.fn(async () => {
+      throw new Error("inbox down");
+    });
+    const { make } = world("needs_implementation_review", { pr: "https://node-template.cognidao.org/knowledge/inbox/contrib-code-work-0001" });
+    const patched = await patchStatus(make({ inboxes: { stateOf } }), "needs_implement");
+    expect(patched.status).toBe("needs_implement");
+    expect(stateOf).not.toHaveBeenCalled();
+  });
+
   it("a back move never reads the PR", async () => {
     const { make } = world("needs_validation", { pr: PR, artifacts });
     const prFacts: PrFactsPort = { read: vi.fn(async () => ({ head: HEAD, merged: false })) };
@@ -423,6 +433,22 @@ describe("placement (the one-shot cutover)", () => {
     expect(await planFor(INBOX_URL, {}, { inboxes: inboxState({ merged: false, open: false }) })).toBe("needs_implement");
     // A port that does not say reads as open.
     expect(await planFor(PR, {}, { prFacts: { read: async () => ({ head: HEAD, merged: false }) } })).toBe("needs_implementation_review");
+  });
+
+  it("a merged PR of a repository outside the pin is not placed in done: it is never read and nothing is written", async () => {
+    const read = vi.fn(async () => ({ head: HEAD, merged: true }));
+    const { queries, make } = world("needs_closeout", { pr: OTHER_REPO_PR });
+    const adapter = make({ prFacts: { read } });
+    expect(await adapter.planPlacement(toWorkItemId(ID))).toBeUndefined();
+    await expect(place(adapter, "done")).rejects.toBeInstanceOf(WorkItemGateUnmetError);
+    expect(read).not.toHaveBeenCalled();
+    expect(wrote(queries)).toBe(false);
+  });
+
+  it("unpinned, a merged PR of any github.com repository still places in done", async () => {
+    const { make } = world("needs_closeout", { pr: OTHER_REPO_PR });
+    const placed = await place(make({ prFacts: merged, prRepos: [] }), "done");
+    expect(placed.status).toBe("done");
   });
 
   it("a closed PR or closed inbox is placed in needs_implement; the open and done claims are refused", async () => {

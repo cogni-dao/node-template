@@ -35,6 +35,8 @@ export const EVENT_NAMES = {
 	WORK_ITEMS_ARTIFACT_REFUSED: "work.items.artifact_refused",
 	WORK_ITEMS_ARTIFACTS_READ: "work.items.artifacts_read",
 	// A refused work item write (task.0122): one terminal event per refusal with its errorCode (invalid_input, gate_unmet, revision_conflict, ...); codes and ids only, never a body.
+	// An item envelope part (links, artifacts, readings) that could not be read in time or failed: the envelope is served without it and marked unavailable. One warn per degraded part.
+	WORK_ITEMS_ENVELOPE_DEGRADED: "work.items.envelope_degraded",
 	WORK_ITEMS_CREATE_REFUSED: "work.items.create_refused",
 	WORK_ITEMS_PATCH_REFUSED: "work.items.patch_refused",
 	// The same-door check refused a route call (a bearer without the grant, or the grant store unreachable): one terminal event with routeId and errorCode (policy_denied | authz_unavailable).

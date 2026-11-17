@@ -184,6 +184,8 @@ export {
   gateNeeds,
   parsePullRequestUrl,
   refusesPathChange,
+  REPO_PATTERN,
+  resolvePrRepoPin,
   TRIAGE_SCORE_AXES,
 } from "./gates.js";
 export {

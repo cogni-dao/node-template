@@ -91,6 +91,7 @@ import {
   type PrFacts,
   type PrFactsPort,
 } from "../../gates.js";
+import { statusRank } from "../../transitions.js";
 import { type Placement, placementFor, type DeliverableState } from "../../placement.js";
 import { parseWorkItemScores } from "../../scores.js";
 import {
@@ -4111,10 +4112,16 @@ export class DoltgresWorkItemAdapter
     const pr = optionalString(current.pr)?.trim() ?? "";
     let state: DeliverableState | undefined;
     if (pr && from === "needs_closeout") {
-      const parsed = parsePullRequestUrl(pr);
-      const deliverable = classifyDeliverable(pr);
-      if (parsed) {
-        const facts = await this.readPrFacts(String(id), from, "placement", pr);
+      // The pinned repositories decide what a pull request is: one outside the pin is not a deliverable, so it is never read
+      // and never places the item ("unknown").
+      const deliverable = classifyDeliverable(pr, this.prRepos);
+      if (deliverable?.kind === "pr") {
+        const facts = await this.readPrFacts(
+          String(id),
+          from,
+          "placement",
+          deliverable.url
+        );
         state = facts.merged ? "merged" : facts.open === false ? "closed" : "open";
       } else if (deliverable?.kind === "inbox" && this.inboxes) {
         const inboxPort = this.inboxes;
@@ -4481,7 +4488,8 @@ export class DoltgresWorkItemAdapter
       : [];
     const inboxes: Record<string, InboxFacts | null> = {};
     const inboxPort = this.inboxes;
-    if (needs.artifacts && inboxPort) {
+    // A move back reads no inbox: it needs no exit artifact, so an inbox timeout must not 503 it.
+    if (needs.artifacts && inboxPort && statusRank(to) > statusRank(from)) {
       const contributions = new Set<string>();
       if (deliverable?.kind === "inbox") contributions.add(deliverable.contribution);
       for (const artifact of artifacts) {

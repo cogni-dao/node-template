@@ -765,7 +765,7 @@ function createContainer(): Container {
 		moveReadings: moveMetrics.readings,
 		// task.0118: first page of an item's citation links, the same read the UI and the route use.
 		links: createCitationLinksPort(() => knowledgeStorePort),
-		log: (event) => log.warn(event, "work.items.envelope_degraded"),
+		log: (event) => log.warn(event, EVENT_NAMES.WORK_ITEMS_ENVELOPE_DEGRADED),
 		// QUERY_READS_THE_LIVE_BACKLOG: the AI query tool (and the prioritizer) reads
 		// this node's Doltgres work items; `doltgresWorkItems` is assigned below and
 		// read only at call time.

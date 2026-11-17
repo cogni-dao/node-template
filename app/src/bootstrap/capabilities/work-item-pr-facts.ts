@@ -14,30 +14,14 @@
  */
 
 import type { VcsCapability } from "@cogni/ai-tools";
-import { parsePullRequestUrl, type PrFactsPort } from "@cogni/work-items";
+import {
+	parsePullRequestUrl,
+	type PrFactsPort,
+	resolvePrRepoPin,
+} from "@cogni/work-items";
 
-const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-
-/**
- * `WORK_ITEMS_PR_REPO` as the gate takes it: one or more comma-separated `owner/repo`. The well-formed entries pin the
- * repositories whose pull requests are code deliverables; a malformed entry is ignored and reported, never pinned. No
- * well-formed entry leaves it unpinned (the gate accepts a PR of any github.com repo) with the reason, so the container can
- * warn once; it never fails boot and never becomes a default repository.
- */
-export function resolveWorkItemsPrRepos(value: string | undefined): {
-	readonly repos: readonly string[];
-	readonly ignored: readonly string[];
-	readonly reason?: "unset" | "invalid";
-} {
-	const entries = (value ?? "")
-		.split(",")
-		.map((entry) => entry.trim())
-		.filter(Boolean);
-	const repos = entries.filter((entry) => REPO_PATTERN.test(entry));
-	const ignored = entries.filter((entry) => !REPO_PATTERN.test(entry));
-	if (repos.length) return { repos, ignored };
-	return { repos, ignored, reason: entries.length ? "invalid" : "unset" };
-}
+/** `WORK_ITEMS_PR_REPO` as the gate takes it; the one reader lives with the gate predicate in `@cogni/work-items`. */
+export const resolveWorkItemsPrRepos = resolvePrRepoPin;
 
 export function createPrFactsPort(
 	vcs: Pick<VcsCapability, "getPr">,

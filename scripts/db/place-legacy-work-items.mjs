@@ -32,6 +32,7 @@
 
 import { parseArgs } from "node:util";
 import postgres from "postgres";
+import { resolvePrRepoPin } from "../../packages/work-items/dist/index.js";
 import { createDoltgresWorkItemStore } from "../../packages/work-items/dist/adapters/doltgres/index.js";
 
 const PRINCIPAL = "system:work-items-placement";
@@ -89,11 +90,17 @@ const inboxes = {
 	},
 };
 
-/** The same pin the app takes: one or more comma-separated owner/repo; an entry that is not owner/repo is ignored. */
-const prRepos = (process.env.WORK_ITEMS_PR_REPO ?? "")
-	.split(",")
-	.map((entry) => entry.trim())
-	.filter((entry) => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(entry));
+/** The same pin, read by the same function, as the app. A PR outside it is not placed. */
+const pin = resolvePrRepoPin(process.env.WORK_ITEMS_PR_REPO);
+const prRepos = pin.repos;
+if (!prRepos.length)
+	console.warn(
+		`WARNING: WORK_ITEMS_PR_REPO is ${pin.reason ?? "unset"}; a merged PR of ANY github.com repository will place its item in done. Set it to the node's owner/repo before --apply.`,
+	);
+if (pin.ignored.length)
+	console.warn(
+		`WARNING: ignored WORK_ITEMS_PR_REPO entries that are not owner/repo: ${pin.ignored.join(", ")}`,
+	);
 
 const adapter = createDoltgresWorkItemStore(makeClient(), {
 	...(prRepos.length ? { prRepos } : {}),

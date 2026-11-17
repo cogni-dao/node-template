@@ -106,6 +106,31 @@ export type Deliverable =
 const PR_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([0-9]+)$/;
 const INBOX_URL = /^https?:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?\/knowledge\/inbox\/(contrib-[a-z0-9-]{1,200})$/;
 
+/** One `owner/repo` of a repository pin. */
+export const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/**
+ * `WORK_ITEMS_PR_REPO` as the gate takes it: one or more comma-separated `owner/repo`. The well-formed entries pin the
+ * repositories whose pull requests are code deliverables; a malformed entry is ignored and reported, never pinned. No
+ * well-formed entry leaves it unpinned (the gate accepts a PR of any github.com repo) with the reason, so the caller can
+ * warn once; it never fails boot and never becomes a default repository. The one reader of the pin, for the app and the
+ * placement script alike.
+ */
+export function resolvePrRepoPin(value: string | undefined): {
+  readonly repos: readonly string[];
+  readonly ignored: readonly string[];
+  readonly reason?: "unset" | "invalid";
+} {
+  const entries = (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const repos = entries.filter((entry) => REPO_PATTERN.test(entry));
+  const ignored = entries.filter((entry) => !REPO_PATTERN.test(entry));
+  if (repos.length) return { repos, ignored };
+  return { repos, ignored, reason: entries.length ? "invalid" : "unset" };
+}
+
 /** `owner/repo` and number of a GitHub pull request URL; `undefined` for anything else. */
 export function parsePullRequestUrl(
   url: string

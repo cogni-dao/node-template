@@ -28,6 +28,7 @@ import type {
   WorkItemSummariesListOutput,
 } from "@cogni/node-contracts";
 import { WorkItemSummarySchema } from "@cogni/node-contracts";
+import { EVENT_NAMES } from "@cogni/node-shared";
 import type {
   WorkItem,
   WorkItemId,
@@ -380,7 +381,7 @@ async function withItemEnvelope(dto: WorkItemDto, options?: WorkItemReadOptions)
       links: createCitationLinksPort(() => container.knowledgeStorePort),
       // task.0028: the latest artifact of each kind, without body, one bounded read.
       artifacts: artifactStore ? { latest: (id) => artifactStore.latest(id) } : undefined,
-      log: (event) => container.log.warn(event, "work.items.envelope_degraded"),
+      log: (event) => container.log.warn(event, EVENT_NAMES.WORK_ITEMS_ENVELOPE_DEGRADED),
     },
     options,
   );
