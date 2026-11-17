@@ -17,8 +17,10 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeDetail } from "@/app/(app)/knowledge/_components/KnowledgeDetail";
 
-const pass = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
-vi.mock("@/components", () => ({ Sheet: pass, SheetContent: pass, SheetHeader: pass, SheetTitle: pass }));
+vi.mock("@/components", () => {
+  const pass = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
+  return { Sheet: pass, SheetContent: pass, SheetHeader: pass, SheetTitle: pass };
+});
 vi.mock("@/app/(app)/knowledge/_components/KnowledgeEntryFields", () => ({ KnowledgeEntryFields: () => <p>fields</p> }));
 vi.mock("@/app/(app)/knowledge/_components/CopyLinkButton", () => ({ CopyLinkButton: () => null }));
 vi.mock("@/app/(app)/knowledge/_components/GoalsMount", () => ({
