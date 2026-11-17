@@ -900,6 +900,31 @@ describe("a metric's own page", () => {
     qc.clear();
   });
 
+  it("shows the metric's brief on its knowledge page, above the chart (task.0125)", async () => {
+    const brief = {
+      summary: "Counts open work items each hour from the node's work-item table.",
+      justification: "Shows whether open scope grows faster than the node closes it.",
+    };
+    const fetchMetric = vi.fn(async () => ({
+      definition: { id: "m-page", title: "Page metric", revision: "1", spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 600 }, brief },
+      latestAttempt: reading,
+      lastGood: reading,
+      viewState: "ok",
+      history: [reading],
+    }));
+    const fetchHistory = vi.fn(async () => trend("m-page", "items", [3, 4, 5, 6, 7, 8]));
+    const client = { ...createGoalsClient(), fetchGoals: async () => fixture(), fetchMetric, fetchHistory } as unknown as ReturnType<typeof createGoalsClient>;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={qc}><GoalsProvider client={client}>
+      <MetricEvidence id="m-page" />
+    </GoalsProvider></QueryClientProvider>);
+    const figure = await view.findByRole("figure");
+    const shown = figure.querySelector("[data-brief]") as HTMLElement;
+    expect(within(shown).getByText(brief.summary)).toBeInTheDocument();
+    expect(within(shown).getByText(brief.justification)).toBeInTheDocument();
+    qc.clear();
+  });
+
   it("gives a KPI's metric and a supporting metric the same header; only the label and links differ", async () => {
     const readFor = (id: string, serves: { kpi: string; role: "input" } | undefined, bandAssessment?: KpiAssessment) => ({
       definition: { id, title: `Title ${id}`, revision: "1", spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 600 }, ...(serves ? { serves } : {}) },
