@@ -42,3 +42,5 @@ export function toUserId(raw: string): UserId {
 export function userActor(userId: UserId): ActorId {
   return userId as unknown as ActorId;
 }
+
+// ci cold-path probe (reverted)
