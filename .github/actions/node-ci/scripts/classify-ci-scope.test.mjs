@@ -1,4 +1,4 @@
-// Outcome tests for the node-ci scripts (classifier, unit runner). Each case names the defect it catches: a wrong
+// Outcome tests for the node-ci scripts (classifier, unit runner, concurrent runner). Each case names the defect it catches: a wrong
 // scope either skips tests a PR can break (false green) or runs everything for nothing.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { classifyFiles, decide, parseTestChain, selectUnitFilters } from "./classify-ci-scope.mjs";
-import { pureChain, selectUnitRun } from "./run-unit-tests.mjs";
+import { heaviestFirst, pureChain, selectUnitRun } from "./run-unit-tests.mjs";
 import { findUndeclaredWorkspaceEdges } from "./workspace-edges.mjs";
 
 const DIRS = ["app", "graphs", "packages/ids", "packages/metrics"];
@@ -78,9 +78,9 @@ const CASES = [
     });
     assert.match(readFileSync(out, "utf8"), /^scope=full$/m);
   }],
-  // Defect: the runner re-implements a root `test` script that also does something else (a build, a
-  // lint), so that step silently stops running. Anything but plain package steps runs as `pnpm test`.
-  ["only a plain package chain is interpreted", () => {
+  // Defect: the runner parallelises a root `test` script that also does something else (a build, a
+  // lint), so that step silently stops running. Anything but plain package steps stays serial and exact.
+  ["only a plain package chain is parallelised", () => {
     const guard = "node scripts/check-test-filters.mjs";
     assert.deepEqual(pureChain(`${guard} && pnpm --filter @x/a test && pnpm --filter "@x/b" test`), ["@x/a", "@x/b"]);
     assert.equal(pureChain("pnpm --filter @x/a test && pnpm lint"), null);
@@ -96,6 +96,26 @@ const CASES = [
     }
     assert.deepEqual(selectUnitRun({ CI_SCOPE: "affected", UNIT_FILTERS: "@x/c @x/a @x/zzz" }, chain).names, ["@x/a", "@x/c"]);
     assert.equal(selectUnitRun({ CI_SCOPE: "full" }, null).mode, "serial");
+  }],
+  // Defect: the long pole starts last, so the lane waits for it after everything else finished.
+  ["the package with the most test files starts first, ties keep chain order", () => {
+    const weights = new Map([["@x/a", 3], ["@x/b", 250], ["@x/c", 3]]);
+    assert.deepEqual(heaviestFirst(["@x/a", "@x/b", "@x/c"], weights), ["@x/b", "@x/a", "@x/c"]);
+  }],
+  // Defect: concurrency swallows a failure (green with a red sibling) or a failing job cancels its
+  // sibling so only one failure is ever reported. Exit is the first failure in the order given.
+  ["a concurrent run fails with the first failing job's code and still runs every sibling", () => {
+    const module = new URL("./run-concurrent.mjs", import.meta.url).href;
+    const program = `
+      import { runAll, exitCodeOf } from ${JSON.stringify(module)};
+      const sh = (name, script) => ({ name, cmd: "bash", args: ["-c", script] });
+      const results = await runAll([sh("slow-fail", "sleep 1; exit 4"), sh("pass", "echo sibling-ran"), sh("fast-fail", "exit 5")], { concurrency: 3, heartbeatMs: 0 });
+      process.exit(exitCodeOf(results));`;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", program], { encoding: "utf8" });
+    assert.equal(result.status, 4);
+    assert.match(result.stdout, /sibling-ran/);
+    assert.match(result.stdout, /::error title=slow-fail::/);
+    assert.match(result.stdout, /::error title=fast-fail::/);
   }],
 ];
 
