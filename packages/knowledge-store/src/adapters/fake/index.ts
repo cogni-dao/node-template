@@ -12,12 +12,12 @@
  */
 
 import {
-  KNOWLEDGE_BROWSE_PAGE_SIZE,
   type KnowledgeBrowsePage,
   type KnowledgeBrowseQuery,
 } from "../../contracts.js";
 import {
   browseQuery,
+  browseWindow,
   matchesBrowse,
   nextBrowseCursor,
   sortValue,
@@ -219,21 +219,19 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
           return cmp > 0 || (cmp === 0 && row.id > position.id);
         })
       : rows;
-    const window = remaining.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE);
     const needle = query.search?.toLowerCase();
-    const last = window[window.length - 1];
+    const window = browseWindow(
+      remaining,
+      needle ? (row) => matchesBrowse(row, needle) : undefined
+    );
+    const last = window.matches[window.matches.length - 1];
     return {
       revision: await this.currentCommit(),
-      items: window
-        .filter((row) => !needle || matchesBrowse(row, needle))
-        .map(summary),
-      scannedRows: window.length,
+      items: window.matches.map(summary),
+      scannedRows: window.scannedRows,
       total: rows.length,
       nextCursor:
-        last &&
-        (needle
-          ? window.length === KNOWLEDGE_BROWSE_PAGE_SIZE
-          : remaining.length > KNOWLEDGE_BROWSE_PAGE_SIZE)
+        last && window.hasMore
           ? nextBrowseCursor(signature, summary(last), query.sort)
           : null,
     };

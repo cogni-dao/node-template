@@ -8,7 +8,7 @@
  * Invariants:
  *   - ONE_WINDOW_PER_VIEW: opening Browse, or changing its filters or sort, issues at most one metadata request (none when `initialData` seeds the default first window). Nothing walks cursors or prefetches.
  *   - INTENT_ONLY_SEARCH: a body search (`query.search`) is requested once each time a search window identity is rendered: when a hook mounts with a search, or when submit, Continue, Previous, Restart, a filter or a sort change produces a new one. Focus, reconnect and cache invalidation never replay a body window. `KnowledgeBrowse` mounts with no committed search, so there body reads follow only an explicit submit.
- *   - EMPTY_WINDOW_CAN_CONTINUE: `canNext` follows `nextCursor`, so an empty capped search window still offers Continue.
+ *   - EMPTY_WINDOW_CAN_CONTINUE: `canNext` follows `nextCursor`; a search window carries one only when another match follows.
  *   - WINDOW_RESETS_ON_QUERY_CHANGE: a different filter, sort or search starts at the first window with an empty history, and the reset is kept, so returning to an earlier query also starts at its first window. `reset()` returns to the first window explicitly.
  *   - ABORT_ON_CHANGE: each request gets React Query's `AbortSignal`; leaving a window (new query or unmount) aborts its in-flight request.
  *   - NO_AUTOMATIC_RETRY: React Query `retry: false`; a failed window stays failed until `retry()` re-requests the same cursor.

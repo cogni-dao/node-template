@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
+  KNOWLEDGE_BROWSE_PAGE_SIZE,
   type KnowledgeBrowseQuery,
   KnowledgeBrowseQuerySchema,
   type KnowledgeSummary,
@@ -108,4 +109,24 @@ export function matchesBrowse(row: Knowledge, needle: string): boolean {
     row.entryType,
     row.entityId,
   ].some((value) => value?.toLowerCase().includes(needle));
+}
+/**
+ * One page over the ordered rows after the cursor: the first page of matches
+ * (every row without a search), how many rows were examined to find them, and
+ * whether another match follows. The continuation resumes after the last match.
+ */
+export function browseWindow<T>(
+  rows: readonly T[],
+  matches: (row: T) => boolean = () => true
+): { matches: T[]; scannedRows: number; hasMore: boolean } {
+  const found: T[] = [];
+  let scannedRows = rows.length;
+  for (const [index, row] of rows.entries()) {
+    if (!matches(row)) continue;
+    if (found.length === KNOWLEDGE_BROWSE_PAGE_SIZE)
+      return { matches: found, scannedRows, hasMore: true };
+    found.push(row);
+    scannedRows = index + 1;
+  }
+  return { matches: found, scannedRows: rows.length, hasMore: false };
 }

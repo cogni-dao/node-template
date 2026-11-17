@@ -373,11 +373,15 @@ export const KnowledgeBrowsePageSchema = z.object({
   revision: z.string().min(1).max(200),
   items: z.array(KnowledgeSummarySchema).max(KNOWLEDGE_BROWSE_PAGE_SIZE),
   nextCursor: z.string().nullable(),
-  scannedRows: z.number().int().min(0).max(KNOWLEDGE_BROWSE_PAGE_SIZE),
+  /**
+   * Rows examined after the cursor to fill this window. A search reads every
+   * candidate after the cursor and stops counting at the window's last match.
+   */
+  scannedRows: z.number().int().min(0),
   /**
    * Exact number of entries matching the window's filters (domains, entry
    * types, source types) at `revision`. With `search`, it is the candidate set
-   * the search walks; body matches are found per window, never pre-counted.
+   * the search walks; each window returns up to one page of matches.
    */
   total: z.number().int().min(0),
 });

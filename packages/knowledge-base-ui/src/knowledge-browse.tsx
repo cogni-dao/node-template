@@ -3,14 +3,14 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/knowledge-browse`
- * Purpose: The whole bounded knowledge Browse capability: table, header sort and exact filters, column picker, submit-only body search, explicit window navigation (Previous / Next or Continue search / Retry window / Restart) and the revision-changed prompt (task.0059).
+ * Purpose: The whole bounded knowledge Browse capability: table, header sort and exact filters, column picker, submit-only body search, explicit window navigation (Previous / Next / Retry window / Restart) and the revision-changed prompt (task.0059).
  * Scope: Client view over `useKnowledgeBrowse` and a node-supplied fetcher. The node supplies its endpoint, auth, SSR seed, known filter values and what a row selection opens (e.g. its detail sheet).
  * Invariants:
  *   - DRAFT_IS_NOT_SEARCH: typing edits only the draft. Submit (button or Enter) commits a changed draft that `KnowledgeBrowseQuerySchema` accepts; a rejected draft shows the schema's issue and sends nothing; an unchanged draft is not replayed.
  *   - ONE_WINDOW_PER_VIEW and INTENT_ONLY_SEARCH (see `useKnowledgeBrowse`); the view mounts with no committed search, so body reads follow only submit.
  *   - CLEAR_RETURNS_TO_FIRST_WINDOW: "Clear filters" empties filters and search and always returns to window 1.
  *   - OPTIONS_FROM_NODE: `entryTypeOptions` / `sourceTypeOptions` are required, because the canonical lists live in the store root (not its browser-safe `/contracts`); nodes pass `EntryTypeSchema.options` / `SourceTypeSchema.options`.
- *   - EXACT_TOTAL: the status line states the window's position against the store's exact filtered total ("Showing 1–20 of 5,046"); a search window states the candidates it examined and its matches; a capped empty search window says to continue, not "no matches". The page size comes from `@cogni/knowledge-store/contracts`.
+ *   - EXACT_TOTAL: the status line states the window's position against the store's exact filtered total ("Showing 1–20 of 5,046"); a search window states its matches and the entries the search covered, since one submit searches every candidate (bug.0048). The page size comes from `@cogni/knowledge-store/contracts`.
  *   - HOST_QUERY_CLIENT: rendered under the host's `QueryClientProvider`.
  * Side-effects: IO (through the injected fetcher)
  * Links: task.0059, packages/knowledge-base-ui/src/use-knowledge-windows.ts
@@ -65,8 +65,8 @@ const count = (n: number) => n.toLocaleString("en-US");
 
 /**
  * The window's position against the exact filtered total: "Showing 21–40 of
- * 5,046". A search window states which candidates it examined and how many
- * matched ("Searched 1–20 of 5,046 candidates · 3 matches").
+ * 5,046". A search window states which matches it shows and the entries the
+ * search covered ("Showing matches 1–3 · searched 5,046 entries").
  */
 export function knowledgeWindowSummary(
   page: KnowledgeBrowsePage | undefined,
@@ -77,17 +77,14 @@ export function knowledgeWindowSummary(
   if (isFetching) return "Loading window…";
   if (!page) return "Window not loaded";
   const first = windowIndex * KNOWLEDGE_BROWSE_PAGE_SIZE + 1;
-  const covered = isSearch ? page.scannedRows : page.items.length;
+  const covered = page.items.length;
   const range =
     covered > 0 ? `${count(first)}–${count(first + covered - 1)}` : "0";
-  const more = page.nextCursor
-    ? isSearch
-      ? " · continuation available"
-      : " · more available"
-    : " · end of results";
-  return isSearch
-    ? `Searched ${range} of ${count(page.total)} candidates · ${count(page.items.length)} matches${more}`
-    : `Showing ${range} of ${count(page.total)}${more}`;
+  const more = page.nextCursor ? " · more available" : " · end of results";
+  if (!isSearch) return `Showing ${range} of ${count(page.total)}${more}`;
+  return covered > 0
+    ? `Showing matches ${range} · searched ${count(page.total)} entries${more}`
+    : `No matches in ${count(page.total)} entries`;
 }
 
 export function KnowledgeBrowse({
@@ -232,8 +229,8 @@ export function KnowledgeBrowse({
         isLoading={browse.awaitingFirstRead}
         {...(onSelect && { onRowClick: onSelect })}
         emptyMessage={
-          page?.nextCursor
-            ? "No matches in this window. Continue search to examine more entries."
+          isSearch
+            ? "No entries match this search."
             : "No entries match these filters."
         }
       />
@@ -252,7 +249,7 @@ export function KnowledgeBrowse({
           disabled={!browse.canNext}
           onClick={browse.next}
         >
-          {isSearch ? "Continue search" : "Next window"}
+          Next window
         </Button>
       </div>
       {children}

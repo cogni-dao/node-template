@@ -5,7 +5,7 @@ import {
   KnowledgeBrowseQueryError,
 } from "../src/domain/browse-errors.js";
 
-it("continues through empty search windows to a literal body match beyond 500", async () => {
+it("one search window finds a literal body match beyond 500 candidates (bug.0048)", async () => {
   const store = new FakeKnowledgeStoreAdapter();
   await store.registerDomain({ id: "test", name: "Test" });
   await store.withWrite(
@@ -21,24 +21,47 @@ it("continues through empty search windows to a literal body match beyond 500", 
         });
     }
   );
-  let cursor: string | undefined;
-  const found: string[] = [];
-  let windows = 0;
-  do {
-    const result = await store.browseKnowledge({
-      sort: "id",
-      direction: "asc",
-      search: "i̇%_MATCH",
-      cursor,
-    });
-    expect(result.scannedRows).toBeLessThanOrEqual(20);
-    expect(JSON.stringify(result.items)).not.toContain("Only body");
-    found.push(...result.items.map((item) => item.id));
-    cursor = result.nextCursor ?? undefined;
-    windows++;
-  } while (cursor && windows < 30);
-  expect(found).toEqual(["row-0521"]);
-  expect(windows).toBe(27);
+  const result = await store.browseKnowledge({
+    sort: "id",
+    direction: "asc",
+    search: "i̇%_MATCH",
+  });
+  expect(result.items.map((item) => item.id)).toEqual(["row-0521"]);
+  expect(JSON.stringify(result.items)).not.toContain("Only body");
+  expect(result.scannedRows).toBe(522);
+  expect(result.nextCursor).toBeNull();
+});
+
+it("search windows hold a full page of matches and continue after the last one", async () => {
+  const store = new FakeKnowledgeStoreAdapter();
+  await store.registerDomain({ id: "test", name: "Test" });
+  await store.withWrite(
+    { operationId: "match-pages", message: "fixture" },
+    async (write) => {
+      for (let i = 0; i < 100; i++)
+        await write.addKnowledge({
+          id: `row-${String(i).padStart(3, "0")}`,
+          domain: "test",
+          title: "Ordinary",
+          content: i % 4 === 3 ? "needle" : "hay",
+          sourceType: "human",
+        });
+    }
+  );
+  const query = { sort: "id", direction: "asc", search: "needle" } as const;
+  const first = await store.browseKnowledge(query);
+  expect(first.items.map((item) => item.id)).toEqual(
+    Array.from({ length: 20 }, (_, i) => `row-${String(i * 4 + 3).padStart(3, "0")}`)
+  );
+  expect(first.scannedRows).toBe(80);
+  const next = await store.browseKnowledge({
+    ...query,
+    cursor: required(first.nextCursor),
+  });
+  expect(next.items.map((item) => item.id)).toEqual(
+    Array.from({ length: 5 }, (_, i) => `row-${String(i * 4 + 83).padStart(3, "0")}`)
+  );
+  expect(next.nextCursor).toBeNull();
 });
 
 it("binds continuation to the complete query and retains an empty exact filter", async () => {
@@ -216,7 +239,7 @@ it("matches an independent fixed-corpus oracle for every exposed order, nulls an
   ).rejects.toBeInstanceOf(KnowledgeBrowseQueryError);
 });
 
-it("native lookahead is not consumed and search reads exactly one bounded body window", async () => {
+it("native lookahead is not consumed and search reads every candidate body after the cursor", async () => {
   const { DoltgresKnowledgeStoreAdapter } = await import(
     "../src/adapters/doltgres/index.js"
   );
@@ -260,8 +283,9 @@ it("native lookahead is not consumed and search reads exactly one bounded body w
   });
   expect(queries[2]).toContain("domain IN ('test', 'x'' OR 1=1 --')");
   expect(queries[2]).toContain(
-    "ORDER BY COALESCE(confidence_pct, -1) ASC, id ASC LIMIT 20"
+    "ORDER BY COALESCE(confidence_pct, -1) ASC, id ASC"
   );
+  expect(queries[2]).not.toMatch(/LIMIT/);
   expect(queries[2]).toMatch(/browse_created_at, content FROM knowledge/);
   expect(queries[2]).not.toMatch(/LOWER|ILIKE/);
 });

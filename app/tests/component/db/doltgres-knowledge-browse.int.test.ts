@@ -596,7 +596,7 @@ describe("native Doltgres knowledge browsing", () => {
 		).toBe(true);
 	}, 120_000);
 
-	it("applies global any-of filters and searches all six literal fields through empty windows", async () => {
+	it("applies global any-of filters and finds each of six literal fields in one search window (bug.0048)", async () => {
 		const filtered = await store.browseKnowledge({
 			domains: ["z-domainneedle"],
 			entryTypes: ["finding"],
@@ -613,30 +613,15 @@ describe("native Doltgres knowledge browsing", () => {
 			["entityneedle", id(5)],
 			["%_LITERAL", id(549)],
 		]) {
-			let cursor: string | undefined;
-			const found: string[] = [];
-			let empty = 0;
-			let exhausted = false;
-			for (let page = 0; page < 30; page++) {
-				const result = await store.browseKnowledge({
-					sort: "id",
-					direction: "asc",
-					search: needle,
-					...(cursor ? { cursor } : {}),
-				});
-				if (!result.items.length && result.nextCursor) empty++;
-				expect(result.scannedRows).toBeLessThanOrEqual(20);
-				expect(result.items.every((row) => !("content" in row))).toBe(true);
-				found.push(...result.items.map((row) => row.id));
-				if (!result.nextCursor) {
-					exhausted = true;
-					break;
-				}
-				cursor = result.nextCursor;
-			}
-			expect(exhausted).toBe(true);
-			expect(found).toEqual([expected]);
-			if (needle === "%_LITERAL") expect(empty).toBeGreaterThanOrEqual(25);
+			const result = await store.browseKnowledge({
+				sort: "id",
+				direction: "asc",
+				search: needle,
+			});
+			expect(result.items.every((row) => !("content" in row))).toBe(true);
+			expect(result.items.map((row) => row.id)).toEqual([expected]);
+			expect(result.nextCursor).toBeNull();
+			expect(result.scannedRows).toBe(result.total);
 		}
 		expect(
 			(await store.listKnowledge("a", { q: "legacytrigger" })).map(

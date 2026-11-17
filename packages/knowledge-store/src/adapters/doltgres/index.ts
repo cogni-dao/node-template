@@ -35,7 +35,11 @@ import {
   type KnowledgeSummary,
 } from "../../contracts.js";
 import { readBrowseWithinBudget } from "./browse-budget.js";
-import { browseQuery, nextBrowseCursor } from "../../domain/browse.js";
+import {
+  browseQuery,
+  browseWindow,
+  nextBrowseCursor,
+} from "../../domain/browse.js";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
 import {
   type ActiveGoal,
@@ -511,7 +515,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
             "Knowledge revision unavailable; retry shortly"
           );
         const rows = await read(
-          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? KNOWLEDGE_BROWSE_PAGE_SIZE : KNOWLEDGE_BROWSE_PAGE_SIZE + 1}`
+          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC${search ? "" : ` LIMIT ${KNOWLEDGE_BROWSE_PAGE_SIZE + 1}`}`
         );
         const totalKey = `${revision}\u0000${filterWhere}`;
         let total = this.browseTotals.get(totalKey);
@@ -529,7 +533,26 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         return { rows, revision, total };
       }
     );
-    const window = rows.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE);
+    // A search reads every candidate after the cursor, unlimited, and keeps the
+    // first page of matches: Doltgres has no ILIKE and LOWER() panics on
+    // out-of-line TEXT, so matching runs here (the `searchKnowledge` idiom).
+    // Limiting the read first would hide every match outside one page of rows.
+    const window = browseWindow(
+      rows,
+      search
+        ? (row) =>
+            [
+              row.id,
+              row.title,
+              row.content,
+              row.domain,
+              row.entry_type,
+              row.entity_id,
+            ].some(
+              (v) => typeof v === "string" && v.toLowerCase().includes(search)
+            )
+        : undefined
+    );
     const toSummary = (row: Record<string, unknown>): KnowledgeSummary => ({
       id: String(row.id),
       domain: String(row.domain),
@@ -544,33 +567,14 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         ? new Date(row.created_at as string).toISOString()
         : null,
     });
-    const items = window
-      .filter(
-        (row) =>
-          !search ||
-          [
-            row.id,
-            row.title,
-            row.content,
-            row.domain,
-            row.entry_type,
-            row.entity_id,
-          ].some(
-            (v) => typeof v === "string" && v.toLowerCase().includes(search)
-          )
-      )
-      .map(toSummary);
-    const hasMore = search
-      ? window.length === KNOWLEDGE_BROWSE_PAGE_SIZE
-      : rows.length > KNOWLEDGE_BROWSE_PAGE_SIZE;
-    const last = window[window.length - 1];
+    const last = window.matches[window.matches.length - 1];
     return {
       revision,
-      items,
-      scannedRows: window.length,
+      items: window.matches.map(toSummary),
+      scannedRows: window.scannedRows,
       total,
       nextCursor:
-        hasMore && last
+        window.hasMore && last
           ? nextBrowseCursor(
               signature,
               toSummary(last),

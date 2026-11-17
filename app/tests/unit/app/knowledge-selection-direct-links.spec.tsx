@@ -408,7 +408,7 @@ it("node transport: typing issues no request; submit sends exactly one package-e
   expect((box as HTMLInputElement).value).toBe("abcde");
   expect(reads).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "Search" }));
-  await screen.findByText(/Searched 1–5 of 5,046 candidates/);
+  await screen.findByText("No matches in 5,046 entries");
   expect(reads).toHaveLength(1);
   expect(reads[0]?.searchParams.get("search")).toBe("abcde");
   expect(reads[0]?.searchParams.get("sort")).toBe("createdAt");
