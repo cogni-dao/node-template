@@ -19,14 +19,14 @@
 import { spawn } from "node:child_process";
 
 /**
- * @typedef {{ name: string, cmd: string, args: string[] }} Job
+ * @typedef {{ name: string, cmd: string, args: string[], env?: NodeJS.ProcessEnv }} Job
  * @typedef {{ name: string, status: number, seconds: number }} Result
  */
 
 function runJob(job, onDone) {
   const started = Date.now();
   const chunks = [];
-  const child = spawn(job.cmd, job.args, { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(job.cmd, job.args, { stdio: ["ignore", "pipe", "pipe"], env: job.env ?? process.env });
   child.stdout.on("data", (chunk) => chunks.push(chunk));
   child.stderr.on("data", (chunk) => chunks.push(chunk));
   const finish = (status) => {

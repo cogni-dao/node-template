@@ -11,6 +11,7 @@
  *   - The scripts/check-test-filters.mjs guard runs first when the node has it, and its failure fails the run.
  *   - Heaviest package first (most test files), so the long pole starts at once and the small packages fill the second slot.
  *   - Two at a time (UNIT_CONCURRENCY). The chain is CPU-bound, so this does not add CPU: it hides the per-package startup (about 2s each across 15 packages) and fills the core the app suite's 3 workers leave free. Measured on PR 395: unit test phase 134-202s concurrent against 168-230s serial.
+ *   - Every core for vitest (VITEST_MAX_WORKERS = availableParallelism, unless the node sets it): vitest's default of cores minus one leaves a core of a 4-vCPU runner idle under a suite that is 421 worker-seconds of CPU.
  *   - Every package runs to completion; the exit code is the first failing package's in chain order (run-concurrent.mjs).
  * Side-effects: IO (spawns node, git and pnpm).
  * Links: ./classify-ci-scope.mjs, ./run-concurrent.mjs, ../action.yml
@@ -20,6 +21,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -94,7 +96,10 @@ async function main() {
 
   const names = heaviestFirst(run.names, testFileWeights());
   console.log(`run-unit-tests: ${run.mode} chain, ${names.length} package(s): ${names.join(" ")}`);
-  const jobs = names.map((name) => ({ name, cmd: "pnpm", args: ["--filter", name, "test"] }));
+  // Vitest defaults to one worker fewer than the cores (3 on a 4-vCPU runner) and the app suite is
+  // CPU-bound, so give it every core. A node can still pin its own VITEST_MAX_WORKERS.
+  const env = { ...process.env, VITEST_MAX_WORKERS: process.env.VITEST_MAX_WORKERS ?? String(availableParallelism()) };
+  const jobs = names.map((name) => ({ name, cmd: "pnpm", args: ["--filter", name, "test"], env }));
   const concurrency = Number(process.env.UNIT_CONCURRENCY) || 2;
   const results = await runAll(jobs, { concurrency });
   console.log(results.map((r) => `${r.name} ${r.status === 0 ? "ok" : "FAILED"} ${r.seconds}s`).join("\n"));
