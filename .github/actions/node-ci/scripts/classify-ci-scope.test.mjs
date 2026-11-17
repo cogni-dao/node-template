@@ -1,4 +1,4 @@
-// Outcome test for classify-ci-scope.mjs. Each case names the defect it catches: a wrong
+// Outcome tests for the node-ci scripts (classifier, unit runner). Each case names the defect it catches: a wrong
 // scope either skips tests a PR can break (false green) or runs everything for nothing.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { classifyFiles, decide, parseTestChain, selectUnitFilters } from "./classify-ci-scope.mjs";
+import { pureChain, selectUnitRun } from "./run-unit-tests.mjs";
 import { findUndeclaredWorkspaceEdges } from "./workspace-edges.mjs";
 
 const DIRS = ["app", "graphs", "packages/ids", "packages/metrics"];
@@ -76,6 +77,28 @@ const CASES = [
       env: { ...process.env, CI_EVENT: "pull_request", BASE_REF: "no-such-branch-for-test", GITHUB_OUTPUT: out },
     });
     assert.match(readFileSync(out, "utf8"), /^scope=full$/m);
+  }],
+  // Defect: the runner re-implements a root `test` script that also does something else (a build, a
+  // lint), so that step silently stops running. Anything but plain package steps runs as `pnpm test`.
+  ["only a plain package chain is interpreted", () => {
+    const guard = "node scripts/check-test-filters.mjs";
+    assert.deepEqual(pureChain(`${guard} && pnpm --filter @x/a test && pnpm --filter "@x/b" test`), ["@x/a", "@x/b"]);
+    assert.equal(pureChain("pnpm --filter @x/a test && pnpm lint"), null);
+    assert.equal(pureChain("pnpm --filter @x/a test:ci"), null);
+    assert.equal(pureChain(undefined), null);
+  }],
+  // Defect: a crashed or missing classifier (empty scope) runs a subset, so the merge queue and any
+  // unscoped run would pass without the full chain. Only an explicit `affected` scope narrows.
+  ["only an explicit affected scope runs a subset of the chain", () => {
+    const chain = ["@x/a", "@x/b", "@x/c"];
+    for (const scope of [undefined, "", "full", "docs-only"]) {
+      assert.equal(selectUnitRun({ CI_SCOPE: scope, UNIT_FILTERS: "@x/b" }, chain).mode, "full", `scope ${scope}`);
+    }
+    const affected = selectUnitRun({ CI_SCOPE: "affected", UNIT_FILTERS: "@x/c @x/a @x/zzz" }, chain);
+    assert.equal(affected.mode, "affected");
+    assert.deepEqual(affected.names, ["@x/a", "@x/c"]);
+    // A chain the runner cannot read is never narrowed: it runs the node's own `pnpm test:ci`.
+    assert.equal(selectUnitRun({ CI_SCOPE: "affected", UNIT_FILTERS: "@x/a" }, null).mode, "full");
   }],
 ];
 
