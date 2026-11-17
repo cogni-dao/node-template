@@ -5,7 +5,8 @@
  * Module: `@app/(app)/knowledge/_components/KnowledgeDetail`
  * Purpose: Slide-over Sheet that renders a single knowledge entry's full content,
  *   with a copy-link affordance to the entry's permalink. Body shared with the
- *   routable `/knowledge/[id]` page via `KnowledgeEntryFields`.
+ *   routable `/knowledge/[id]` page via `KnowledgeEntryBody`, so a metric shows
+ *   its chart and brief here too.
  * Scope: Pure presentation; no fetching.
  * @internal
  */
@@ -13,18 +14,17 @@
 "use client";
 
 import { KnowledgeUseWhen } from "@cogni/knowledge-base-ui";
-import type { KnowledgeRow } from "@cogni/node-contracts";
 import type { ReactElement } from "react";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
 import { CopyLinkButton } from "./CopyLinkButton";
-import { KnowledgeEntryFields } from "./KnowledgeEntryFields";
+import { type KnowledgeEntry, KnowledgeEntryBody } from "./KnowledgeEntryBody";
 
 interface KnowledgeDetailProps {
   readonly loading?: boolean;
   readonly error?: unknown;
   readonly onRetry?: () => void;
-  readonly item: KnowledgeRow | null;
+  readonly item: KnowledgeEntry | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -87,8 +87,8 @@ export function KnowledgeDetail({
               </div>
             </SheetHeader>
 
-            <div className="mt-6">
-              <KnowledgeEntryFields item={item} />
+            <div className="mt-6 flex flex-col gap-4">
+              <KnowledgeEntryBody item={item} />
             </div>
           </>
         )}
