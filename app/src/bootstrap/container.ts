@@ -63,6 +63,7 @@ import {
 import { parseMcpConfigFromEnv } from "@cogni/langgraph-graphs";
 import {
 	COGNI_SYSTEM_PRINCIPAL_USER_ID,
+	EVENT_NAMES,
 	initAnalytics,
 	shutdownAnalytics,
 } from "@cogni/node-shared";
@@ -311,7 +312,7 @@ export interface Container {
 	workItemQuery: WorkItemQueryPort;
 	/** Node-local Doltgres work-item query/create/patch/delete surface. */
 	doltgresWorkItems: WorkItemsDoltgresPort;
-	/** Review and validation artifacts of work items (task.0028): the item store, the insert-only artifact store and the inbox author port. Undefined when DOLTGRES_URL is unset. */
+	/** Review and validation artifacts of work items (task.0028): the item store and the insert-only artifact store. Undefined when DOLTGRES_URL is unset. */
 	workItemArtifacts: WorkItemArtifactDeps | undefined;
 	/** Run event streaming — publish/subscribe via Redis Streams */
 	runStream: RunStreamPort;
@@ -830,7 +831,7 @@ function createContainer(): Container {
 		if (!prRepos.repos.length) {
 			log.warn(
 				{
-					event: "adapter.work_items.pr_repo_unpinned",
+					event: EVENT_NAMES.ADAPTER_WORK_ITEMS_PR_REPO_UNPINNED,
 					reason: prRepos.reason,
 				},
 				"work items accept a pull request of any github.com repository as a code deliverable; set WORK_ITEMS_PR_REPO=owner/repo to pin one",
@@ -840,7 +841,7 @@ function createContainer(): Container {
 		if (prRepos.ignored.length) {
 			log.warn(
 				{
-					event: "adapter.work_items.pr_repo_ignored",
+					event: EVENT_NAMES.ADAPTER_WORK_ITEMS_PR_REPO_IGNORED,
 					ignored: prRepos.ignored,
 					pinned: prRepos.repos,
 				},

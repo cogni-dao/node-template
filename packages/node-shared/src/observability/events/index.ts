@@ -39,6 +39,9 @@ export const EVENT_NAMES = {
 	WORK_ITEMS_PATCH_REFUSED: "work.items.patch_refused",
 	// The same-door check refused a route call (a bearer without the grant, or the grant store unreachable): one terminal event with routeId and errorCode (policy_denied | authz_unavailable).
 	AGENT_ROUTE_DENIED: "agent.route_denied",
+	// Work-item PR repo pin at boot (task.0122): unset or malformed leaves it unpinned; entries that are not owner/repo are ignored. Once at boot, never per request.
+	ADAPTER_WORK_ITEMS_PR_REPO_UNPINNED: "adapter.work_items.pr_repo_unpinned",
+	ADAPTER_WORK_ITEMS_PR_REPO_IGNORED: "adapter.work_items.pr_repo_ignored",
 	KNOWLEDGE_HISTORY_READ: "knowledge.history_read",
 	// Whole-graph read (task.0059): one terminal event per read, counts and bytes only.
 	KNOWLEDGE_GRAPH_READ: "knowledge.graph_read",

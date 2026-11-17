@@ -8,7 +8,8 @@
  * Scope: Run ONCE per node, by the operator, against that node's Doltgres through its custody, AFTER migration 0008 and the app
  *   version that has `status_revision` are deployed; never by deploy. Migration 0008 already moved every needs_merge item to
  *   needs_closeout, so needs_merge is never a source.
- *   Usage: DOLTGRES_URL=... node scripts/db/place-legacy-work-items.mjs [--apply]
+ *   Usage: DOLTGRES_URL=... [WORK_ITEMS_PR_REPO=owner/repo,...] node scripts/db/place-legacy-work-items.mjs [--apply]
+ *   WORK_ITEMS_PR_REPO is the same pin the app takes; set it to the node's value so placement reads PRs as the gates do.
  *   Without `--apply` it prints the plan and writes nothing.
  * Invariants:
  *   - THE_STORE_DECIDES: the script only reads item ids and asks `DoltgresWorkItemAdapter.planPlacement`, then asks `place` to apply
@@ -88,7 +89,14 @@ const inboxes = {
 	},
 };
 
+/** The same pin the app takes: one or more comma-separated owner/repo; an entry that is not owner/repo is ignored. */
+const prRepos = (process.env.WORK_ITEMS_PR_REPO ?? "")
+	.split(",")
+	.map((entry) => entry.trim())
+	.filter((entry) => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(entry));
+
 const adapter = createDoltgresWorkItemStore(makeClient(), {
+	...(prRepos.length ? { prRepos } : {}),
 	writerLockProtocol: "database",
 	recreateClient: makeClient,
 	readClient: reader,

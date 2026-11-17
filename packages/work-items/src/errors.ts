@@ -106,7 +106,7 @@ export class WorkItemScoresInvalidError extends Error {
 }
 
 /**
- * A move is refused (task.0122): the exit artifact or fact it needs is missing, stale or not independent, or the move is
+ * A move is refused (task.0122): the exit artifact or fact it needs is missing or stale, or the move is
  * not allowed at all (a jump, an exit from done or cancelled, into a legacy status). Nothing was written. `missing` is the
  * artifact kind or fact (`GateMissing`).
  */

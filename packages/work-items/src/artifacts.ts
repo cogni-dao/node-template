@@ -510,8 +510,8 @@ const invalid = (
   },
 });
 
-/** Same origin, ignoring case and a trailing slash. No configured origin matches nothing. */
-function isOwnOrigin(origin: string, own: string | undefined): boolean {
+/** Whether `origin` is this hub's own origin: scheme, host and port compared, case and a trailing slash aside. With none configured, never. */
+export function isOwnOrigin(origin: string, own: string | undefined): boolean {
   if (!own) return false;
   try {
     return new URL(origin).origin === new URL(own).origin;

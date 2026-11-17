@@ -323,6 +323,7 @@ describe("exit of needs_validation: PASS-grade at the approved head", () => {
     { name: "the PR facts not read is facts_unavailable", ...code, artifacts: [prReview(HEAD, "approve", { itemRevision: 2 }), prValidation()], prFacts: null, unavailable: "pr" },
     { name: "a code item cannot jump from validation to done", from: "needs_validation", to: "done", artifacts: [prReview(HEAD, "approve", { itemRevision: 2 }), prValidation()], prFacts: MERGED_PR, unmet: "path" },
     { name: "a story's validation names this hub's origin", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation()], ok: true },
+    { name: "a story's validation origin is compared as the write side does: case and a trailing slash aside", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation()], hubOrigin: "https://Node-Template.cognidao.org/", ok: true },
     { name: "a story validation of another origin is refused", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation(PASS, `https://other.example@${HEAD}`)], unmet: "validation" },
     { name: "with no hub origin configured a story validation is refused (fail closed)", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation()], hubOrigin: null, unmet: "validation" },
     { name: "a story needs a PASS-grade validation", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation(FAILED)], unmet: "validation" },
@@ -451,12 +452,17 @@ describe("gateNeeds: the facts a move reads, known before the lock", () => {
     expect(needs(from, to).pr).toBe(reads);
   });
 
-  it("a back move, a cancel and a move out of a legacy status read nothing", () => {
+  it("a move to triage, a cancel and a move out of a legacy status read nothing", () => {
     const none = { pr: false, children: false, artifacts: false };
     expect(needs("needs_validation", "needs_triage")).toEqual(none);
-    expect(needs("needs_merge", "needs_implementation_review")).toEqual(none);
     expect(needs("needs_merge", "cancelled")).toEqual(none);
     expect(needs("blocked", "needs_triage")).toEqual(none);
+  });
+
+  it("a back move to a ladder stage reads the artifacts (the path comes from the latest triage) but never the PR", () => {
+    expect(needs("needs_merge", "needs_implementation_review")).toEqual({ pr: false, children: false, artifacts: true });
+    expect(needs("needs_implement", "needs_design")).toEqual({ pr: false, children: false, artifacts: true });
+    expect(needs("needs_implement", "needs_design", "story", null)).toEqual({ pr: false, children: false, artifacts: true });
   });
 
   it("a forward move reads the artifacts; a story reads its children, never a PR; a knowledge item never reads a PR", () => {

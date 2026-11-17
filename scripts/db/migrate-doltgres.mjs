@@ -104,7 +104,7 @@ async function applyPending(sql, folder) {
   const lastWhen = rows[0]?.created_at != null ? Number(rows[0].created_at) : 0;
 
   const tagByWhen = journalTags(folder);
-  const tags = [];
+  const entries = [];
   for (const migration of migrations) {
     if (migration.folderMillis <= lastWhen) continue;
     for (const stmt of migration.sql) {
@@ -125,12 +125,13 @@ async function applyPending(sql, folder) {
     await sql.unsafe(
       `INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES (${sqlEscape(migration.hash)}, ${migration.folderMillis})`
     );
-    const tag = tagByWhen.get(migration.folderMillis) ?? `unnamed@${migration.folderMillis}`;
-    tags.push(tag);
-    // One line per applied migration, by name: a candidate log proves "0008_..." was applied without reading the database.
-    console.log(`MIGRATION_APPLIED ${JSON.stringify({ node: NODE, tag, when: migration.folderMillis })}`);
+    entries.push({
+      tag: tagByWhen.get(migration.folderMillis) ?? `unnamed@${migration.folderMillis}`,
+      when: migration.folderMillis,
+    });
   }
-  return { applied: tags.length, tags };
+  // The caller prints the receipt, only after the batch verified and merged: a line here would claim success too early.
+  return { applied: entries.length, tags: entries.map((e) => e.tag), entries };
 }
 
 const retainedPools = new WeakSet();
@@ -316,9 +317,9 @@ async function migrate(folder, before) {
           return { applied: 0, tags: [], committed: false };
         }
         return mutate("migration: drizzle-kit batch", async (scoped) => {
-          const { applied, tags } = await applyPending(scoped, folder);
+          const { applied, tags, entries } = await applyPending(scoped, folder);
           await verifyDoltgresSchema(scoped, folder);
-          return { applied, tags, committed: true };
+          return { applied, tags, entries, committed: true };
         });
       });
     } catch (error) {
@@ -328,6 +329,10 @@ async function migrate(folder, before) {
       throw error;
     }
   });
+  // One line per applied migration, by name, printed only after verify and merge succeeded: a candidate log proves "0008_..." was
+  // applied without reading the database.
+  for (const entry of result.entries ?? [])
+    console.log(`MIGRATION_APPLIED ${JSON.stringify({ nodeId: NODE, tag: entry.tag, when: entry.when })}`);
   console.log(`✅ ${NODE} migrate complete: ${result.applied} migration(s) applied${result.tags.length ? ` (${result.tags.join(", ")})` : ""} + verified + ${result.committed ? "owned branch committed" : "read-only no-op; no journal DDL or commit"} in ${Date.now() - t0}ms`);
   return result;
 }

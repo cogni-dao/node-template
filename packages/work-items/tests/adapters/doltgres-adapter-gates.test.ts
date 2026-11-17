@@ -203,6 +203,27 @@ describe("a refused move writes nothing", () => {
   });
 });
 
+describe("a back move on the design route", () => {
+  it("reads the latest triage, so a design-route item at needs_implement may return to needs_design", async () => {
+    const design = artifactRow("triage", `work:${ID}`, "design");
+    const { queries, make } = world("needs_implement", { artifacts: [design] });
+    const patched = await patchStatus(make(), "needs_design");
+    expect(patched.status).toBe("needs_design");
+    expect(wrote(queries)).toBe(true);
+  });
+
+  it("an item with no design-route triage cannot enter a design stage by moving back", async () => {
+    const { queries, make } = world("needs_implement");
+    await expect(patchStatus(make(), "needs_design")).rejects.toMatchObject({
+      name: "WorkItemGateUnmetError",
+      from: "needs_implement",
+      to: "needs_design",
+      missing: "path",
+    });
+    expect(wrote(queries)).toBe(false);
+  });
+});
+
 describe("status_revision", () => {
   it("is restamped by a forward move on its exit artifact", async () => {
     const triage = artifactRow("triage", `work:${ID}`, "implement");
@@ -221,6 +242,16 @@ describe("status_revision", () => {
     const { queries, make } = world("needs_validation", { pr: PR });
     const patched = await patchStatus(make(), "needs_triage");
     expect(patched.status).toBe("needs_triage");
+    expect(queries.find((q) => q.startsWith("UPDATE work_items"))).toContain(
+      "status_revision = revision + 1"
+    );
+  });
+
+  it("is restamped by a move back to a design stage, which needs no fresh artifact", async () => {
+    const stale = artifactRow("triage", `work:${ID}`, "design", { item_revision: 1 });
+    const { queries, make } = world("needs_implement", { artifacts: [stale] });
+    const patched = await patchStatus(make(), "needs_design");
+    expect(patched.status).toBe("needs_design");
     expect(queries.find((q) => q.startsWith("UPDATE work_items"))).toContain(
       "status_revision = revision + 1"
     );

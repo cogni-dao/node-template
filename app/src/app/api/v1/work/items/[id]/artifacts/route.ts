@@ -9,7 +9,7 @@
  *   - SAME_DOOR: POST needs the `work_item:transition` grant, the same door `PATCH /work/items/{id}` runs (route id `work.items.artifacts.create` is the route twin of the tool `core__work_item_artifact_record`, which carries the same `work_item:transition` scope as `core__work_item_update`); a signed-in human passes. A granular review grant is a later story. GET needs a session, like history.
  *   - AUTHOR_IS_STAMPED: the author is `sessionUser.id`; a body never names one.
  *   - Errors, each with an `errorCode`: 400 `invalid_input` (an invalid JSON body too), 403 grant, 404 `not_found`, 409 `work_item_write_outcome_unknown` (inspect, never replay), 503 `artifacts_unavailable` (no store wired too). Nothing is written in the 400, 404 and 503 cases. The author is stamped for audit; no check compares it with the subject's author.
- *   - One terminal log event per call (codes and counts only): `work.items.artifact_recorded` on success, `work.items.artifact_refused` on every other write outcome, `work.items.artifacts_read` for the list. A failure also warns once as `work.items.artifact_unavailable`.
+ *   - One terminal log event per call (codes and counts only): `work.items.artifact_recorded` on success, `work.items.artifact_refused` on every other write outcome, `work.items.artifacts_read` for the list. A failure carries its `errorName` on that same terminal line.
  * Side-effects: IO (HTTP response, Doltgres read and write)
  * Links: @cogni-dao/work-items recordWorkItemArtifact, hub work-cicd-gates-design
  * @public
@@ -38,7 +38,7 @@ const EVENT_BY_LOG = {
   "work.items.artifacts_read": EVENT_NAMES.WORK_ITEMS_ARTIFACTS_READ,
 } as const;
 
-/** One terminal log event per call, then the response. A failed call also warns once, under one event name. */
+/** One terminal log event per call, then the response. A failed call carries its `errorName` on that same line. */
 function respond(
   ctx: {
     readonly log: Parameters<typeof logEvent>[0];
@@ -53,11 +53,9 @@ function respond(
     reqId: ctx.reqId,
     routeId: ctx.routeId,
     ...fields,
+    ...(errorName !== undefined ? { errorName } : {}),
     durationMs: Date.now() - startedAt,
   });
-  if (errorName !== undefined) {
-    ctx.log.warn({ errorName }, "work.items.artifact_unavailable");
-  }
   return NextResponse.json(body, { status });
 }
 

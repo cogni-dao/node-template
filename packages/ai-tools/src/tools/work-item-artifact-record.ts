@@ -65,7 +65,7 @@ export const workItemArtifactRecordContract: ToolContract<
     "Input { id, artifact: { kind, subject, verdict, note?, url?, body?, rows? } }. A triage artifact has kind 'triage', subject 'work:<itemId>', " +
     "verdict research, design or implement (the route you chose) and, when the item declares no `moves`, a one-line `note` naming the measurement gap. " +
     "Recording never moves the item: record the artifact, then patch the status with core__work_item_update. " +
-    "The author is you; a review or validation of work you wrote is refused. A refusal returns success=false with a code and nothing was written.",
+    "The author recorded is you. A refusal returns success=false with a code and nothing was written.",
   effect: "state_change",
   requires: {
     scope: "work_item:transition",

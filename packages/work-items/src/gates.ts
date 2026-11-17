@@ -33,6 +33,7 @@
 
 import {
   type ArtifactKind,
+  isOwnOrigin,
   isPassGrade,
   parseArtifactSubject,
   type WorkItemArtifact,
@@ -285,9 +286,11 @@ const PR_STAGES: readonly WorkItemStatus[] = [
 ];
 
 /**
- * What the move reads, a superset known without the artifacts (the route needs them): a back move, a cancel or a move from
- * a legacy status reads nothing; a forward move reads the artifacts; a code item leaving review, validation or merge reads
- * its PR; a story leaving implement reads its children.
+ * What the move reads, a superset known without the artifacts (the route needs them): a move to needs_triage or a cancel, or a
+ * move from a legacy status, reads nothing. A move to any other ladder stage reads the artifacts, forward or back, because the
+ * item's path depends on its latest triage (a design-route item may go back to needs_design; without its triage artifact the
+ * route would read as implement). Only a forward move reads the PR (a code item leaving review, validation or merge) or the
+ * children (a story leaving implement).
  */
 export function gateNeeds(
   item: GateItem,
@@ -295,14 +298,16 @@ export function gateNeeds(
   to: WorkItemStatus,
   deliverable: Deliverable | undefined
 ): GateNeeds {
-  const forward = statusRank(from) >= 0 && statusRank(to) > statusRank(from);
-  if (!forward || to === "cancelled") return NO_NEEDS;
+  const toRank = statusRank(to);
+  if (statusRank(from) < 0 || toRank <= 0) return NO_NEEDS;
+  const forward = toRank > statusRank(from);
   return {
     pr:
+      forward &&
       item.type !== "story" &&
       deliverable?.kind === "pr" &&
       PR_STAGES.includes(from),
-    children: item.type === "story" && from === "needs_implement",
+    children: forward && item.type === "story" && from === "needs_implement",
     artifacts: true,
   };
 }
@@ -478,9 +483,8 @@ export function evaluateMove(
       if (item.type === "story") {
         if (subject?.form !== "build") return unmet("validation");
         // FAIL_CLOSED: a story validation must name this hub's own origin; with none configured nothing can.
-        return facts.hubOrigin && subject.origin === facts.hubOrigin
-          ? OK
-          : unmet("validation");
+        // The same normalisation the write side applies (`isOwnOrigin`): scheme, host and port, case and a trailing slash aside.
+        return isOwnOrigin(subject.origin, facts.hubOrigin) ? OK : unmet("validation");
       }
       if (deliverable?.kind !== "pr") return unmet("pr");
       if (!facts.pr) return unavailable("pr");
