@@ -26,7 +26,7 @@ const FILES = [
   ...(HAS_ACTION ? [ACTION] : []),
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
-  ".github/workflows/publish-packages.yml",
+  ...(HAS_ACTION ? [".github/workflows/publish-packages.yml"] : []),
   ".cogni/repo-policy.json",
 ];
 
@@ -75,36 +75,42 @@ const CASES = [
     name: `${job} must not restore the full workspace install`,
     mutate: editPrBuildJob(job, contractInstall, "pnpm install --frozen-lockfile"),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /frozen contract install/,
   })),
   {
     name: "contract installs must retain frozen lock enforcement",
     mutate: editPrBuildJob("detect", contractInstall, contractInstall.replace(" --frozen-lockfile", "")),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /frozen contract install/,
   },
   {
     name: "contract jobs must not hydrate the broad workspace cache",
     mutate: editPrBuildJob("manifest", "          node-version: 22", "          node-version: 22\n          cache: pnpm"),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /must not hydrate a broad Node cache/,
   },
   {
     name: "PRs must not export the trusted main image cache",
     mutate: edit(".github/workflows/pr-build.yml", mainCacheExport, "type=gha,mode=max,scope=node-template-${{ matrix.target.artifact }}"),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /trusted main cache export/,
   },
   {
     name: "workflow dispatch must not become a main cache writer",
     mutate: edit(".github/workflows/pr-build.yml", mainCacheExport, mainCacheExport.replace("github.event_name == 'push' && ", "")),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /trusted main cache export/,
   },
   {
     name: "the disposable image job must not restore slow Buildx teardown",
     mutate: edit(".github/workflows/pr-build.yml", "          cleanup: false", "          cleanup: true"),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /ephemeral Buildx cleanup/,
   },
   {
@@ -121,6 +127,7 @@ const CASES = [
       "      - name: Build repo-spec contract\n        run: pnpm check"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /detect dependency build/,
   },
   {
@@ -131,6 +138,7 @@ const CASES = [
       "      - name: Redundant verification\n        run: pnpm test:ci\n\n      - name: Detect node image targets"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /jobs.detect must not duplicate CI checks or tests/,
   },
   {
@@ -191,6 +199,7 @@ const CASES = [
       'gh release upload "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" --clobber \\'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /uses --clobber/,
   },
   {
@@ -201,6 +210,7 @@ const CASES = [
       "      - name: Attach the tarball to a Release\n        continue-on-error: true\n        if: github.event_name == 'push'"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /continue-on-error/,
   },
   {
@@ -211,6 +221,7 @@ const CASES = [
       "      - name: Attach the tarball to a Release\n"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /publishes or attests but is not gated/,
   },
   {
@@ -221,6 +232,7 @@ const CASES = [
       "      - name: Tagged commit checks are assumed green"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /Tagged commit must have passed every required check/,
   },
   {
@@ -231,12 +243,14 @@ const CASES = [
       "  id-token: write\n  attestations: write\n  packages: write"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /permissions\.packages must not be granted/,
   },
   {
     name: "building the artifact on a different Node major than CI gates it",
     mutate: edit(".github/workflows/publish-packages.yml", 'NODE_VERSION: "22"', 'NODE_VERSION: "24"'),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /env\.NODE_VERSION must match/,
   },
   // The registry <-> tag-filter bijection. Drift in EITHER direction is silent at
@@ -249,6 +263,7 @@ const CASES = [
       ""
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /must include the tag filter "knowledge-store-v\*"/,
   },
   {
@@ -259,6 +274,7 @@ const CASES = [
       '      - "knowledge-base-v*"\n      - "node-core-v*"\n'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /tag filter "node-core-v\*" matches no env\.PACKAGES entry/,
   },
   {
@@ -269,6 +285,7 @@ const CASES = [
       ""
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /tag filter "knowledge-base-v\*" matches no env\.PACKAGES entry/,
   },
   {
@@ -279,6 +296,7 @@ const CASES = [
       '  PACKAGES: "not json"\n  PACKAGES_OLD: >-\n'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /env\.PACKAGES must be valid JSON/,
   },
   {
@@ -289,6 +307,7 @@ const CASES = [
       '{"name":"@cogni-dao/work-items","tagPrefix":"work-items-v"}'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /env\.PACKAGES\[\d+\] must declare a non-empty string "dir"/,
   },
   {
@@ -299,6 +318,7 @@ const CASES = [
       '        pkg:\n          - {"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"}'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /matrix\.pkg must be derived from jobs\.select/,
   },
   {
@@ -309,6 +329,7 @@ const CASES = [
       "  select:\n    runs-on: ubuntu-latest\n"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /jobs\.select must expose a non-empty `packages` output/,
   },
   {
@@ -319,6 +340,7 @@ const CASES = [
       "  publish:\n"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /jobs\.publish\.needs must include "select"/,
   },
   // Defect: narrowing the full unit step to pull requests lets the merge queue pass without
@@ -448,7 +470,7 @@ const CASES = [
 let failed = 0;
 let skipped = 0;
 for (const testCase of CASES) {
-  if (testCase.mutate.needsAction && !HAS_ACTION) {
+  if ((testCase.mutate.needsAction || testCase.templateOnly) && !HAS_ACTION) {
     skipped += 1;
     console.log(`skip ${testCase.name} (template-only: no ${ACTION} in this repo)`);
     continue;
