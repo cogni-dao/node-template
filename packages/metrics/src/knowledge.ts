@@ -31,6 +31,7 @@ import {
 	NO_INLINE_HISTORY_MAX_ROWS,
 	readGithubActions,
 	readGithubStars,
+	readKnowledgeMerges,
 	readNoInlineHistoryScope,
 	readNoInlineHistoryState,
 	readWorkConvergence,
@@ -75,6 +76,7 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"github.stars@1",
 	"github.actions@1",
 	"no-inline-history@1",
+	"knowledge.merge-review@1",
 ] as const;
 /** `work.count@1` → `work.count`: the family every version of a calculator shares. */
 export function calculatorFamily(id: string): string {
@@ -284,6 +286,31 @@ export function createGoalMetrics(deps: {
 					readNoInlineHistoryState(sourceSql, p.subject, signal),
 				);
 			return ctx.read((signal) => readNoInlineHistoryScope(sourceSql, signal));
+		},
+	});
+	const mergeReviewParams = z.strictObject({
+		output: z.enum(["share", "merged"]),
+		days: z.number().int().min(1).max(28),
+	});
+	registry.register({
+		id: "knowledge.merge-review@1",
+		// Window edges are resolved_at event times inside [end - days, end).
+		historicalWindows: true,
+		unit: "ratio",
+		unitFor: (params) =>
+			mergeReviewParams.parse(params).output === "share" ? "ratio" : "items",
+		displayFor: (params) =>
+			mergeReviewParams.parse(params).output === "share"
+				? "progress"
+				: "volume",
+		windowSeconds: (params) => mergeReviewParams.parse(params).days * 86400,
+		paramsSchema: mergeReviewParams,
+		budget,
+		compute: async (params, ctx) => {
+			const { output } = mergeReviewParams.parse(params);
+			return ctx.read((signal) =>
+				readKnowledgeMerges(sourceSql, output, ctx.window, signal),
+			);
 		},
 	});
 	const nodeCalculatorIds: string[] = [];

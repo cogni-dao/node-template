@@ -1,0 +1,92 @@
+// Outcome test for classify-ci-scope.mjs. Each case names the defect it catches: a wrong
+// scope either skips tests a PR can break (false green) or runs everything for nothing.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { classifyFiles, decide, parseTestChain, selectUnitFilters } from "./classify-ci-scope.mjs";
+import { findUndeclaredWorkspaceEdges } from "./workspace-edges.mjs";
+
+const DIRS = ["app", "graphs", "packages/ids", "packages/metrics"];
+const scopeOf = (files) => classifyFiles(files, DIRS).scope;
+
+const CASES = [
+  // Defect: docs-only PRs keep paying for install + build + tests.
+  ["docs and markdown only is docs-only", () => assert.equal(scopeOf(["docs/spec/overview.png", "packages/ids/README.md"]), "docs-only")],
+  // Defect: a unit test reads root CLAUDE.md/AGENTS.md, so skipping unit on their edit is a false green.
+  ["root CLAUDE.md is not docs-only", () => assert.notEqual(scopeOf(["CLAUDE.md"]), "docs-only")],
+  // Defect: a workflow, script or lockfile change scoped down hides breakage in every package.
+  ...[".github/workflows/ci.yaml", "scripts/ci/x.mjs", "pnpm-lock.yaml", "package.json", "tsconfig.base.json", "packages/ids/tsconfig.json"].map((file) => [
+    `${file} runs full`,
+    () => assert.equal(scopeOf([file, "packages/ids/src/a.ts"]), "full"),
+  ]),
+  // Defect: a file no package owns (config, infra) can be read by path from a test.
+  ["a file outside every workspace package runs full", () => assert.equal(scopeOf(["infra/x.yaml"]), "full")],
+  // Defect: fail-open on an empty or unreadable diff.
+  ["an empty diff runs full", () => assert.equal(scopeOf([]), "full")],
+  // Defect: a doc riding along with code must not hide the code change.
+  ["docs plus a package change is affected, naming the package", () => {
+    const result = classifyFiles(["docs/diagram.png","packages/ids/src/a.ts"], DIRS);
+    assert.equal(result.scope, "affected");
+    assert.deepEqual(result.packages, ["packages/ids"]);
+  }],
+  // Defect: the curated chain stops owning what runs, or selection reorders/invents packages.
+  ["unit selection is the curated chain intersected with the affected set, in chain order", () => {
+    const chain = parseTestChain('node a && pnpm --filter @x/b test && pnpm --filter @x/a test && pnpm --filter "@x/c" test');
+    assert.deepEqual(chain, ["@x/b", "@x/a", "@x/c"]);
+    assert.deepEqual(selectUnitFilters(chain, ["@x/c", "@x/b", "@x/not-in-chain"]), ["@x/b", "@x/c"]);
+  }],
+  // Defect: a package test importing another package's source by path is invisible to pnpm's
+  // graph, so an app-only change would skip that test (false green). Declared (even aliased) is fine.
+  ["an undeclared cross-package relative import is found; a declared or aliased one is not", () => {
+    const pkgs = [
+      { name: "@x/app", dir: "app" },
+      { name: "@x/lib", dir: "packages/lib" },
+      { name: "@x/ui", dir: "packages/ui" },
+    ];
+    const manifests = {
+      "app/package.json": { dependencies: { "@x/ui-alias": "workspace:@x/ui@*" } },
+      "packages/lib/package.json": {},
+      "packages/ui/package.json": {},
+    };
+    const sources = {
+      "packages/ui/tests/a.test.ts": 'import { f } from "../../../app/src/f";',
+      "app/tests/b.test.ts": 'import { g } from "../../packages/ui/src/g";\nimport { h } from "../../packages/lib/src/h";',
+    };
+    const read = (file) => (manifests[file] ? JSON.stringify(manifests[file]) : sources[file]);
+    const edges = findUndeclaredWorkspaceEdges(pkgs, Object.keys(sources), read);
+    assert.equal(edges.length, 2);
+    assert.ok(edges.some((e) => e.startsWith("packages/ui/tests/a.test.ts") && e.includes("@x/app")));
+    assert.ok(edges.some((e) => e.startsWith("app/tests/b.test.ts") && e.includes("@x/lib")));
+  }],
+  // Defect: any path through main() that is not a clean PR classification must be `full`:
+  // the merge queue, main, a throwing classifier, an unresolvable base. A smaller scope there is a false green.
+  ["merge_group, push, a thrown error and an unresolvable base all decide full", () => {
+    const boom = () => {
+      throw new Error("boom");
+    };
+    assert.equal(decide({ CI_EVENT: "merge_group" }, () => ({ scope: "docs-only" })).scope, "full");
+    assert.equal(decide({ CI_EVENT: "push" }, () => ({ scope: "docs-only" })).scope, "full");
+    assert.equal(decide({ CI_EVENT: "pull_request" }, boom).scope, "full");
+    const out = join(mkdtempSync(join(tmpdir(), "ci-scope-")), "out");
+    spawnSync(process.execPath, [fileURLToPath(new URL("./classify-ci-scope.mjs", import.meta.url))], {
+      env: { ...process.env, CI_EVENT: "pull_request", BASE_REF: "no-such-branch-for-test", GITHUB_OUTPUT: out },
+    });
+    assert.match(readFileSync(out, "utf8"), /^scope=full$/m);
+  }],
+];
+
+let failed = 0;
+for (const [name, run] of CASES) {
+  try {
+    run();
+    console.log(`ok - ${name}`);
+  } catch (error) {
+    failed += 1;
+    console.error(`not ok - ${name}\n${error.message}`);
+  }
+}
+process.exit(failed === 0 ? 0 : 1);

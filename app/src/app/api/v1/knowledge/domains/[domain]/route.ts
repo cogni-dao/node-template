@@ -4,9 +4,9 @@
 /**
  * Module: `@app/api/v1/knowledge/domains/[domain]/route`
  * Purpose: HTTP endpoints for one knowledge domain — GET read, PATCH name/description, DELETE if empty.
- * Scope: GET needs a signed-in human or a bearer agent holding the knowledge:read role (sameDoor `knowledge.read`); PATCH and DELETE keep the auth they had. Does not contain business logic; delegates to ../_handlers.ts and the container's KnowledgeStorePort.
+ * Scope: GET needs a signed-in human or a bearer agent holding the knowledge:read role (sameDoor `knowledge.read`); PATCH and DELETE need a signed-in human (a bearer agent is 403 `bearer_write_undeclared`). Does not contain business logic; delegates to ../_handlers.ts and the container's KnowledgeStorePort.
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, DOMAIN_READ_NEEDS_GRANT,
- *   DOMAIN_MUTATION_BEARER_OR_SESSION, DOMAIN_ID_IS_IMMUTABLE, DOMAIN_DELETE_REFUSES_NONEMPTY.
+ *   DOMAIN_MUTATION_HUMAN_ONLY, DOMAIN_ID_IS_IMMUTABLE, DOMAIN_DELETE_REFUSES_NONEMPTY.
  *   PUT is not supported (405): PATCH is the partial update.
  * Side-effects: IO (HTTP response, Doltgres read/write via container port; one Dolt commit per mutation)
  * Links: contracts/knowledge.domains.v1.contract, hub `knowledge-domain-crud-design`

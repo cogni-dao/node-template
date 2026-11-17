@@ -88,6 +88,7 @@ export const DELETE = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "ai.threads.delete",
+    bearerWrite: "deletes only the caller's own thread (the facade scopes by the caller's identity)",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, _request, sessionUser, context) => {

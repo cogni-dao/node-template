@@ -51,6 +51,11 @@ const adminUser: Principal = {
   role: "admin",
 };
 
+const allowAdmin: NodeAdminAuthority = { check: async () => ({ ok: true }) };
+const denyAdmin: NodeAdminAuthority = {
+  check: async () => ({ ok: false, errorCode: "authz_denied" }),
+};
+
 function contribution(
   overrides: Partial<ContributionRecord> = {}
 ): ContributionRecord {
@@ -441,6 +446,7 @@ describe("createContributionService", () => {
       canMergeKnowledge: defaultCanMergeKnowledge,
       rateLimit: { maxOpenPerPrincipal: 5 },
       gates: [shapeGate],
+      nodeAdmin: allowAdmin,
     });
 
     const result = await service.merge({
@@ -666,6 +672,7 @@ describe("createContributionService", () => {
       port,
       canMergeKnowledge: () => true,
       rateLimit: { maxOpenPerPrincipal: 5 },
+      nodeAdmin: allowAdmin,
       pushMainOnMerge: async () => {
         pushCalls++;
       },
@@ -931,6 +938,7 @@ describe("createContributionService", () => {
       port,
       canMergeKnowledge: () => true,
       rateLimit: { maxOpenPerPrincipal: 5 },
+      nodeAdmin: allowAdmin,
       pushMainOnMerge: async () => {
         try {
           throw new Error("dolthub unreachable");
@@ -950,7 +958,7 @@ describe("createContributionService", () => {
     expect(pushFailures).toBe(1);
   });
 
-  describe("goal-layer merge gate (GOAL_CHANGE_IS_NODE_ADMIN, MERGE_GATE_ON_RAW_DIFF)", () => {
+  describe("merge gate (MERGE_IS_NODE_ADMIN, MERGE_GATE_ON_RAW_DIFF)", () => {
     const make = (
       touched: FakeContributionPort["touched"],
       nodeAdmin?: NodeAdminAuthority
@@ -1045,14 +1053,16 @@ describe("createContributionService", () => {
       expect(port.lastMerge).toBeNull();
     });
 
-    it("a non-goal merge needs no authority, even when none is wired", async () => {
-      const { port, service } = make({
-        headCommit: "h0",
-        knowledgeIds: ["note-1"],
-        citations: [],
-      });
-      await service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" });
-      expect(port.lastMerge?.expectedHeadCommit).toBe("h0");
+    it("a non-goal merge needs the authority too (bug.0044)", async () => {
+      const note = { headCommit: "h0", knowledgeIds: ["note-1"], citations: [] };
+      const denied = make(note, deny);
+      await expect(
+        denied.service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" })
+      ).rejects.toBeInstanceOf(NodeAdminRequiredError);
+      expect(denied.port.lastMerge).toBeNull();
+      const allowed = make(note, allow);
+      await allowed.service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" });
+      expect(allowed.port.lastMerge?.expectedHeadCommit).toBe("h0");
     });
 
     it("an admin merge passes and pins the gated head (MERGE_EXPECTED_HEAD)", async () => {
@@ -1065,7 +1075,21 @@ describe("createContributionService", () => {
       expect(port.lastMerge?.expectedHeadCommit).toBe("h1");
     });
 
-    it("gates a supersedes edge onto a goal, but not a bet extending one", async () => {
+    it("pins the head read before the authority check, so a head that moves during it is not merged blind", async () => {
+      const { port, service } = make(
+        { headCommit: "h1", knowledgeIds: ["note-1"], citations: [] },
+        {
+          check: async () => {
+            port.touched = { headCommit: "h2", knowledgeIds: ["note-1"], citations: [] };
+            return { ok: true };
+          },
+        }
+      );
+      await service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" });
+      expect(port.lastMerge?.expectedHeadCommit).toBe("h1");
+    });
+
+    it("gates a supersedes edge onto a goal; an admin merges a bet extending one", async () => {
       const retire = make(
         {
           headCommit: "h2",
@@ -1083,11 +1107,112 @@ describe("createContributionService", () => {
           knowledgeIds: ["bet-1"],
           citations: [{ citingId: "bet-1", citedId: "goal-a", citationType: "extends" }],
         },
-        deny
+        allow
       );
       await bet.service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" });
       expect(bet.port.lastMerge?.expectedHeadCommit).toBe("h3");
     });
+  });
+});
+
+describe("node-admin gate on merge and close (bug.0044)", () => {
+  const human: Principal = { id: "user-2", kind: "user", role: "admin" };
+  const make = (nodeAdmin?: NodeAdminAuthority, records = [contribution()]) => {
+    const port = new FakeContributionPort();
+    port.records = records;
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: defaultCanMergeKnowledge,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      ...(nodeAdmin ? { nodeAdmin } : {}),
+    });
+    return { port, service };
+  };
+  const id = "contrib-agent-1-abc123";
+
+  it("refuses a non-admin human merge with 403 before the port merges", async () => {
+    const { port, service } = make(denyAdmin);
+    const err = await service
+      .merge({ principal: human, contributionId: id })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NodeAdminRequiredError);
+    expect((err as NodeAdminRequiredError).status).toBe(403);
+    expect(port.lastMerge).toBeNull();
+  });
+
+  it("lets a node-admin merge, checking the caller's actor", async () => {
+    const actors: unknown[] = [];
+    const { port, service } = make({
+      check: async (actor) => {
+        actors.push(actor);
+        return { ok: true };
+      },
+    });
+    await service.merge({
+      principal: human,
+      contributionId: id,
+      actor: { userId: "user-2", walletAddress: "0xabc" },
+    });
+    expect(actors).toEqual([{ userId: "user-2", walletAddress: "0xabc" }]);
+    expect(port.lastMerge?.contributionId).toBe(id);
+  });
+
+  it("returns a terminal receipt without consulting the authority", async () => {
+    const { port, service } = make(denyAdmin, [
+      contribution({ state: "merged", mergedCommit: "durable" }),
+    ]);
+    await expect(
+      service.merge({ principal: human, contributionId: id })
+    ).resolves.toEqual({ commitHash: "merge123" });
+    expect(port.lastMerge?.contributionId).toBe(id);
+  });
+
+  it("fails merge closed 503 when the node wired no authority", async () => {
+    const { port, service } = make();
+    const err = await service
+      .merge({ principal: human, contributionId: id })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NodeAdminRequiredError);
+    expect((err as NodeAdminRequiredError).status).toBe(503);
+    expect(port.lastMerge).toBeNull();
+  });
+
+  it("lets the owner close its own contribution without the authority", async () => {
+    const { port, service } = make(denyAdmin, [
+      contribution({ principalId: "user-2", principalKind: "user" }),
+    ]);
+    await service.close({ principal: human, contributionId: id, reason: "mine" });
+    expect(port.lastClose?.contributionId).toBe(id);
+  });
+
+  it("refuses a non-admin human closing another's contribution with 403", async () => {
+    const { port, service } = make(denyAdmin);
+    const err = await service
+      .close({ principal: human, contributionId: id, reason: "not mine" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NodeAdminRequiredError);
+    expect((err as NodeAdminRequiredError).status).toBe(403);
+    expect(port.lastClose).toBeNull();
+  });
+
+  it("lets a node-admin close another's contribution", async () => {
+    const { port, service } = make(allowAdmin);
+    await service.close({
+      principal: human,
+      contributionId: id,
+      reason: "reviewed",
+      actor: { userId: "user-2", walletAddress: "0xabc" },
+    });
+    expect(port.lastClose?.contributionId).toBe(id);
+  });
+
+  it("fails close of another's contribution closed 503 when no authority is wired", async () => {
+    const { port, service } = make();
+    const err = await service
+      .close({ principal: human, contributionId: id, reason: "x" })
+      .catch((e: unknown) => e);
+    expect((err as NodeAdminRequiredError).status).toBe(503);
+    expect(port.lastClose).toBeNull();
   });
 });
 

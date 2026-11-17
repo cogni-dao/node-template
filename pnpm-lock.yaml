@@ -525,7 +525,7 @@ importers:
         version: 4.4.3
     devDependencies:
       '@cogni-dao/knowledge-store':
-        specifier: workspace:0.18.0
+        specifier: workspace:0.19.0
         version: link:../knowledge-store
       '@cogni-dao/metrics':
         specifier: workspace:*
@@ -1018,6 +1018,12 @@ importers:
         specifier: ^4.1.12
         version: 4.4.3
     devDependencies:
+      '@cogni-dao/knowledge-store':
+        specifier: workspace:*
+        version: link:../knowledge-store
+      '@cogni-dao/work-items':
+        specifier: workspace:*
+        version: link:../work-items
       '@types/node':
         specifier: ^22
         version: 22.19.19
