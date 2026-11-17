@@ -14,7 +14,9 @@
  *   the previous range stays on screen while the next one loads; the chart
  *   surface is named by the visible metric title; a collapsed readings list is
  *   the keyboard path to each observation; NO_TARGET_NO_LINE (no target, no
- *   reference line, no miss colour).
+ *   reference line, no miss colour); BRIEF_WHEN_OPEN (the metric's summary and
+ *   justification show here as plain text, never on the card face; none reads
+ *   "No brief yet").
  * Side-effects: IO (via GoalsClient.fetchHistory)
  * Links: ./metric-subject.ts, ./display.ts, packages/metrics/src/contracts.ts (MetricHistorySchema)
  * @public
@@ -206,6 +208,19 @@ export function MetricChart({
           <RangeToggle value={range} onChange={setRange} />
         </div>
       </div>
+
+      {subject.brief ? (
+        <dl data-brief className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+          <dt className="text-muted-foreground text-xs uppercase leading-5 tracking-wider">What</dt>
+          <dd className="break-words">{subject.brief.summary}</dd>
+          <dt className="text-muted-foreground text-xs uppercase leading-5 tracking-wider">Why</dt>
+          <dd className="break-words text-muted-foreground">{subject.brief.justification}</dd>
+        </dl>
+      ) : (
+        <p data-brief="missing" className="text-muted-foreground text-xs">
+          No brief yet
+        </p>
+      )}
 
       <div className="relative h-48">
         {history.isError && !shown ? (

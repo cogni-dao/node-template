@@ -25,6 +25,7 @@ import type {
   GoalsProgress,
   KpiAssessment,
   KpiStatus,
+  MetricBrief,
   MetricLatest,
   MetricOrphan,
   MetricServesRole,
@@ -58,6 +59,8 @@ export interface MetricRow {
   readonly title: string;
   readonly calculatorId: string;
   readonly role: MetricServesRole | null;
+  /** The metric's five-second read; null when it declares none. */
+  readonly brief: MetricBrief | null;
   readonly assessment: KpiAssessment | null;
   readonly latest: MetricLatest | null;
   readonly flags: readonly MetricFlag[];
@@ -150,6 +153,7 @@ export function servedRows(kpi: GoalKpi, data: Pick<GoalsProgress, "orphans">): 
     title: s.metric.title,
     calculatorId: s.metric.calculatorId,
     role: s.metric.role,
+    brief: s.metric.brief ?? null,
     assessment: s.assessment,
     latest: s.latest ?? null,
     flags: flags.get(s.metric.id) ?? [],
@@ -195,6 +199,7 @@ export function notServingRows(data: Pick<GoalsProgress, "orphans" | "unbound">)
       title: o.title ?? o.metricId,
       calculatorId: "",
       role: null,
+      brief: o.brief ?? null,
       assessment: o.assessment,
       latest: o.latest ?? null,
       flags: flags.get(o.metricId) ?? [],
@@ -207,6 +212,7 @@ export function notServingRows(data: Pick<GoalsProgress, "orphans" | "unbound">)
       title: u.metric.title,
       calculatorId: u.metric.calculatorId,
       role: null,
+      brief: u.metric.brief ?? null,
       assessment: u.assessment,
       latest: u.latest,
       flags: [{ kind: "unbound" }, ...(flags.get(u.metric.id) ?? [])],
