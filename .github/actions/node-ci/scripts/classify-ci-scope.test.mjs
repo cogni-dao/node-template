@@ -105,10 +105,13 @@ const CASES = [
   // Defect: concurrency swallows a failure (green with a red sibling) or a failing job cancels its
   // sibling so only one failure is ever reported. Exit is the first failure in the order given.
   ["a concurrent run fails with the first failing job's code and still runs every sibling", () => {
-    const script = fileURLToPath(new URL("./run-concurrent.mjs", import.meta.url));
-    const result = spawnSync(process.execPath, [script, "--concurrency", "3", "slow-fail=sleep 1; exit 4", "pass=echo sibling-ran", "fast-fail=exit 5"], {
-      encoding: "utf8",
-    });
+    const module = new URL("./run-concurrent.mjs", import.meta.url).href;
+    const program = `
+      import { runAll, exitCodeOf } from ${JSON.stringify(module)};
+      const sh = (name, script) => ({ name, cmd: "bash", args: ["-c", script] });
+      const results = await runAll([sh("slow-fail", "sleep 1; exit 4"), sh("pass", "echo sibling-ran"), sh("fast-fail", "exit 5")], { concurrency: 3, heartbeatMs: 0 });
+      process.exit(exitCodeOf(results));`;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", program], { encoding: "utf8" });
     assert.equal(result.status, 4);
     assert.match(result.stdout, /sibling-ran/);
     assert.match(result.stdout, /::error title=slow-fail::/);

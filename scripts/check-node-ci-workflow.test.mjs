@@ -373,9 +373,9 @@ const CASES = [
   // Defect: a moved tag changes CI under every node that pinned it without editing a workflow.
   {
     name: "a nested action must be pinned to a full commit SHA",
-    mutate: edit(ACTION, "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4", "actions/cache@v4"),
+    mutate: edit(ACTION, "actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4", "actions/cache/restore@v4"),
     expectExit: 1,
-    expectMatch: /must pin actions\/cache@v4 to a full commit SHA/,
+    expectMatch: /must pin actions\/cache\/restore@v4 to a full commit SHA/,
   },
   {
     name: "a caller must pin the shared action by full SHA, not a branch",

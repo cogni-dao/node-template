@@ -370,6 +370,7 @@ function assertCiScopePolicy(steps) {
           "github.event_name": event,
           "inputs.lane": lane,
           "inputs.db_check": dbCheck,
+          "inputs.doltgres_command": "configured",
           "steps.scope.outputs.scope": scope,
           "steps.build_cache.outputs.cache-hit": cacheHit,
         };
@@ -389,7 +390,7 @@ function assertCiScopePolicy(steps) {
             ? mine.filter((step) => isSetup(step) || step.id === "scope" || (lane === "static" && step.run === "pnpm check:markdown-refs"))
             : mine.filter(
                 (step) =>
-                  !(cacheHit === "true" && step.name === "Build workspace packages") &&
+                  !(cacheHit === "true" && ["Build workspace packages", "Save workspace package build"].includes(step.name)) &&
                   !(dbCheck === "false" && step.name === "Database schema checks")
               );
         if (JSON.stringify(ran.map(stepLabel)) !== JSON.stringify(expected.map(stepLabel))) {
@@ -432,8 +433,8 @@ function assertCiAction(actionFile) {
 
   // The build cache is exact-key only: restore-keys would hand a lane a build of different sources.
   const cache = steps.find((step) => step?.id === "build_cache");
-  if (!String(cache?.uses ?? "").startsWith("actions/cache@") || !String(cache?.with?.key ?? "").includes("hashFiles(")) {
-    fail(CI_ACTION_PATH, 'step id "build_cache" must be actions/cache keyed on hashFiles(...) of the build inputs');
+  if (!String(cache?.uses ?? "").startsWith("actions/cache/restore@") || !String(cache?.with?.key ?? "").includes("hashFiles(")) {
+    fail(CI_ACTION_PATH, 'step id "build_cache" must be actions/cache/restore keyed on hashFiles(...) of the build inputs');
   }
   if (Object.hasOwn(cache?.with ?? {}, "restore-keys")) {
     fail(CI_ACTION_PATH, "build_cache must not use restore-keys: only an exact input hash may skip the build");
@@ -457,8 +458,7 @@ function assertCiAction(actionFile) {
     expectLaneStep(steps, name, "static", command, `static ${name} command`);
   }
   expectLaneStep(steps, "Unit tests", "unit", { fragment: "scripts/run-unit-tests.mjs" }, "unit test command");
-  expectLaneStep(steps, "Component tests (testcontainers)", "component", { fragment: "pnpm test:component" }, "component test command");
-  expectLaneStep(steps, "Component tests (testcontainers)", "component", { fragment: "scripts/run-concurrent.mjs" }, "component concurrency runner");
+  expectLaneStep(steps, "Component tests (testcontainers)", "component", "pnpm test:component", "component test command");
   assertCiScopePolicy(steps);
 }
 
