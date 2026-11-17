@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 const create = vi.fn();
+const warn = vi.fn();
 const registry = new MetricRegistry();
 registry.register({
   id: "work.count@1",
@@ -32,7 +33,7 @@ vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
     knowledgeContributionService: { create },
     goalMetrics: { registry },
-    log: { warn: vi.fn() },
+    log: { warn },
   }),
 }));
 
@@ -64,6 +65,7 @@ const post = (metricSpec: unknown) =>
 describe("handleCreate metric spec with serves + band (story.0033)", () => {
   beforeEach(() => {
     create.mockReset();
+    warn.mockReset();
     create.mockResolvedValue({ contributionId: "c1" });
   });
 
@@ -99,6 +101,7 @@ describe("handleCreate metric spec with serves + band (story.0033)", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toContain("brief");
     expect(create).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith({ metricId: "open-work", reason: "brief_missing" }, "knowledge.contributions.metric_spec_rejected");
   });
 
   it("rejects a band whose unit does not match the metric with a 422", async () => {

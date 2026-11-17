@@ -493,24 +493,34 @@ export async function handleClose(
  * A written spec must carry its five-second `brief` (metric-foundation-design "Metric brief").
  */
 export function validateMetricSpec(stored: unknown, id: string, title: string): NextResponse | null {
+  // Each rejection logs one event with its reason and issue paths, never the stored values.
+  const reject = (status: 400 | 422, reason: string, body: Record<string, unknown>, issues?: readonly string[]) => {
+    getContainer().log.warn({ metricId: id, reason, ...(issues ? { issues } : {}) }, "knowledge.contributions.metric_spec_rejected");
+    return NextResponse.json(body, { status });
+  };
   const parsed = StoredMetricSpecSchema.safeParse(stored);
-  if (!parsed.success) return NextResponse.json({ error: "invalid metric definition", issues: parsed.error.issues }, { status: 400 });
+  if (!parsed.success)
+    return reject(
+      400,
+      "invalid_definition",
+      { error: "invalid metric definition", issues: parsed.error.issues },
+      parsed.error.issues.map((i) => `${i.path.join(".")}:${i.code}`),
+    );
   const { display, serves: _serves, band, brief, ...spec } = parsed.data;
   if (!brief)
-    return NextResponse.json(
-      { error: "metric definition needs a brief: {summary, justification}, one sentence of at most 25 words each" },
-      { status: 400 },
-    );
+    return reject(400, "brief_missing", {
+      error: "metric definition needs a brief: {summary, justification}, one sentence of at most 25 words each",
+    });
   const registry = getContainer().goalMetrics?.registry;
   try {
     registry?.validate({ id, title, revision: "proposed", spec });
   } catch {
-    return NextResponse.json({ error: "unsupported calculator or parameters" }, { status: 422 });
+    return reject(422, "unsupported_calculator", { error: "unsupported calculator or parameters" });
   }
   const unit = registry ? calculatorShape(registry.get(spec.calculatorId), spec.params).unit : null;
   if (display && unit !== null && !displayFits(display, unit))
-    return NextResponse.json({ error: "display does not fit the metric unit (slo needs %)" }, { status: 422 });
+    return reject(422, "display_unit_mismatch", { error: "display does not fit the metric unit (slo needs %)" });
   if (band && unit !== null && band.target.unit !== unit)
-    return NextResponse.json({ error: `band target unit must match the metric unit (${unit})` }, { status: 422 });
+    return reject(422, "band_unit_mismatch", { error: `band target unit must match the metric unit (${unit})` });
   return null;
 }
