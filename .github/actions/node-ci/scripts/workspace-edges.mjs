@@ -2,14 +2,14 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@scripts/ci/workspace-edges`
+ * Module: `@github/actions/node-ci/scripts/workspace-edges`
  * Purpose: Find relative imports that cross from one workspace package into another without a declared dependency, an edge pnpm's graph cannot see (task.0127).
  * Scope: Static text scan of tracked source and test files under each workspace dir. Does not resolve aliases, and does not catch paths read at run time.
  * Invariants:
  *   - Affected-only CI trusts pnpm's dependency graph; an undeclared edge makes that graph lie, so the classifier runs `full` when one exists.
- *   - Run directly (`pnpm ci:edges`), it fails when the tree contains one, so the edge is fixed at its root rather than forever running full.
+ *   - Run directly (`node .github/actions/node-ci/scripts/workspace-edges.mjs`), it fails when the tree contains one, so the edge is fixed at its root rather than forever running full.
  * Side-effects: IO (git ls-files, pnpm ls, reads source files).
- * Links: scripts/ci/classify-ci-scope.mjs
+ * Links: .github/actions/node-ci/scripts/classify-ci-scope.mjs
  */
 
 // biome-ignore-all lint/suspicious/noConsole: CI script
@@ -19,7 +19,9 @@ import { readFileSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// The repository under test, never the directory this script lives in: a consumer node runs
+// these scripts from its pinned copy of the action, with the node checkout as the working dir.
+export const REPO_ROOT = resolve(process.env.GITHUB_WORKSPACE || process.cwd());
 
 const SOURCE = /\.(?:[cm]?[jt]sx?)$/;
 const RELATIVE_SPECIFIER = /\b(?:from|import|require|mock|importActual)\s*\(?\s*["'](\.\.?\/[^"'\n]+)["']/g;

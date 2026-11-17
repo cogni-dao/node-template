@@ -1,0 +1,168 @@
+name: Node CI lane
+description: >-
+  One required node-CI job (static, unit or component) as steps, so a node keeps its bare required
+  check names. Pin it by full commit SHA; the scripts it runs travel with that SHA.
+
+# story.0052 -- shared, fast node CI.
+#
+# WHY A COMPOSITE ACTION AND NOT A REUSABLE WORKFLOW: GitHub names every job a `workflow_call`
+# runs `<caller job> / <called job>` (for example `ci / unit`). The fleet's rulesets require the
+# bare contexts `static`, `unit` and `component`, and a ruleset change per node would deadlock
+# each node's own adoption PR (the old names stop reporting while still required). A caller job
+# that runs this action keeps the job name, so the required set is identical in every node.
+#
+# CALLER CONTRACT (every consuming job):
+#   - the job is named `static`, `unit` or `component` (no `name:`, no matrix, no `if:`, no `needs:`)
+#   - step 1 is actions/checkout with `fetch-depth: 0` (the classifier diffs a PR against its base)
+#   - step 2 is this action with `lane: <the job id>`
+#   - node-specific environment (test env vars, TESTCONTAINERS_*) is set on the caller's job or
+#     workflow `env:`; this action reads and sets no secret. FORK_FREEDOM.
+#   - node-specific extra steps run in the caller job, before or after this action
+# NODE CONVENTION: root package.json scripts `packages:build`, `typecheck`, `db:check`,
+# `check:workflow`, `check:declarations`, `check:markdown-refs`, `test` (a chain of
+# `pnpm --filter <pkg> test`), `test:ci` and `test:component`.
+# PIN: `uses: cogni-dao/node-template/.github/actions/node-ci@<40-char SHA>`. node-template, the
+# reference consumer, uses `./.github/actions/node-ci` so a change here is proven by its own CI.
+#
+# SCOPE (task.0127 AFFECTED_ON_PR_FULL_ON_QUEUE): on pull_request, run only what the diff can break;
+# merge_group and push always run everything. Scoping skips STEPS, never the job, so every required
+# context still reports. A classifier error leaves the scope output empty, which every gate reads as full.
+
+inputs:
+  lane:
+    description: static, unit or component. Must equal the caller job id.
+    required: true
+  node_version:
+    description: Node major for the whole lane. Match the repository's publish workflow.
+    default: "22"
+  db_check:
+    description: Run `pnpm db:check` in the static lane. Set to "false" for a node with no schema drift guard yet.
+    default: "true"
+  doltgres_command:
+    description: >-
+      Component lane only. A real-Doltgres acceptance command run beside the component tests
+      (for example `pnpm --filter @cogni/node-template-app test:doltgres`). Empty skips it.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: ${{ inputs.node_version }}
+        cache: pnpm
+
+    - name: Classify CI scope
+      id: scope
+      # A crash leaves the outputs empty, which every gated step reads as full.
+      continue-on-error: true
+      shell: bash
+      env:
+        CI_EVENT: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+      run: node "${{ github.action_path }}/scripts/classify-ci-scope.mjs"
+
+    # Workspace package build output, keyed on every input that can change it. An exact-key
+    # hit only (no restore-keys), so a restored build is always the build these sources produce.
+    # Restored before install: no node_modules exists yet, so the hash covers source only.
+    - name: Restore workspace package build
+      id: build_cache
+      if: steps.scope.outputs.scope != 'docs-only'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: |
+          packages/*/dist
+          packages/*/*.tsbuildinfo
+          graphs/dist
+          graphs/*.tsbuildinfo
+        key: node-ci-build-v1-${{ runner.os }}-node${{ inputs.node_version }}-${{ hashFiles('packages/**', 'graphs/**', '!**/node_modules/**', '!**/dist/**', '!**/*.tsbuildinfo', '!**/*.md', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'tsconfig.base.json') }}
+
+    - name: Install dependencies
+      if: steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: Install pinned Foundry
+      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'
+      uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+      with:
+        version: v1.7.1
+
+    - name: Verify publish-condition artifact and behavior
+      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      run: pnpm --filter @cogni/cogni-contracts check:solidity
+
+    - name: Build workspace packages
+      if: steps.scope.outputs.scope != 'docs-only' && steps.build_cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: pnpm packages:build
+
+    # F2 (task.5198): a drift guard wired into no CI job is decorative. It runs after the build
+    # because check-generate-clean's doltgres lane resolves @cogni-dao/knowledge-base through its
+    # `exports` -> dist, not src.
+    - name: Database schema checks
+      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only' && inputs.db_check == 'true'
+      shell: bash
+      run: pnpm db:check
+
+    - name: Type check
+      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      run: pnpm typecheck
+
+    - name: Workflow contract check
+      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      run: pnpm check:workflow
+
+    # bug.5254: the same schema and sovereign policy the deploy verb runs (passes 1 and 2), plus
+    # the retired `secret_refs` refusal. Pass 3 is operator data and runs only at deploy.
+    - name: Node declarations check
+      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      run: pnpm check:declarations
+
+    # Never scoped out. A docs-only PR runs only this: Markdown can break no build, type, schema,
+    # workflow or declaration, so the one check a Markdown edit can fail is its own reference
+    # policy. It needs only git and node, so a docs-only run does no install. story.0046.
+    - name: Markdown references check
+      if: inputs.lane == 'static'
+      shell: bash
+      run: pnpm check:markdown-refs
+
+    # The whole curated chain on merge_group, push and any PR the classifier cannot scope (an empty
+    # or missing scope lands here too); only an explicit `affected` scope runs a subset.
+    - name: Unit tests
+      if: inputs.lane == 'unit' && steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      env:
+        CI_SCOPE: ${{ steps.scope.outputs.scope }}
+        UNIT_FILTERS: ${{ steps.scope.outputs.unit_filters }}
+      run: node "${{ github.action_path }}/scripts/run-unit-tests.mjs"
+
+    # The repo/ripgrep-adapter component test shells out to `rg`.
+    - name: Install ripgrep
+      if: inputs.lane == 'component' && steps.scope.outputs.scope != 'docs-only'
+      uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1 # v2
+      with:
+        tool: ripgrep
+
+    - name: Verify ripgrep
+      if: inputs.lane == 'component' && steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      run: rg --version
+
+    # Component tests (Postgres testcontainers) and the real-Doltgres acceptance lane share nothing
+    # but the Docker daemon, so they run side by side; the Doltgres lane is the long pole.
+    - name: Component tests (testcontainers)
+      if: inputs.lane == 'component' && steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      env:
+        DOLTGRES_COMMAND: ${{ inputs.doltgres_command }}
+      run: |
+        jobs=("component=pnpm test:component")
+        if [ -n "$DOLTGRES_COMMAND" ]; then jobs+=("doltgres=$DOLTGRES_COMMAND"); fi
+        node "${{ github.action_path }}/scripts/run-concurrent.mjs" "${jobs[@]}"

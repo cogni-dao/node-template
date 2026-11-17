@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { parse } from "yaml";
 
 const CI_WORKFLOW_PATH = ".github/workflows/ci.yaml";
+const CI_ACTION_PATH = ".github/actions/node-ci/action.yml";
 const PR_BUILD_WORKFLOW_PATH = ".github/workflows/pr-build.yml";
 const PR_LINT_WORKFLOW_PATH = ".github/workflows/pr-lint.yaml";
 const PUBLISH_WORKFLOW_PATH = ".github/workflows/publish-packages.yml";
@@ -158,6 +159,9 @@ function findRequiredCheckProviders(workflows, context) {
   const providers = [];
   for (const { path, workflow } of workflows) {
     for (const [jobId, job] of Object.entries(workflow?.jobs ?? {})) {
+      // A job that calls a reusable workflow reports `<this job> / <called job>`, never the bare
+      // name, so it cannot provide a bare required context (story.0052).
+      if (typeof job?.uses === "string") continue;
       if (effectiveCheckName(jobId, job) === context) {
         providers.push({ path, workflow, jobId, job });
       }
@@ -181,7 +185,8 @@ function assertRequiredChecksRunOnReviewEvents(policy, workflows) {
       fail(
         REPO_POLICY_PATH,
         `required check ${JSON.stringify(context)} must be emitted by exactly one job; found ${providers.length}` +
-          (renamed.length ? ` (${renamed.join("; ")})` : "")
+          (renamed.length ? ` (${renamed.join("; ")})` : "") +
+          " (a job that calls a reusable workflow reports `<job> / <called job>`, never the bare context)"
       );
       continue;
     }
@@ -244,53 +249,63 @@ expectEqual(CI_WORKFLOW_PATH, ciWorkflow?.permissions?.contents, "read", "permis
 expectIncludes(CI_WORKFLOW_PATH, ciWorkflow?.concurrency?.group, "ci-${{ github.workflow }}-${{ github.ref }}", "concurrency.group");
 expectEqual(CI_WORKFLOW_PATH, ciWorkflow?.concurrency?.["cancel-in-progress"], true, "concurrency.cancel-in-progress");
 
-const staticJob = ciWorkflow?.jobs?.static;
-if (!staticJob) fail(CI_WORKFLOW_PATH, "jobs must include static");
-const staticSteps = Array.isArray(staticJob?.steps) ? staticJob.steps : [];
-expectStep(CI_WORKFLOW_PATH, staticSteps, "Install dependencies");
-expectStep(CI_WORKFLOW_PATH, staticSteps, "Build workspace packages");
-for (const [name, command] of [
-  ["Database schema checks", "pnpm db:check"],
-  ["Type check", "pnpm typecheck"],
-  ["Workflow contract check", "pnpm check:workflow"],
-]) {
-  const step = expectStep(CI_WORKFLOW_PATH, staticSteps, name);
-  expectEqual(CI_WORKFLOW_PATH, step?.run, command, `static ${name} command`);
+// ---------------------------------------------------------------------------------------------
+// Required lanes (story.0052). ci.yaml is a thin caller: each required job checks out and runs
+// the node-ci composite action with `lane: <job id>`. The action owns the steps, so this file
+// pins both halves: the caller shape here, the lane behaviour in the action below.
+// ---------------------------------------------------------------------------------------------
+const LANES = ["static", "unit", "component"];
+const CI_ACTION_LOCAL = "./.github/actions/node-ci";
+const CI_ACTION_PINNED = /^cogni-dao\/node-template\/\.github\/actions\/node-ci@[0-9a-f]{40}$/;
+
+for (const lane of LANES) {
+  const job = ciWorkflow?.jobs?.[lane];
+  if (!job) {
+    fail(CI_WORKFLOW_PATH, `jobs must include ${lane}`);
+    continue;
+  }
+  // The lanes run in PARALLEL: each does its own install and build, so gating one on another
+  // only serialised the fast gate onto the critical path.
+  if (Object.hasOwn(job, "needs")) {
+    fail(CI_WORKFLOW_PATH, `jobs.${lane} must run in parallel (no \`needs\`); got ${JSON.stringify(job.needs)}`);
+  }
+  const steps = Array.isArray(job.steps) ? job.steps : [];
+  const checkout = steps.find((step) => String(step?.uses ?? "").startsWith("actions/checkout@"));
+  if (checkout?.with?.["fetch-depth"] !== 0) {
+    fail(CI_WORKFLOW_PATH, `${lane} must check out with fetch-depth: 0 (the classifier diffs a PR against its base)`);
+  }
+  const actionSteps = steps.filter((step) => /(^|\/)\.github\/actions\/node-ci(@|$)/.test(String(step?.uses ?? "")));
+  if (actionSteps.length !== 1) {
+    fail(CI_WORKFLOW_PATH, `${lane} must run the node-ci action exactly once; found ${actionSteps.length}`);
+    continue;
+  }
+  const [action] = actionSteps;
+  // A pin is a full commit SHA: a tag or branch is mutable, so a moved ref would change CI under a
+  // node that never edited its workflow. node-template, the reference consumer, uses the local path.
+  if (action.uses !== CI_ACTION_LOCAL && !CI_ACTION_PINNED.test(action.uses)) {
+    fail(
+      CI_WORKFLOW_PATH,
+      `${lane} must call ${CI_ACTION_LOCAL} or cogni-dao/node-template/.github/actions/node-ci@<40-char commit SHA>; got ${JSON.stringify(action.uses)}`
+    );
+  }
+  expectEqual(CI_WORKFLOW_PATH, action.with?.lane, lane, `${lane} node-ci lane input`);
+  expectEqual(CI_WORKFLOW_PATH, action.with?.node_version, "${{ env.NODE_VERSION }}", `${lane} node-ci node_version input`);
+  if (Object.hasOwn(action, "if") || Object.hasOwn(action, "continue-on-error")) {
+    fail(CI_WORKFLOW_PATH, `${lane} node-ci step must not be conditional or continue-on-error: it IS the required check`);
+  }
+}
+// FORK_FREEDOM: CI runs without secrets.
+if (JSON.stringify(ciWorkflow).includes("secrets.")) {
+  fail(CI_WORKFLOW_PATH, "ci.yaml must not reference secrets (FORK_FREEDOM)");
 }
 
-const unitJob = ciWorkflow?.jobs?.unit;
-if (!unitJob) fail(CI_WORKFLOW_PATH, "jobs must include unit");
-// unit runs in PARALLEL with static (no `needs: static`): it does its own
-// install + packages:build (asserted below), so gating on static only serialized
-// the fast gate onto the critical path for a fail-fast the merge queue re-checks.
-// The required-check contract (static/unit/component exist + are required) is
-// enforced via repo-policy requiredStatusChecks, independent of job ordering.
-// Contract: unit must NOT depend on static (keeps the parallel shape uniform).
-if (Object.hasOwn(unitJob, "needs")) {
-  fail(CI_WORKFLOW_PATH, `jobs.unit must run in parallel (no \`needs\`); got ${JSON.stringify(unitJob.needs)}`);
-}
-const unitSteps = Array.isArray(unitJob?.steps) ? unitJob.steps : [];
-expectStep(CI_WORKFLOW_PATH, unitSteps, "Install dependencies");
-expectStep(CI_WORKFLOW_PATH, unitSteps, "Build workspace packages");
-const unitTestStep = expectStep(
-  CI_WORKFLOW_PATH,
-  unitSteps,
-  "Unit + contract coverage tests"
-);
-expectEqual(
-  CI_WORKFLOW_PATH,
-  unitTestStep?.run,
-  "pnpm test:ci",
-  "unit test command"
-);
-
-// task.0127 AFFECTED_ON_PR_FULL_ON_QUEUE: the step-level `if:` expressions in ci.yaml ARE the
+// task.0127 AFFECTED_ON_PR_FULL_ON_QUEUE: the step-level `if:` expressions in the action ARE the
 // scoping policy, so pin their behaviour, not their text. Each condition is evaluated against
-// every (event, scope) the workflow can see. merge_group and push always get `full` from the
+// every (event, scope) a lane can see. merge_group and push always get `full` from the
 // classifier; an empty scope is a crashed classifier and must also mean full.
 function evaluateIf(expression, context) {
   const source = String(expression);
-  const tokens = [...source.matchAll(/\s*(&&|\|\||==|!=|'[^']*'|[A-Za-z_][\w.]*)\s*/gy)].map((m) => m[1]);
+  const tokens = [...source.matchAll(/\s*(&&|\|\||==|!=|'[^']*'|[A-Za-z_][\w.-]*)\s*/gy)].map((m) => m[1]);
   if (tokens.join("") !== source.replace(/\s+/g, "")) {
     throw new Error(`unsupported syntax in ${JSON.stringify(source)}`);
   }
@@ -324,58 +339,134 @@ function evaluateIf(expression, context) {
   return value;
 }
 
-function assertCiScopePolicy(workflow) {
-  const DOCS_ONLY_RUNS = {
-    static: ["pnpm ci:scope", "pnpm check:markdown-refs"],
-    unit: ["pnpm ci:scope"],
-    component: ["pnpm ci:scope"],
-  };
-  const SETUP_ACTIONS = ["actions/checkout@", "pnpm/action-setup@", "actions/setup-node@"];
-  const cases = [
+const stepLabel = (step) => step.name ?? step.uses ?? step.run;
+// A step belongs to the lane its `if` names (`inputs.lane == 'unit'`); a step naming none belongs to all.
+const stepLane = (step) => /inputs\.lane == '(\w+)'/.exec(String(step?.if ?? ""))?.[1];
+
+function expectLaneStep(steps, name, lane, expectedRun, label) {
+  const step = steps.find((candidate) => candidate?.name === name);
+  if (!step) {
+    fail(CI_ACTION_PATH, `steps must include ${JSON.stringify(name)}`);
+    return;
+  }
+  if (stepLane(step) !== lane) fail(CI_ACTION_PATH, `${JSON.stringify(name)} must be gated to the ${lane} lane`);
+  if (typeof expectedRun === "string") expectEqual(CI_ACTION_PATH, step.run, expectedRun, label);
+  else expectIncludes(CI_ACTION_PATH, step.run, expectedRun.fragment, label);
+}
+
+function assertCiScopePolicy(steps) {
+  const SETUP_ACTIONS = ["pnpm/action-setup@", "actions/setup-node@"];
+  const isSetup = (step) => SETUP_ACTIONS.some((setup) => String(step.uses ?? "").startsWith(setup));
+  const events = [
     ...["merge_group", "push"].flatMap((event) => ["full", ""].map((scope) => ({ event, scope }))),
     ...["full", "", "affected", "docs-only"].map((scope) => ({ event: "pull_request", scope })),
   ];
-  const label = (step) => step.run ?? step.uses;
-  for (const [jobId, docsOnlyRuns] of Object.entries(DOCS_ONLY_RUNS)) {
-    const steps = Array.isArray(workflow?.jobs?.[jobId]?.steps) ? workflow.jobs[jobId].steps : [];
-    const classify = steps.find((step) => step?.id === "scope");
-    if (classify?.run !== "pnpm ci:scope" || Object.hasOwn(classify, "if") || classify["continue-on-error"] !== true) {
-      fail(CI_WORKFLOW_PATH, `${jobId} must run \`pnpm ci:scope\` as step id "scope", ungated and with continue-on-error: true`);
-    }
-    if (jobId === "static") {
-      const markdown = steps.find((step) => step?.run === "pnpm check:markdown-refs");
-      if (!markdown || Object.hasOwn(markdown, "if")) {
-        fail(CI_WORKFLOW_PATH, "static must run `pnpm check:markdown-refs` on every event and scope (no `if`)");
-      }
-    }
-    for (const { event, scope } of cases) {
-      const where = `${jobId} on ${event} with scope ${JSON.stringify(scope)}`;
-      const context = { "github.event_name": event, "steps.scope.outputs.scope": scope };
-      let skipped;
-      try {
-        skipped = steps.filter((step) => Object.hasOwn(step, "if") && !evaluateIf(step.if, context));
-      } catch (error) {
-        fail(CI_WORKFLOW_PATH, `${where}: cannot evaluate step conditions: ${error.message}`);
-        return;
-      }
-      // `full` and a crashed classifier run everything except the affected-only unit step.
-      const expected =
-        scope === "docs-only"
-          ? steps.filter(
-              (step) =>
-                !SETUP_ACTIONS.some((action) => String(step.uses ?? "").startsWith(action)) &&
-                !docsOnlyRuns.includes(step.run)
-            )
-          : steps.filter((step) => step.run === (scope === "affected" ? "pnpm test:ci" : "pnpm test:affected"));
-      const got = skipped.map(label);
-      const want = expected.map(label);
-      if (JSON.stringify(got) !== JSON.stringify(want)) {
-        fail(CI_WORKFLOW_PATH, `${where} must skip exactly ${JSON.stringify(want)}; it skips ${JSON.stringify(got)}`);
+  for (const lane of LANES) {
+    const mine = steps.filter((step) => [undefined, lane].includes(stepLane(step)));
+    for (const { event, scope } of events) {
+      for (const [cacheHit, dbCheck] of [["", "true"], ["true", "true"], ["", "false"]]) {
+        const where = `${lane} on ${event} with scope ${JSON.stringify(scope)}, build cache hit ${JSON.stringify(cacheHit)}, db_check ${dbCheck}`;
+        const context = {
+          "github.event_name": event,
+          "inputs.lane": lane,
+          "inputs.db_check": dbCheck,
+          "steps.scope.outputs.scope": scope,
+          "steps.build_cache.outputs.cache-hit": cacheHit,
+        };
+        let ran;
+        try {
+          ran = mine.filter((step) => !Object.hasOwn(step, "if") || evaluateIf(step.if, context));
+        } catch (error) {
+          fail(CI_ACTION_PATH, `${where}: cannot evaluate step conditions: ${error.message}`);
+          return;
+        }
+        // A docs-only diff runs the classifier and the one never-scoped check (Markdown refs, static
+        // only), nothing else. Every other scope runs EVERY lane step: scoping narrows which unit
+        // packages run inside the one unit step, never which steps run. A restored build cache skips
+        // the build, db_check=false skips the schema check, and nothing else may be skipped.
+        const expected =
+          scope === "docs-only"
+            ? mine.filter((step) => isSetup(step) || step.id === "scope" || (lane === "static" && step.run === "pnpm check:markdown-refs"))
+            : mine.filter(
+                (step) =>
+                  !(cacheHit === "true" && step.name === "Build workspace packages") &&
+                  !(dbCheck === "false" && step.name === "Database schema checks")
+              );
+        if (JSON.stringify(ran.map(stepLabel)) !== JSON.stringify(expected.map(stepLabel))) {
+          fail(
+            CI_ACTION_PATH,
+            `${where} must run exactly ${JSON.stringify(expected.map(stepLabel))}; it runs ${JSON.stringify(ran.map(stepLabel))}`
+          );
+        }
       }
     }
   }
 }
-assertCiScopePolicy(ciWorkflow);
+
+function assertCiAction(actionFile) {
+  const action = parse(actionFile);
+  if (action?.runs?.using !== "composite") {
+    fail(CI_ACTION_PATH, "runs.using must be composite so a caller job keeps its bare required check name");
+    return;
+  }
+  const steps = Array.isArray(action.runs.steps) ? action.runs.steps : [];
+  if (/secrets\./.test(actionFile)) fail(CI_ACTION_PATH, "must not reference secrets (FORK_FREEDOM)");
+  for (const step of steps) {
+    if (step?.run !== undefined && step.shell === undefined) {
+      fail(CI_ACTION_PATH, `step ${JSON.stringify(stepLabel(step))} runs a command without a shell`);
+    }
+    // NO_RUNTIME_FETCHES intent: every nested action is immutable.
+    if (step?.uses !== undefined && !/@[0-9a-f]{40}(\s|$)/.test(String(step.uses))) {
+      fail(CI_ACTION_PATH, `step ${JSON.stringify(stepLabel(step))} must pin ${step.uses} to a full commit SHA`);
+    }
+  }
+
+  const classify = steps.find((step) => step?.id === "scope");
+  if (
+    !String(classify?.run ?? "").includes("scripts/classify-ci-scope.mjs") ||
+    Object.hasOwn(classify ?? {}, "if") ||
+    classify?.["continue-on-error"] !== true
+  ) {
+    fail(CI_ACTION_PATH, 'must run classify-ci-scope.mjs as step id "scope", ungated and with continue-on-error: true');
+  }
+
+  // The build cache is exact-key only: restore-keys would hand a lane a build of different sources.
+  const cache = steps.find((step) => step?.id === "build_cache");
+  if (!String(cache?.uses ?? "").startsWith("actions/cache@") || !String(cache?.with?.key ?? "").includes("hashFiles(")) {
+    fail(CI_ACTION_PATH, 'step id "build_cache" must be actions/cache keyed on hashFiles(...) of the build inputs');
+  }
+  if (Object.hasOwn(cache?.with ?? {}, "restore-keys")) {
+    fail(CI_ACTION_PATH, "build_cache must not use restore-keys: only an exact input hash may skip the build");
+  }
+
+  for (const [name, run] of [
+    ["Install dependencies", "pnpm install --frozen-lockfile"],
+    ["Build workspace packages", "pnpm packages:build"],
+  ]) {
+    const step = steps.find((candidate) => candidate?.name === name);
+    if (!step) fail(CI_ACTION_PATH, `steps must include ${JSON.stringify(name)}`);
+    else expectEqual(CI_ACTION_PATH, step.run, run, `${name} command`);
+  }
+  for (const [name, command] of [
+    ["Database schema checks", "pnpm db:check"],
+    ["Type check", "pnpm typecheck"],
+    ["Workflow contract check", "pnpm check:workflow"],
+    ["Node declarations check", "pnpm check:declarations"],
+    ["Markdown references check", "pnpm check:markdown-refs"],
+  ]) {
+    expectLaneStep(steps, name, "static", command, `static ${name} command`);
+  }
+  expectLaneStep(steps, "Unit tests", "unit", { fragment: "scripts/run-unit-tests.mjs" }, "unit test command");
+  expectLaneStep(steps, "Component tests (testcontainers)", "component", { fragment: "pnpm test:component" }, "component test command");
+  expectLaneStep(steps, "Component tests (testcontainers)", "component", { fragment: "scripts/run-concurrent.mjs" }, "component concurrency runner");
+  assertCiScopePolicy(steps);
+}
+
+if (existsSync(CI_ACTION_PATH)) {
+  assertCiAction(readFileSync(CI_ACTION_PATH, "utf8"));
+} else if (LANES.some((lane) => ciWorkflow?.jobs?.[lane]?.steps?.some((step) => step?.uses === CI_ACTION_LOCAL))) {
+  fail(CI_ACTION_PATH, "ci.yaml calls the local node-ci action but the action file is missing");
+}
 
 expectEqual(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow?.name, "PR Build", "workflow name");
 expectTrigger(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow, "pull_request");

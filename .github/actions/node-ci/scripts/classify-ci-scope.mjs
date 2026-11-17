@@ -2,19 +2,19 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@scripts/ci/classify-ci-scope`
+ * Module: `@github/actions/node-ci/scripts/classify-ci-scope`
  * Purpose: Decide how much of CI a change can break, so PR verdicts are fast while the merge queue still runs everything (task.0127).
  * Scope: Classifies a diff as `docs-only`, `affected` or `full` and names the unit-test packages an `affected` diff must run. Does not run tests or install anything.
  * Invariants:
  *   - AFFECTED_ON_PR_FULL_ON_QUEUE: only `pull_request` is ever scoped; `merge_group` and `push` are always `full`.
  *   - FAIL_SAFE: any classifier error, an empty diff or an unresolvable base is `full`, never a smaller scope.
- *   - SKIP_STEPS_NOT_JOBS: this script only emits outputs; the workflow skips steps and every required job still reports.
- *   - The curated unit list stays owned by the root `test` script: it is parsed here the way scripts/check-test-filters.mjs parses it, never copied.
- *   - UNDECLARED_EDGE_IS_FULL: a relative import across workspace packages with no declared dependency (scripts/ci/workspace-edges.mjs) hides a dependent from pnpm's graph, so the diff runs `full`.
+ *   - SKIP_STEPS_NOT_JOBS: this script only emits outputs; the action skips steps and every required job still reports.
+ *   - The curated unit list stays owned by the root `test` script: it is parsed here from the node repo, never copied.
+ *   - UNDECLARED_EDGE_IS_FULL: a relative import across workspace packages with no declared dependency (workspace-edges.mjs) hides a dependent from pnpm's graph, so the diff runs `full`.
  *   - Uses node builtins, git and `pnpm ls` only, so it runs before `pnpm install`.
- * Preview locally: `CI_EVENT=pull_request BASE_REF=main pnpm ci:scope` (run after `git fetch origin main`; optional HEAD_REF=<commit> classifies a past commit).
+ * Preview locally from the repo root: `CI_EVENT=pull_request BASE_REF=main node .github/actions/node-ci/scripts/classify-ci-scope.mjs` (run after `git fetch origin main`; optional HEAD_REF=<commit> classifies a past commit).
  * Side-effects: IO (runs git and pnpm, appends to $GITHUB_OUTPUT).
- * Links: .github/workflows/ci.yaml, scripts/ci/run-unit-tests.mjs, scripts/check-test-filters.mjs
+ * Links: ../action.yml, run-unit-tests.mjs
  */
 
 // biome-ignore-all lint/suspicious/noConsole: CI script

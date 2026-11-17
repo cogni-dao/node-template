@@ -17,8 +17,10 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CHECKER = join(REPO_ROOT, "scripts", "check-node-ci-workflow.mjs");
+const ACTION = ".github/actions/node-ci/action.yml";
 const FILES = [
   ".github/workflows/ci.yaml",
+  ACTION,
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
   ".github/workflows/publish-packages.yml",
@@ -130,8 +132,8 @@ const CASES = [
   {
     name: "removing detection checks must not remove the required unit suite",
     mutate: edit(
-      ".github/workflows/ci.yaml",
-      "run: pnpm test:ci",
+      ACTION,
+      'run: node "${{ github.action_path }}/scripts/run-unit-tests.mjs"',
       "run: echo tests skipped"
     ),
     expectExit: 1,
@@ -140,7 +142,7 @@ const CASES = [
   {
     name: "schema verification remains owned by required static CI",
     mutate: edit(
-      ".github/workflows/ci.yaml",
+      ACTION,
       "run: pnpm db:check",
       "run: echo schema checks skipped"
     ),
@@ -324,23 +326,88 @@ const CASES = [
   {
     name: "the full unit chain must still run on merge_group",
     mutate: edit(
-      ".github/workflows/ci.yaml",
-      "scope != 'docs-only' && steps.scope.outputs.scope != 'affected'",
-      "scope != 'docs-only' && steps.scope.outputs.scope != 'affected' && github.event_name == 'pull_request'"
+      ACTION,
+      "      if: inputs.lane == 'unit' && steps.scope.outputs.scope != 'docs-only'\n",
+      "      if: inputs.lane == 'unit' && steps.scope.outputs.scope != 'docs-only' && github.event_name == 'pull_request'\n"
     ),
     expectExit: 1,
-    expectMatch: /unit on merge_group with scope "full" must skip exactly/,
+    expectMatch: /unit on merge_group with scope "full".*must run exactly/,
   },
   // Defect: gating the Markdown check on scope lets a docs-only PR pass with nothing verified.
   {
     name: "markdown refs must never be gated",
     mutate: edit(
-      ".github/workflows/ci.yaml",
-      "      - name: Markdown references check\n",
-      "      - name: Markdown references check\n        if: steps.scope.outputs.scope != 'docs-only'\n"
+      ACTION,
+      "      if: inputs.lane == 'static'\n      shell: bash\n      run: pnpm check:markdown-refs",
+      "      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'\n      shell: bash\n      run: pnpm check:markdown-refs"
     ),
     expectExit: 1,
-    expectMatch: /markdown-refs/,
+    expectMatch: /static on pull_request with scope "docs-only".*must run exactly/,
+  },
+  // story.0052. Defect: a lane skips work other than the build or the unit selection, so a required
+  // check reports green having run less than the merge queue expects.
+  {
+    name: "a lane step must not be skipped by a scope it was not designed for",
+    mutate: edit(
+      ACTION,
+      "      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'\n      shell: bash\n      run: pnpm typecheck",
+      "      if: inputs.lane == 'static' && steps.scope.outputs.scope == 'full'\n      shell: bash\n      run: pnpm typecheck"
+    ),
+    expectExit: 1,
+    expectMatch: /static on pull_request with scope "affected".*must run exactly/,
+  },
+  // Defect: a step meant for one lane runs in all three (or a lane runs another lane's check).
+  {
+    name: "the unit suite must stay gated to the unit lane",
+    mutate: edit(ACTION, "      if: inputs.lane == 'unit' && steps.scope.outputs.scope != 'docs-only'\n", "      if: steps.scope.outputs.scope != 'docs-only'\n"),
+    expectExit: 1,
+    expectMatch: /"Unit tests" must be gated to the unit lane/,
+  },
+  // Defect: restore-keys restores a build of DIFFERENT sources and skips the build, so a lane tests stale output.
+  {
+    name: "the build cache may only hit on an exact input hash",
+    mutate: edit(ACTION, "          graphs/*.tsbuildinfo\n        key:", "          graphs/*.tsbuildinfo\n        restore-keys: node-ci-build-v1-\n        key:"),
+    expectExit: 1,
+    expectMatch: /must not use restore-keys/,
+  },
+  // Defect: a moved tag changes CI under every node that pinned it without editing a workflow.
+  {
+    name: "a nested action must be pinned to a full commit SHA",
+    mutate: edit(ACTION, "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4", "actions/cache@v4"),
+    expectExit: 1,
+    expectMatch: /must pin actions\/cache@v4 to a full commit SHA/,
+  },
+  {
+    name: "a caller must pin the shared action by full SHA, not a branch",
+    mutate: edit(".github/workflows/ci.yaml", "uses: ./.github/actions/node-ci", "uses: cogni-dao/node-template/.github/actions/node-ci@main"),
+    expectExit: 1,
+    expectMatch: /node-ci@<40-char commit SHA>/,
+  },
+  // Defect: FORK_FREEDOM. A secret in the shared action would fail every fork and node PR run.
+  {
+    name: "the shared action must not read a secret",
+    mutate: edit(ACTION, "        node-version: ${{ inputs.node_version }}\n", "        node-version: ${{ inputs.node_version }}\n        token: ${{ secrets.GITHUB_TOKEN }}\n"),
+    expectExit: 1,
+    expectMatch: /must not reference secrets/,
+  },
+  // Defect: a job running another lane's steps under this lane's required name.
+  {
+    name: "a job must run the lane it is named for",
+    mutate: edit(".github/workflows/ci.yaml", "lane: unit", "lane: static"),
+    expectExit: 1,
+    expectMatch: /unit node-ci lane input/,
+  },
+  // Defect: converting a required job to a reusable-workflow call renames its check to
+  // `unit / <called job>`; the required `unit` then never reports and the ruleset deadlocks.
+  {
+    name: "calling a reusable workflow from a required job cannot provide the bare context",
+    mutate: edit(
+      ".github/workflows/ci.yaml",
+      "\n  unit:\n    runs-on: ubuntu-latest\n",
+      "\n  unit:\n    uses: cogni-dao/node-template/.github/workflows/ci.yml@0000000000000000000000000000000000000000\n"
+    ),
+    expectExit: 1,
+    expectMatch: /required check "unit" must be emitted by exactly one job; found 0/,
   },
 ];
 
