@@ -23,7 +23,7 @@ import {
 	WorkItemWriteOutcomeUnknownError,
 	WorkItemsBusyError,
 } from "@cogni/work-items/adapters/doltgres";
-import { startWorkItemsDoltgres } from "./doltgres-work-items.fixture";
+import { DB_NAME, startWorkItemsDoltgres } from "./doltgres-work-items.fixture";
 
 describe("Doltgres 0.57.3 work-item acceptance: reader and writer settlement", () => {
 	let container: StartedTestContainer;

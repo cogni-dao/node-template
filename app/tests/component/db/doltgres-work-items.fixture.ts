@@ -30,7 +30,7 @@ const MIGRATIONS_DIR = path.resolve(
 	"app/src/adapters/server/db/doltgres-migrations",
 );
 export const DOLTGRES_IMAGE = "dolthub/doltgresql:0.57.3";
-const DB_NAME = "knowledge_node_template_work_items";
+export const DB_NAME = "knowledge_node_template_work_items";
 const PASSWORD = "doltgres";
 
 export const stageLogger = {
