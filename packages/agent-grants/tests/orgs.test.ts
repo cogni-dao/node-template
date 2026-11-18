@@ -10,6 +10,7 @@ import {
   validRepoSpecPath,
   createOwnerSources,
   createRepoSpecOwnerSource,
+  createGithubRepoSpecFetcher,
   ensureOrg,
   fetchRepoSpecFromGithub,
   InvalidOrgSourceError,
@@ -360,8 +361,25 @@ describe("fetchRepoSpecFromGithub", () => {
 
   it("sends the optional token as a bearer", async () => {
     const fetchImpl = vi.fn((_url: unknown, _init?: RequestInit) => ok("x"));
-    await fetchRepoSpecFromGithub(REF, undefined, { fetch: fetchImpl as unknown as typeof fetch, token: "ghp_test" });
+    await fetchRepoSpecFromGithub(REF, undefined, { fetch: fetchImpl as unknown as typeof fetch, token: async () => "ghp_test" });
     expect(((fetchImpl.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>).authorization).toBe("Bearer ghp_test");
+    // A provider that yields nothing sends nothing; a provider that throws is an owner outage.
+    await fetchRepoSpecFromGithub(REF, undefined, { fetch: fetchImpl as unknown as typeof fetch, token: async () => undefined });
+    expect(((fetchImpl.mock.calls[1] as [string, RequestInit])[1].headers as Record<string, string>).authorization).toBeUndefined();
+    await expect(
+      fetchRepoSpecFromGithub(REF, undefined, { fetch: fetchImpl as unknown as typeof fetch, token: async () => Promise.reject(new Error("no installation")) })
+    ).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("createGithubRepoSpecFetcher is a ready-made fetchRepoSpec that asks the provider for a fresh token per read", async () => {
+    const fetchImpl = vi.fn((_url: unknown, _init?: RequestInit) => ok("version: 1\n"));
+    const token = vi.fn(async () => "t1");
+    const fetchRepoSpec = createGithubRepoSpecFetcher({ fetch: fetchImpl as unknown as typeof fetch, token });
+    await fetchRepoSpec(REF, MONO);
+    await fetchRepoSpec(REF, MONO);
+    expect(token).toHaveBeenCalledTimes(2);
+    expect((fetchImpl.mock.calls[0] as [string])[0]).toContain("/contents/nodes/operator/.cogni/repo-spec.yaml");
   });
 
   it("a monorepo path is read from that path; a traversal or absolute path is refused before any request", async () => {
