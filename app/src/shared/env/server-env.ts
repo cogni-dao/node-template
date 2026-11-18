@@ -282,8 +282,8 @@ export const serverSchema = z.object({
   SERVICE_ENROLLMENT_ORIGIN: optionalString,
   SERVICE_ENROLLMENT_ENVIRONMENT: optionalString,
   SERVICE_ENROLLMENT_TRUSTED_HOMES: optionalString,
-  SERVICE_ENROLLMENT_SIGNING_JWK: optionalString,
-  SERVICE_ENROLLMENT_SIGNING_KID: optionalString,
+  // 32 random bytes, base64: the operator mints it once (`source: agent`); the signing key pair and its kid are derived from it.
+  SERVICE_ENROLLMENT_SIGNING_SEED: optionalString,
   SERVICE_LINK_TARGETS: optionalString,
 
   // PostHog product analytics — required

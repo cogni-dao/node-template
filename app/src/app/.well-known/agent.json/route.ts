@@ -74,6 +74,10 @@ import {
 	getNodeName,
 	getNodeThumbnail,
 } from "@/shared/config/repoSpec.server";
+import {
+	serviceEnrollmentEnvironment,
+	serviceEnrollmentOrigin,
+} from "@/bootstrap/service-enrollment-config";
 import { serverEnv } from "@/shared/env";
 
 export const runtime = "nodejs";
@@ -81,6 +85,8 @@ export const runtime = "nodejs";
 
 export async function GET(request: Request) {
 	const env = serverEnv();
+	const enrollmentOrigin = serviceEnrollmentOrigin(env);
+	const enrollmentEnvironment = serviceEnrollmentEnvironment(env);
 	const origin = publicOrigin(request);
 	// DECLARED_ONCE_SHOWN_EVERYWHERE: rendered from the grant declarations on every read, never a copy table.
 	const { permissions: askable } = buildPermissionCatalog(
@@ -101,14 +107,14 @@ export async function GET(request: Request) {
 		version: "v1",
 		nodeId: getNodeId(),
 		// Present only when this node publishes service enrollment (story.0038): who may sign for it and the credential ceilings a signer must respect.
-		...(env.SERVICE_ENROLLMENT_ORIGIN && env.SERVICE_ENROLLMENT_ENVIRONMENT
+		...(enrollmentOrigin && enrollmentEnvironment
 			? {
 					serviceEnrollment: {
 						protocol: "service.enrollment.v2",
 						receiver: {
 							nodeId: getNodeId(),
-							environment: env.SERVICE_ENROLLMENT_ENVIRONMENT,
-							origin: env.SERVICE_ENROLLMENT_ORIGIN,
+							environment: enrollmentEnvironment,
+							origin: enrollmentOrigin,
 						},
 						credentialCeilings: {
 							ttlSec: 2592000,

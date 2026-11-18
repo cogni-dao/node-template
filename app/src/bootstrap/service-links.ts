@@ -18,7 +18,6 @@ import {
   COGNI_SYSTEM_PRINCIPAL_USER_ID,
 } from "@cogni/node-shared";
 /** Node-local configuration and client composition for the published durable enrollment capability. */
-import { exportJWK, importJWK } from "jose";
 import { withTenantScope } from "@cogni/db-client";
 import { connections } from "@cogni/db-schema";
 import type { ActorId } from "@cogni/ids";
@@ -27,13 +26,18 @@ import { z } from "zod";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { resolveAppDb, resolveServiceDb } from "./container";
+import {
+  deriveServiceSigner,
+  serviceEnrollmentEnvironment,
+  serviceEnrollmentOrigin,
+} from "./service-enrollment-config";
 
 export function serviceHomeTuple() {
   const env = serverEnv();
   return nodeTupleSchema.parse({
     nodeId: getNodeId(),
-    environment: env.SERVICE_ENROLLMENT_ENVIRONMENT,
-    origin: env.SERVICE_ENROLLMENT_ORIGIN,
+    environment: serviceEnrollmentEnvironment(env),
+    origin: serviceEnrollmentOrigin(env),
   });
 }
 /** Owner-reviewed trust tuples. Legacy reconciliation is explicit and ambiguous origin/service mappings are refused by the store. */
@@ -65,38 +69,11 @@ export function serviceConnectionKey(targetAlias: string): ConnectionKey {
   };
 }
 export async function serviceSigner() {
-  const env = serverEnv();
-  if (
-    !env.SERVICE_ENROLLMENT_SIGNING_JWK ||
-    !env.SERVICE_ENROLLMENT_SIGNING_KID
-  )
-    throw new Error("service_signer_unavailable");
-  const jwk = JSON.parse(env.SERVICE_ENROLLMENT_SIGNING_JWK);
-  if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.d !== "string")
-    throw new Error("service_signer_unavailable");
-  const key = await importJWK(jwk, "EdDSA");
-  const signer = createEnrollmentProofSigner({
-    kid: env.SERVICE_ENROLLMENT_SIGNING_KID,
-    key,
-  });
-  // Explicit allowlist: private members cannot reach the public route.
-  const pub = await exportJWK(
-    await importJWK({ kty: jwk.kty, crv: jwk.crv, x: jwk.x }, "EdDSA")
-  );
+  // The key pair and its kid come from one generated seed (see service-enrollment-config.ts); nothing here parses a pasted key.
+  const derived = await deriveServiceSigner(serverEnv().SERVICE_ENROLLMENT_SIGNING_SEED);
   return {
-    signer,
-    jwks: {
-      keys: [
-        {
-          kty: pub.kty,
-          crv: pub.crv,
-          x: pub.x,
-          kid: env.SERVICE_ENROLLMENT_SIGNING_KID,
-          alg: "EdDSA",
-          use: "sig",
-        },
-      ],
-    },
+    signer: createEnrollmentProofSigner({ kid: derived.kid, key: derived.key }),
+    jwks: derived.jwks,
   };
 }
 let composed: Promise<Awaited<ReturnType<typeof compose>>> | undefined;
