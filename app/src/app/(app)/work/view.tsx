@@ -82,7 +82,6 @@ import { type WorkIntent, useWorkNavigation } from "./WorkNavigationBoundary";
 import {
   fetchWorkBoard,
   fetchWorkItem,
-  WORK_ITEM_DETAIL_INCLUDE,
   fetchWorkItems,
 } from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
@@ -200,6 +199,7 @@ export function WorkDashboardView({
   const boardView = desired.params.get("view") !== "table";
   const cursor = searchParams.get("cursor") ?? "";
   // story.0058: page 1 of artifact and history refs, and the selected artifact in full, ride the item read.
+  const WORK_ITEM_DETAIL_INCLUDE = "artifacts,history";
   const selectedArtifact = searchParams.get("artifact") ?? undefined;
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId, WORK_ITEM_DETAIL_INCLUDE, selectedArtifact ?? null],

@@ -92,9 +92,6 @@ export async function fetchWorkBoard(
   return response.json() as Promise<WorkBoardColumns>;
 }
 
-/** The detail view's envelope parts: page 1 of artifact and history refs (story.0058). */
-export const WORK_ITEM_DETAIL_INCLUDE = "artifacts,history";
-
 export async function fetchWorkItem(
   id: string,
   signal?: AbortSignal,
