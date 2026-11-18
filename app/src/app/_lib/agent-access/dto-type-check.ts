@@ -44,6 +44,7 @@ export function viewIsWire(view: NodeAiAccessView): Wire {
   return {
     canManage: view.canManage,
     more: view.more,
+    ...(view.nextCursor === undefined ? {} : { nextCursor: view.nextCursor }),
     permissions: view.permissions.map((row) => ({
       section: row.section,
       principalUserId: row.principalUserId,

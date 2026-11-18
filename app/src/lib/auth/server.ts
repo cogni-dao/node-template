@@ -5,7 +5,7 @@
  * Module: `@/lib/auth/server`
  * Purpose: Canonical server-side session helper for Auth4.
  * Scope: Server-only. Wraps NextAuth's getServerSession with invariant enforcement. Do not use on client.
- * Invariants: Returns null unless id is present. walletAddress may be null for OAuth-only users.
+ * Invariants: Returns null unless id is present. walletAddress may be null for OAuth-only users. The identity is marked `via: "session"`: it comes only from the NextAuth cookie session, never from a request header or body, so the route doors read it as a human.
  * Side-effects: IO (NextAuth session retrieval)
  * Links: https://cognidao.org/knowledge/node-template-identity-model
  * @public

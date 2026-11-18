@@ -10,8 +10,8 @@
 import { describe, expect, it } from "vitest";
 import { createPostgresAgentGrantsStore, type SqlTag } from "../src";
 
-const refusesDates = (seen: unknown[][]): SqlTag =>
-  ((strings: TemplateStringsArray, ...values: unknown[]) => {
+const refusesDates = (seen: unknown[][]): SqlTag => {
+  const tag = ((strings: TemplateStringsArray, ...values: unknown[]) => {
     seen.push(values);
     for (const v of values) if (v instanceof Date) return Promise.reject(Object.assign(new TypeError("Date parameter"), { code: "ERR_INVALID_ARG_TYPE" }));
     const text = strings.join("?");
@@ -20,6 +20,9 @@ const refusesDates = (seen: unknown[][]): SqlTag =>
     if (text.includes("count(*)")) return Promise.resolve([{ n: 0 }]);
     return Promise.resolve([]);
   }) as unknown as SqlTag;
+  // Node-plane role writes open one transaction (the user lock first), so the fake client can begin.
+  return Object.assign(tag, { begin: <T,>(fn: (tx: SqlTag) => Promise<T>) => fn(tag) });
+};
 
 describe("the Postgres store passes no JS Date as a parameter", () => {
   it("an ask (new row, and a re-ask) sends the link end as an ISO string", async () => {

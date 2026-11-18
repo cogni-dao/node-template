@@ -152,6 +152,16 @@ function logPerimeterDenial(
 
 export async function proxy(req: NextRequest): Promise<NextResponse> {
 	const { pathname } = req.nextUrl;
+	// HUMAN_ROUTES_SESSION_ONLY: the human service-link mount answers a signed-in person only; an Authorization header is refused before any handler.
+	if (
+		(pathname === "/api/v1/service-links" || pathname.startsWith("/api/v1/service-links/")) &&
+		req.headers.has("authorization")
+	) {
+		return NextResponse.json(
+			{ error: "human_session_required", code: "human_session_required" },
+			{ status: 403, headers: { "cache-control": "no-store" } },
+		);
+	}
 	const isPublicApi = isPublicApiRoute(pathname);
 	const isAgentBearerRequest = isAgentApiRoute(pathname) && hasAgentBearer(req);
 

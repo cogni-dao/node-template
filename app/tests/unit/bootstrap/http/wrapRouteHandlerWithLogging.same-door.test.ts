@@ -13,6 +13,7 @@
 
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type { SessionUser } from "@cogni/node-shared";
+import type { SqlTag } from "@cogni/agent-grants";
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,6 +37,8 @@ log.child.mockReturnValue(log);
 /** A tagged template that answers the role queries from a set. `begin` hands back the same tag. */
 function fakeSql(state: {
   roles: Set<string>;
+  /** Principals made by a service enrollment (`agent_principals.service_key` set). */
+  services?: Set<string>;
   down: boolean;
   queries: number;
   /** `principal|scope|account` rows that are live account grants. */
@@ -54,6 +57,7 @@ function fakeSql(state: {
       return state.grants?.has(`${values[0]}|${values[1]}|${values[2]}`) ? [{ ok: 1 }] : [];
     if (text.includes("FROM agent_roles"))
       return state.roles.has(`${values[0]}|${values[1]}`) ? [{ ok: 1 }] : [];
+    if (text.includes("FROM agent_principals") && text.includes("service_key IS NOT NULL")) return state.services?.has(String(values[0])) ? [{ ok: 1 }] : [];
     return [];
   }) as unknown as AgentAuthoritySql;
   (tag as unknown as { begin: unknown }).begin = async (fn: (t: unknown) => Promise<unknown>) => fn(tag);
@@ -62,7 +66,7 @@ function fakeSql(state: {
 
 const handler = vi.fn(async () => NextResponse.json({ ran: true }));
 const AGENT = "agent-user-1";
-const state = { roles: new Set<string>(), down: false, queries: 0, grants: new Set<string>(), owners: new Set<string>() };
+const state = { roles: new Set<string>(), services: new Set<string>(), down: false, queries: 0, grants: new Set<string>(), owners: new Set<string>() };
 
 function route(sameDoor: string, user: SessionUser | null, routeId = "work.items.patch") {
   return wrapRouteHandlerWithLogging(
@@ -89,6 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   log.child.mockReturnValue(log);
   state.roles = new Set();
+  state.services = new Set();
   state.grants = new Set();
   state.owners = new Set();
   state.down = false;
@@ -107,6 +112,34 @@ beforeEach(() => {
 });
 
 describe("the route door (real wrapper, real authorizeRoute)", () => {
+  it("uses the reserved transaction for both live-role and DAO-admin reads", async () => {
+    const roles = new Set(["dao-admin", "not-admin"]);
+    const reads: string[] = [];
+    const tx: SqlTag = async (strings, ...values) => {
+      const text = strings.join("?");
+      if (text.includes("FROM agent_roles")) {
+        reads.push("role");
+        return roles.has(String(values[0])) ? [{ ok: 1 }] : [];
+      }
+      if (text.includes("FROM user_bindings")) { reads.push("admin"); return values[0] === "dao-admin" ? [{ external_id: "0xadmin" }] : []; }
+      throw new Error("unexpected authority read");
+    };
+    const sql = Object.assign(async () => { throw new Error("root pool must not be reacquired"); }, {
+      begin: async <T,>(fn: (connection: SqlTag) => Promise<T>) => fn(tx),
+    });
+    const authority = createAgentToolAuthority({ sql, toolBundle: [], log: log as never,
+      nodeAdmin: { check: async ({ walletAddress }) => walletAddress === "0xadmin" ? { ok: true } : { ok: false, errorCode: "authz_denied" } },
+    });
+    const decide = (userId: string) => authority.authorizeRoute({ toolId: "service-link.manage", routeId: "service.links.create", userId, via: "bearer" });
+    expect(await Promise.all([decide("dao-admin"), decide("not-admin")])).toEqual([
+      { decision: "allow", basis: "role" }, { decision: "deny", code: "policy_denied", reason: "subject_not_admin" },
+    ]);
+    expect(reads.filter((r) => r === "admin")).toHaveLength(2);
+    roles.delete("dao-admin");
+    expect(await decide("dao-admin")).toMatchObject({ decision: "deny", reason: "no_role" });
+    expect(reads.filter((r) => r === "admin")).toHaveLength(2);
+  });
+
   it("a bearer with no role row gets 403 policy_denied and the handler never runs", async () => {
     const res = await call("core__work_item_update", user("bearer"));
     expect(res.status).toBe(403);
@@ -214,13 +247,87 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     ]);
   });
 
-  it("a read route with no sameDoor option is untouched (the door is opt-in per route; writes are deny-by-default, see the deny-by-default test)", async () => {
-    const res = await wrapRouteHandlerWithLogging(
-      { routeId: "plain", auth: { mode: "required", getSessionUser: async () => user("bearer") } },
-      handler
-    )(new NextRequest("https://node.example/api/v1/x", { method: "GET" }));
-    expect(res.status).toBe(200);
+  it("a read route with no sameDoor option is untouched for a human and reads one row for a bearer (writes are deny-by-default, see the deny-by-default test)", async () => {
+    const plain = (u: SessionUser) =>
+      wrapRouteHandlerWithLogging(
+        { routeId: "plain", auth: { mode: "required", getSessionUser: async () => u } },
+        handler
+      )(new NextRequest("https://node.example/api/v1/x", { method: "GET" }));
+    expect((await plain(user("session", "human-1"))).status).toBe(200);
     expect(state.queries).toBe(0);
+    expect((await plain(user("bearer"))).status).toBe(200);
+    expect(state.queries).toBe(1);
+  });
+
+  it("SERVICE_KEY_DENY_BY_DEFAULT: a service key is 403 on a route with no door (ai.agents.list), 200 on a knowledge.read door route while On, and an ordinary agent key still reaches ai.agents.list", async () => {
+    const chat = (u: SessionUser) =>
+      wrapRouteHandlerWithLogging(
+        { routeId: "ai.agents.list", auth: { mode: "required", getSessionUser: async () => u } },
+        handler
+      )(new NextRequest("https://node.example/api/v1/ai/agents", { method: "GET" }));
+    state.services.add(AGENT);
+    const refused = await chat(user("bearer"));
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: "service_key_route_denied", code: "service_key_route_denied" });
+    expect(handler).not.toHaveBeenCalled();
+    // A declared capability uses the same grant decision for a service and an ordinary outside agent.
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(403);
+    state.roles.add(`${AGENT}|work_item:transition`);
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(200);
+    state.services.delete(AGENT);
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(200);
+    state.roles.delete(`${AGENT}|work_item:transition`);
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(403);
+    state.services.add(AGENT);
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(403);
+    // The knowledge.read door route: 200 once its role row is On.
+    state.roles.add(`${AGENT}|knowledge:read`);
+    expect((await call("knowledge.read", user("bearer"))).status).toBe(200);
+    // An agent key without service_key and a human reach ai.agents.list as before.
+    expect((await chat(user("bearer", "other-agent"))).status).toBe(200);
+    expect((await chat(user("session", "human-1"))).status).toBe(200);
+    const denied = log.warn.mock.calls.map(([f]) => f as Record<string, unknown>).filter((f) => f.code === "service_key_route_denied");
+    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "ai.agents.list", code: "service_key_route_denied", reason: "route_has_no_capability_door" });
+  });
+
+  it("the service-key gate is 503 on a store outage, never an allow", async () => {
+    state.down = true;
+    const res = await wrapRouteHandlerWithLogging(
+      { routeId: "ai.agents.list", auth: { mode: "required", getSessionUser: async () => user("bearer") } },
+      handler
+    )(new NextRequest("https://node.example/api/v1/ai/agents", { method: "GET" }));
+    expect(res.status).toBe(503);
+    expect(handler).not.toHaveBeenCalled();
+    // The outage is logged once as a store failure with its class (never a message), like every other store failure.
+    const logged = log.error.mock.calls.map(([f]) => f as Record<string, unknown>).filter((f) => f.event === "agent.roles.unavailable");
+    expect(logged).toEqual([expect.objectContaining({ routeId: "ai.agents.list" })]);
+    expect(await res.json()).toEqual({ error: "authz_unavailable" });
+  });
+
+  it("fail closed like the door: an identity with no `via` is a bearer for the service-key gate", async () => {
+    state.services.add(AGENT);
+    const chat = (u: SessionUser) =>
+      wrapRouteHandlerWithLogging(
+        { routeId: "ai.agents.list", auth: { mode: "required", getSessionUser: async () => u } },
+        handler
+      )(new NextRequest("https://node.example/api/v1/ai/agents", { method: "GET" }));
+    expect((await chat(user(undefined))).status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+    expect((await chat(user(undefined, "other-agent"))).status).toBe(200);
+  });
+
+  it("log budget: a refused door call logs at most 4 lines (start, decision, route_denied, end) and a refused service-key call at most 3 (start, one warn, end)", async () => {
+    const lines = () => log.info.mock.calls.length + log.warn.mock.calls.length + log.error.mock.calls.length + log.debug.mock.calls.length;
+    state.services.add(AGENT);
+    await call("knowledge.read", user("bearer"));
+    expect(lines()).toBeLessThanOrEqual(4);
+    vi.clearAllMocks();
+    log.child.mockReturnValue(log);
+    await wrapRouteHandlerWithLogging(
+      { routeId: "ai.agents.list", auth: { mode: "required", getSessionUser: async () => user("bearer") } },
+      handler
+    )(new NextRequest("https://node.example/api/v1/ai/agents", { method: "GET" }));
+    expect(lines()).toBeLessThanOrEqual(3);
   });
 });
 
@@ -294,10 +401,11 @@ describe("the OPTIONAL query account door (payments.credits_summary?accountId=)"
       handler
     )(new NextRequest(`https://node.example/api/v1/payments/credits/summary${query}`));
 
-  it("with no accountId the route reads the caller's own account and no door runs (no store read)", async () => {
-    expect((await queryRoute(user("bearer"), "")).status).toBe(200);
+  it("with no accountId the route reads the caller's own account and no door runs: a human reads nothing, a bearer pays only the one service-key read", async () => {
     expect((await queryRoute(user("session", "human-1"), "?limit=5")).status).toBe(200);
     expect(state.queries).toBe(0);
+    expect((await queryRoute(user("bearer"), "")).status).toBe(200);
+    expect(state.queries).toBe(1);
   });
 
   it("with an accountId the account door runs: the owner passes by session; a stranger, an empty id and an agent with no grant get the one 404", async () => {

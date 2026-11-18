@@ -33,7 +33,7 @@ const request = (input = new NextRequest("http://localhost/api/v1/work/items/tas
 beforeEach(() => {
   vi.resetAllMocks();
   log.child.mockReturnValue(log);
-  fake.user = { id: "u", walletAddress: null, displayName: null, avatarColor: null };
+  fake.user = { id: "u", walletAddress: null, displayName: null, avatarColor: null, via: "session" };
   fake.container = { config: { unhandledErrorPolicy: "respond_500" }, log, clock: { now: () => new Date().toISOString() }, doltgresWorkItems: { get, listSummaries, listBoardColumns }, workItemQuery: { get: vi.fn().mockResolvedValue(null) }, knowledgeStorePort: { readWorkEdo }, goalMetrics: { workReadBatch, predictionBatch } };
   get.mockResolvedValue(item);
   workReadBatch.mockResolvedValue([{ baseline: { id: baselineId, status: "ok", value: 2, observedAt: "2026-01-01", unit: "count" }, current: { id: otherId, status: "error", value: null, observedAt: "2026-01-02", viewState: "error", unit: "count" } }]);

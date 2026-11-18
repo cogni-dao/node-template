@@ -116,6 +116,7 @@ describe("schedule history HTTP boundary", () => {
     session.mockResolvedValue({
       id: caller,
       walletAddress: "0x0000000000000000000000000000000000000001",
+      via: "session",
     });
     getSchedule.mockResolvedValue(schedule);
     listRuns.mockResolvedValue([]);

@@ -279,6 +279,12 @@ export const serverSchema = z.object({
   // BYO-AI: AEAD encryption key for connections table (hex-encoded 32 bytes)
   // Optional — BYO-AI features disabled when not set.
   CONNECTIONS_ENCRYPTION_KEY: optionalString,
+  SERVICE_ENROLLMENT_ORIGIN: optionalString,
+  SERVICE_ENROLLMENT_ENVIRONMENT: optionalString,
+  SERVICE_ENROLLMENT_TRUSTED_HOMES: optionalString,
+  SERVICE_ENROLLMENT_SIGNING_JWK: optionalString,
+  SERVICE_ENROLLMENT_SIGNING_KID: optionalString,
+  SERVICE_LINK_TARGETS: optionalString,
 
   // PostHog product analytics — required
   // See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/posthog-setup.md for setup

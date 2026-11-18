@@ -16,9 +16,11 @@
 
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   check,
   customType,
   index,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -41,6 +43,7 @@ const CONNECTION_PROVIDERS = [
   "github",
   "google",
   "bluesky",
+  "cogni-node",
 ] as const;
 
 const CREDENTIAL_TYPES = [
@@ -63,6 +66,13 @@ export const connections = pgTable(
       .notNull()
       .references(() => billingAccounts.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
+    serviceKeyDigest: text("service_key_digest"),
+    serviceIdentity: jsonb("service_identity"),
+    serviceOperationId: uuid("service_operation_id"),
+    serviceGeneration: bigint("service_generation", { mode: "number" }),
+    serviceCredentialId: uuid("service_credential_id"),
+    serviceState: text("service_state"),
+    renewUntil: timestamp("renew_until", { withTimezone: true }),
     credentialType: text("credential_type").notNull(),
     /** AEAD encrypted JSON blob (nonce prepended). Never store plaintext tokens. */
     encryptedCredentials: bytea("encrypted_credentials").notNull(),
@@ -85,7 +95,7 @@ export const connections = pgTable(
     check(
       "connections_provider_check",
       sql`${table.provider} IN (${sql.join(
-        CONNECTION_PROVIDERS.map((p) => sql`${p}`),
+        CONNECTION_PROVIDERS.map((p) => sql.raw(`'${p}'`)),
         sql`, `
       )})`
     ),
@@ -99,6 +109,13 @@ export const connections = pgTable(
     index("connections_billing_account_id_idx").on(table.billingAccountId),
     uniqueIndex("connections_billing_account_provider_active_idx")
       .on(table.billingAccountId, table.provider)
-      .where(sql`${table.revokedAt} IS NULL`),
+      .where(
+        sql`${table.revokedAt} IS NULL AND ${table.provider} <> 'cogni-node'`
+      ),
+    uniqueIndex("connections_service_ready_unique")
+      .on(table.serviceKeyDigest)
+      .where(
+        sql`${table.provider} = 'cogni-node' AND ${table.serviceState} = 'ready'`
+      ),
   ]
 ).enableRLS();

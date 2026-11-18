@@ -103,6 +103,7 @@ export type {
   AccessSection,
   NodeAiPermissionView,
   PendingAskView,
+  RoleCursor,
   RoleRow,
   RoleState,
   RunIdentity,

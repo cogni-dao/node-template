@@ -23,6 +23,7 @@ vi.mock("@/shared/config/repoSpec.server", () => ({
   getNodeHook: () => "Test hook",
   getNodeMission: () => "Test mission",
   getNodeName: () => "Test node",
+  getNodeId: () => "11111111-1111-4111-8111-111111111111",
   getNodeThumbnail: () => null,
 }));
 

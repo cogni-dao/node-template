@@ -25,6 +25,7 @@ function fakeSql(answers: { bypass: unknown; roleQueryFails?: boolean }) {
       if (answers.roleQueryFails) throw new Error("db down");
       return [{ bypass: answers.bypass }];
     }
+    if (text.includes("agent_authority_maintenance")) return [{ backfill_ready: true }]; // fully migrated fixture
     return []; // what a non-BYPASSRLS role sees under FORCE RLS with no policy
   };
   const client = Object.assign(tag, { begin: <T>(fn: (tx: typeof tag) => Promise<T>) => fn(tag) });

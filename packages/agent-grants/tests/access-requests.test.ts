@@ -6,6 +6,7 @@ import {
   AgentRolesError,
   authorize,
   authorizeCaller,
+  buildNodeAiView,
   denyRequest,
   grantRole,
   listOwnAccess,
@@ -133,5 +134,35 @@ describe("the admin's yes, no and take-back", () => {
     expect((await denyRequest(s, { principalUserId: "b", scope: "work_item:transition", me: ADMIN, scopeKinds: {} })).denied).toBe(false);
     expect((await denyRequest(s, { principalUserId: "a", scope: "work_item:transition", me: ADMIN, scopeKinds: {} })).denied).toBe(true);
     expect((await revokeRole(s, { principalUserId: "b", scope: "work_item:transition", me: ADMIN, scopeKinds: {} })).revoked).toBe(true);
+  });
+});
+
+
+describe("enrolled service permission restoration", () => {
+  it("keeps the visible Off control and restores the same principal through the normal admin grant", async () => {
+    const s = memoryStore({ servicePrincipals: ["service"], names: { service: "git-review@home.example" } });
+    const scope = "knowledge:read";
+    const declaration = { label: "Read the knowledge base", description: "Read this node's knowledge." };
+    const grant = { principalUserId: "service", scope, me: ADMIN, declaredScopes: [scope], scopeKinds: {} };
+    const read = () => authorizeCaller(s, async () => "denied", { userId: "service", via: "bearer", requires: { scope, kind: "node", subject: "member" } });
+    const controls = async () => buildNodeAiView({ declarations: { [scope]: declaration }, scopesByPrincipal: {}, internal: [], rows: (await s.listRoleRows(25, [scope])).rows });
+    await requestAccess(s, { principalUserId: "service", scope, declaredScopes: [scope], askableScopes: [scope] });
+    await grantRole(s, grant);
+    expect(await read()).toMatchObject({ decision: "allow" });
+    await revokeRole(s, { principalUserId: "service", scope, me: ADMIN, scopeKinds: {} });
+    expect(await read()).toMatchObject({ decision: "deny" });
+    expect(await controls()).toEqual([expect.objectContaining({ section: "outside", principalUserId: "service", on: false })]);
+    await expect(grantRole(s, { ...grant, me: { userId: "service", admin: {} } })).rejects.toMatchObject({ code: "self_approval" });
+    await grantRole(s, grant);
+    expect(await read()).toMatchObject({ decision: "allow" });
+    expect(await controls()).toEqual([expect.objectContaining({ principalUserId: "service", on: true })]);
+    expect(s.roles[0]).toMatchObject({ revoked: true, approvedBy: "admin-1" }); // preserve the earlier grant's audit row
+  });
+
+  it("a newer dismissed ask cannot resurrect an older approved permission", async () => {
+    const s = memoryStore({ servicePrincipals: ["service"], roles: [{ principal: "service", scope: "edo:write", revoked: true }, { principal: "service", scope: "edo:write", pending: true }] });
+    await denyRequest(s, { principalUserId: "service", scope: "edo:write", me: ADMIN, scopeKinds: {} });
+    await expect(grantRole(s, { principalUserId: "service", scope: "edo:write", me: ADMIN, declaredScopes, scopeKinds: {} })).rejects.toMatchObject({ code: "not_pending" });
+    expect((await s.listRoleRows(25, ["edo:write"])).rows).toEqual([]);
   });
 });

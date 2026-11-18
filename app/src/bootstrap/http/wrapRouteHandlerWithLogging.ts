@@ -104,6 +104,7 @@ type AuthRequiredOptions = {
 
 type AuthOptionalOptions = {
   routeId: string;
+  sameDoor?: string;
   auth: {
     mode: "optional";
     getSessionUser: () => Promise<SessionUser | null>;
@@ -318,6 +319,23 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
               { error: "bearer_write_undeclared", code: "bearer_write_undeclared" },
               { status: responseStatus, headers: { "cache-control": "no-store" } }
             );
+          }
+          // SERVICE_KEY_DENY_BY_DEFAULT (story.0038): a principal made by a service enrollment reaches only a route whose declared door runs for this request; its ordinary
+          // grants decide at that door, and service kind never overrides an approved capability. Every other route stays closed to it, reads included. A human session
+          // and every other bearer pass. Fail closed, like the door: only an identity that says `session` is a human; an absent or unknown `via` is a bearer.
+          if (sessionUser && via === "bearer" && !doorRuns) {
+            const gate = await container.agentAuthority.denyServiceKeyOffDoor({
+              routeId: options.routeId,
+              userId: sessionUser.id,
+            });
+            if (gate.decision === "deny") {
+              responseStatus = gate.code === "authz_unavailable" ? 503 : 403;
+              return NextResponse.json(
+                // An outage is the same quiet 503 body every route answers; a refused service key names its code.
+                gate.code === "authz_unavailable" ? { error: gate.code } : { error: gate.code, code: gate.code },
+                { status: responseStatus, headers: { "cache-control": "no-store" } }
+              );
+            }
           }
           if (doorRuns && sameDoor && sessionUser) {
             let accountId: string | undefined;

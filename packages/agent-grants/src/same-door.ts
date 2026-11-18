@@ -82,6 +82,18 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
       "knowledge.domains.get",
     ],
   },
+  // The requester half of a node-to-node service link (story.0038): an admin of THIS node connects it to a declared service on another node.
+  // The target node's own permission still needs that node's approval. A bearer needs a live role row and the admin check (ONE_ADMIN_CHECK).
+  "service-link.manage": {
+    requires: {
+      scope: "service_link:manage",
+      kind: "node",
+      subject: "admin",
+      label: "Manage service connections",
+      description: "Connect this node to a declared service. Target permissions still require that node's approval.",
+    },
+    routes: ["service.links.create", "service.links.read", "service.links.knowledge", "service.links.disconnect"],
+  },
   "knowledge.contribute": {
     requires: {
       scope: "knowledge:contribute",

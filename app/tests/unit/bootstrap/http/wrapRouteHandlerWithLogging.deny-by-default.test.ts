@@ -43,7 +43,8 @@ beforeEach(() => {
     log,
     config: { unhandledErrorPolicy: "respond_500" },
     clock: { now: () => new Date("2026-11-14T00:00:00Z").toISOString() },
-    agentAuthority: { authorizeRoute },
+    // A bearer on a route whose door does not run passes the service-key gate (it is not a service principal).
+    agentAuthority: { authorizeRoute, denyServiceKeyOffDoor: vi.fn(async () => ({ decision: "allow" })) },
   };
 });
 

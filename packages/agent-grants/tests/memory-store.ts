@@ -44,6 +44,8 @@ export function memoryStore(init?: {
   names?: Record<string, string>;
   /** user id -> the billing account id that user owns. */
   accounts?: Record<string, string>;
+  /** User ids of principals made by a service enrollment (`agent_principals.service_key` set). */
+  servicePrincipals?: string[];
   failing?: boolean;
 }): AgentGrantsStore & { roles: MemoryRole[]; clock: MemoryClock } {
   const clock: MemoryClock = { now: Date.now() };
@@ -102,7 +104,7 @@ export function memoryStore(init?: {
     name: nameOf(r.principal),
     hint: null,
     scope: r.scope,
-    state: r.approvedBy ? "granted" : "pending",
+    state: r.approvedBy ? (r.revoked ? "revoked" : "granted") : "pending",
     at: "2026-11-09T00:00:00.000Z",
     rowId: r.id,
     resource: r.resource,
@@ -164,7 +166,16 @@ export function memoryStore(init?: {
       return Object.entries(init?.principals ?? {}).map(([slug, userId]) => ({ userId, slug }));
     },
     async listRoleRows(limit) {
-      const all = roles.filter((r) => r.resource === "node" && !r.revoked).map(toView);
+      const all = roles
+        .filter(
+          (r, i) =>
+            r.resource === "node" &&
+            (!r.revoked ||
+              (!!r.approvedBy &&
+                (init?.servicePrincipals ?? []).includes(r.principal) &&
+                !roles.slice(i + 1).some((newer) => newer.principal === r.principal && newer.scope === r.scope)))
+        )
+        .map(toView);
       // Same contract as the SQL: this node's own AI always in full; outside rows bounded, pending first.
       const mine = all.filter((r) => r.internal);
       const outside = all.filter((r) => !r.internal).sort((a, b) => (a.state === b.state ? 0 : a.state === "pending" ? -1 : 1));
@@ -193,14 +204,16 @@ export function memoryStore(init?: {
       const open = openRow(principalUserId, scope);
       if (open) {
         if (open.approvedBy) return "granted";
-        open.linkHash = link.hash;
-        open.linkExpiresAt = link.expiresAt.getTime();
-        open.linkConsumed = false;
+        if (link) {
+          open.linkHash = link.hash;
+          open.linkExpiresAt = link.expiresAt.getTime();
+          open.linkConsumed = false;
+        }
         return "pending";
       }
       if (roles.filter((r) => r.principal === principalUserId && !r.revoked && !r.approvedBy).length >= maxPending) return "too_many";
       if (roles.filter((r) => !r.revoked && !r.approvedBy).length >= maxPendingTotal) return "node_full";
-      roles.push(mk({ principal: principalUserId, scope, resource, linkHash: link.hash, linkExpiresAt: link.expiresAt.getTime() }));
+      roles.push(mk({ principal: principalUserId, scope, resource, linkHash: link?.hash ?? null, linkExpiresAt: link ? link.expiresAt.getTime() : null }));
       return "created";
     },
     async approvePending({ principalUserId, scope, approvedBy }) {
@@ -210,6 +223,14 @@ export function memoryStore(init?: {
       row.approvedBy = approvedBy;
       row.grantedAt = clock.now;
       row.linkHash = null;
+      return true;
+    },
+    async restoreRevoked({ principalUserId, scope, approvedBy }) {
+      guard();
+      if (principalUserId === approvedBy) return false;
+      const row = [...roles].reverse().find((r) => r.principal === principalUserId && r.scope === scope && r.resource === "node");
+      if (!row?.revoked || !row.approvedBy) return false;
+      roles.push(mk({ principal: principalUserId, scope, approvedBy, grantedAt: clock.now }));
       return true;
     },
     async denyPending({ principalUserId, scope }) {
@@ -232,6 +253,10 @@ export function memoryStore(init?: {
       if (openRow(principalUserId, scope)) return false;
       roles.push(mk({ principal: principalUserId, scope, approvedBy, grantedAt: clock.now }));
       return true;
+    },
+    async isServicePrincipal(principalUserId) {
+      guard();
+      return (init?.servicePrincipals ?? []).includes(principalUserId);
     },
     async revokeRole({ principalUserId, scope }) {
       guard();

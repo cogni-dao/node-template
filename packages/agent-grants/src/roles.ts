@@ -35,6 +35,7 @@ export type RolesErrorCode =
   | "principal_not_found"
   | "invalid_scope"
   | "not_pending"
+  | "request_expired"
   | "self_approval"
   | "too_many_requests"
   | "no_external_door"
@@ -161,7 +162,8 @@ export async function listOwnAccess(
 
 /**
  * The admin turns a NODE row ON. A pending ask is approved; an internal AI with no row gets a live row. An outside agent with no
- * ask cannot be granted: it has to ask first. `me.admin` is the admin session (ONE_GATE).
+ * ask cannot be granted: it has to ask first. A previously approved permission may be turned back on by the admin without a new ask.
+ * `me.admin` is the admin session (ONE_GATE).
  */
 export async function grantRole(
   store: AgentGrantsStore,
@@ -178,6 +180,8 @@ export async function grantRole(
   if (await store.approvePending({ principalUserId: userId, scope: input.scope, approvedBy: input.me.userId }))
     return { principalUserId: userId, created: true };
   if (!internal) {
+    if (await store.restoreRevoked?.({ principalUserId: userId, scope: input.scope, approvedBy: input.me.userId }))
+      return { principalUserId: userId, created: true };
     // No pending ask: if it is already live this is a no-op, else the agent must ask first.
     if (await store.hasLiveRole(userId, input.scope)) return { principalUserId: userId, created: false };
     throw new AgentRolesError("not_pending", "no pending ask for this agent and scope");

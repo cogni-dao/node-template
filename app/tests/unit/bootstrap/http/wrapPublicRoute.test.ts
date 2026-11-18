@@ -15,6 +15,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TokenBucketRateLimiter } from "@/bootstrap/http/rateLimiter";
+import { getContainer } from "@/bootstrap/container";
+import { wrapPublicRoute as lazyWrapPublicRoute } from "@/bootstrap/http";
 import {
   makeWrapPublicRoute,
   type WrapPublicRouteDeps,
@@ -207,6 +209,47 @@ describe("makeWrapPublicRoute - Rate Limit Bypass", () => {
   });
 
   describe("cache headers", () => {
+    it("preserves no-store when lazy wrapper initialization fails", async () => {
+      vi.mocked(getContainer).mockImplementationOnce(() => { throw new Error("boot failed"); });
+      const route = lazyWrapPublicRoute(
+        { routeId: "agent.service_enrollments.create", noStore: true },
+        async () => NextResponse.json({ ok: true })
+      );
+      const response = await route(createRequest());
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    });
+    it.each(["agent.service_enrollments.create", "agent.service_enrollments.token"])(
+      "enforces no-store for %s on limiter and wrapper failures",
+      async (routeId) => {
+        const emptyLimiter = new TokenBucketRateLimiter({ maxTokens: 0, refillRate: 0, burstSize: 0 });
+        const wrap = makeWrapPublicRoute({
+          rateLimitBypass: { enabled: false, headerName: "x-stack-test", headerValue: "1" },
+          rateLimiter: emptyLimiter,
+          DEPLOY_ENVIRONMENT: "test",
+        });
+        const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+        const route = wrap({ routeId, noStore: true }, handler);
+        const limited = await route(createRequest());
+        expect(limited.status).toBe(429);
+        expect(limited.headers.get("cache-control")).toBe("no-store");
+        expect(handler).not.toHaveBeenCalled();
+        vi.mocked(getContainer).mockImplementationOnce(() => { throw new Error("boot failed"); });
+        const failed = await route(createRequest());
+        expect(failed.status).toBe(503);
+        expect(failed.headers.get("cache-control")).toBe("no-store");
+        const allowed = makeWrapPublicRoute({
+          rateLimitBypass: { enabled: true, headerName: "x-stack-test", headerValue: "1" },
+          rateLimiter: limiter,
+          DEPLOY_ENVIRONMENT: "test",
+        });
+        const response = await allowed({ routeId, noStore: true }, async () =>
+          NextResponse.json({ ok: true }, { headers: { "cache-control": "public, max-age=60" } })
+        )(createRequest({ "x-stack-test": "1" }));
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+      }
+    );
     it("should apply cache headers to successful responses", async () => {
       const deps: WrapPublicRouteDeps = {
         rateLimitBypass: {

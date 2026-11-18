@@ -69,6 +69,7 @@ import {
 	getNodeBrandColor,
 	getNodeBrandIcon,
 	getNodeHook,
+	getNodeId,
 	getNodeMission,
 	getNodeName,
 	getNodeThumbnail,
@@ -98,6 +99,25 @@ export async function GET(request: Request) {
 	return NextResponse.json({
 		name: "Cogni Node API",
 		version: "v1",
+		nodeId: getNodeId(),
+		// Present only when this node publishes service enrollment (story.0038): who may sign for it and the credential ceilings a signer must respect.
+		...(env.SERVICE_ENROLLMENT_ORIGIN && env.SERVICE_ENROLLMENT_ENVIRONMENT
+			? {
+					serviceEnrollment: {
+						protocol: "service.enrollment.v2",
+						receiver: {
+							nodeId: getNodeId(),
+							environment: env.SERVICE_ENROLLMENT_ENVIRONMENT,
+							origin: env.SERVICE_ENROLLMENT_ORIGIN,
+						},
+						credentialCeilings: {
+							ttlSec: 2592000,
+							renewWindowSec: 1209600,
+							pendingSec: 900,
+						},
+					},
+				}
+			: {}),
 		buildSha: env.APP_BUILD_SHA,
 		// IDENTITY_IS_REPO_SPEC_PROJECTION: the node's display identity, projected from its own repo-spec
 		// `intent` (never hardcoded). The operator reads THIS to render gallery cards — no operator-side

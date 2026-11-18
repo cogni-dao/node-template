@@ -68,7 +68,7 @@ export type RoleState = "pending" | "granted" | "denied" | "revoked" | "expired"
 /** What `authorizeAccount()` found: the account's owner, an agent holding a live delegated row, or nothing (a non-disclosing 404). */
 export type AccountAccess = "owner" | "delegated" | null;
 
-/** One pending or live grant row, with who it is for. For the admin table. */
+/** One pending, live or restorable revoked grant row, with who it is for. For the admin table. */
 export interface RoleRow {
   readonly principalUserId: string;
   /** The catalog slug for an internal AI, else null. */
@@ -79,7 +79,7 @@ export interface RoleRow {
   /** A plain note that the agent is tied to something outside, such as "GitHub linked". Null when nothing is known. */
   readonly hint: string | null;
   readonly scope: string;
-  readonly state: "pending" | "granted";
+  readonly state: "pending" | "granted" | "revoked";
   readonly at: string;
   /** The grant row's id. The table sends it back to revoke an account row (R4). */
   readonly rowId: string;
@@ -118,6 +118,11 @@ export type AskResult = "created" | "pending" | "granted" | "too_many" | "node_f
  * and no revoke; an account row also needs a future `expires_at`. A pending row (an ask) never opens a lock.
  * RESOURCE_SPLIT (R1): every node-plane method acts on `resource = 'node'` rows only; every account method on `resource = 'account'` rows only.
  */
+export interface RoleCursor {
+  readonly principalUserId: string;
+  readonly scope: string;
+}
+
 export interface AgentGrantsStore {
   /** A live (approved, unrevoked) node role row for this principal user id and scope. Never cached. */
   hasLiveRole(principalId: string, scope: string): Promise<boolean>;
@@ -138,10 +143,14 @@ export interface AgentGrantsStore {
   /** Every live node role row with its principal's slug. Never cached. */
   listLiveRoles(): Promise<Array<{ principalSlug: string; scope: string }>>;
   /**
-   * Every pending and live NODE row for the admin table. Never cached. Rows of this node's own AI are always all returned (few);
+   * Every pending and live NODE row for the admin table, plus latest revoked enrolled-service controls for `declaredScopes`. Never cached. Rows of this node's own AI are always all returned (few);
    * rows of outside agents are bounded by `limit` (pending first). `more` counts the outside rows not returned.
    */
-  listRoleRows(limit: number): Promise<{ rows: RoleRow[]; more: number }>;
+  listRoleRows(
+    limit: number,
+    declaredScopes?: readonly string[],
+    after?: RoleCursor
+  ): Promise<{ rows: RoleRow[]; more: number; nextCursor?: RoleCursor | null }>;
   /**
    * The live account rows on the one account `accountId` (its owner's view), newest first, bounded by `limit`. Internal AI and outside agents
    * alike. An ended row (revoked or past `expires_at`) is not listed. `more` counts the live rows not returned.
@@ -165,12 +174,15 @@ export interface AgentGrantsStore {
     principalUserId: string;
     scope: string;
     resource: GrantResource;
-    link: AskLink;
+    /** The one-time approval link. Absent for an ask no person opens by link (a service enrollment: its admin turns it On from the admin table). */
+    link?: AskLink;
     maxPending: number;
     maxPendingTotal: number;
   }): Promise<AskResult>;
   /** Approves the pending NODE row: sets the approver and `granted_at`, and consumes its link. False when no pending node row exists. */
   approvePending(input: { principalUserId: string; scope: string; approvedBy: string }): Promise<boolean>;
+  /** Restores the latest previously approved, revoked permission in a new audit row; a newer denied ask never restores an older approval. */
+  restoreRevoked?(input: { principalUserId: string; scope: string; approvedBy: string }): Promise<boolean>;
   /** Denies the pending NODE row (soft: `revoked_at` set, never approved). False when no pending node row exists. */
   denyPending(input: { principalUserId: string; scope: string }): Promise<boolean>;
   /** Inserts a live NODE role row an admin writes directly (approved at once); false when a live or pending row exists. */
@@ -202,10 +214,17 @@ export interface AgentGrantsStore {
   }): Promise<boolean>;
   /** Revokes a live ACCOUNT row by id, only where its account is owned by `ownerUserId`. False otherwise (a foreign row is invisible). */
   revokeAccountRole(input: { rowId: string; ownerUserId: string }): Promise<boolean>;
+  /**
+   * True when the principal was made by a service enrollment (`agent_principals.service_key` is set). Optional: a store without it
+   * cannot tell, and the service-key gate (`denyServiceKeyOffDoor`) then refuses (it cannot show the caller is not a service).
+   */
+  isServicePrincipal?(principalUserId: string): Promise<boolean>;
 }
 
 /** Hands the guard a store bound to one transaction or connection. */
-export type WithStore = <T>(fn: (store: AgentGrantsStore) => Promise<T>) => Promise<T>;
+export type WithStore = <T>(
+  fn: (store: AgentGrantsStore) => Promise<T>
+) => Promise<T>;
 
 /** One authorization decision, for the node's logger. Holds no tokens. */
 export interface AuthzEvent {
@@ -263,6 +282,7 @@ export interface NodeAiPermissionView {
 
 /** The `GET /api/v1/agent-access/roles` body. A non-admin gets `canManage: false` and no rows. */
 export interface NodeAiAccessView {
+  readonly nextCursor?: RoleCursor | null | undefined;
   readonly canManage: boolean;
   readonly permissions: readonly NodeAiPermissionView[];
   /** Outside rows left out of `permissions` because the list is bounded. 0 when nothing is cut. */

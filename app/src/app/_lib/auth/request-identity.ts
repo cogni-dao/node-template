@@ -18,8 +18,8 @@
  *   - REVOCABLE_STORE_OUTAGE_IS_503: a store failure throws `CredentialStoreUnavailableError` (the route wrapper answers 503), never null (401).
  *   - REVOCABLE_ACTIVE_ONLY: the generic resolver admits only an `active` revocable key. A pending or renew_only key reaches only the
  *     credential routes that opt in through `verifyRevocableKey`.
- *   - VIA_IS_LOGGING_AND_WRITE_GATE: the resolved identity carries `via: "bearer" | "session"`. It is for logging and the DENY_BY_DEFAULT
- *     write gate in the route wrapper (bug.0045); it is never a tool-authority input: every authenticated caller is the run subject, bearer agents included (task.5456).
+ *   - VIA_IS_LOGGING_AND_WRITE_GATE: the resolved identity carries `via: "bearer" | "session"`. It is for logging, the DENY_BY_DEFAULT
+ *     write gate in the route wrapper (bug.0045) and the service-key gate (a service-enrolled bearer is refused off its door); it is never a tool-authority input: every authenticated caller is the run subject, bearer agents included (task.5456).
  *   - NO_AUTH_CYCLE: imports getServerSessionUser DIRECTLY from @/lib/auth/server.
  *     Must NOT import getSessionUser from @/app/_lib/auth/session (that module
  *     re-exports this resolver and would create unbounded async recursion on
@@ -129,7 +129,7 @@ function isSameOrigin(origin: string | null, host: string | null): boolean {
   }
 }
 
-/** A cookie session identity, marked `via: "session"`: logging and the DENY_BY_DEFAULT write gate (a session passes it; anything else is treated as a bearer). */
+/** A cookie session identity, marked `via: "session"`: logging, the DENY_BY_DEFAULT write gate and the service-key gate (a session passes them; anything else is treated as a bearer). */
 async function resolveSessionIdentity(): Promise<SessionUser | null> {
   const user = await getServerSessionUser();
   return user ? { ...user, via: "session" } : null;

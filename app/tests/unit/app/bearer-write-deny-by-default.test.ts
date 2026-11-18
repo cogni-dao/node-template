@@ -43,6 +43,10 @@ const MODE_NONE_SELF_AUTHENTICATED: Readonly<Record<string, string>> = {
   "agent.credentials.rotate": "credentialBearerRoute verifies the caller's own revocable key (active or renew_only) and acts on that credential only",
   "agent.credentials.confirm": "credentialBearerRoute verifies the caller's own revocable key and acts on that credential only",
   "agent.credentials.revoke": "credentialBearerRoute verifies the caller's own revocable key and acts on that credential only",
+  "service.links.create": "serviceLinkRoute (app/_lib/service-links.ts) mounts the NORMAL wrapper with auth required and the declared service-link.manage door; the scanner reads a helper mount as mode none",
+  "service.links.disconnect": "serviceLinkRoute (app/_lib/service-links.ts) mounts the NORMAL wrapper with auth required and the declared service-link.manage door; the scanner reads a helper mount as mode none",
+  "v1/public/agent/service-enrollments/route.ts#POST": "public by design: the signed service.enrollment.v1 token is verified before any write; the key is minted only after an admin's click and a poll",
+  "v1/public/agent/service-enrollments/token/route.ts#POST": "public by design: the device code (stored only as a hash) is the credential; the answer is ciphertext sealed to the token's cnf key",
 };
 
 /** Write handlers that do not use the route wrapper at all, keyed by `<path under api>#<METHOD>`. They are not bearer-capable; each says how it authenticates. */

@@ -38,7 +38,7 @@ vi.mock("next/headers", () => ({
 vi.mock("@/lib/auth/server", () => ({ getServerSessionUser: async () => null }));
 vi.mock("@/shared/env/server", () => ({ serverEnv: () => ({ AUTH_SECRET: "test-secret-for-unit-tests-only-0123456789" }) }));
 vi.mock("@/bootstrap/container", () => ({
-  getContainer: () => ({ log, config: { unhandledErrorPolicy: "respond_500" }, clock: { now: () => "2026-11-10T00:00:00Z" } }),
+  getContainer: () => ({ agentAuthority: { denyServiceKeyOffDoor: async () => ({ decision: "allow" }) }, log, config: { unhandledErrorPolicy: "respond_500" }, clock: { now: () => "2026-11-10T00:00:00Z" } }),
 }));
 vi.mock("@/bootstrap/agent-credentials", () => ({
   getAgentCredentialStore: () => fake.memory.store,

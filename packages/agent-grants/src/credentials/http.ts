@@ -19,6 +19,7 @@
  */
 
 import { z } from "zod";
+import { confirmAgentCredentialOperation } from "../enrollment/protocol";
 
 import {
   CredentialRateLimitedError,
@@ -41,18 +42,7 @@ const pendingKey = z.object({
 export const upgradeAgentCredentialOperation = { id: "agent.credentials.upgrade", output: pendingKey } as const;
 export const rotateAgentCredentialOperation = { id: "agent.credentials.rotate", output: pendingKey } as const;
 
-export const confirmAgentCredentialOperation = {
-  id: "agent.credentials.confirm",
-  output: z.object({
-    userId: z.string().min(1),
-    credentialId: z.string().min(1),
-    status: z.literal("active"),
-    /** True when the credential was already active (a replayed confirm). */
-    replay: z.boolean(),
-    expiresAt: z.string().min(1),
-    renewUntil: z.string().min(1),
-  }),
-} as const;
+export { confirmAgentCredentialOperation } from "../enrollment/protocol";
 
 export const revokeAgentCredentialOperation = {
   id: "agent.credentials.revoke",
@@ -81,6 +71,7 @@ const refuse = (status: number, error: string, headers: Readonly<Record<string, 
 });
 
 const UPGRADE_REFUSALS = {
+  rate_limited: [429, "rate_limited"],
   unknown_user: [403, "not_agent_key"],
   wallet_user: [403, "not_agent_key"],
   internal_principal: [403, "not_agent_key"],
@@ -91,6 +82,8 @@ const UPGRADE_REFUSALS = {
 
 const CONFIRM_REFUSALS = {
   revoked: "superseded",
+  superseded: "superseded",
+  permission_off: "permission_off",
   expired: "pending_expired",
   predecessor_revoked: "predecessor_revoked",
   not_found: "superseded",
@@ -118,6 +111,7 @@ export function credentialHttp(input: CredentialHttpInput): CredentialHttpRespon
     case "rotate": {
       const minted = input.result;
       if (!minted.ok) {
+        if (minted.reason === "rate_limited") return refuse(429, "rate_limited", { ...NO_STORE, "retry-after": "60" });
         // Rotate has one refusal; upgrade names each one.
         const [status, error] = input.op === "rotate" ? ([409, "not_rotatable"] as const) : UPGRADE_REFUSALS[minted.reason];
         return refuse(status, error);
@@ -135,13 +129,14 @@ export function credentialHttp(input: CredentialHttpInput): CredentialHttpRespon
     }
     case "confirm": {
       const result = input.result;
-      if (!result.ok) return refuse(409, CONFIRM_REFUSALS[result.reason]);
+      if (!result.ok) return refuse(result.reason === "permission_off" ? 403 : 409, CONFIRM_REFUSALS[result.reason]);
       return ok(
         confirmAgentCredentialOperation.output.parse({
           userId: result.userId,
           credentialId: input.credentialId,
           status: "active",
           replay: result.status === "already_active",
+          ...(result.observedAt ? { observedAt: result.observedAt } : {}),
           expiresAt: result.expiresAt,
           renewUntil: result.renewUntil,
         })

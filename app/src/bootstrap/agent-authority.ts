@@ -39,6 +39,7 @@ import {
   listMine,
   listOwnAccess,
   type PrincipalRef,
+  type RoleCursor,
   previewAsk,
   principalKindOf,
   requestAccess,
@@ -75,6 +76,8 @@ export interface AgentToolAuthority {
   readonly declaredScopes: readonly string[];
   /** The declared kind of every scope (it picks the resource, the approver and the page the approval link opens). */
   readonly scopeKinds: Readonly<Record<string, ToolRequires["kind"]>>;
+  /** Scopes an outside agent can actually use (a route twin it can call). An ask, and a service enrollment, is refused for any other scope. */
+  readonly askableScopes: readonly string[];
   /** Turn a NODE row ON: approve a pending ask, or grant one of this node's AI directly. `me.admin` is the admin session (ONE_GATE). */
   grantRole(
     input: PrincipalRef & { scope: string; me: ApprovalCaller }
@@ -133,7 +136,12 @@ export interface AgentToolAuthority {
    * The admin table: one row per grant row, in three blocks. Name and description come from the declarations only.
    * Outside rows are bounded (`MAX_ADMIN_OUTSIDE_ROWS`); `more` counts the ones cut.
    */
-  listNodeAi(): Promise<{ permissions: NodeAiPermissionView[]; more: number }>;
+  listNodeAi(after?: RoleCursor): Promise<{
+    permissions: NodeAiPermissionView[];
+    more: number;
+    /** Where the next page of outside rows starts, or null at the end. */
+    nextCursor: RoleCursor | null;
+  }>;
   /** The same admin check the guard uses, for the role routes. */
   readonly adminCheck: AdminCheck;
   /**
@@ -148,7 +156,18 @@ export interface AgentToolAuthority {
     /** The account the route names. Required for an account-kind tool. */
     accountId?: string;
   }): Promise<AuthzDecision>;
+  /**
+   * SERVICE_KEY_DENY_BY_DEFAULT: the wrapper calls this for a bearer on every route whose declared door does not run for the request.
+   * A principal made by service enrollment (`service_key` set) is refused there (`service_key_route_denied`); any other bearer is allowed.
+   * A store that cannot answer is `authz_unavailable`, never an allow.
+   */
+  denyServiceKeyOffDoor(input: { routeId: string; userId: string }): Promise<ServiceKeyGateDecision>;
 }
+
+/** The service-key gate's answer. */
+export type ServiceKeyGateDecision =
+  | { readonly decision: "allow" }
+  | { readonly decision: "deny"; readonly code: "service_key_route_denied" | "authz_unavailable"; readonly reason: string };
 
 /** Wallet-bound admin check: any bound wallet that is a node admin passes. */
 export function createAdminCheck(
@@ -204,9 +223,9 @@ export function createAgentToolAuthority(deps: {
   // One transaction per call, so a role read sees one consistent snapshot. A failure that is not a domain refusal is logged HERE, once, with its class (name,
   // SQLSTATE, constraint, table, column; never a message), because the callers that follow (the tool guard, the route door, a route catch) turn it into a quiet
   // `authz_unavailable`: without this line a broken store is a 503 with nothing in Loki.
-  const withStore: WithStore = async (fn) => {
+  const withTx = async <T>(fn: (tx: SqlTag) => Promise<T>): Promise<T> => {
     try {
-      return await deps.sql.begin((tx) => fn(createPostgresAgentGrantsStore(tx)));
+      return await deps.sql.begin(fn);
     } catch (error) {
       if (!(error instanceof AgentRolesError))
         deps.log.error(
@@ -216,6 +235,7 @@ export function createAgentToolAuthority(deps: {
       throw error;
     }
   };
+  const withStore: WithStore = (fn) => withTx((tx) => fn(createPostgresAgentGrantsStore(tx)));
 
   const onDecision = (event: AuthzEvent): void => {
     const level = event.decision === "allow" ? "info" : "warn";
@@ -229,17 +249,19 @@ export function createAgentToolAuthority(deps: {
     resolvePrincipal: (slug) => withStore((store) => resolveInternalPrincipal(store, slug)),
     guardDeps: { withStore, adminCheck, onDecision },
     scopeKinds,
-    async listNodeAi() {
+    askableScopes,
+    async listNodeAi(after) {
       // The scopes each AI may use come from the contracts of every tool its graphs list. NODE scopes only: an account scope is the person's,
       // and the admin table never shows account rows.
       const scopesByPrincipal = scopesOf("node");
       const { internal, listed } = await withStore(async (store) => ({
         internal: await store.listInternalPrincipals(),
-        listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS),
+        listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS, declaredScopes, after),
       }));
       return {
         permissions: buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: listed.rows }),
         more: listed.more,
+        nextCursor: listed.nextCursor ?? null,
       };
     },
     declaredScopes,
@@ -249,8 +271,10 @@ export function createAgentToolAuthority(deps: {
         requiresById[toolId] ?? ROUTE_ONLY_CAPABILITIES[toolId]?.requires;
       const decision: AuthzDecision = !requires
         ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
-        : await withStore((store) =>
-            authorizeCaller(store, adminCheck, { userId, via, requires, accountId })
+        : await withTx((tx) =>
+            // The admin read rides the SAME connection as the role read: an admin check on the root pool while this transaction holds a pool
+            // connection can exhaust a small pool (two concurrent callers, each waiting for a third connection).
+            authorizeCaller(createPostgresAgentGrantsStore(tx), createAdminCheck(tx, deps.nodeAdmin), { userId, via, requires, accountId })
           ).catch(
             (): AuthzDecision => ({
               decision: "deny",
@@ -270,6 +294,32 @@ export function createAgentToolAuthority(deps: {
         route: routeId,
         account: accountId ?? null,
       });
+      return decision;
+    },
+    async denyServiceKeyOffDoor({ routeId, userId }) {
+      // One plain read: no transaction, so no BEGIN/COMMIT round trips on every bearer call.
+      const decision: ServiceKeyGateDecision = await (async (): Promise<ServiceKeyGateDecision> => {
+        const store = createPostgresAgentGrantsStore(deps.sql);
+        // A store that cannot tell is strict: refuse (it cannot be shown that the caller is not a service).
+        if (!store.isServicePrincipal)
+          return { decision: "deny", code: "service_key_route_denied", reason: "service_kind_unknown" };
+        return (await store.isServicePrincipal(userId))
+          ? { decision: "deny", code: "service_key_route_denied", reason: "route_has_no_capability_door" }
+          : { decision: "allow" };
+      })().catch((error: unknown): ServiceKeyGateDecision => {
+        // An outage is logged HERE once with its class (never a message), like every other store failure, because the answer is a quiet 503.
+        deps.log.error(
+          { event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId, ...failureFields(error) },
+          EVENT_NAMES.AGENT_ROLES_UNAVAILABLE
+        );
+        return { decision: "deny", code: "authz_unavailable", reason: "store_unavailable" };
+      });
+      // A service key refused off its door is one warn: who, which route, a fixed code. No key, no header.
+      if (decision.decision === "deny" && decision.code === "service_key_route_denied")
+        deps.log.warn(
+          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: userId, routeId, code: decision.code, reason: decision.reason },
+          EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED
+        );
       return decision;
     },
     async grantRole(input) {

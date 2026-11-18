@@ -71,6 +71,8 @@ vi.mock("@/bootstrap/container", () => ({
     // The GET routes carry the knowledge.read door; its allow/deny is proven in knowledge.read-principal.test.ts.
     agentAuthority: {
       authorizeRoute: vi.fn(async () => ({ decision: "allow", basis: "role" })),
+      // The routes without a door (domain update/delete) pass the service-key gate for a plain agent key.
+      denyServiceKeyOffDoor: vi.fn(async () => ({ decision: "allow" })),
     },
   })),
 }));
