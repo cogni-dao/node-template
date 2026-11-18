@@ -153,7 +153,8 @@ export function WorkItemDetailBody({
 	const selected = read?.artifact;
 	const selectedArtifact = selected !== undefined && "id" in selected ? selected : undefined;
 	const selectedBody = selectedArtifact && (
-		<div className="flex flex-col gap-2 py-2 pl-6 text-sm">
+		// Real reviews run to thousands of characters: the open one scrolls inside its row, so the list stays in view.
+		<div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto py-2 pl-6 text-sm">
 			{selectedArtifact.note && <span className="text-muted-foreground">{selectedArtifact.note}</span>}
 			{selectedArtifact.body ? (
 				<Markdown content={selectedArtifact.body} />
@@ -237,12 +238,14 @@ export function WorkItemDetailBody({
 									<div className={CITATION_LIST_CLASS}>
 										{artifactPage.refs.map((ref) => {
 											const open = selected !== undefined && "id" in selected && selected.id === ref.id;
+											// Only the latest artifact of a kind decides; an earlier iteration reads muted.
+											const superseded = artifactPage.refs.some((other) => other.kind === ref.kind && other.seq > ref.seq);
 											return (
 												<div key={ref.id} className="flex flex-col">
 													<CitationRow
 														direction="out"
 														relation={ref.verdict.replace(/_/g, " ")}
-														tone={verdictTone(ref.verdict)}
+														tone={superseded ? "muted" : verdictTone(ref.verdict)}
 														slug={KIND_TITLES[ref.kind]}
 														href={itemScopedHref(item.id, searchParams, "artifact", open ? null : ref.id)}
 														hoverTitle={[ref.note, formatRelativeTime(ref.createdAt)].filter(Boolean).join(" · ")}

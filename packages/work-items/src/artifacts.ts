@@ -346,7 +346,8 @@ const markdownCell = (value: string): string =>
 /** The canonical scorecard rows as one GFM table, for a human view that renders Markdown. Pure. The `reason` column appears only when a row has one. */
 export function scorecardMarkdown(rows: readonly ScorecardRow[]): string {
   const withReason = rows.some((row) => row.reason !== undefined && row.reason.trim() !== "");
-  const head = ["tweak", "human", "ai", "loki", "trace", "overall", ...(withReason ? ["reason"] : [])];
+  // The canonical /validate-candidate scorecard header, so a stored scorecard reads like every other one.
+  const head = ["PR TWEAK", "HUMAN", "AI", "LOKI", "TRACE", "OVERALL", ...(withReason ? ["REASON"] : [])];
   const lines = [`| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`];
   for (const row of rows) {
     const cells = [row.tweak, row.human, row.ai, row.loki, row.trace, row.overall, ...(withReason ? [row.reason ?? ""] : [])];

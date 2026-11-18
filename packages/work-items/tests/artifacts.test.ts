@@ -709,7 +709,7 @@ describe("refs first, then one read (story.0058)", () => {
   });
 
   it("scorecardMarkdown leaves out the reason column when no row has a reason", () => {
-    expect(scorecardMarkdown([row()]).split("\n")[0]).toBe("| tweak | human | ai | loki | trace | overall |");
+    expect(scorecardMarkdown([row()]).split("\n")[0]).toBe("| PR TWEAK | HUMAN | AI | LOKI | TRACE | OVERALL |");
   });
 
   it("scorecardMarkdown builds one GFM table and escapes pipes and line breaks", () => {
