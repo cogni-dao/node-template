@@ -85,7 +85,7 @@ export const linkTransactions = pgTable(
 	(table) => [
 		check(
 			"link_transactions_provider_check",
-			sql`${table.provider} IN ('github', 'discord', 'google')`,
+			sql`${table.provider} IN ('github', 'discord', 'google', 'wallet')`,
 		),
 		index("link_transactions_user_id_idx").on(table.userId),
 		pgPolicy("tenant_isolation", {

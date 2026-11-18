@@ -4,7 +4,7 @@
 /** Drizzle adapter for atomic identity nonce redemption and binding writes. */
 
 import type { Database } from "@cogni/db-client";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 
 import { createBindingInTransaction } from "@/adapters/server/identity/create-binding";
 import type {
@@ -25,6 +25,7 @@ class DrizzleIdentityBindingTransaction
 		nonce: string;
 		userId: string;
 		now: Date;
+		provider?: "github" | "wallet";
 	}): Promise<boolean> {
 		const [consumed] = await this.tx
 			.update(linkTransactions)
@@ -33,13 +34,42 @@ class DrizzleIdentityBindingTransaction
 				and(
 					eq(linkTransactions.id, params.nonce),
 					eq(linkTransactions.userId, params.userId),
-					eq(linkTransactions.provider, "github"),
+					eq(linkTransactions.provider, params.provider ?? "github"),
 					isNull(linkTransactions.consumedAt),
 					gt(linkTransactions.expiresAt, params.now),
 				),
 			)
 			.returning({ id: linkTransactions.id });
 		return Boolean(consumed);
+	}
+
+	async findWalletBinding(address: string) {
+		const [row] = await this.tx
+			.select({ id: userBindings.id, userId: userBindings.userId })
+			.from(userBindings)
+			.where(
+				and(
+					eq(userBindings.provider, "wallet"),
+					sql`lower(${userBindings.externalId}) = ${address.toLowerCase()}`,
+				),
+			)
+			.limit(1);
+		return row ?? null;
+	}
+
+	async createWalletBinding(params: {
+		userId: string;
+		address: string;
+		evidence: Record<string, unknown>;
+	}): Promise<boolean> {
+		const result = await createBindingInTransaction(
+			this.tx,
+			params.userId,
+			"wallet",
+			params.address.toLowerCase(),
+			{ method: "siwe_bind", ...params.evidence },
+		);
+		return result.created;
 	}
 
 	async findGithubBinding(githubId: string) {
@@ -91,11 +121,12 @@ export class DrizzleIdentityBindingRepository
 		nonce: string;
 		userId: string;
 		expiresAt: Date;
+		provider?: "github" | "wallet";
 	}): Promise<void> {
 		await this.db.insert(linkTransactions).values({
 			id: params.nonce,
 			userId: params.userId,
-			provider: "github",
+			provider: params.provider ?? "github",
 			expiresAt: params.expiresAt,
 		});
 	}

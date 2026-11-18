@@ -6,7 +6,7 @@
  * Purpose: Runtime agent authority tables: internal agent principals and node role rows.
  * Scope: Schema only. Reads and writes live in `@cogni-dao/agent-grants` (raw SQL over an injected client).
  * Invariants:
- *   - AGENTS_HOLD_NO_WALLET: an internal principal row points at a seeded `users` row with no wallet and has no credential.
+ *   - An internal principal row points at a seeded `users` row that has no credential.
  *   - CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: `agent_credentials` rows belong only to a user with an `external` `agent_principals` row
  *     (a trigger in the migration enforces it).
  *   - ROLE_ROWS_ARE_SOFT_REVOKED: a role row is never deleted; `revoked_at` ends it. One live row per (principal, scope).
@@ -17,8 +17,8 @@
  *     and ONE narrow select policy (an account row naming the connection's own user as principal); no write policy.
  *     `agent_principals` is readable by every role (its select policy) and writable only by a BYPASSRLS service
  *     connection. FORCE is added by hand in the migration.
- *   - AGENTS_HOLD_NO_WALLET (a payout guard, enforced in the database; it does not decide who may be admin): a trigger on `user_bindings` (migration) refuses a wallet
- *     binding for any user that has an `agent_principals` row, on every binding path.
+ *   - AGENT_WALLET_IS_NOT_A_PAYEE (a payout guard, enforced in the database; it does not decide who may be admin): an agent principal may bind a wallet, but a trigger
+ *     on `epoch_distribution_leaves` and `distribution_settlement_leaves` (migration 0043) refuses a payout leaf whose account is a wallet an agent principal owns.
  * Side-effects: none (schema definitions only)
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard
  * @public

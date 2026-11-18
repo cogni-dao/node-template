@@ -8,6 +8,7 @@
  * Invariants:
  * - RESOLVER_READ_ONLY: only SELECT statements; never inserts/updates a binding (no binding-write flow).
  * - RESOLVER_NULL_IS_UNRESOLVED: a claimant with no wallet resolves to `wallet: null` — never a synthesized address.
+ * - AGENT_WALLET_IS_NOT_A_PAYEE: a user with an `agent_principals` row resolves to `wallet: null` even when a wallet is bound; an AI can prove a wallet (so it can be an admin) but is never paid to it.
  * - RESOLVER_CONTRIBUTOR_WALLET: resolves the person's OWN wallet (users.wallet_address / user_bindings provider='wallet'); never an operator/treasury wallet.
  * - RESOLVER_GITHUB_VIA_BINDING: `identity:github:<externalId>` → user_id via user_bindings(provider='github', external_id), mirroring AttributionStore.resolveIdentities.
  * Side-effects: IO (database reads)
@@ -20,6 +21,7 @@ import type {
   ClaimantWalletResolver,
   HexAddress,
 } from "@cogni/aragon-osx";
+import { agentPrincipals } from "@cogni/db-schema/agent-authority";
 import { userBindings } from "@cogni/db-schema/identity";
 import { users } from "@cogni/db-schema/refs";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
@@ -176,9 +178,18 @@ export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
 
   /** Resolve user_id → EVM wallet (user_bindings 'wallet' binding, then users.wallet_address). */
   private async resolveWalletsByUserId(
-    userIds: readonly string[]
+    candidateUserIds: readonly string[]
   ): Promise<Map<string, HexAddress>> {
     const result = new Map<string, HexAddress>();
+    if (candidateUserIds.length === 0) return result;
+
+    // AGENT_WALLET_IS_NOT_A_PAYEE: an agent principal never resolves to a wallet.
+    const agentRows = await this.db
+      .select({ userId: agentPrincipals.userId })
+      .from(agentPrincipals)
+      .where(inArray(agentPrincipals.userId, [...candidateUserIds]));
+    const agentUserIds = new Set(agentRows.map((row) => row.userId));
+    const userIds = candidateUserIds.filter((id) => !agentUserIds.has(id));
     if (userIds.length === 0) return result;
 
     // Primary: explicit wallet bindings.

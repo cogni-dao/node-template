@@ -9,7 +9,7 @@
  * Scope: `@cogni-dao/agent-grants` + `bootstrap/agent-authority` + database policies. No HTTP, no LLM.
  * Invariants:
  *   - SERVICE_ROLE_ONLY: the app role sees no `agent_roles` / `agent_principals` row.
- *   - AGENTS_HOLD_NO_WALLET: seeded principal users have no wallet.
+ *   - AGENT_WALLET_IS_NOT_A_PAYEE: an agent may bind a wallet and be seen by the admin check, but no payout leaf resolves to its wallet.
  *   - NEVER_CACHED: a revoke denies the very next guarded call.
  * Side-effects: IO (testcontainers Postgres)
  * Notes: DATABASE_SERVICE_URL = BYPASSRLS; DATABASE_URL = app role with FORCE RLS.
@@ -131,43 +131,44 @@ describe("agent authority (real Postgres)", () => {
     });
   });
 
-  describe("AGENTS_HOLD_NO_WALLET: an agent principal can never bind a wallet (database trigger)", () => {
-    const bind = (userId: string, provider: string, externalId: string) =>
-      service`INSERT INTO user_bindings (id, user_id, provider, external_id)
-        VALUES (${randomUUID()}, ${userId}, ${provider}, ${externalId})`;
+  describe("AGENT_WALLET_IS_NOT_A_PAYEE: an agent may bind a wallet, but is never a payee (database trigger)", () => {
     const addr = () => `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`;
-
-    it("refuses a wallet binding for a seeded internal principal", async () => {
-      await expect(bind(NODE_AI_PRINCIPAL_USER_ID, "wallet", addr())).rejects.toThrow(/cannot bind a wallet/);
-      await expect(bind(PRIORITIZER_PRINCIPAL_USER_ID, "wallet", addr())).rejects.toThrow(/cannot bind a wallet/);
-    });
-
-    it("refuses it on the real createBinding path (SIWE / import / attested)", async () => {
-      const { createBinding } = await import("@/adapters/server/identity/create-binding");
-      const { getSeedDb } = await import("@tests/_fixtures/db/seed-client");
-      await expect(
-        createBinding(getSeedDb(), NODE_AI_PRINCIPAL_USER_ID, "wallet", addr(), { method: "siwe" })
-      ).rejects.toMatchObject({
-        // drizzle wraps the driver error; the trigger's message and constraint are on the cause.
-        cause: { message: expect.stringMatching(/cannot bind a wallet/), constraint_name: "agent_principals_no_wallet_binding" },
-      });
-    });
-
-    it("refuses re-pointing an existing wallet binding onto an agent principal", async () => {
-      const human = await makeUser(addr());
-      await expect(
-        service`UPDATE user_bindings SET user_id = ${NODE_AI_PRINCIPAL_USER_ID} WHERE user_id = ${human} AND provider = 'wallet'`
-      ).rejects.toThrow(/cannot bind a wallet/);
-    });
-
-    it("refuses a wallet for a later-registered agent principal, and still allows other providers and ordinary users", async () => {
-      const agent = await makeUser();
+    const makeAgent = async (wallet: string) => {
+      const agent = await makeUser(wallet);
       await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('external', NULL, ${agent})`;
-      await expect(bind(agent, "wallet", addr())).rejects.toThrow(/cannot bind a wallet/);
-      await bind(agent, "github", `gh-${randomUUID()}`); // a non-wallet binding does not make an admin
-      await makeUser(addr()); // an ordinary human still binds a wallet
-      await service`DELETE FROM user_bindings WHERE user_id = ${agent}`;
-      await service`DELETE FROM agent_principals WHERE user_id = ${agent}`;
+      return agent;
+    };
+
+    it("lets an agent principal bind a wallet, and the admin check then sees it", async () => {
+      const wallet = addr();
+      const agent = await makeAgent(wallet);
+      const check = createAdminCheck(service as unknown as AgentAuthoritySql, {
+        check: async (input) => (input.walletAddress === wallet ? { ok: true } : { ok: false, errorCode: "authz_denied" }),
+      });
+      expect(await check(agent)).toBe("allow");
+    });
+
+    it("guards both payout tables", async () => {
+      const rows = await service`
+        SELECT c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+        WHERE t.tgname LIKE '%agent_wallet_is_not_a_payee' AND NOT t.tgisinternal ORDER BY c.relname`;
+      expect(rows.map((r) => r.relname)).toEqual(["distribution_settlement_leaves", "epoch_distribution_leaves"]);
+    });
+
+    it("refuses a payout row for an agent-owned wallet in any casing, and allows a human's wallet", async () => {
+      const agentWallet = addr();
+      await makeAgent(`0x${agentWallet.slice(2).toUpperCase()}`); // stored checksummed-style, matched lowercased
+      const humanWallet = addr();
+      await makeUser(humanWallet);
+      // The same trigger function the leaf tables carry, on a probe table with the leaf's `account_lower` column.
+      const probe = (wallet: string) =>
+        service.begin(async (tx) => {
+          await tx`CREATE TEMP TABLE payee_probe (account_lower text) ON COMMIT DROP`;
+          await tx`CREATE TRIGGER probe BEFORE INSERT ON payee_probe FOR EACH ROW EXECUTE FUNCTION agent_wallet_is_not_a_payee()`;
+          await tx`INSERT INTO payee_probe VALUES (${wallet})`;
+        });
+      await probe(humanWallet.toLowerCase());
+      await expect(probe(agentWallet.toLowerCase())).rejects.toThrow(/cannot be a payee/);
     });
   });
 
