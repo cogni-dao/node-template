@@ -18,7 +18,7 @@ import type { NodeAiPermissionView, PrincipalRef } from "@cogni/agent-grants";
 
 declare const adminSessionBrand: unique symbol;
 
-/** A browser session the node-admin check approved. Made only by `requireAdminSession()`. */
+/** An admin decision: a caller (session or bearer) the one node-admin check approved. Made only by `requireAdminSession()`. */
 export type AdminSession = {
   readonly [adminSessionBrand]: true;
   readonly userId: string;

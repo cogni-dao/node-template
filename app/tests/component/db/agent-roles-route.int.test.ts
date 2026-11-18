@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/component/db/agent-roles-route.int.test`
  * Purpose: GET/POST/DELETE /api/v1/admin/ai-access (the admin area, through requireAdminSession and NodeAdminPort) and the guard it controls, against real Postgres
- *   (task.5456, V8 V9): any Authorization header 403 human_session_required, non-admin 403, 503 when no
+ *   (task.5456, V8 V9): a bearer meets the same admin check (no admin wallet 403 authz_denied), non-admin 403, 503 when no
  *   admins are configured, GET shows the live Allow state after grant and after revoke, admin grant allows the next tool call, admin revoke denies it, and the log lines.
  * Scope: The real route handlers, real wrapRouteHandlerWithLogging, real `agent-authority` wiring, real repo-spec
  *   node admin authority and a real database. Only the NextAuth session decode is replaced (`getSessionUser`).
@@ -94,7 +94,7 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
 
   // The guard as the provider builds it, around a tool that reports whether it ran.
   const callTool = async (principalId: string | undefined, subjectUserId?: string) => {
-    const tool = CORE_TOOL_BUNDLE.find((t) => t.contract.name === "core__work_item_transition")!;
+    const tool = CORE_TOOL_BUNDLE.find((t) => t.contract.name === "core__work_item_update")!;
     const guarded = guardTools(
       { [tool.contract.name]: { id: tool.contract.name, effect: tool.contract.effect, exec: async () => "ran" } } as never,
       { [tool.contract.name]: tool.contract.requires! },
@@ -142,18 +142,15 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
 
   const body = { principal: "prioritizer", scope: "work_item:transition" };
 
-  it("HEADER-REFUSED: any Authorization header on a human route is 403 human_session_required, even for the admin's own session", async () => {
-    for (const user of [sessionUser(agentUser, "bearer"), sessionUser(adminUser, "bearer"), sessionUser(adminUser, "session"), null]) {
-      session.user = user;
-      for (const res of [
-        await call(POST, body, { authorization: "Bearer cogni_ag_sk_v1_x" }),
-        await call(DELETE, body, { authorization: "Bearer cogni_ag_sk_v1_x" }),
-        await getView({ authorization: "Bearer cogni_ag_sk_v1_x" }),
-        await getView({ authorization: "Basic nope" }),
-      ]) {
-        expect(res.status).toBe(403);
-        expect(await res.json()).toMatchObject({ code: "human_session_required" });
-      }
+  it("SAME-DECISION: a bearer with no admin wallet gets the same 403 authz_denied a non-admin session gets, and nothing changes", async () => {
+    session.user = sessionUser(agentUser, "bearer");
+    for (const res of [
+      await call(POST, body, { authorization: "Bearer cogni_ag_sk_v1_x" }),
+      await call(DELETE, body, { authorization: "Bearer cogni_ag_sk_v1_x" }),
+      await getView({ authorization: "Bearer cogni_ag_sk_v1_x" }),
+    ]) {
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "authz_denied" });
     }
     const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
     expect(rows).toHaveLength(0);
@@ -192,8 +189,9 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
 
   it("503: no configured admins gives authz_unavailable on GET and POST, never a plain deny", async () => {
     const real = holder.container as Record<string, unknown>;
-    const nodeAdmin = { check: async () => ({ ok: false, errorCode: "authz_unavailable", reason: "no_node_admins_configured" }) };
-    holder.container = { ...real, nodeAdmin };
+    // The one admin check reports an unconfigured node as unavailable; the mint must answer 503, never a plain deny.
+    const agentAuthority = { ...(real.agentAuthority as Record<string, unknown>), adminCheck: async () => "unavailable" as const };
+    holder.container = { ...real, agentAuthority };
     try {
       session.user = sessionUser(adminUser, "session");
       expect((await getView()).status).toBe(503);
@@ -218,10 +216,10 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     expect(await live()).toHaveLength(before.length);
   });
 
-  it("V8: a bearer identity is not a session: the mint refuses it, and nothing is written", async () => {
+  it("V8: a bearer with no admin wallet meets the one admin check: 403, and nothing is written", async () => {
     session.user = sessionUser(agentUser, "bearer");
-    expect((await call(POST, body)).status).toBe(401);
-    expect((await call(DELETE, body)).status).toBe(401);
+    expect((await call(POST, body)).status).toBe(403);
+    expect((await call(DELETE, body)).status).toBe(403);
     const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
     expect(rows).toHaveLength(0);
   });
@@ -251,7 +249,7 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     // V9: the log lines (real pino JSON from the real code path).
     const authz = logLines.filter((l) => l.event === "agent_tool.authz");
     expect(authz.map((l) => `${l.decision}/${l.code}`)).toEqual(["deny/policy_denied", "allow/allowed", "deny/policy_denied"]);
-    expect(authz[1]).toMatchObject({ principal: PRIORITIZER_PRINCIPAL_USER_ID, subject: null, payer: "payer-route-test", tool: "core__work_item_transition" });
+    expect(authz[1]).toMatchObject({ principal: PRIORITIZER_PRINCIPAL_USER_ID, subject: null, payer: "payer-route-test", tool: "core__work_item_update" });
     expect(logLines.filter((l) => String(l.event).startsWith("agent_role.")).map((l) => l.event)).toEqual(["agent_role.granted", "agent_role.revoked"]);
     const serialized = JSON.stringify(logLines);
     expect(serialized).not.toMatch(/cogni_ag_sk|Bearer |AUTH_SECRET|0x[0-9a-fA-F]{40}/);

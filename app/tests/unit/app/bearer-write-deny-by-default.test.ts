@@ -34,9 +34,9 @@ const REFUSED_FOR_BEARERS: Readonly<Record<string, string>> = {
 
 /** `auth.mode: "none"` write routes outside `internal/` that authenticate the caller themselves. Each reason says how. */
 const MODE_NONE_SELF_AUTHENTICATED: Readonly<Record<string, string>> = {
-  "admin.ai-access.preview": "requireAdminSession(): an admin session, and any Authorization header is refused",
-  "admin.ai-access.on": "requireAdminSession(): an admin session, and any Authorization header is refused",
-  "admin.ai-access.off": "requireAdminSession(): an admin session, and any Authorization header is refused",
+  "admin.ai-access.preview": "requireAdminSession(): the one admin check, for a session or a bearer",
+  "admin.ai-access.on": "requireAdminSession(): the one admin check, for a session or a bearer",
+  "admin.ai-access.off": "requireAdminSession(): the one admin check, for a session or a bearer",
   "agent.mine.preview": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.on": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.off": "human plane: refuseNonSession() then the signed-in person",

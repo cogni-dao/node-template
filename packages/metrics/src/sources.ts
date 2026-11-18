@@ -57,26 +57,38 @@ export async function readWorkCount(
 	};
 }
 
-/** Response bytes are bounded during streaming, not after allocating the body. */
-export async function readGithubStars(
-	owner: string,
-	repo: string,
+/**
+ * One unauthenticated GET against the fixed provider origin, parsed as JSON.
+ * Response bytes are bounded during streaming, not after allocating the body.
+ * The provider HTTP `Date` is the response snapshot watermark, not a body field.
+ */
+async function fetchProviderJson(
+	url: string,
 	signal: AbortSignal,
-	budget: Readonly<MetricBudget>,
-): Promise<MetricSample> {
-	const response = await fetch(
-		`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
-		{
-			signal,
-			redirect: "error",
-			headers: {
-				Accept: "application/vnd.github+json",
-				"User-Agent": "Cogni-node-metrics",
-			},
-			cache: "no-store",
+	maxResponseBytes: number,
+): Promise<{ body: any; date: string | null }> {
+	const response = await fetch(url, {
+		signal,
+		redirect: "error",
+		headers: {
+			Accept: "application/vnd.github+json",
+			"User-Agent": "Cogni-node-metrics",
 		},
-	);
-	if (!response.ok || !response.body) throw new Error("provider_unavailable");
+		cache: "no-store",
+	});
+	if (!response.ok) {
+		// 403 and 429 are the provider's quota answers; a 200 that spent the last request is still data.
+		if (
+			response.status === 429 ||
+			response.status === 403 ||
+			response.headers.get("x-ratelimit-remaining") === "0"
+		) {
+			await response.body?.cancel();
+			throw new ProviderRateLimited("provider_rate_limited");
+		}
+		throw new Error("provider_unavailable");
+	}
+	if (!response.body) throw new Error("provider_unavailable");
 	const reader = response.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let size = 0;
@@ -85,8 +97,7 @@ export async function readGithubStars(
 			const part = await reader.read();
 			if (part.done) break;
 			size += part.value.byteLength;
-			if (size > budget.maxResponseBytes)
-				throw new Error("provider_response_budget");
+			if (size > maxResponseBytes) throw new Error("provider_response_budget");
 			chunks.push(part.value);
 		}
 	} finally {
@@ -98,21 +109,250 @@ export async function readGithubStars(
 		bytes.set(chunk, offset);
 		offset += chunk.length;
 	}
-	const body = JSON.parse(new TextDecoder().decode(bytes));
-	// Provider HTTP Date is the response snapshot watermark, not repository.updated_at.
 	const sourceDate = response.headers.get("date");
+	return {
+		body: JSON.parse(new TextDecoder().decode(bytes)),
+		date: sourceDate ? new Date(sourceDate).toISOString() : null,
+	};
+}
+
+export async function readGithubStars(
+	owner: string,
+	repo: string,
+	signal: AbortSignal,
+	budget: Readonly<MetricBudget>,
+): Promise<MetricSample> {
+	const { body, date } = await fetchProviderJson(
+		`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+		signal,
+		budget.maxResponseBytes,
+	);
 	return {
 		value: body.stargazers_count,
 		unit: "stars",
 		complete: typeof body.stargazers_count === "number",
-		sourceWatermarks: [
-			{
-				source: "github.public",
-				asOf: sourceDate ? new Date(sourceDate).toISOString() : null,
-			},
-		],
+		sourceWatermarks: [{ source: "github.public", asOf: date }],
 		evidenceRefs: [`https://github.com/${owner}/${repo}`],
 	};
+}
+
+/** Most runs one workflow-runs page returns; the API's own cap. */
+export const GITHUB_ACTIONS_PAGE_SIZE = 100;
+/** Pages one reading may read: more runs than this is incomplete, never truncated. */
+export const GITHUB_ACTIONS_MAX_PAGES = 10;
+/** A full runs page is about 1.4 MB (100 runs, ~14 KB each, measured); 3 MiB bounds each page. */
+export const GITHUB_ACTIONS_MAX_PAGE_BYTES = 3_145_728;
+
+export interface GithubActionsParams {
+	owner: string;
+	repo: string;
+	workflow: string;
+	event?: "pull_request" | "merge_group" | "push" | undefined;
+	output: "duration" | "failure_rate" | "flake_rate";
+	/** Nearest-rank quantile for `duration`; default 0.95. */
+	quantile?: number | undefined;
+}
+
+/** Fields every run needs to be counted at all; the rest are read only for the runs that give a verdict. */
+interface WorkflowRun {
+	id: number;
+	head_sha: string;
+	conclusion: string | null;
+	run_attempt: number;
+	created_at: string;
+	run_started_at: string;
+	updated_at: string;
+}
+
+const isRunEntry = (r: any): boolean =>
+	!!r &&
+	Number.isSafeInteger(r.id) &&
+	(r.conclusion === null || typeof r.conclusion === "string");
+
+const runFailed = (r: WorkflowRun) =>
+	r.conclusion === "failure" ||
+	r.conclusion === "startup_failure" ||
+	r.conclusion === "timed_out";
+
+const givesVerdict = (r: WorkflowRun) =>
+	r.conclusion === "success" || runFailed(r);
+
+/** Fields the rates need from a run that gives a verdict. */
+const hasVerdictFields = (r: WorkflowRun) =>
+	typeof r.head_sha === "string" &&
+	Number.isInteger(r.run_attempt) &&
+	Number.isFinite(Date.parse(r.created_at));
+
+/** The provider refused the read for quota (403/429): a wait, not a fault. */
+class ProviderRateLimited extends Error {}
+
+/** One page read for a window and the verdict on whether it covers the window. */
+type LoadedRuns =
+	| { kind: "ok"; runs: WorkflowRun[]; asOf: string | null }
+	| { kind: "incomplete"; counts: string; asOf: string | null }
+	| { kind: "rate_limited"; asOf: string | null };
+
+/** Runs one shared page read; `key` names the read, `fn` performs it with its own signal. */
+export type SharedRead = <T>(
+	key: string,
+	fn: (signal: AbortSignal) => Promise<T>,
+	signal: AbortSignal,
+) => Promise<T>;
+const unshared: SharedRead = (_key, fn, signal) => fn(signal);
+
+async function loadWorkflowRuns(
+	url: (page: number) => string,
+	signal: AbortSignal,
+	maxResponseBytes: number,
+): Promise<LoadedRuns> {
+	const cap = GITHUB_ACTIONS_MAX_PAGES * GITHUB_ACTIONS_PAGE_SIZE;
+	const runs = new Map<number, WorkflowRun>();
+	let asOf: string | null = null;
+	let total = Number.POSITIVE_INFINITY;
+	try {
+		for (
+			let page = 1;
+			page <= GITHUB_ACTIONS_MAX_PAGES && runs.size < total;
+			page++
+		) {
+			const got = await fetchProviderJson(url(page), signal, maxResponseBytes);
+			asOf ??= got.date;
+			const pageRuns = got.body?.workflow_runs;
+			if (
+				!Array.isArray(pageRuns) ||
+				!Number.isSafeInteger(got.body.total_count) ||
+				!pageRuns.every(isRunEntry)
+			)
+				return { kind: "incomplete", counts: `malformed-page=${page}`, asOf };
+			total = got.body.total_count;
+			if (total > cap)
+				return { kind: "incomplete", counts: `total=${total},cap=${cap}`, asOf };
+			for (const run of pageRuns) runs.set(run.id, run);
+			if (pageRuns.length === 0) break;
+		}
+	} catch (error) {
+		if (error instanceof ProviderRateLimited)
+			return { kind: "rate_limited", asOf };
+		throw error;
+	}
+	if (runs.size < total)
+		return {
+			kind: "incomplete",
+			counts: `read=${runs.size},total=${total}`,
+			asOf,
+		};
+	return { kind: "ok", runs: [...runs.values()], asOf };
+}
+
+/**
+ * CI health of one workflow over the half-open window [start, end), read from
+ * the provider's Actions REST API without credentials. The population is
+ * completed runs that succeeded or failed (`startup_failure` and `timed_out`
+ * count as failure); cancelled, skipped, neutral, stale and action_required
+ * runs are no verdict on the code and are left out, whatever their fields hold.
+ * A flaky head SHA has a passing retry (`run_attempt > 1`) or both a failed and
+ * a passing run. More runs than `GITHUB_ACTIONS_MAX_PAGES` pages hold, a
+ * malformed page or an empty population is unknown, never a partial value or a
+ * 0; a quota refusal is unknown with the existing `source_failed` reason and a `rate-limited` evidence marker. `read` is the
+ * budgeted source call (the whole page read is one call). `share` lets
+ * calculators that read the same workflow list inside one tick pay for it once;
+ * the list is requested from the minute the window starts and trimmed to the
+ * exact window here, so every reading sees the same runs.
+ */
+export async function readGithubActions(
+	p: GithubActionsParams,
+	window: { start: string; end: string },
+	read: <T>(
+		source: (signal: AbortSignal, budget: Readonly<MetricBudget>) => Promise<T>,
+	) => Promise<T>,
+	share: SharedRead = unshared,
+): Promise<MetricSample> {
+	const start = Date.parse(window.start);
+	const end = Date.parse(window.end);
+	const unit = p.output === "duration" ? "min" : "%";
+	const workflowUrl = `https://github.com/${p.owner}/${p.repo}/actions/workflows/${p.workflow}`;
+	const created = new Date(Math.floor(start / 60000) * 60000)
+		.toISOString()
+		.replace(/\.\d+Z$/, "Z");
+	const query =
+		`created=${encodeURIComponent(`>=${created}`)}` +
+		`&status=completed&per_page=${GITHUB_ACTIONS_PAGE_SIZE}&exclude_pull_requests=true` +
+		(p.event ? `&event=${p.event}` : "");
+	const url = (page: number) =>
+		`https://api.github.com/repos/${encodeURIComponent(p.owner)}/${encodeURIComponent(p.repo)}/actions/workflows/${encodeURIComponent(p.workflow)}/runs?${query}&page=${page}`;
+	const loaded = await read((signal, budget) =>
+		share(
+			url(1),
+			(sharedSignal) =>
+				loadWorkflowRuns(url, sharedSignal, budget.maxResponseBytes),
+			signal,
+		),
+	);
+	const sample = (
+		value: number,
+		complete: boolean,
+		counts: string,
+		reason?:
+			| "incomplete_or_invalid_source"
+			| "zero_denominator"
+			| "source_failed",
+	): MetricSample => ({
+		value,
+		unit,
+		complete,
+		...(reason ? { reason } : {}),
+		sourceWatermarks: [{ source: "github.actions", asOf: loaded.asOf }],
+		evidenceRefs: [
+			workflowUrl,
+			`github:actions:${p.repo}/${p.workflow}:${counts}`,
+		],
+	});
+	if (loaded.kind === "rate_limited")
+		return sample(0, false, "rate-limited", "source_failed");
+	if (loaded.kind === "incomplete")
+		return sample(0, false, loaded.counts, "incomplete_or_invalid_source");
+
+	const inWindow = loaded.runs.filter((r) => {
+		const at = Date.parse(r.created_at);
+		return givesVerdict(r) && !(at < start || at >= end);
+	});
+	if (!inWindow.every(hasVerdictFields))
+		return sample(0, false, "malformed-run", "incomplete_or_invalid_source");
+	const population = inWindow;
+	const bySha = new Map<string, WorkflowRun[]>();
+	for (const r of population) {
+		const group = bySha.get(r.head_sha);
+		if (group) group.push(r);
+		else bySha.set(r.head_sha, [r]);
+	}
+	const flakyShas = [...bySha.values()].filter(
+		(group) =>
+			group.some((r) => r.run_attempt > 1 && r.conclusion === "success") ||
+			(group.some(runFailed) && group.some((r) => r.conclusion === "success")),
+	).length;
+	const failures = population.filter(runFailed).length;
+	const counts = `runs=${population.length},failures=${failures},shas=${bySha.size},flakyShas=${flakyShas}`;
+	if (population.length === 0)
+		return sample(0, false, counts, "zero_denominator");
+
+	if (p.output === "failure_rate")
+		return sample((failures / population.length) * 100, true, counts);
+	if (p.output === "flake_rate")
+		return sample((flakyShas / bySha.size) * 100, true, counts);
+	// A run whose timings are missing or run backwards has no duration; it is skipped, not a reason to void the reading.
+	const minutes = population
+		.map(
+			(r) => (Date.parse(r.updated_at) - Date.parse(r.run_started_at)) / 60000,
+		)
+		.filter((m) => Number.isFinite(m) && m >= 0)
+		.sort((a, b) => a - b);
+	if (minutes.length === 0)
+		return sample(0, false, counts, "incomplete_or_invalid_source");
+	// Nearest rank in integer basis points, so 0.55 x 100 ranks 55, not 56.
+	const rank = Math.ceil(
+		(Math.round((p.quantile ?? 0.95) * 10000) * minutes.length) / 10000,
+	);
+	return sample(minutes[Math.max(0, rank - 1)] as number, true, counts);
 }
 
 const SYNTHETIC_LABELS = (column: string) =>

@@ -345,8 +345,9 @@ describe("work board capability (package exports only)", () => {
     expect(cardIds()).not.toContain("story.0004");
     expect(screen.queryByRole("heading", { name: "design" })).not.toBeInTheDocument();
     const last = server.fetchBoard.mock.lastCall?.[0];
-    expect(last?.get("statuses")).not.toContain("needs_design");
-    expect(last?.get("statuses")).toContain("done");
+    const statuses = last?.get("statuses")?.split(",");
+    expect(statuses).not.toContain("needs_design");
+    expect(statuses).toContain("done");
   });
 
   it("discloses a sort without a board control and resets to rank", async () => {

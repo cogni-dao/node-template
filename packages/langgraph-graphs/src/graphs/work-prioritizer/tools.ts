@@ -9,6 +9,7 @@ import {
   KNOWLEDGE_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
+  WORK_ITEM_ARTIFACT_RECORD_NAME,
   WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 
@@ -42,6 +43,8 @@ export const COGNI_DECIDE_TOOL_IDS = [
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
   WORK_ITEM_UPDATE_NAME,
+  // Routing an item out of needs_triage needs the triage artifact (task.0122).
+  WORK_ITEM_ARTIFACT_RECORD_NAME,
   GET_CURRENT_TIME_NAME,
 ] as const;
 /** Triage guide: a run changes at most this many distinct items. */
@@ -55,7 +58,10 @@ export const OPEN_STATUSES = [
   "needs_triage",
   "needs_research",
   "needs_design",
+  "needs_design_review",
   "needs_implement",
+  "needs_implementation_review",
+  "needs_validation",
   "needs_closeout",
   "needs_merge",
   "blocked",

@@ -1313,6 +1313,11 @@ export {
   type EntryResolverSql,
 } from "./entry-resolver.js";
 export {
+  createDoltgresInboxStates,
+  type InboxStates,
+  type InboxStateSql,
+} from "./inbox-state.js";
+export {
   DoltgresEdoResolverAdapter,
   type DoltgresEdoResolverConfig,
 } from "./edo-resolver.js";

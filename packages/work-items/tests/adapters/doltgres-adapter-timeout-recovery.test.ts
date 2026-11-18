@@ -98,6 +98,8 @@ function makeTimeoutHarness({
   };
   const events: string[] = [];
   const logger: WorkItemLogger = {
+    // Fast stage lines arrive as debug; the harness wants every stage line.
+    debug: (fields) => events.push(String(fields.event)),
     info: (fields) => events.push(String(fields.event)),
     warn: (fields) => events.push(String(fields.event)),
     error: (fields) => events.push(String(fields.event)),

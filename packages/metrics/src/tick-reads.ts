@@ -22,12 +22,72 @@ interface Shared {
 	pending: number;
 }
 
+interface SharedOnce<T = unknown> {
+	controller: AbortController;
+	promise: Promise<T>;
+	pending: number;
+}
+
 export function createTickReads() {
 	const scope = new AsyncLocalStorage<Map<string, Shared>>();
+	const once = new AsyncLocalStorage<Map<string, SharedOnce>>();
 	return {
 		/** Run `fn` with one shared-statement scope. */
 		run<T>(fn: () => Promise<T>): Promise<T> {
-			return scope.run(new Map(), fn);
+			return scope.run(new Map(), () => once.run(new Map(), fn));
+		},
+		/**
+		 * Inside `run`, the first caller of `key` performs `fn` and later callers
+		 * await the same result; outside it every call performs `fn`. The shared
+		 * read has its own signal, aborted only when every waiter still pending
+		 * aborts. A failed read leaves the scope so a later caller retries. The
+		 * scope ends with the tick, so nothing outlives it.
+		 */
+		shareOnce<T>(
+			key: string,
+			fn: (signal: AbortSignal) => Promise<T>,
+			signal: AbortSignal,
+		): Promise<T> {
+			const memo = once.getStore();
+			if (!memo) return fn(signal);
+			let shared = memo.get(key) as SharedOnce<T> | undefined;
+			if (!shared) {
+				const controller = new AbortController();
+				const created: SharedOnce<T> = {
+					controller,
+					promise: fn(controller.signal),
+					pending: 0,
+				};
+				created.promise.catch(() => {
+					if (memo.get(key) === created) memo.delete(key);
+				});
+				memo.set(key, created as SharedOnce);
+				shared = created;
+			}
+			const s = shared;
+			s.pending++;
+			return new Promise<T>((resolve, reject) => {
+				const abandon = () => {
+					s.pending = Math.max(0, s.pending - 1);
+					if (s.pending === 0) {
+						if (memo.get(key) === s) memo.delete(key);
+						s.controller.abort();
+					}
+					reject(signal.reason ?? new Error("aborted"));
+				};
+				if (signal.aborted) return abandon();
+				signal.addEventListener("abort", abandon, { once: true });
+				s.promise.then(
+					(value) => {
+						signal.removeEventListener("abort", abandon);
+						resolve(value);
+					},
+					(error: unknown) => {
+						signal.removeEventListener("abort", abandon);
+						reject(error);
+					},
+				);
+			});
 		},
 		/** A client whose `unsafe(text)` shares identical statements inside `run`. */
 		share(sql: Sql): Sql {

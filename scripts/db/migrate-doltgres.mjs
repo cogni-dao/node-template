@@ -14,7 +14,8 @@
 // biome-ignore-all lint/suspicious/noConsole: standalone Node script invoked as initContainer CMD; stdout is the only log surface
 // biome-ignore-all lint/style/noProcessEnv: container entry point reads DATABASE_URL + NODE_NAME directly; no env wrapper to hide behind
 
-import { writeSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { createHash } from "node:crypto";
@@ -68,6 +69,19 @@ function isHarmlessDropMiss(stmt, err) {
 }
 
 /**
+ * The journal tag of each migration by its `when` (drizzle's `folderMillis`), so the receipt names what it applied
+ * ("0007_work_item_artifact_sequence"), not just a count. A missing or unreadable journal names nothing; it never fails a migration.
+ */
+export function journalTags(folder) {
+  try {
+    const journal = JSON.parse(readFileSync(join(folder, "meta", "_journal.json"), "utf8"));
+    return new Map((journal.entries ?? []).map((entry) => [Number(entry.when), String(entry.tag)]));
+  } catch {
+    return new Map();
+  }
+}
+
+/**
  * Apply pending migrations via simple-protocol sql.unsafe — the Doltgres-safe
  * equivalent of `drizzle-orm/postgres-js/migrator`'s `migrate()`. Same journal
  * semantics (skip when `folderMillis <= last_applied`), same SHA-256 hashing,
@@ -89,7 +103,8 @@ async function applyPending(sql, folder) {
   );
   const lastWhen = rows[0]?.created_at != null ? Number(rows[0].created_at) : 0;
 
-  let applied = 0;
+  const tagByWhen = journalTags(folder);
+  const entries = [];
   for (const migration of migrations) {
     if (migration.folderMillis <= lastWhen) continue;
     for (const stmt of migration.sql) {
@@ -110,9 +125,13 @@ async function applyPending(sql, folder) {
     await sql.unsafe(
       `INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES (${sqlEscape(migration.hash)}, ${migration.folderMillis})`
     );
-    applied += 1;
+    entries.push({
+      tag: tagByWhen.get(migration.folderMillis) ?? `unnamed@${migration.folderMillis}`,
+      when: migration.folderMillis,
+    });
   }
-  return applied;
+  // The caller prints the receipt, only after the batch verified and merged: a line here would claim success too early.
+  return { applied: entries.length, tags: entries.map((e) => e.tag), entries };
 }
 
 const retainedPools = new WeakSet();
@@ -120,6 +139,7 @@ const retainedPools = new WeakSet();
 function terminateMigration(error) {
   const text = (value) => typeof value === "string" ? value : null;
   writeSync(2, `MIGRATION_OUTCOME ${JSON.stringify({
+    nodeId: NODE,
     code: text(error?.code) ?? (isDoltgresMigrationOutcomeUncertain(error) ? "migration_write_outcome_unknown" : "migration_failed"),
     retryable: error?.retryable === true,
     operationId: text(error?.operationId), branch: text(error?.branch),
@@ -271,7 +291,7 @@ async function migrate(folder, before) {
       if (pending === 0) {
         if (before) await before(reader);
         await verifyDoltgresSchema(reader, folder);
-        return { applied: 0, committed: false };
+        return { applied: 0, tags: [], committed: false };
       }
     } finally { reader.release(); }
     const batch = readMigrationFiles({ migrationsFolder: folder }).map(({ hash, folderMillis }) => ({ hash, folderMillis }));
@@ -295,12 +315,12 @@ async function migrate(folder, before) {
         // Another admitted migrator may have finished while this one queued.
         if ((await pendingCount(sql, folder)) === 0) {
           await verifyDoltgresSchema(sql, folder);
-          return { applied: 0, committed: false };
+          return { applied: 0, tags: [], committed: false };
         }
         return mutate("migration: drizzle-kit batch", async (scoped) => {
-          const applied = await applyPending(scoped, folder);
+          const { applied, tags, entries } = await applyPending(scoped, folder);
           await verifyDoltgresSchema(scoped, folder);
-          return { applied, committed: true };
+          return { applied, tags, entries, committed: true };
         });
       });
     } catch (error) {
@@ -310,7 +330,11 @@ async function migrate(folder, before) {
       throw error;
     }
   });
-  console.log(`✅ ${NODE} migrate complete: ${result.applied} migration(s) applied + verified + ${result.committed ? "owned branch committed" : "read-only no-op; no journal DDL or commit"} in ${Date.now() - t0}ms`);
+  // One line per applied migration, by name, printed only after verify and merge succeeded: a candidate log proves "0008_..." was
+  // applied without reading the database.
+  for (const entry of result.entries ?? [])
+    console.log(`MIGRATION_APPLIED ${JSON.stringify({ nodeId: NODE, tag: entry.tag, when: entry.when })}`);
+  console.log(`✅ ${NODE} migrate complete: ${result.applied} migration(s) applied${result.tags.length ? ` (${result.tags.join(", ")})` : ""} + verified + ${result.committed ? "owned branch committed" : "read-only no-op; no journal DDL or commit"} in ${Date.now() - t0}ms`);
   return result;
 }
 

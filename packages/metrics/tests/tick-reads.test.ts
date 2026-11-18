@@ -81,4 +81,41 @@ describe("tick-shared source statements", () => {
 		});
 		expect(f.calls).toEqual(["SELECT 4", "SELECT 4"]);
 	});
+
+	it("shares one read among waiters, retries after a failure, and aborts the read only when the last waiter aborts", async () => {
+		const tick = createTickReads();
+		let calls = 0;
+		let fail = true;
+		let sharedSignal: AbortSignal | undefined;
+		const read = (signal: AbortSignal) => {
+			calls++;
+			sharedSignal = signal;
+			return new Promise<number>((resolve, reject) => {
+				signal.addEventListener("abort", () => reject(new Error("aborted")));
+				queueMicrotask(() => {
+					if (fail) reject(new Error("boom"));
+					else if (calls > 1) setTimeout(() => resolve(calls), 20);
+				});
+			});
+		};
+		await tick.run(async () => {
+			// A failed read leaves the scope: the next caller reads again.
+			await expect(
+				tick.shareOnce("k", read, new AbortController().signal),
+			).rejects.toThrow("boom");
+			fail = false;
+			const first = new AbortController();
+			const second = new AbortController();
+			const a = tick.shareOnce("k", read, first.signal);
+			const b = tick.shareOnce("k", read, second.signal);
+			// Two waiters, one read (the failed one plus this one).
+			expect(calls).toBe(2);
+			first.abort();
+			await expect(a).rejects.toBeDefined();
+			expect(sharedSignal?.aborted).toBe(false);
+			second.abort();
+			await expect(b).rejects.toBeDefined();
+			expect(sharedSignal?.aborted).toBe(true);
+		});
+	});
 });

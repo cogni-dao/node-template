@@ -12,6 +12,7 @@ import {
   offeredToolIds,
   ROUTE_ONLY_CAPABILITIES,
   SAFE_METHODS,
+  SAME_DOOR_ROUTES,
   type TerminalDenial,
   type ToolRequires,
 } from "../src";
@@ -49,8 +50,12 @@ describe("authorizeCaller (the route door)", () => {
   it("a store outage on a bearer is authz_unavailable", async () => {
     expect(await authorizeCaller(memoryStore({ failing: true }), denyAdmin, { userId: "agent", via: "bearer", requires: node() })).toMatchObject({ code: "authz_unavailable" });
   });
-  it("a bearer passes an admin-subject scope on the role row alone (an AI admin check arrives with item I2)", async () => {
-    expect(await authorizeCaller(withRole(), denyAdmin, { userId: "agent", via: "bearer", requires: node("admin") })).toMatchObject({ decision: "allow" });
+  it("a bearer meets the one admin check on an admin-subject scope: its own wallet decides, never the role row alone", async () => {
+    const seen: string[] = [];
+    const check = (verdict: "allow" | "denied") => async (who: string) => { seen.push(who); return verdict; };
+    expect(await authorizeCaller(withRole(), check("denied"), { userId: "agent", via: "bearer", requires: node("admin") })).toMatchObject({ decision: "deny", reason: "subject_not_admin" });
+    expect(await authorizeCaller(withRole(), check("allow"), { userId: "agent", via: "bearer", requires: node("admin") })).toMatchObject({ decision: "allow" });
+    expect(seen).toEqual(["agent", "agent"]);
   });
   it("a bearer is the subject for own-data scopes", async () => {
     const store = memoryStore({ roles: [{ principal: "agent", scope: "schedule:manage" }] });
@@ -237,5 +242,18 @@ describe("bearerWriteRefusal (DENY_BY_DEFAULT)", () => {
   });
   it("an open-by-design route passes", () => {
     for (const routeId of Object.keys(OPEN_BY_DESIGN_ROUTES)) expect(bearerWriteRefusal({ ...base, routeId })).toBeNull();
+  });
+});
+
+describe("work item artifacts (task.0028)", () => {
+  it("the artifact write rides the work_item:transition door as its own tool twin; no review scope exists", () => {
+    expect(SAME_DOOR_ROUTES.core__work_item_artifact_record).toEqual({
+      scope: "work_item:transition",
+      routes: ["work.items.artifacts.create"],
+    });
+    expect(SAME_DOOR_ROUTES.core__work_item_update?.scope).toBe("work_item:transition");
+    const scopes = Object.values(ROUTE_ONLY_CAPABILITIES).map((c) => c.requires.scope);
+    expect(scopes).not.toContain("work_item:review");
+    expect(Object.values(ROUTE_ONLY_CAPABILITIES).flatMap((c) => c.routes)).not.toContain("work.items.artifacts.create");
   });
 });

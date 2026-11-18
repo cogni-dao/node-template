@@ -17,11 +17,18 @@
  *   - DEGRADE_IS_LOGGED_ONCE: each degraded part (chain, links) emits one `EnvelopeDegradedEvent` per read, carrying
  *     only an error name, never row content.
  *   - NEVER_THROWS: a port failure degrades its part; the item is always returned.
+ *   - ARTIFACTS_ONE_QUERY (task.0028): with an `artifacts` port the read adds the latest artifact of each kind (at most four) through one bounded call; a failure, or one stored row that does not parse as an artifact, reads `artifacts: { unavailable: true }`, never an empty answer and never a 500.
  * Side-effects: none (the ports it calls do I/O)
  * Links: packages/work-items/src/moves.ts, hub agent-tool-context-envelope
  * @public
  */
 
+import {
+  toLatestArtifacts,
+  type WorkItemArtifact,
+  WorkItemArtifactSummarySchema,
+  type WorkItemArtifactsLatest,
+} from "./artifacts.js";
 import type { WorkItemLinks } from "./contracts.js";
 import {
   judgeMoveSummaries,
@@ -38,9 +45,15 @@ export interface ItemLinksPort {
   firstPage(id: string, signal: AbortSignal): Promise<WorkItemLinks>;
 }
 
+/** The latest artifact of each kind for an item (task.0028). The node adapts its artifact store to this port. */
+export interface ItemArtifactsPort {
+  /** At most one artifact per kind (four rows), newest of each. Throws when the store cannot answer. */
+  latest(id: string, signal: AbortSignal): Promise<readonly WorkItemArtifact[]>;
+}
+
 /** One degraded part of one envelope read. `reason` is an error name or a fixed code, never content. */
 export interface EnvelopeDegradedEvent {
-  readonly part: "chain" | "links";
+  readonly part: "chain" | "links" | "artifacts";
   readonly workItemId: string;
   readonly reason: string;
   /** Moves whose chain did not resolve, and how many were asked (chain only). */
@@ -51,6 +64,8 @@ export interface EnvelopeDegradedEvent {
 export interface ItemEnvelopeDeps {
   readonly readings?: MoveReadingPort | undefined;
   readonly links?: ItemLinksPort | undefined;
+  /** Adds `artifacts`: the latest review or validation of each kind. No port: the part is absent. */
+  readonly artifacts?: ItemArtifactsPort | undefined;
   readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
 }
 
@@ -63,9 +78,12 @@ export interface ItemEnvelopeOptions {
   readonly includeLinks?: boolean;
   /** Set false to skip the metric, KPI and goal chain (callers that need only the stored move ids). */
   readonly chain?: boolean;
+  /** Set false to skip the artifacts read (callers that need only the item). Default: read them when a port is wired. */
+  readonly artifacts?: boolean;
 }
 
 const UNAVAILABLE_LINKS: WorkItemLinks = { items: [], nextCursor: null, unavailable: true };
+const UNAVAILABLE_ARTIFACTS: WorkItemArtifactsLatest = { unavailable: true };
 
 const reasonOf = (error: unknown): string => {
   const name = (error as { name?: unknown } | null)?.name;
@@ -76,7 +94,7 @@ export async function composeItemEnvelope<T extends { id: string; moves?: WorkIt
   item: T,
   deps: ItemEnvelopeDeps,
   options: ItemEnvelopeOptions = {},
-): Promise<T & { links?: WorkItemLinks }> {
+): Promise<T & { links?: WorkItemLinks; artifacts?: WorkItemArtifactsLatest }> {
   const emit = (event: EnvelopeDegradedEvent) => {
     try {
       deps.log?.(event);
@@ -100,7 +118,26 @@ export async function composeItemEnvelope<T extends { id: string; moves?: WorkIt
       return UNAVAILABLE_LINKS;
     }
   };
-  const [judged, context, links] = await Promise.all([
+  const readArtifacts = async (): Promise<WorkItemArtifactsLatest | undefined> => {
+    const port = deps.artifacts;
+    if (!port || options.artifacts === false) return undefined;
+    try {
+      const stored = await runBounded((signal) => port.latest(item.id, signal), options);
+      // A stored row the wire cannot carry degrades the part; it never fails the item read (a 500).
+      const rows = stored.map((row) => WorkItemArtifactSummarySchema.safeParse(row));
+      if (rows.some((row) => !row.success)) {
+        emit({ part: "artifacts", workItemId: item.id, reason: "invalid_row" });
+        return UNAVAILABLE_ARTIFACTS;
+      }
+      return toLatestArtifacts(
+        rows.flatMap((row) => (row.success ? [row.data] : [])),
+      );
+    } catch (error) {
+      emit({ part: "artifacts", workItemId: item.id, reason: reasonOf(error) });
+      return UNAVAILABLE_ARTIFACTS;
+    }
+  };
+  const [judged, context, links, artifacts] = await Promise.all([
     judgeMoveSummaries([item], deps.readings, options).then((rows) => rows[0] ?? item),
     wantChain
       ? readMoveContext(ids, deps.readings, options, (error) => {
@@ -108,6 +145,7 @@ export async function composeItemEnvelope<T extends { id: string; moves?: WorkIt
         })
       : undefined,
     options.includeLinks ? readLinks() : undefined,
+    readArtifacts(),
   ]);
   let out: T = judged;
   if (wantChain) {
@@ -124,5 +162,9 @@ export async function composeItemEnvelope<T extends { id: string; moves?: WorkIt
         of: ids.length,
       });
   }
-  return links ? { ...out, links } : out;
+  return {
+    ...out,
+    ...(links ? { links } : {}),
+    ...(artifacts ? { artifacts } : {}),
+  };
 }

@@ -10,18 +10,25 @@
 // Each case mutates a throwaway copy of the real workflow/policy files and asserts the
 // checker exits non-zero with a recognisable message.
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CHECKER = join(REPO_ROOT, "scripts", "check-node-ci-workflow.mjs");
+const ACTION = ".github/actions/node-ci/action.yml";
+// node-template carries the action; a fleet node pins it by SHA and has no such file, so the cases that
+// mutate the action are template-only and every other case must still run unchanged in a fleet repo.
+const HAS_ACTION = existsSync(join(REPO_ROOT, ACTION));
+const PUBLISH = ".github/workflows/publish-packages.yml";
+const HAS_PUBLISH = existsSync(join(REPO_ROOT, PUBLISH));
 const FILES = [
   ".github/workflows/ci.yaml",
+  ...(HAS_ACTION ? [ACTION] : []),
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
-  ".github/workflows/publish-packages.yml",
+  ...(HAS_PUBLISH ? [PUBLISH] : []),
   ".cogni/repo-policy.json",
 ];
 
@@ -33,6 +40,7 @@ function runCheckerOn(mutate) {
   mutate({
     read: (file) => readFileSync(join(dir, file), "utf8"),
     write: (file, text) => writeFileSync(join(dir, file), text),
+    remove: (file) => rmSync(join(dir, file), { recursive: true, force: true }),
   });
   // The checker resolves its inputs relative to CWD, so running it from the fixture
   // dir points it at the mutated copies while `yaml` still resolves from the repo.
@@ -45,6 +53,7 @@ const edit = (file, from, to) => ({ read, write }) => {
   if (!before.includes(from)) throw new Error(`fixture anchor missing in ${file}: ${from}`);
   write(file, before.replace(from, to));
 };
+const actionEdit = (from, to) => Object.assign(edit(ACTION, from, to), { needsAction: true });
 
 const contractInstall =
   "pnpm --filter @cogni/repo-spec... install --frozen-lockfile --ignore-scripts --config.dedupe-peer-dependents=false";
@@ -69,36 +78,42 @@ const CASES = [
     name: `${job} must not restore the full workspace install`,
     mutate: editPrBuildJob(job, contractInstall, "pnpm install --frozen-lockfile"),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /frozen contract install/,
   })),
   {
     name: "contract installs must retain frozen lock enforcement",
     mutate: editPrBuildJob("detect", contractInstall, contractInstall.replace(" --frozen-lockfile", "")),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /frozen contract install/,
   },
   {
     name: "contract jobs must not hydrate the broad workspace cache",
     mutate: editPrBuildJob("manifest", "          node-version: 22", "          node-version: 22\n          cache: pnpm"),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /must not hydrate a broad Node cache/,
   },
   {
     name: "PRs must not export the trusted main image cache",
     mutate: edit(".github/workflows/pr-build.yml", mainCacheExport, "type=gha,mode=max,scope=node-template-${{ matrix.target.artifact }}"),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /trusted main cache export/,
   },
   {
     name: "workflow dispatch must not become a main cache writer",
     mutate: edit(".github/workflows/pr-build.yml", mainCacheExport, mainCacheExport.replace("github.event_name == 'push' && ", "")),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /trusted main cache export/,
   },
   {
     name: "the disposable image job must not restore slow Buildx teardown",
     mutate: edit(".github/workflows/pr-build.yml", "          cleanup: false", "          cleanup: true"),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /ephemeral Buildx cleanup/,
   },
   {
@@ -115,6 +130,7 @@ const CASES = [
       "      - name: Build repo-spec contract\n        run: pnpm check"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /detect dependency build/,
   },
   {
@@ -125,13 +141,12 @@ const CASES = [
       "      - name: Redundant verification\n        run: pnpm test:ci\n\n      - name: Detect node image targets"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /jobs.detect must not duplicate CI checks or tests/,
   },
   {
     name: "removing detection checks must not remove the required unit suite",
-    mutate: edit(
-      ".github/workflows/ci.yaml",
-      "run: pnpm test:ci",
+    mutate: actionEdit('run: node "${{ github.action_path }}/scripts/run-unit-tests.mjs"',
       "run: echo tests skipped"
     ),
     expectExit: 1,
@@ -139,9 +154,7 @@ const CASES = [
   },
   {
     name: "schema verification remains owned by required static CI",
-    mutate: edit(
-      ".github/workflows/ci.yaml",
-      "run: pnpm db:check",
+    mutate: actionEdit("run: pnpm db:check",
       "run: echo schema checks skipped"
     ),
     expectExit: 1,
@@ -176,6 +189,29 @@ const CASES = [
     expectMatch: /scores a skipped required check as SUCCESS/,
   },
   {
+    // Defect: dropping the action file (and pointing the caller at a remote SHA) would otherwise read as a
+    // fleet tree and switch the publish-lane checks off while the publish workflow is still present.
+    name: "the publish checks still run when the action directory is removed",
+    mutate: Object.assign(
+      ({ read, write, remove }) => {
+        remove(".github/actions");
+        const ci = read(".github/workflows/ci.yaml");
+        write(
+          ".github/workflows/ci.yaml",
+          ci.replaceAll(
+            "uses: ./.github/actions/node-ci",
+            "uses: cogni-dao/node-template/.github/actions/node-ci@e75f53a164aebbd3ec1cbdb2bd2294711cf5455e"
+          )
+        );
+        const publish = read(PUBLISH);
+        write(PUBLISH, publish.replace("  attestations: write", "  attestations: write\n  packages: write"));
+      },
+      { needsPublish: true }
+    ),
+    expectExit: 1,
+    expectMatch: /permissions\.packages must not be granted/,
+  },
+  {
     name: "a policy context with no emitting job at all is rejected",
     mutate: edit(".cogni/repo-policy.json", '"manifest"]', '"manifest", "nonexistent-check"]'),
     expectExit: 1,
@@ -189,6 +225,7 @@ const CASES = [
       'gh release upload "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" --clobber \\'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /uses --clobber/,
   },
   {
@@ -199,6 +236,7 @@ const CASES = [
       "      - name: Attach the tarball to a Release\n        continue-on-error: true\n        if: github.event_name == 'push'"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /continue-on-error/,
   },
   {
@@ -209,6 +247,7 @@ const CASES = [
       "      - name: Attach the tarball to a Release\n"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /publishes or attests but is not gated/,
   },
   {
@@ -219,6 +258,7 @@ const CASES = [
       "      - name: Tagged commit checks are assumed green"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /Tagged commit must have passed every required check/,
   },
   {
@@ -229,12 +269,14 @@ const CASES = [
       "  id-token: write\n  attestations: write\n  packages: write"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /permissions\.packages must not be granted/,
   },
   {
     name: "building the artifact on a different Node major than CI gates it",
     mutate: edit(".github/workflows/publish-packages.yml", 'NODE_VERSION: "22"', 'NODE_VERSION: "24"'),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /env\.NODE_VERSION must match/,
   },
   // The registry <-> tag-filter bijection. Drift in EITHER direction is silent at
@@ -247,6 +289,7 @@ const CASES = [
       ""
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /must include the tag filter "knowledge-store-v\*"/,
   },
   {
@@ -257,6 +300,7 @@ const CASES = [
       '      - "knowledge-base-v*"\n      - "node-core-v*"\n'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /tag filter "node-core-v\*" matches no env\.PACKAGES entry/,
   },
   {
@@ -267,6 +311,7 @@ const CASES = [
       ""
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /tag filter "knowledge-base-v\*" matches no env\.PACKAGES entry/,
   },
   {
@@ -277,6 +322,7 @@ const CASES = [
       '  PACKAGES: "not json"\n  PACKAGES_OLD: >-\n'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /env\.PACKAGES must be valid JSON/,
   },
   {
@@ -287,6 +333,7 @@ const CASES = [
       '{"name":"@cogni-dao/work-items","tagPrefix":"work-items-v"}'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /env\.PACKAGES\[\d+\] must declare a non-empty string "dir"/,
   },
   {
@@ -297,6 +344,7 @@ const CASES = [
       '        pkg:\n          - {"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"}'
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /matrix\.pkg must be derived from jobs\.select/,
   },
   {
@@ -307,6 +355,7 @@ const CASES = [
       "  select:\n    runs-on: ubuntu-latest\n"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /jobs\.select must expose a non-empty `packages` output/,
   },
   {
@@ -317,35 +366,146 @@ const CASES = [
       "  publish:\n"
     ),
     expectExit: 1,
+    templateOnly: true,
     expectMatch: /jobs\.publish\.needs must include "select"/,
   },
   // Defect: narrowing the full unit step to pull requests lets the merge queue pass without
   // running the full chain, so a PR-time under-selection is never caught before merge.
   {
     name: "the full unit chain must still run on merge_group",
-    mutate: edit(
-      ".github/workflows/ci.yaml",
-      "scope != 'docs-only' && steps.scope.outputs.scope != 'affected'",
-      "scope != 'docs-only' && steps.scope.outputs.scope != 'affected' && github.event_name == 'pull_request'"
+    mutate: actionEdit("      if: inputs.lane == 'unit' && steps.scope.outputs.scope != 'docs-only'\n",
+      "      if: inputs.lane == 'unit' && steps.scope.outputs.scope != 'docs-only' && github.event_name == 'pull_request'\n"
     ),
     expectExit: 1,
-    expectMatch: /unit on merge_group with scope "full" must skip exactly/,
+    expectMatch: /unit on merge_group with scope "full".*must run exactly/,
   },
   // Defect: gating the Markdown check on scope lets a docs-only PR pass with nothing verified.
   {
     name: "markdown refs must never be gated",
-    mutate: edit(
-      ".github/workflows/ci.yaml",
-      "      - name: Markdown references check\n",
-      "      - name: Markdown references check\n        if: steps.scope.outputs.scope != 'docs-only'\n"
+    mutate: actionEdit("      if: inputs.lane == 'static'\n      shell: bash\n      run: pnpm check:markdown-refs",
+      "      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'\n      shell: bash\n      run: pnpm check:markdown-refs"
     ),
     expectExit: 1,
-    expectMatch: /markdown-refs/,
+    expectMatch: /static on pull_request with scope "docs-only".*must run exactly/,
+  },
+  // story.0052. Defect: a lane skips work other than the build or the unit selection, so a required
+  // check reports green having run less than the merge queue expects.
+  {
+    name: "a lane step must not be skipped by a scope it was not designed for",
+    mutate: actionEdit("      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'\n      shell: bash\n      run: pnpm typecheck",
+      "      if: inputs.lane == 'static' && steps.scope.outputs.scope == 'full'\n      shell: bash\n      run: pnpm typecheck"
+    ),
+    expectExit: 1,
+    expectMatch: /static on pull_request with scope "affected".*must run exactly/,
+  },
+  // Defect: a step meant for one lane runs in all three (or a lane runs another lane's check).
+  {
+    name: "the unit suite must stay gated to the unit lane",
+    mutate: actionEdit("      if: inputs.lane == 'unit' && steps.scope.outputs.scope != 'docs-only'\n", "      if: steps.scope.outputs.scope != 'docs-only'\n"),
+    expectExit: 1,
+    expectMatch: /"Unit tests" must be gated to the unit lane/,
+  },
+  // Defect: restore-keys restores a build of DIFFERENT sources and skips the build, so a lane tests stale output.
+  {
+    name: "the build cache may only hit on an exact input hash",
+    mutate: actionEdit("          graphs/*.tsbuildinfo\n        key:", "          graphs/*.tsbuildinfo\n        restore-keys: node-ci-build-v1-\n        key:"),
+    expectExit: 1,
+    expectMatch: /build_cache must not set restore-keys/,
+  },
+  // Defect: a moved tag changes CI under every node that pinned it without editing a workflow.
+  {
+    name: "a nested action must be pinned to a full commit SHA",
+    mutate: actionEdit("actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4", "actions/cache/restore@v4"),
+    expectExit: 1,
+    expectMatch: /must pin actions\/cache\/restore@v4 to a full commit SHA/,
+  },
+  {
+    name: "a caller must pin the shared action by full SHA, not a branch",
+    mutate: ({ read, write }) => {
+      const path = ".github/workflows/ci.yaml";
+      const before = read(path);
+      const pattern = /uses: (\.\/\.github\/actions\/node-ci|cogni-dao\/node-template\/\.github\/actions\/node-ci@[0-9a-f]{40})/;
+      if (!pattern.test(before)) throw new Error("fixture anchor missing: node-ci uses");
+      write(path, before.replace(pattern, "uses: cogni-dao/node-template/.github/actions/node-ci@main"));
+    },
+    expectExit: 1,
+    expectMatch: /node-ci@<40-char commit SHA>/,
+  },
+  // Defect: FORK_FREEDOM. A secret in the shared action would fail every fork and node PR run.
+  {
+    name: "the shared action must not read a secret",
+    mutate: actionEdit("        node-version: ${{ inputs.node_version }}\n", "        node-version: ${{ inputs.node_version }}\n        token: ${{ secrets.GITHUB_TOKEN }}\n"),
+    expectExit: 1,
+    expectMatch: /must not reference secrets/,
+  },
+  // Defect: a job running another lane's steps under this lane's required name.
+  {
+    name: "a job must run the lane it is named for",
+    mutate: edit(".github/workflows/ci.yaml", "lane: unit", "lane: static"),
+    expectExit: 1,
+    expectMatch: /unit node-ci lane input/,
+  },
+  // Defect: a key narrowed to the lockfile hits after a package source change, so every lane tests a stale build.
+  {
+    name: "the build cache key must cover every build input, not only the lockfile",
+    mutate: actionEdit(
+      "hashFiles('packages/**', 'graphs/**', '!**/node_modules/**', '!**/dist/**', '!**/*.tsbuildinfo', '!**/*.md', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'tsconfig.base.json')",
+      "hashFiles('pnpm-lock.yaml')"
+    ),
+    expectExit: 1,
+    expectMatch: /build_cache key/,
+  },
+  // Defect: a typo in `lane` matches no lane-gated step, so the required job passes having run only setup.
+  {
+    name: "the action must validate its inputs before running anything",
+    mutate: actionEdit("    - name: Validate inputs\n", "    - name: Check things\n"),
+    expectExit: 1,
+    expectMatch: /first step must be "Validate inputs"/,
+  },
+  // Defect: a required job that cannot fail reports green whatever its steps did.
+  {
+    name: "a required lane job must not continue on error",
+    mutate: edit(".github/workflows/ci.yaml", "\n  unit:\n    runs-on: ubuntu-latest\n", "\n  unit:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n"),
+    expectExit: 1,
+    expectMatch: /jobs\.unit must not set continue-on-error/,
+  },
+  // Defect: node-template quietly drops its schema drift guard (F2) from the reference caller.
+  {
+    name: "node-template must keep db:check on in its own caller",
+    mutate: Object.assign(
+      edit(".github/workflows/ci.yaml", "          lane: static\n", "          lane: static\n          db_check: \"false\"\n"),
+      { needsAction: true }
+    ),
+    expectExit: 1,
+    expectMatch: /static must run db:check in node-template/,
+  },
+  // Defect: converting a required job to a reusable-workflow call renames its check to
+  // `unit / <called job>`; the required `unit` then never reports and the ruleset deadlocks.
+  {
+    name: "calling a reusable workflow from a required job cannot provide the bare context",
+    mutate: edit(
+      ".github/workflows/ci.yaml",
+      "\n  unit:\n    runs-on: ubuntu-latest\n",
+      "\n  unit:\n    uses: cogni-dao/node-template/.github/workflows/ci.yml@0000000000000000000000000000000000000000\n"
+    ),
+    expectExit: 1,
+    expectMatch: /required check "unit" must be emitted by exactly one job; found 0/,
   },
 ];
 
 let failed = 0;
+let skipped = 0;
 for (const testCase of CASES) {
+  if (testCase.mutate.needsPublish && !HAS_PUBLISH) {
+    skipped += 1;
+    console.log(`skip ${testCase.name} (template-only: no ${PUBLISH} in this repo)`);
+    continue;
+  }
+  if ((testCase.mutate.needsAction || testCase.templateOnly) && !HAS_ACTION) {
+    skipped += 1;
+    console.log(`skip ${testCase.name} (template-only: no ${ACTION} in this repo)`);
+    continue;
+  }
   const { code, output } = runCheckerOn(testCase.mutate);
   const exitOk = code === testCase.expectExit;
   const matchOk = !testCase.expectMatch || testCase.expectMatch.test(output);
@@ -361,7 +521,7 @@ for (const testCase of CASES) {
 }
 
 if (failed > 0) {
-  console.error(`\n${failed} of ${CASES.length} self-tests failed`);
+  console.error(`\n${failed} of ${CASES.length - skipped} self-tests failed`);
   process.exit(1);
 }
-console.log(`\nall ${CASES.length} self-tests passed`);
+console.log(`\nall ${CASES.length - skipped} self-tests passed${skipped ? ` (${skipped} template-only skipped)` : ""}`);

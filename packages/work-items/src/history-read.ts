@@ -49,7 +49,7 @@ const EVENT = "work.items.history_read" as const;
 const DB_MESSAGE_MAX = 300;
 
 /** Database error code and bounded single-line message for the failure log (bug.0025). */
-const errorDetail = (
+export const errorDetail = (
   error: unknown
 ): { dbCode?: string; errorMessage?: string } => {
   const { code, message } = (error ?? {}) as {

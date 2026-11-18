@@ -329,13 +329,7 @@ describe("@cogni-dao/metrics/knowledge", () => {
 		// Counts + head + 2 edges x (reflog, recorded head) + walk + diff.
 		expect(convergence.budget.maxSourceCalls).toBe(8);
 		expect(convergence.budget.maxRows).toBe(FIRST_PARENT_WALK_CAP + 5);
-		expect(service.registry.describe().map((c) => c.id)).toEqual([
-			"work.count@1",
-			"work.convergence@1",
-			"github.stars@1",
-			"no-inline-history@1",
-			"knowledge.merge-review@1",
-		]);
+		expect(service.registry.describe().map((c) => c.id)).toEqual([...PACKAGE_CALCULATOR_IDS]);
 	});
 	describe("node calculators (task.5442)", () => {
 		const budget = {

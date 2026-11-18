@@ -51,10 +51,59 @@ export type { WorkItemPatchInput } from "./patch-contract.js";
 export { composeItemEnvelope } from "./envelope.js";
 export type {
   EnvelopeDegradedEvent,
+  ItemArtifactsPort,
   ItemEnvelopeDeps,
   ItemEnvelopeOptions,
   ItemLinksPort,
 } from "./envelope.js";
+export type {
+  ArtifactErrorCode,
+  ArtifactItemStore,
+  ArtifactKind,
+  ArtifactLog,
+  ArtifactResult,
+  ArtifactSubject,
+  NewWorkItemArtifact,
+  ScorecardOverall,
+  ScorecardRow,
+  SubjectForm,
+  WorkItemArtifact,
+  WorkItemArtifactDeps,
+  WorkItemArtifactInput,
+  WorkItemArtifactStore,
+  WorkItemArtifactSummary,
+  WorkItemArtifactsLatest,
+} from "./artifacts.js";
+export {
+  artifactInvalidJson,
+  artifactsNotConfigured,
+  ARTIFACT_BODY_MAX,
+  ARTIFACT_KINDS,
+  ARTIFACT_NOTE_MAX,
+  ARTIFACT_ROWS_MAX,
+  ARTIFACT_URL_MAX,
+  ARTIFACTS_LIST_MAX,
+  isPassGrade,
+  listWorkItemArtifacts,
+  parseArtifactSubject,
+  recordWorkItemArtifact,
+  REVIEW_VERDICTS,
+  SCORECARD_CELLS,
+  SCORECARD_OVERALLS,
+  ScorecardRowSchema,
+  SUBJECT_FORMS_BY_KIND,
+  toLatestArtifacts,
+  VALIDATION_VERDICTS,
+  VERDICTS_BY_KIND,
+  TRIAGE_VERDICTS,
+  withPassGrade,
+  WorkItemArtifactInputSchema,
+  WorkItemArtifactSchema,
+  WorkItemArtifactSummarySchema,
+  WorkItemArtifactsLatestSchema,
+  workItemsArtifactsCreateOperation,
+  workItemsArtifactsListOperation,
+} from "./artifacts.js";
 export type {
   JudgedMove,
   MetricBaselinePort,
@@ -114,7 +163,34 @@ export {
   parseWorkItemCommitMessage,
   shapeHistory,
 } from "./history.js";
+export type {
+  Deliverable,
+  GateArtifact,
+  GateArtifactKind,
+  GateFacts,
+  GateItem,
+  GateMissing,
+  GateNeeds,
+  InboxFacts,
+  MoveResult,
+  InboxStatePort,
+  PrFacts,
+  PrFactsPort,
+} from "./gates.js";
 export {
+  classifyDeliverable,
+  evaluateMove,
+  GATE_CHILDREN_MAX,
+  gateNeeds,
+  parsePullRequestUrl,
+  refusesPathChange,
+  REPO_PATTERN,
+  resolvePrRepoPin,
+  TRIAGE_SCORE_AXES,
+} from "./gates.js";
+export {
+  WorkItemGateFactsUnavailableError,
+  WorkItemGateUnmetError,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
   WorkItemsCapacityError,
@@ -144,7 +220,21 @@ export {
   WORK_ITEM_SCORES_MAX_AXES,
   WORK_ITEM_SCORES_MAX_BYTES,
 } from "./scores.js";
-export { isValidTransition, VALID_TRANSITIONS } from "./transitions.js";
+export type {
+  DeliverableState,
+  Placement,
+  PlacementInput,
+} from "./placement.js";
+export { PLACEMENT_REASONS, placementFor } from "./placement.js";
+export {
+  FORWARD_TARGETS,
+  isLegacyStatus,
+  isValidTransition,
+  LEGACY_STATUSES,
+  STATUS_ORDER,
+  statusRank,
+  VALID_TRANSITIONS,
+} from "./transitions.js";
 export type {
   ActorKind,
   ExternalRef,

@@ -24,8 +24,16 @@ const GITHUB_API = "https://api.github.com";
 
 type FetchFn = typeof fetch;
 
-async function githubGet(fetchFn: FetchFn, path: string): Promise<unknown> {
+/** An unauthenticated read that gets no signal still ends: a hung GitHub must not hold a caller. */
+const GITHUB_READ_TIMEOUT_MS = 10_000;
+
+async function githubGet(
+  fetchFn: FetchFn,
+  path: string,
+  signal?: AbortSignal
+): Promise<unknown> {
   const res = await fetchFn(`${GITHUB_API}${path}`, {
+    signal: signal ?? AbortSignal.timeout(GITHUB_READ_TIMEOUT_MS),
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "cogni-node",
@@ -120,13 +128,19 @@ export function createGithubReadVcsCapability(
   const closedPrs = new Map<string, { at: number; byNumber: Map<number, GithubPullResponse> }>();
   const lineage = new Map<string, Set<string>>();
 
-  async function recentClosedPr(owner: string, repo: string, n: number) {
+  async function recentClosedPr(
+    owner: string,
+    repo: string,
+    n: number,
+    signal?: AbortSignal
+  ) {
     const key = `${owner}/${repo}`.toLowerCase();
     let entry = closedPrs.get(key);
     if (!entry || now() - entry.at > CLOSED_PR_TTL_MS) {
       const list = (await githubGet(
         fetchFn,
-        `${repoPath(owner, repo)}/pulls?state=closed&sort=updated&direction=desc&per_page=100`
+        `${repoPath(owner, repo)}/pulls?state=closed&sort=updated&direction=desc&per_page=100`,
+        signal
       )) as GithubPullResponse[];
       entry = { at: now(), byNumber: new Map(list.map((pr) => [pr.number, pr])) };
       closedPrs.set(key, entry);
@@ -151,13 +165,14 @@ export function createGithubReadVcsCapability(
   return {
     ...stubVcsCapability,
 
-    getPr: async ({ owner, repo, prNumber }): Promise<PrFacts> => {
-      const listed = await recentClosedPr(owner, repo, prNumber);
+    getPr: async ({ owner, repo, prNumber, signal }): Promise<PrFacts> => {
+      const listed = await recentClosedPr(owner, repo, prNumber, signal);
       if (listed) return toPrFacts(listed);
       return toPrFacts(
         (await githubGet(
           fetchFn,
-          `${repoPath(owner, repo)}/pulls/${prNumber}`
+          `${repoPath(owner, repo)}/pulls/${prNumber}`,
+          signal
         )) as GithubPullResponse
       );
     },
