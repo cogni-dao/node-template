@@ -60,6 +60,9 @@ vi.mock("@/components", () => {
   };
 });
 
+// The Payout section has its own fetches and is not part of the link flow under test.
+vi.mock("@/app/(app)/profile/PayoutProfile.client", () => ({ PayoutProfile: () => null }));
+
 vi.mock("@/features/ai/icons/providers/OpenAIIcon", () => ({
   OpenAIIcon: () => null,
 }));
