@@ -76,7 +76,6 @@ export type {
 } from "./capabilities";
 export {
   createRemoteKnowledgeTransport,
-  parseServiceLinkTargets,
   REMOTE_ALIAS_PATTERN,
   REMOTE_KNOWLEDGE_SCOPE,
   REMOTE_KNOWLEDGE_SERVICE,

@@ -7,7 +7,7 @@
  * Scope: Single GET handler. Public, no auth. The key set comes from the signer in the container, which holds the public half only here.
  * Invariants:
  *   - NO_PRIVATE_MEMBER: the response is the signer's `jwks()`, an explicit public-key allowlist; the private JWK never reaches this route.
- *   - UNSET_IS_404: with no `SERVICE_ASSERTION_SIGNING_JWK` and `SERVICE_ASSERTION_SIGNING_KID` configured, this node is not a home and the route is 404.
+ *   - UNSET_IS_404: with no `SERVICE_ASSERTION_SIGNING_SEED` configured, this node is not a home and the route is 404.
  * Side-effects: none
  * Links: https://node-template.cognidao.org/knowledge/node-service-enrollment
  * @public

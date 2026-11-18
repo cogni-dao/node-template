@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/service-links/ask`
  * Purpose: A node admin has this node's AI ask a configured remote node for one permission (story.0038 phase 2): `{ alias, scope }` signs a service assertion as service
  *   `node-ai` and posts it to the target's `/api/v1/public/agent/service-enrollments`. The target's admin turns the ask On there.
- * Scope: HTTP validation, the one admin check, and delegation to `container.serviceLinks.ask`. The alias names an entry of the server's `SERVICE_LINK_TARGETS`; it is never a URL.
+ * Scope: HTTP validation, the one admin check, and delegation to `container.serviceLinks.ask`. The alias names an entry of the deployment's `.cogni/service-links.yaml` targets; it is never a URL.
  * Invariants:
  *   - ONE_ADMIN_CHECK: only a node admin (`agentAuthority.adminCheck`, the caller's bound wallets against the repo-spec roster) may start the ask, for a session or a bearer alike.
  *   - NOTHING_IS_GRANTED: the answer is the target's `pending` or `granted` (or its refusal status); nothing is written on either node's grant table here.

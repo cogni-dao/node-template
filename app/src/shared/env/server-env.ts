@@ -280,15 +280,11 @@ export const serverSchema = z.object({
   // Optional — BYO-AI features disabled when not set.
   CONNECTIONS_ENCRYPTION_KEY: optionalString,
 
-  // Service assertions (story.0038): this node signs short-lived assertions as a home (private Ed25519 JWK as JSON + its kid) and trusts listed homes as a target
-  // (JSON array of { issuer, jwksUri, services }). All optional: unset = no jwks route, no outbound signer, no trusted homes.
-  SERVICE_ASSERTION_SIGNING_JWK: optionalString,
-  SERVICE_ASSERTION_SIGNING_KID: optionalString,
-  SERVICE_TRUSTED_HOMES: optionalString,
+  // Service assertions (story.0038): this node signs short-lived assertions as a home with an Ed25519 key derived from this 32-byte hex seed (the operator generates it).
+  // Optional: unset = no jwks route and no outbound signer. The homes it trusts and the nodes its AI calls are Git config (.cogni/service-links.yaml), not env.
+  SERVICE_ASSERTION_SIGNING_SEED: optionalString,
   // Optional GitHub token: sent as a bearer on the repo-spec read for org owners, to lift the unauthenticated rate limit.
   GITHUB_READ_TOKEN: optionalString,
-  // story.0038 phase 2: the other nodes this node's AI may read and ask (JSON array of { alias, nodeId, origin }). Unset = no remote targets.
-  SERVICE_LINK_TARGETS: optionalString,
 
   // PostHog product analytics — required
   // See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/posthog-setup.md for setup

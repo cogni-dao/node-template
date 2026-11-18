@@ -7,7 +7,7 @@
  *   name a node alias. The transport, not the tool and not the model, holds the target list and asks the host to sign each call.
  * Scope: Pure construction plus one injected `fetch` and one injected `authorize` (the host signs a short-lived service assertion). Reads no env and holds no key.
  * Invariants:
- *   - ALIAS_FROM_SERVER_CONFIG: targets come only from `parseServiceLinkTargets(SERVICE_LINK_TARGETS)`; an alias that is not listed is `unknown_alias`. The model names an alias, never a URL.
+ *   - ALIAS_FROM_SERVER_CONFIG: targets come only from the deployment's Git config (`.cogni/service-links.yaml`, parsed by `parseLinkTargets` in `@cogni-dao/agent-grants`); an alias that is not listed is `unknown_alias`. The model names an alias, never a URL.
  *   - GET_ONLY_CONFIGURED_ORIGIN: every request is a GET to `{origin}/api/v1/knowledge/{id}` or `{origin}/api/v1/knowledge?...`, https only, the configured origin only.
  *     Redirects are never followed (`redirect: "manual"`; any 3xx is `unavailable`). 10 s timeout. The body is capped at 1 MiB while it streams.
  *   - NO_HEADERS_BACK: only parsed knowledge rows leave the transport; no response header is returned or logged.
@@ -69,41 +69,6 @@ export interface RemoteKnowledgeCapability {
   get(alias: string, id: string): Promise<KnowledgeEntry | null>;
   list(alias: string, params: { domain: string; limit: number }): Promise<KnowledgeEntry[]>;
   search(alias: string, params: { domain: string; query: string; limit: number }): Promise<KnowledgeEntry[]>;
-}
-
-const NODE_ID_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
-
-/**
- * The `SERVICE_LINK_TARGETS` JSON (`[{ alias, nodeId, origin }]`), or `[]` when unset or unusable. An entry with a bad alias, node id or a non-canonical https origin is
- * dropped; a repeated alias keeps its first entry. Failing closed means a bad config yields fewer targets, never a looser one.
- */
-export function parseServiceLinkTargets(raw: string | undefined): RemoteKnowledgeTarget[] {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const seen = new Set<string>();
-    const out: RemoteKnowledgeTarget[] = [];
-    for (const entry of parsed) {
-      const e = entry as { alias?: unknown; nodeId?: unknown; origin?: unknown } | null;
-      if (
-        !e ||
-        typeof e.alias !== "string" ||
-        !REMOTE_ALIAS_PATTERN.test(e.alias) ||
-        typeof e.nodeId !== "string" ||
-        !NODE_ID_PATTERN.test(e.nodeId) ||
-        typeof e.origin !== "string" ||
-        !isCanonicalHttpsOrigin(e.origin) ||
-        seen.has(e.alias)
-      )
-        continue;
-      seen.add(e.alias);
-      out.push({ alias: e.alias, nodeId: e.nodeId, origin: e.origin });
-    }
-    return out;
-  } catch {
-    return [];
-  }
 }
 
 function isCanonicalHttpsOrigin(value: string): boolean {

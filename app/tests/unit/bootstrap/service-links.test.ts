@@ -12,7 +12,7 @@ import type { ServiceAssertionSigner } from "@cogni/agent-grants/service-auth";
 import { describe, expect, it, vi } from "vitest";
 import { createServiceLinks } from "@/bootstrap/service-links";
 
-const TARGETS = JSON.stringify([{ alias: "toks5", nodeId: "node-toks5", origin: "https://toks5.example.org" }]);
+const TARGETS = [{ alias: "toks5", nodeId: "node-toks5", origin: "https://toks5.example.org" }];
 const log = { info: vi.fn(), warn: vi.fn() } as never;
 
 const signer = () => {
@@ -28,7 +28,7 @@ describe("service links", () => {
       calls.push({ url: String(url), init: init ?? {} });
       return new Response(JSON.stringify({ status: "pending" }), { status: 201 });
     }) as typeof fetch;
-    const links = createServiceLinks({ env: { SERVICE_LINK_TARGETS: TARGETS }, signer: async () => s.signer, log, fetchImpl });
+    const links = createServiceLinks({ targets: TARGETS, signer: async () => s.signer, log, fetchImpl });
     expect(await links.ask("toks5", "knowledge:read")).toEqual({ ok: true, alias: "toks5", status: "pending", httpStatus: 201 });
     expect(s.authorizationHeader).toHaveBeenCalledWith({ service: "node-ai", audienceNodeId: "node-toks5", scope: "knowledge:read" });
     expect(calls).toHaveLength(1);
@@ -40,35 +40,35 @@ describe("service links", () => {
   it("a refusal from the target is reported with its status and no status word", async () => {
     const s = signer();
     const fetchImpl = (async () => new Response("{}", { status: 401 })) as typeof fetch;
-    const links = createServiceLinks({ env: { SERVICE_LINK_TARGETS: TARGETS }, signer: async () => s.signer, log, fetchImpl });
+    const links = createServiceLinks({ targets: TARGETS, signer: async () => s.signer, log, fetchImpl });
     expect(await links.ask("toks5", "knowledge:read")).toEqual({ ok: true, alias: "toks5", status: null, httpStatus: 401 });
   });
 
   it("an unknown alias, a missing signer and a network failure send nothing unsigned", async () => {
     const fetchImpl = vi.fn(async () => new Response("{}")) as unknown as typeof fetch;
     const s = signer();
-    const configured = createServiceLinks({ env: { SERVICE_LINK_TARGETS: TARGETS }, signer: async () => s.signer, log, fetchImpl });
+    const configured = createServiceLinks({ targets: TARGETS, signer: async () => s.signer, log, fetchImpl });
     expect(await configured.ask("nope", "knowledge:read")).toEqual({ ok: false, reason: "unknown_alias" });
-    const unsigned = createServiceLinks({ env: { SERVICE_LINK_TARGETS: TARGETS }, signer: async () => null, log, fetchImpl });
+    const unsigned = createServiceLinks({ targets: TARGETS, signer: async () => null, log, fetchImpl });
     expect(await unsigned.ask("toks5", "knowledge:read")).toEqual({ ok: false, reason: "no_signer" });
     await expect(unsigned.remoteKnowledge.get("toks5", "k1")).rejects.toMatchObject({ code: "unavailable" });
     expect(fetchImpl).not.toHaveBeenCalled();
-    const broken = createServiceLinks({ env: { SERVICE_LINK_TARGETS: TARGETS }, signer: async () => s.signer, log, fetchImpl: (async () => Promise.reject(new TypeError("net"))) as typeof fetch });
+    const broken = createServiceLinks({ targets: TARGETS, signer: async () => s.signer, log, fetchImpl: (async () => Promise.reject(new TypeError("net"))) as typeof fetch });
     expect(await broken.ask("toks5", "knowledge:read")).toEqual({ ok: false, reason: "unreachable" });
   });
 
   it("a remote knowledge read signs for the target's node id with scope knowledge:read, once per request", async () => {
     const s = signer();
     const fetchImpl = (async () => new Response("{}", { status: 404 })) as typeof fetch;
-    const links = createServiceLinks({ env: { SERVICE_LINK_TARGETS: TARGETS }, signer: async () => s.signer, log, fetchImpl });
+    const links = createServiceLinks({ targets: TARGETS, signer: async () => s.signer, log, fetchImpl });
     expect(await links.remoteKnowledge.get("toks5", "k1")).toBeNull();
     expect(s.authorizationHeader).toHaveBeenCalledTimes(1);
     expect(s.authorizationHeader).toHaveBeenCalledWith({ service: "node-ai", audienceNodeId: "node-toks5", scope: "knowledge:read" });
     expect(links.targets).toHaveLength(1);
   });
 
-  it("no SERVICE_LINK_TARGETS means no target and every alias is unknown", async () => {
-    const links = createServiceLinks({ env: {}, signer: async () => null, log });
+  it("no configured targets means no target and every alias is unknown", async () => {
+    const links = createServiceLinks({ targets: [], signer: async () => null, log });
     expect(links.targets).toEqual([]);
     await expect(links.remoteKnowledge.get("toks5", "k1")).rejects.toMatchObject({ code: "unknown_alias" });
   });

@@ -178,6 +178,40 @@ export function createServiceAssertionSigner(opts: {
   };
 }
 
+/** PKCS#8 prefix of an Ed25519 private key (RFC 8410): the 32-byte seed follows. */
+const ED25519_PKCS8_PREFIX = "302e020100300506032b657004220420";
+
+/** The RFC 7638 JWK thumbprint of an Ed25519 public key (`{"crv","kty","x"}` in that member order, sha256, base64url). */
+export async function ed25519Thumbprint(x: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", enc.encode(`{"crv":"Ed25519","kty":"OKP","x":"${x}"}`));
+  return toB64Url(new Uint8Array(digest));
+}
+
+/**
+ * A signer from a 32-byte seed (64 hex characters), the form an operator generates and stores as a secret. The Ed25519 key pair is derived through Web Crypto from the
+ * PKCS#8 encoding (prefix + seed); `kid` is the RFC 7638 thumbprint of the public key, so two nodes never need to agree on a name. Throws `TypeError` for a seed
+ * that is not 64 hex characters (the message never carries the value). The JWK variant (`createServiceAssertionSigner`) stays for an operator that keeps its own key.
+ */
+export async function createServiceAssertionSignerFromSeed(opts: {
+  /** This node's canonical https origin (becomes `iss`). */
+  issuer: string;
+  /** 64 hex characters: the 32-byte Ed25519 seed. */
+  seedHex: string;
+  now?: () => number;
+}): Promise<ServiceAssertionSigner> {
+  if (typeof opts.seedHex !== "string" || !/^[0-9a-fA-F]{64}$/.test(opts.seedHex)) throw new TypeError("seed must be 64 hex characters");
+  const der = Uint8Array.from((ED25519_PKCS8_PREFIX + opts.seedHex).match(/../g) as string[], (byte) => Number.parseInt(byte, 16));
+  const key = await crypto.subtle.importKey("pkcs8", der, { name: "Ed25519" }, true, ["sign"]);
+  const jwk = (await crypto.subtle.exportKey("jwk", key)) as { d?: string; x?: string };
+  if (typeof jwk.d !== "string" || typeof jwk.x !== "string") throw new TypeError("seed could not be expanded to a key");
+  return createServiceAssertionSigner({
+    issuer: opts.issuer,
+    kid: await ed25519Thumbprint(jwk.x),
+    privateJwk: { kty: "OKP", crv: "Ed25519", d: jwk.d, x: jwk.x },
+    ...(opts.now ? { now: opts.now } : {}),
+  });
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------------------------
 // Target side: replay store and verifier
 // ---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -265,28 +299,52 @@ export interface ServiceAssertionVerifier {
 }
 
 /**
- * The trusted-homes JSON (`[{ issuer, jwksUri, services }]`), or `[]` when unset or unusable (every assertion is then `untrusted_issuer`: fail closed). An
- * entry needs a canonical https `issuer` and a `jwksUri` that parses as an https URL; only the services that match `SERVICE_SLUG` are kept.
+ * The trusted homes from a parsed list (`[{ issuer, jwks_uri, services }]`, the shape of a node's `.cogni/service-links.yaml`), or `[]` when it is missing or not a list
+ * (every assertion is then `untrusted_issuer`: fail closed). Strict per entry: a canonical https `issuer`, a `jwks_uri` that parses as an https URL and a `services` list are
+ * required, any other entry is dropped; of the services only those matching `SERVICE_SLUG` are kept.
  */
-export function parseTrustedHomes(raw: string | undefined): TrustedHome[] {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((entry): TrustedHome[] => {
-      const e = entry as { issuer?: unknown; jwksUri?: unknown; services?: unknown } | null;
-      if (!e || typeof e.issuer !== "string" || !isCanonicalHttpsOrigin(e.issuer) || typeof e.jwksUri !== "string" || !Array.isArray(e.services)) return [];
-      try {
-        if (new URL(e.jwksUri).protocol !== "https:") return [];
-      } catch {
-        return [];
-      }
-      const services = e.services.filter((s): s is string => typeof s === "string" && SERVICE_SLUG.test(s));
-      return [{ issuer: e.issuer, jwksUri: e.jwksUri, services }];
-    });
-  } catch {
-    return [];
+export function parseTrustedHomes(raw: unknown): TrustedHome[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry): TrustedHome[] => {
+    const e = entry as { issuer?: unknown; jwks_uri?: unknown; services?: unknown } | null;
+    if (!e || typeof e.issuer !== "string" || !isCanonicalHttpsOrigin(e.issuer) || typeof e.jwks_uri !== "string" || !Array.isArray(e.services)) return [];
+    try {
+      if (new URL(e.jwks_uri).protocol !== "https:") return [];
+    } catch {
+      return [];
+    }
+    const services = e.services.filter((s): s is string => typeof s === "string" && SERVICE_SLUG.test(s));
+    return [{ issuer: e.issuer, jwksUri: e.jwks_uri, services }];
+  });
+}
+
+/** One node this node's AI may call: the alias a tool names, the node id the assertion's `aud` carries, and the target's canonical https origin. */
+export interface LinkTarget {
+  readonly alias: string;
+  readonly nodeId: string;
+  readonly origin: string;
+}
+
+/** The alias a tool may name. */
+export const LINK_ALIAS = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const LINK_NODE_ID = /^[A-Za-z0-9._-]{1,100}$/;
+
+/**
+ * The link targets from a parsed list (`[{ alias, node_id, origin }]`, the shape of a node's `.cogni/service-links.yaml`), or `[]` when it is missing or not a list. Strict per
+ * entry (a lowercase `alias`, a `node_id`, a canonical https `origin` with no credentials); any other entry is dropped, and a repeated alias keeps its first entry.
+ */
+export function parseLinkTargets(raw: unknown): LinkTarget[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: LinkTarget[] = [];
+  for (const entry of raw) {
+    const e = entry as { alias?: unknown; node_id?: unknown; origin?: unknown } | null;
+    if (!e || typeof e.alias !== "string" || !LINK_ALIAS.test(e.alias) || typeof e.node_id !== "string" || !LINK_NODE_ID.test(e.node_id)) continue;
+    if (typeof e.origin !== "string" || !isCanonicalHttpsOrigin(e.origin) || seen.has(e.alias)) continue;
+    seen.add(e.alias);
+    out.push({ alias: e.alias, nodeId: e.node_id, origin: e.origin });
   }
+  return out;
 }
 
 /**

@@ -24,32 +24,33 @@ async function jwk() {
 }
 
 describe("buildSigner", () => {
-  const base = { SERVICE_ASSERTION_SIGNING_KID: "k1", APP_BASE_URL: "https://node.example" };
+  const SEED = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+  const base = { APP_BASE_URL: "https://node.example" };
 
-  it("is absent and silent when this node is not configured as a home", async () => {
+  it("is absent and silent when no seed is set (this node is not a home)", async () => {
     const log = logger();
     expect(await buildSigner({}, log)).toBeNull();
-    expect(await buildSigner({ APP_BASE_URL: "https://node.example" }, log)).toBeNull();
+    expect(await buildSigner(base, log)).toBeNull();
+    expect(await buildSigner({ ...base, SERVICE_ASSERTION_SIGNING_SEED: "" }, log)).toBeNull();
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("a valid key gives a signer whose jwks carries only public members", async () => {
-    const key = await jwk();
-    const signer = await buildSigner({ ...base, SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify(key) }, logger());
-    expect(signer?.jwks().keys[0]).toMatchObject({ kid: "k1", x: key.x });
-    expect(JSON.stringify(signer?.jwks())).not.toContain(key.d);
+  it("a valid seed gives a signer whose jwks carries only public members and a thumbprint kid", async () => {
+    const signer = await buildSigner({ ...base, SERVICE_ASSERTION_SIGNING_SEED: SEED }, logger());
+    const [key] = signer?.jwks().keys ?? [];
+    expect(key).toMatchObject({ kty: "OKP", crv: "Ed25519", alg: "EdDSA", x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo" });
+    expect(key?.kid).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(signer?.jwks())).not.toContain(SEED);
+    expect(Object.keys(key ?? {}).sort()).toEqual(["alg", "crv", "kid", "kty", "use", "x"]);
   });
 
-  it("a partly configured or unusable key is null with ONE warning naming the reason, never the key", async () => {
-    const good = await jwk();
-    const other = await jwk();
+  it("a malformed seed or an unusable origin is null with ONE warning naming the reason, never the value", async () => {
     const cases: Array<[Record<string, string | undefined>, string]> = [
-      [{ SERVICE_ASSERTION_SIGNING_KID: "k1", APP_BASE_URL: "https://node.example" }, "signing_jwk_missing"],
-      [{ SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify(good), APP_BASE_URL: "https://node.example" }, "signing_kid_missing"],
-      [{ ...base, SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify(good), APP_BASE_URL: undefined }, "app_base_url_unusable"],
-      [{ ...base, SERVICE_ASSERTION_SIGNING_JWK: "{bad" }, "signing_jwk_not_json"],
-      [{ ...base, SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify({ kty: "RSA" }) }, "signer_config_invalid"],
-      [{ ...base, SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify({ ...good, x: other.x }) }, "signing_key_mismatch"],
+      [{ ...base, SERVICE_ASSERTION_SIGNING_SEED: "not-hex-at-all" }, "signing_seed_malformed"],
+      [{ ...base, SERVICE_ASSERTION_SIGNING_SEED: SEED.slice(2) }, "signing_seed_malformed"],
+      [{ ...base, SERVICE_ASSERTION_SIGNING_SEED: `${SEED}00` }, "signing_seed_malformed"],
+      [{ SERVICE_ASSERTION_SIGNING_SEED: SEED }, "app_base_url_unusable"],
+      [{ SERVICE_ASSERTION_SIGNING_SEED: SEED, APP_BASE_URL: "not a url" }, "app_base_url_unusable"],
     ];
     for (const [env, reason] of cases) {
       const log = logger();
@@ -57,7 +58,7 @@ describe("buildSigner", () => {
       expect(log.warn, reason).toHaveBeenCalledTimes(1);
       const [fields] = log.warn.mock.calls[0] as [Record<string, unknown>];
       expect(fields.reason).toBe(reason);
-      expect(JSON.stringify(log.warn.mock.calls)).not.toContain(good.d);
+      expect(JSON.stringify(log.warn.mock.calls)).not.toContain(env.SERVICE_ASSERTION_SIGNING_SEED ?? "never-empty-match");
     }
   });
 });
@@ -65,7 +66,7 @@ describe("buildSigner", () => {
 describe("createServiceAuth: refusal log levels", () => {
   const rig = async (code: "untrusted_issuer" | "malformed" | "bad_signature" | "replayed") => {
     const log = logger();
-    const auth = createServiceAuth({ env: {}, nodeId: "node-x", sql: (() => Promise.resolve([])) as unknown as AgentAuthoritySql, log: log as never });
+    const auth = createServiceAuth({ env: {}, trustedHomes: [], nodeId: "node-x", sql: (() => Promise.resolve([])) as unknown as AgentAuthoritySql, log: log as never });
     // No trusted home is configured, so any well-formed token is `untrusted_issuer` and junk is `malformed`.
     const key = await jwk();
     const signer = createServiceAssertionSigner({ issuer: "https://home.example", kid: "k", privateJwk: key as never });

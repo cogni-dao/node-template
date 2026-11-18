@@ -5,10 +5,10 @@
  * Module: `@bootstrap/service-links`
  * Purpose: This node's thin wiring for calling OTHER nodes as its own AI (story.0038 phase 2): the remote-knowledge transport the stock knowledge tools use, and the
  *   outbound ask that enrolls this node's AI on a target.
- * Scope: Composition only. Reads `SERVICE_LINK_TARGETS`; signs with this node's service assertion signer (`createServiceAuth`) as service `node-ai`, `aud` = the target's node id.
+ * Scope: Composition only. Takes the targets from `.cogni/service-links.yaml` (parsed in `service-links-config.ts`); signs with this node's service assertion signer (`createServiceAuth`) as service `node-ai`, `aud` = the target's node id.
  *   The transport rules (https, configured origin, GET, no redirects, timeout, size cap, redaction) live in `@cogni/ai-tools`; this file adds the logs and the ask.
  * Invariants:
- *   - ALIAS_FROM_SERVER_CONFIG: an alias that is not in `SERVICE_LINK_TARGETS` is refused before any signing or network call.
+ *   - ALIAS_FROM_SERVER_CONFIG: an alias that is not in the deployment's `targets` is refused before any signing or network call.
  *   - NO_SIGNER_NO_CALL: without a signing key every outbound call is refused (`unavailable`), never sent unsigned.
  *   - ASK_IS_ONE_FIXED_POST: the ask is a POST of `{ scope }` to `{origin}/api/v1/public/agent/service-enrollments` on the configured origin only, https, no redirects, 10 s, 64 KiB cap.
  *   - NO_TOKEN_IN_LOGS: `remote_knowledge.read` and `service_link.asked` carry alias, operation, outcome and status, never an assertion, a header or a body.
@@ -19,7 +19,6 @@
 
 import {
   createRemoteKnowledgeTransport,
-  parseServiceLinkTargets,
   readBodyCapped,
   REMOTE_KNOWLEDGE_SERVICE,
   RemoteKnowledgeError,
@@ -47,13 +46,14 @@ export interface ServiceLinks {
 }
 
 export function createServiceLinks(deps: {
-  readonly env: { readonly SERVICE_LINK_TARGETS?: string | undefined };
+  /** The nodes this deployment may call, from `.cogni/service-links.yaml` (empty = every alias is unknown). */
+  readonly targets: readonly RemoteKnowledgeTarget[];
   /** Read lazily: the signer is built after the tool bindings. */
   readonly signer: () => Promise<ServiceAssertionSigner | null>;
   readonly log: Logger;
   readonly fetchImpl?: typeof fetch;
 }): ServiceLinks {
-  const targets = parseServiceLinkTargets(deps.env.SERVICE_LINK_TARGETS);
+  const targets = [...deps.targets];
   const byAlias = new Map(targets.map((t) => [t.alias, t]));
   const doFetch = deps.fetchImpl ?? fetch;
 

@@ -9,7 +9,7 @@
  *   plugs in the same code). Never logs a token or a key.
  * Invariants:
  *   - ALL_OPTIONAL: no signing key = no signer (an outbound need is 503) and no jwks route; no trusted homes = every assertion is `untrusted_issuer`.
- *   - SIGNER_FAILS_LOUD: a partly configured or unusable signing key (bad JSON, bad shape, a public `x` that is not the private `d`'s) is no signer plus one
+ *   - SIGNER_FAILS_LOUD: a malformed signing seed (not 64 hex characters) or an unusable origin is no signer plus one
  *     `service_auth.signer_unavailable` warning naming the reason, never a silent null and never the key.
  *   - APPROVERS_ONLY: owners are `activity_ledger.approvers` mapped to the users that bound those wallets (`user_bindings`, provider `wallet`, lowercase).
  *   - SINGLE_REPLICA_REPLAY: the replay store is in memory; a target with several replicas needs a shared store behind the same interface.
@@ -25,15 +25,13 @@ import {
   type OrgOwners,
 } from "@cogni/agent-grants/orgs";
 import {
-  assertSigningKeyMatches,
   createMemoryReplayStore,
-  createServiceAssertionSigner,
+  createServiceAssertionSignerFromSeed,
   createServiceAssertionVerifier,
-  type Ed25519PrivateJwk,
-  parseTrustedHomes,
   type ServiceAssertionResult,
   type ServiceAssertionSigner,
   type ServiceAssertionVerifier,
+  type TrustedHome,
 } from "@cogni/agent-grants/service-auth";
 import { extractLedgerApprovers, parseRepoSpec } from "@cogni/repo-spec";
 import type { Logger } from "pino";
@@ -52,47 +50,31 @@ export interface ServiceAuth {
 }
 
 interface SignerEnv {
-  readonly SERVICE_ASSERTION_SIGNING_JWK?: string | undefined;
-  readonly SERVICE_ASSERTION_SIGNING_KID?: string | undefined;
+  readonly SERVICE_ASSERTION_SIGNING_SEED?: string | undefined;
   readonly APP_BASE_URL?: string | undefined;
 }
 
 /**
- * The signer from the two env values and this node's own origin. Null and silent when neither signing value is set (this node is not a home); null with ONE
- * warning naming the reason when it is partly configured or the key is unusable. Never logs the key.
+ * The signer from the 32-byte hex seed and this node's own origin. Null and silent when no seed is set (this node is not a home); null with ONE warning naming the reason
+ * when the seed is malformed or the origin is unusable. Never logs the seed. The key pair and its kid derive from the seed inside the package.
  */
 export async function buildSigner(env: SignerEnv, log: Pick<Logger, "warn">): Promise<ServiceAssertionSigner | null> {
-  if (!env.SERVICE_ASSERTION_SIGNING_JWK && !env.SERVICE_ASSERTION_SIGNING_KID) return null;
+  if (!env.SERVICE_ASSERTION_SIGNING_SEED) return null;
   const fail = (reason: string): null => {
     log.warn({ event: EVENT_NAMES.SERVICE_AUTH_SIGNER_UNAVAILABLE, reason }, EVENT_NAMES.SERVICE_AUTH_SIGNER_UNAVAILABLE);
     return null;
   };
-  if (!env.SERVICE_ASSERTION_SIGNING_JWK) return fail("signing_jwk_missing");
-  if (!env.SERVICE_ASSERTION_SIGNING_KID) return fail("signing_kid_missing");
   let origin: string;
   try {
     origin = new URL(env.APP_BASE_URL ?? "").origin;
   } catch {
     return fail("app_base_url_unusable");
   }
-  let privateJwk: Ed25519PrivateJwk;
   try {
-    privateJwk = JSON.parse(env.SERVICE_ASSERTION_SIGNING_JWK) as Ed25519PrivateJwk;
+    return await createServiceAssertionSignerFromSeed({ issuer: origin, seedHex: env.SERVICE_ASSERTION_SIGNING_SEED });
   } catch {
-    return fail("signing_jwk_not_json");
+    return fail("signing_seed_malformed");
   }
-  let signer: ServiceAssertionSigner;
-  try {
-    signer = createServiceAssertionSigner({ issuer: origin, kid: env.SERVICE_ASSERTION_SIGNING_KID, privateJwk });
-  } catch {
-    return fail("signer_config_invalid");
-  }
-  try {
-    await assertSigningKeyMatches(privateJwk);
-  } catch {
-    return fail("signing_key_mismatch");
-  }
-  return signer;
 }
 
 /** The users that bound each of these lowercased wallets (`user_bindings`, provider `wallet`). */
@@ -110,16 +92,17 @@ const QUIET_REFUSALS: ReadonlySet<string> = new Set(["untrusted_issuer", "malfor
 
 export function createServiceAuth(deps: {
   env: SignerEnv & {
-    readonly SERVICE_TRUSTED_HOMES?: string | undefined;
     readonly GITHUB_READ_TOKEN?: string | undefined;
   };
+  /** The homes this deployment trusts, from `.cogni/service-links.yaml` (empty = every assertion is `untrusted_issuer`). */
+  trustedHomes: readonly TrustedHome[];
   nodeId: string;
   sql: AgentAuthoritySql;
   log: Logger;
 }): ServiceAuth {
   const verifier = createServiceAssertionVerifier({
     selfNodeId: deps.nodeId,
-    trustedHomes: parseTrustedHomes(deps.env.SERVICE_TRUSTED_HOMES),
+    trustedHomes: [...deps.trustedHomes],
     replay: createMemoryReplayStore(),
   });
   const owners = createOwnerSources([

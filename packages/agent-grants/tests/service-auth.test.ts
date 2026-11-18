@@ -7,12 +7,14 @@ import {
   assertSigningKeyMatches,
   createMemoryReplayStore,
   createServiceAssertionSigner,
+  createServiceAssertionSignerFromSeed,
   createServiceAssertionVerifier,
   ensureServicePrincipal,
   findServicePrincipal,
   JWKS_MAX_AGE_MS,
   JWKS_REFETCH_MIN_INTERVAL_MS,
   nodeAudience,
+  parseLinkTargets,
   parseTrustedHomes,
   requestServiceAccess,
   servicePrincipalId,
@@ -268,18 +270,88 @@ describe("service principal", () => {
 });
 
 describe("parseTrustedHomes", () => {
-  const good = { issuer: "https://cognidao.org", jwksUri: "https://cognidao.org/.well-known/jwks.json", services: ["git-review"] };
+  // The shape of a node's .cogni/service-links.yaml: snake_case keys.
+  const entry = { issuer: "https://cognidao.org", jwks_uri: "https://cognidao.org/.well-known/jwks.json", services: ["git-review"] };
+  const good: TrustedHome = { issuer: entry.issuer, jwksUri: entry.jwks_uri, services: ["git-review"] };
 
-  it("keeps well-formed homes and drops everything else; unset or unparseable is none", () => {
-    expect(parseTrustedHomes(JSON.stringify([good, { ...good, issuer: "http://x.io" }, { ...good, jwksUri: "http://x.io/j" }, { ...good, jwksUri: "not a url" }, { ...good, services: "x" }, null]))).toEqual([good]);
+  it("keeps well-formed homes and drops everything else; a missing or non-list value is none", () => {
+    expect(
+      parseTrustedHomes([entry, { ...entry, issuer: "http://x.io" }, { ...entry, jwks_uri: "http://x.io/j" }, { ...entry, jwks_uri: "not a url" }, { ...entry, services: "x" }, { issuer: entry.issuer, jwksUri: entry.jwks_uri, services: [] }, null])
+    ).toEqual([good]);
     expect(parseTrustedHomes(undefined)).toEqual([]);
-    expect(parseTrustedHomes("not json")).toEqual([]);
-    expect(parseTrustedHomes('{"issuer":"x"}')).toEqual([]);
+    expect(parseTrustedHomes("not a list")).toEqual([]);
+    expect(parseTrustedHomes({ issuer: "x" })).toEqual([]);
   });
 
   it("keeps only the services that match the slug pattern", () => {
-    const [home] = parseTrustedHomes(JSON.stringify([{ ...good, services: ["git-review", "Node AI", "node-ai", 7, "", "a".repeat(65), "UPPER"] }]));
+    const [home] = parseTrustedHomes([{ ...entry, services: ["git-review", "Node AI", "node-ai", 7, "", "a".repeat(65), "UPPER"] }]);
     expect(home?.services).toEqual(["git-review", "node-ai"]);
+  });
+});
+
+describe("parseLinkTargets", () => {
+  const entry = { alias: "toks5", node_id: "f66b260b-4633-41e2-8711-b7c1b8449cc1", origin: "https://toks5-test.cognidao.org" };
+
+  it("keeps well-formed targets and drops everything else (fail closed)", () => {
+    expect(
+      parseLinkTargets([
+        entry,
+        { ...entry, alias: "plain", origin: "http://plain.example.org" },
+        { ...entry, alias: "path", origin: "https://x.example.org/path" },
+        { ...entry, alias: "cred", origin: "https://user:pw@z.example.org" },
+        { ...entry, alias: "Bad Alias" },
+        { ...entry, alias: "noid", node_id: "" },
+        { alias: "camel", nodeId: entry.node_id, origin: entry.origin },
+        { ...entry, node_id: "other", origin: "https://dup.example.org" },
+        null,
+      ])
+    ).toEqual([{ alias: "toks5", nodeId: entry.node_id, origin: entry.origin }]);
+    expect(parseLinkTargets(undefined)).toEqual([]);
+    expect(parseLinkTargets({ alias: "x" })).toEqual([]);
+  });
+});
+
+describe("createServiceAssertionSignerFromSeed", () => {
+  // RFC 8032 section 7.1, test 1: this seed derives this public key.
+  const SEED = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+  const PUBLIC = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+  const x = Buffer.from(PUBLIC, "hex").toString("base64url");
+
+  it("derives the Ed25519 key from the seed and names it by its RFC 7638 thumbprint", async () => {
+    const signer = await createServiceAssertionSignerFromSeed({ issuer: ISSUER, seedHex: SEED });
+    const [key] = signer.jwks().keys;
+    expect(key?.x).toBe(x);
+    const thumbprint = Buffer.from(await crypto.subtle.digest("SHA-256", Buffer.from(`{"crv":"Ed25519","kty":"OKP","x":"${x}"}`))).toString("base64url");
+    expect(key?.kid).toBe(thumbprint);
+    expect(JSON.stringify(signer.jwks())).not.toContain(SEED);
+    expect(JSON.stringify(signer.jwks())).not.toMatch(/"d"/);
+    // The same seed is the same key (a restart keeps its identity); another seed is another key.
+    const again = await createServiceAssertionSignerFromSeed({ issuer: ISSUER, seedHex: SEED.toUpperCase() });
+    expect(again.jwks()).toEqual(signer.jwks());
+    const other = await createServiceAssertionSignerFromSeed({ issuer: ISSUER, seedHex: "00".repeat(32) });
+    expect(other.jwks().keys[0]?.kid).not.toBe(key?.kid);
+  });
+
+  it("signs assertions that a verifier trusting its published key accepts", async () => {
+    const signer = await createServiceAssertionSignerFromSeed({ issuer: ISSUER, seedHex: SEED, now: () => T0 });
+    const verifier = createServiceAssertionVerifier({
+      selfNodeId: NODE,
+      trustedHomes: [{ issuer: ISSUER, jwksUri: `${ISSUER}/.well-known/jwks.json`, services: ["node-ai"] }],
+      fetchJwks: async () => signer.jwks(),
+      replay: createMemoryReplayStore({ now: () => T0 }),
+      now: () => T0,
+    });
+    const token = await signer.sign({ service: "node-ai", audienceNodeId: NODE, scope: "knowledge:read" });
+    expect(await verifier.verify(token)).toMatchObject({ ok: true, issuer: ISSUER, service: "node-ai" });
+  });
+
+  it("refuses a seed that is not 64 hex characters, and the message never carries the value", async () => {
+    for (const bad of ["", "abc", "zz".repeat(32), "00".repeat(31), "00".repeat(33)]) {
+      const error = await createServiceAssertionSignerFromSeed({ issuer: ISSUER, seedHex: bad }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(String((error as Error).message)).not.toContain(bad || "never-empty-match");
+    }
+    await expect(createServiceAssertionSignerFromSeed({ issuer: "http://x.io", seedHex: SEED })).rejects.toThrow("issuer");
   });
 });
 

@@ -154,6 +154,7 @@ import {
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
+import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import {
@@ -304,7 +305,7 @@ export interface Container {
 	agentAuthority: AgentToolAuthority;
 	/** Service assertions (story.0038): the optional signer, the verifier over the trusted homes, and the org owner source. Thin wiring; the logic is in `@cogni/agent-grants`. */
 	serviceAuth: ServiceAuth;
-	/** Calling other nodes as this node's AI (story.0038 phase 2): the remote-knowledge capability and the outbound ask. Targets come only from SERVICE_LINK_TARGETS. */
+	/** Calling other nodes as this node's AI (story.0038 phase 2): the remote-knowledge capability and the outbound ask. Targets come only from .cogni/service-links.yaml. */
 	serviceLinks: ServiceLinks;
 	/** ADMIN_ACTS_IN_ADMIN: the only door for node-admin writes; callable only with an `AdminSession` minted in `(admin)/`. */
 	nodeAdminPort: NodeAdminPort;
@@ -1100,8 +1101,14 @@ function createContainer(): Container {
 	}
 
 	// story.0038 phase 2: other nodes' knowledge through the stock tools. The signer is read lazily (it is built with `serviceAuth` below).
+	// The homes this node trusts and the nodes its AI calls are Git config for this deployment (.cogni/service-links.yaml); none when the file or the key is missing.
+	const serviceLinksConfig = loadServiceLinksConfig({
+		environment: env.DEPLOY_ENVIRONMENT,
+		repoRoot: env.COGNI_REPO_ROOT,
+		log,
+	});
 	const serviceLinks = createServiceLinks({
-		env,
+		targets: serviceLinksConfig.targets,
 		signer: () => serviceAuth.getSigner(),
 		log,
 	});
@@ -1259,6 +1266,7 @@ function createContainer(): Container {
 	const agentSql = serviceDb.$client as unknown as AgentAuthoritySql;
 	const serviceAuth = createServiceAuth({
 		env,
+		trustedHomes: serviceLinksConfig.trustedHomes,
 		nodeId,
 		sql: agentSql,
 		log,

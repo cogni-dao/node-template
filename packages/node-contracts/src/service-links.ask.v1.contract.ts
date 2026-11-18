@@ -4,7 +4,7 @@
 /**
  * Module: `@contracts/service-links.ask.v1`
  * Purpose: Zod contract for POST /api/v1/service-links/ask (story.0038 phase 2): a node admin has this node's AI ask a configured remote node for one permission.
- * Scope: Body and output only. `alias` names an entry of the server's `SERVICE_LINK_TARGETS`; it is never a URL. The route signs an assertion and posts it to the target's
+ * Scope: Body and output only. `alias` names an entry of the deployment's `.cogni/service-links.yaml` targets; it is never a URL. The route signs an assertion and posts it to the target's
  *   public service-enrollment route, then returns the target's answer.
  * Invariants: CONTRACTS_ARE_TRUTH. NOTHING_IS_GRANTED: the answer is the target's `pending` or `granted`; this node never writes a grant on the target. A refusal carries the
  *   target's HTTP status and no body.

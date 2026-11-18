@@ -6,7 +6,6 @@ import { createKnowledgeReadImplementation } from "../src/tools/knowledge-read";
 import { createKnowledgeSearchImplementation } from "../src/tools/knowledge-search";
 import {
   createRemoteKnowledgeTransport,
-  parseServiceLinkTargets,
   REMOTE_MAX_BODY_BYTES,
   RemoteKnowledgeError,
   redactSecretShapes,
@@ -42,23 +41,6 @@ const harness = (respond: (url: string, init: RequestInit) => Response | Promise
   const remote = createRemoteKnowledgeTransport({ targets: [TARGET], authorize, fetchImpl, ...over });
   return { remote, calls, authorize, fetchImpl };
 };
-
-describe("parseServiceLinkTargets", () => {
-  it("keeps canonical https targets and drops everything else (fail closed)", () => {
-    const raw = JSON.stringify([
-      TARGET,
-      { alias: "plain", nodeId: "n", origin: "http://plain.example.org" },
-      { alias: "path", nodeId: "n", origin: "https://x.example.org/path" },
-      { alias: "Bad Alias", nodeId: "n", origin: "https://y.example.org" },
-      { alias: "toks5", nodeId: "other", origin: "https://dup.example.org" },
-      { alias: "cred", nodeId: "n", origin: "https://user:pw@z.example.org" },
-    ]);
-    expect(parseServiceLinkTargets(raw)).toEqual([TARGET]);
-    expect(parseServiceLinkTargets(undefined)).toEqual([]);
-    expect(parseServiceLinkTargets("not json")).toEqual([]);
-    expect(parseServiceLinkTargets('{"alias":"x"}')).toEqual([]);
-  });
-});
 
 describe("remote knowledge transport", () => {
   it("an unknown alias fails before any signing or network call", async () => {
