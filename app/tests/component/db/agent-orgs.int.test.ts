@@ -64,6 +64,23 @@ describe("orgs and service principals (real Postgres)", () => {
     });
   });
 
+  it("two repo-spec paths in one repo are two orgs, and the monorepo path round-trips through the stored key", async () => {
+    await rolledBack(async (tx) => {
+      const sql = tx as unknown as SqlTag;
+      const mono = { ...SRC, path: "nodes/operator/.cogni/repo-spec.yaml" };
+      const root = await ensureOrg(sql, SRC);
+      const node = await ensureOrg(sql, mono);
+      expect(node.userId).not.toBe(root.userId);
+      expect(node.billingAccountId).not.toBe(root.billingAccountId);
+      expect(await ensureOrg(sql, mono)).toEqual(node);
+      expect(await readOrgSource(sql, node.userId)).toEqual(mono);
+      expect(await readOrgSource(sql, root.userId)).toEqual(SRC);
+      expect(await tx`SELECT owner_source_ref FROM agent_principals WHERE user_id = ${node.userId}`).toEqual([
+        { owner_source_ref: `${SRC.ref}#${mono.path}` },
+      ]);
+    });
+  });
+
   it("the database refuses an org with no owner source, a second org for one source, and an unknown kind", async () => {
     await rolledBack(async (tx) => {
       const mk = async () => {

@@ -8,7 +8,7 @@
  * Scope: Composition only. Reads three optional env values and one GitHub contents URL; every decision lives in the package. Never logs a token or a key.
  * Invariants:
  *   - ALL_OPTIONAL: no signing key = no signer (an outbound need is 503) and no jwks route; no trusted homes = every assertion is `untrusted_issuer`.
- *   - OWNER_READ_VIA_CONTENTS_API: the repo-spec is read from `api.github.com/.../contents/.cogni/repo-spec.yaml` (`Accept: application/vnd.github.raw`), never from
+ *   - OWNER_READ_VIA_CONTENTS_API: the repo-spec is read from `api.github.com/.../contents/<path>` (default `.cogni/repo-spec.yaml`) (`Accept: application/vnd.github.raw`), never from
  *     the raw.githubusercontent.com CDN, whose five-minute cache would double the owners' staleness. 10 s timeout, 64 KiB cap, github.com repos only. A 403 or 429
  *     (rate limit) or any other failure is `OwnerSourceUnavailableError`.
  *   - APPROVERS_ONLY: owners are `activity_ledger.approvers` mapped to the users that bound those wallets (`user_bindings`, provider `wallet`, lowercase).
@@ -21,6 +21,7 @@
 import {
   canonicalRepoRef,
   createOwnerSources,
+  DEFAULT_REPO_SPEC_PATH,
   createRepoSpecOwnerSource,
   OwnerSourceUnavailableError,
 } from "@cogni/agent-grants/orgs";
@@ -41,7 +42,6 @@ import type { Logger } from "pino";
 import { EVENT_NAMES } from "@/shared/observability";
 import type { AgentAuthoritySql } from "./agent-authority";
 
-const REPO_SPEC_PATH = ".cogni/repo-spec.yaml";
 const FETCH_TIMEOUT_MS = 10_000;
 const MAX_REPO_SPEC_BYTES = 64 * 1024;
 
@@ -99,12 +99,16 @@ export function buildSigner(env: {
   }
 }
 
-/** The repo-spec of `ref` on its default branch, through the GitHub contents API. Throws `OwnerSourceUnavailableError` on any failure. */
-export async function fetchRepoSpecFromGithub(ref: string, fetchImpl: typeof fetch = fetch): Promise<string> {
-  const canonical = canonicalRepoRef(ref);
-  if (!canonical) throw new OwnerSourceUnavailableError("ref is not a github repo url");
-  const { pathname } = new URL(canonical);
-  const url = `https://api.github.com/repos${pathname}/contents/${REPO_SPEC_PATH}`;
+/** The repo-spec of `ref` at `path` on its default branch, through the GitHub contents API. Throws `OwnerSourceUnavailableError` on any failure. */
+export async function fetchRepoSpecFromGithub(
+  ref: string,
+  path: string = DEFAULT_REPO_SPEC_PATH,
+  fetchImpl: typeof fetch = fetch
+): Promise<string> {
+  const canonical = canonicalRepoRef(ref, path);
+  if (!canonical) throw new OwnerSourceUnavailableError("ref is not a github repo url or path is not a repo-spec path");
+  const { pathname } = new URL(canonical.split("#")[0] as string);
+  const url = `https://api.github.com/repos${pathname}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
   let res: Response;
   try {
     res = await fetchImpl(url, {
@@ -164,7 +168,7 @@ export function createServiceAuth(deps: {
   });
   const owners = createOwnerSources([
     createRepoSpecOwnerSource({
-      fetchRepoSpec: (ref) => fetchRepoSpecFromGithub(ref),
+      fetchRepoSpec: (ref, path) => fetchRepoSpecFromGithub(ref, path),
       extractApprovers: (yaml) => extractLedgerApprovers(parseRepoSpec(yaml)),
       usersForWallets: (wallets) => usersForWallets(deps.sql, wallets),
     }),

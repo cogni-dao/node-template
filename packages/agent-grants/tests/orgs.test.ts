@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import { authorizeAccount, canApprove, type SqlTag } from "../src";
 import {
   canonicalRepoRef,
+  DEFAULT_REPO_SPEC_PATH,
+  orgSourceFromKey,
+  validRepoSpecPath,
   createOwnerSources,
   createRepoSpecOwnerSource,
   ensureOrg,
@@ -193,45 +196,126 @@ describe("canApprove and authorizeAccount for an org-owned account", () => {
   });
 });
 
-/** A scripted SQL tag: the idempotency decision of ensureOrg (find, then create only what is missing). */
-function fakeTag(state: { org: string | null; account: string | null }) {
+const MONO = "nodes/operator/.cogni/repo-spec.yaml";
+
+describe("repo-spec path", () => {
+  it("the default path keeps the plain repo ref; another path adds #<path>", () => {
+    expect(canonicalRepoRef("https://github.com/Cogni-DAO/Poly", DEFAULT_REPO_SPEC_PATH)).toBe(REF);
+    expect(canonicalRepoRef("https://github.com/Cogni-DAO/Poly", undefined)).toBe(REF);
+    expect(canonicalRepoRef(REF, MONO)).toBe(`${REF}#${MONO}`);
+  });
+
+  it("accepts a relative path ending in .cogni/repo-spec.yaml; rejects traversal, absolute, backslash and other files", () => {
+    for (const ok of [".cogni/repo-spec.yaml", MONO, "a/b/c/.cogni/repo-spec.yaml"]) expect(validRepoSpecPath(ok), ok).toBe(ok);
+    for (const bad of [
+      "../.cogni/repo-spec.yaml",
+      "nodes/../../x/.cogni/repo-spec.yaml",
+      "/.cogni/repo-spec.yaml",
+      "/etc/.cogni/repo-spec.yaml",
+      "nodes\\operator\\.cogni\\repo-spec.yaml",
+      "nodes//operator/.cogni/repo-spec.yaml",
+      "./.cogni/repo-spec.yaml",
+      "x.cogni/repo-spec.yaml",
+      "nodes/operator/.cogni/other.yaml",
+      "nodes/operator/repo-spec.yaml",
+      "",
+    ])
+      expect(validRepoSpecPath(bad), bad).toBeNull();
+    expect(canonicalRepoRef(REF, "../.cogni/repo-spec.yaml")).toBeNull();
+  });
+
+  it("the stored key round-trips to a source: default has no path, a monorepo path comes back", () => {
+    expect(orgSourceFromKey("repo-spec", REF)).toEqual({ kind: "repo-spec", ref: REF });
+    expect(orgSourceFromKey("repo-spec", `${REF}#${MONO}`)).toEqual({ kind: "repo-spec", ref: REF, path: MONO });
+    expect(orgSourceFromKey("repo-spec", `${REF}#../x/.cogni/repo-spec.yaml`)).toBeNull();
+    expect(orgSourceFromKey("members", REF)).toBeNull();
+    expect(orgSourceFromKey("repo-spec", null)).toBeNull();
+  });
+
+  it("the owner source reads the path it is asked for, caches per path, and refuses a bad path without a read", async () => {
+    const s = source();
+    await s.owners.owners(SRC);
+    await s.owners.owners({ ...SRC, path: MONO });
+    await s.owners.owners({ ...SRC, path: MONO });
+    expect(s.fetchRepoSpec.mock.calls).toEqual([
+      [REF, DEFAULT_REPO_SPEC_PATH],
+      [REF, MONO],
+    ]);
+    await expect(s.owners.owners({ ...SRC, path: "../.cogni/repo-spec.yaml" })).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+    expect(s.fetchRepoSpec).toHaveBeenCalledTimes(2);
+  });
+});
+
+/** A scripted SQL tag with state keyed by owner source, so two paths of one repo are two orgs. */
+function fakeTag(state: { orgs: Map<string, string>; accounts: Map<string, string> }) {
   const writes: string[] = [];
   const tag = ((strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join("?");
     if (text.includes("pg_advisory_xact_lock")) return Promise.resolve([]);
-    if (text.includes("FROM agent_principals")) return Promise.resolve(state.org ? [{ user_id: state.org, owner_source_kind: "repo-spec", owner_source_ref: REF }] : []);
-    if (text.includes("FROM billing_accounts")) return Promise.resolve(state.account ? [{ id: state.account }] : []);
+    if (text.includes("FROM agent_principals") && text.includes("owner_source_ref = ?")) {
+      const user = state.orgs.get(`${values[0]}|${values[1]}`);
+      return Promise.resolve(user ? [{ user_id: user }] : []);
+    }
+    if (text.includes("FROM agent_principals")) {
+      const entry = [...state.orgs].find(([, user]) => user === values[0]);
+      const [kind, ref] = entry ? entry[0].split("|") : [];
+      return Promise.resolve(entry ? [{ owner_source_kind: kind, owner_source_ref: ref }] : []);
+    }
+    if (text.includes("FROM billing_accounts")) {
+      const id = state.accounts.get(String(values[0]));
+      return Promise.resolve(id ? [{ id }] : []);
+    }
     writes.push(text.replace(/\s+/g, " ").trim().split(" ").slice(0, 3).join(" "));
-    if (text.includes("INTO users")) state.org = values[0] as string;
-    if (text.includes("INTO billing_accounts")) state.account = values[0] as string;
+    if (text.includes("INTO agent_principals")) state.orgs.set(`${values[1]}|${values[2]}`, values[0] as string);
+    if (text.includes("INTO billing_accounts")) state.accounts.set(values[1] as string, values[0] as string);
     return Promise.resolve([]);
   }) as unknown as SqlTag;
   return { tag, writes };
 }
 
+const emptyState = () => ({ orgs: new Map<string, string>(), accounts: new Map<string, string>() });
+
 describe("ensureOrg", () => {
   it("creates the user, the org principal and one ordinary account the first time, and nothing the second", async () => {
-    const state = { org: null as string | null, account: null as string | null };
-    const { tag, writes } = fakeTag(state);
+    const { tag, writes } = fakeTag(emptyState());
     const first = await ensureOrg(tag, SRC);
     expect(writes).toEqual(["INSERT INTO users", "INSERT INTO agent_principals", "INSERT INTO billing_accounts", "INSERT INTO virtual_keys"]);
     writes.length = 0;
-    const again = await ensureOrg(tag, { kind: "repo-spec", ref: "https://github.com/Cogni-DAO/Poly" });
+    const again = await ensureOrg(tag, { kind: "repo-spec", ref: "https://github.com/Cogni-DAO/Poly", path: DEFAULT_REPO_SPEC_PATH });
     expect(again).toEqual(first);
     expect(writes).toEqual([]);
   });
 
-  it("repairs a missing account on an existing org and refuses a bad source", async () => {
-    const { tag, writes } = fakeTag({ org: "u1", account: null });
+  it("two paths in one repo are two orgs; each is idempotent; the default keeps the plain ref as its key", async () => {
+    const state = emptyState();
+    const { tag } = fakeTag(state);
+    const root = await ensureOrg(tag, SRC);
+    const mono = await ensureOrg(tag, { ...SRC, path: MONO });
+    expect(mono.userId).not.toBe(root.userId);
+    expect(mono.billingAccountId).not.toBe(root.billingAccountId);
+    expect(await ensureOrg(tag, { ...SRC, path: MONO })).toEqual(mono);
+    expect([...state.orgs.keys()].sort()).toEqual([`repo-spec|${REF}`, `repo-spec|${REF}#${MONO}`].sort());
+    expect(await readOrgSource(tag, mono.userId)).toEqual({ kind: "repo-spec", ref: REF, path: MONO });
+    expect(await readOrgSource(tag, root.userId)).toEqual(SRC);
+  });
+
+  it("repairs a missing account on an existing org and refuses a bad source, including a traversal or absolute path", async () => {
+    const state = emptyState();
+    state.orgs.set(`repo-spec|${REF}`, "u1");
+    const { tag, writes } = fakeTag(state);
     const org = await ensureOrg(tag, SRC);
     expect(org.userId).toBe("u1");
     expect(writes).toEqual(["INSERT INTO billing_accounts", "INSERT INTO virtual_keys"]);
     await expect(ensureOrg(tag, { kind: "repo-spec", ref: "http://github.com/a/b" })).rejects.toBeInstanceOf(InvalidOrgSourceError);
     await expect(ensureOrg(tag, { kind: "members" as "repo-spec", ref: REF })).rejects.toBeInstanceOf(InvalidOrgSourceError);
+    for (const path of ["../.cogni/repo-spec.yaml", "/abs/.cogni/repo-spec.yaml", "a\\.cogni/repo-spec.yaml", "nodes/operator/other.yaml"])
+      await expect(ensureOrg(tag, { ...SRC, path }), path).rejects.toBeInstanceOf(InvalidOrgSourceError);
   });
 
   it("readOrgSource returns the source of an org user and null otherwise", async () => {
-    expect(await readOrgSource(fakeTag({ org: "u1", account: null }).tag, "u1")).toEqual(SRC);
-    expect(await readOrgSource(fakeTag({ org: null, account: null }).tag, "u1")).toBeNull();
+    const state = emptyState();
+    state.orgs.set(`repo-spec|${REF}`, "u1");
+    expect(await readOrgSource(fakeTag(state).tag, "u1")).toEqual(SRC);
+    expect(await readOrgSource(fakeTag(emptyState()).tag, "u1")).toBeNull();
   });
 });

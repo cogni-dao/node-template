@@ -20,6 +20,8 @@ export const ensureOrgOperation = {
     source: z.object({
       kind: z.literal("repo-spec"),
       ref: z.string().min(1).max(200),
+      /** Where the repo-spec lives in the repo; default `.cogni/repo-spec.yaml`. A monorepo node names `nodes/<node>/.cogni/repo-spec.yaml`. */
+      path: z.string().min(1).max(200).optional(),
     }),
   }),
   output: z.object({

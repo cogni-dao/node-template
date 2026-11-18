@@ -55,7 +55,7 @@ import {
   type WithStore,
   writeExternalPrincipal,
 } from "@cogni/agent-grants";
-import { ensureOrg, type OrgOwners, type OrgSource } from "@cogni/agent-grants/orgs";
+import { canonicalRepoRef, ensureOrg, type OrgOwners, type OrgSource } from "@cogni/agent-grants/orgs";
 import {
   findServicePrincipal,
   requestServiceAccess,
@@ -433,7 +433,7 @@ export function createAgentToolAuthority(deps: {
     async ensureOrg(source) {
       const org = await deps.sql.begin((tx) => ensureOrg(tx, source));
       deps.log.info(
-        { event: EVENT_NAMES.ORG_ENSURED, orgUserId: org.userId, sourceRef: source.ref },
+        { event: EVENT_NAMES.ORG_ENSURED, orgUserId: org.userId, sourceRef: canonicalRepoRef(source.ref, source.path) ?? source.ref },
         EVENT_NAMES.ORG_ENSURED
       );
       return org;

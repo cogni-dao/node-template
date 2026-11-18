@@ -22,8 +22,14 @@
 
 import type { SqlTag } from "./postgres";
 
-/** Where an org's owners come from. `ref` is the repo's canonical https GitHub URL; the default branch is read. */
-export type OrgSource = { kind: "repo-spec"; ref: string };
+/**
+ * Where an org's owners come from. `ref` is the repo's canonical https GitHub URL; the default branch is read. `path` is where the repo-spec lives in that repo
+ * (default `.cogni/repo-spec.yaml`; a monorepo node uses `nodes/<node>/.cogni/repo-spec.yaml`), so two nodes of one repo are two orgs.
+ */
+export type OrgSource = { kind: "repo-spec"; ref: string; path?: string | undefined };
+
+/** Where a repo-spec lives when the source names no path. */
+export const DEFAULT_REPO_SPEC_PATH = ".cogni/repo-spec.yaml";
 
 /** Reads the owners of an org as principal user ids. A failed read throws `OwnerSourceUnavailableError`, never an empty list. */
 export interface OwnerSource {
@@ -59,22 +65,54 @@ const MAX_CACHED_REFS = 1024;
 
 const REPO_REF = /^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100})$/;
 
+const PATH_SEGMENT = /^[A-Za-z0-9._-]{1,100}$/;
+
 /**
- * The canonical form of a repo-spec ref: `https://github.com/<owner>/<repo>`, lowercase (GitHub names are case-insensitive), no `.git`, no trailing
- * slash, no query. Null when `ref` is anything else.
+ * A repo-spec path: relative, forward slashes only, no `.`/`..`/empty segment, ending in `.cogni/repo-spec.yaml` as a whole final directory name (the default itself,
+ * or `<dirs>/.cogni/repo-spec.yaml`). Null for anything else (absolute, backslash, traversal, another file name).
  */
-export function canonicalRepoRef(ref: string): string | null {
+export function validRepoSpecPath(path: string): string | null {
+  if (typeof path !== "string" || path.length === 0 || path.length > 200) return null;
+  if (path.startsWith("/") || path.includes("\\")) return null;
+  const segments = path.split("/");
+  if (segments.some((segment) => segment === "." || segment === ".." || !PATH_SEGMENT.test(segment))) return null;
+  return path === DEFAULT_REPO_SPEC_PATH || path.endsWith(`/${DEFAULT_REPO_SPEC_PATH}`) ? path : null;
+}
+
+/**
+ * The canonical key of a repo-spec source: `https://github.com/<owner>/<repo>` (lowercase: GitHub names are case-insensitive; no `.git`, trailing slash or query),
+ * plus `#<path>` only when `path` differs from the default, so a default-path ref is the plain repo URL. Null when `ref` or `path` is invalid.
+ */
+export function canonicalRepoRef(ref: string, path?: string | undefined): string | null {
   const m = REPO_REF.exec(ref);
   if (!m) return null;
   const owner = m[1] as string;
   const repo = m[2] as string;
   if (repo === "." || repo === ".." || repo.endsWith(".git")) return null;
-  return `https://github.com/${owner.toLowerCase()}/${repo.toLowerCase()}`;
+  const base = `https://github.com/${owner.toLowerCase()}/${repo.toLowerCase()}`;
+  if (path === undefined || path === DEFAULT_REPO_SPEC_PATH) return base;
+  const valid = validRepoSpecPath(path);
+  return valid ? `${base}#${valid}` : null;
+}
+
+/** Split a canonical key back into the repo URL and the path (the default when the key has none). */
+function splitRepoKey(key: string): { ref: string; path: string } {
+  const at = key.indexOf("#");
+  return at < 0 ? { ref: key, path: DEFAULT_REPO_SPEC_PATH } : { ref: key.slice(0, at), path: key.slice(at + 1) };
+}
+
+/** The org source a stored (kind, canonical key) pair names; a default-path source carries no `path`. Null for an unknown kind or an unusable key. */
+export function orgSourceFromKey(kind: string | null, key: string | null): OrgSource | null {
+  if (kind !== "repo-spec" || !key) return null;
+  const { ref, path } = splitRepoKey(key);
+  const canonical = canonicalRepoRef(ref, path);
+  if (canonical !== key) return null;
+  return path === DEFAULT_REPO_SPEC_PATH ? { kind, ref } : { kind, ref, path };
 }
 
 export interface RepoSpecOwnerSourceDeps {
-  /** The repo-spec yaml on the repo's default branch. May throw. */
-  fetchRepoSpec(ref: string): Promise<string>;
+  /** The repo-spec yaml at `path` (default `.cogni/repo-spec.yaml`) on the repo's default branch. `ref` is the plain repo URL. May throw. */
+  fetchRepoSpec(ref: string, path: string): Promise<string>;
   /** `activity_ledger.approvers` of the yaml, as EVM wallet addresses. May throw on an unparseable file. */
   extractApprovers(yaml: string): string[];
   /** The principal user ids that bound these LOWERCASED wallets. */
@@ -97,9 +135,10 @@ export function createRepoSpecOwnerSource(deps: RepoSpecOwnerSourceDeps): OwnerS
   const cache = new Map<string, { owners: readonly string[]; expiresAt: number }>();
   const inflight = new Map<string, Promise<readonly string[]>>();
 
-  const read = async (ref: string): Promise<readonly string[]> => {
+  const read = async (key: string): Promise<readonly string[]> => {
     try {
-      const approvers = deps.extractApprovers(await deps.fetchRepoSpec(ref));
+      const { ref, path } = splitRepoKey(key);
+      const approvers = deps.extractApprovers(await deps.fetchRepoSpec(ref, path));
       const wallets = [...new Set(approvers.map((wallet) => wallet.toLowerCase()))];
       // A repo-spec that lists no approvers has no owners to read: refuse (never an empty list that could read as "no one may", or be mistaken for an answer).
       if (wallets.length === 0) throw new OwnerSourceUnavailableError("no_approvers");
@@ -114,8 +153,9 @@ export function createRepoSpecOwnerSource(deps: RepoSpecOwnerSourceDeps): OwnerS
     kind: "repo-spec",
     async owners(source) {
       if (source.kind !== "repo-spec") throw new OwnerSourceUnavailableError("source kind is not repo-spec");
-      const ref = canonicalRepoRef(source.ref);
-      if (!ref) throw new OwnerSourceUnavailableError("source ref is not a canonical repo url");
+      // The cache key is the canonical ref including the path, so two nodes of one repo never share an owner list.
+      const ref = canonicalRepoRef(source.ref, source.path);
+      if (!ref) throw new OwnerSourceUnavailableError("source ref or path is not canonical");
       // ttlMs 0 is no cache at all: every call reads fresh, concurrent calls included (a sync job needs the live list).
       if (ttlMs === 0) return read(ref);
       const hit = cache.get(ref);
@@ -171,8 +211,8 @@ const str = (value: unknown): string | null => (typeof value === "string" ? valu
  */
 export async function ensureOrg(tx: SqlTag, source: OrgSource): Promise<{ userId: string; billingAccountId: string }> {
   if (source.kind !== "repo-spec") throw new InvalidOrgSourceError("unknown owner source kind");
-  const ref = canonicalRepoRef(source.ref);
-  if (!ref) throw new InvalidOrgSourceError("ref must be a canonical https github repo url");
+  const ref = canonicalRepoRef(source.ref, source.path);
+  if (!ref) throw new InvalidOrgSourceError("ref must be a canonical https github repo url and path a relative .cogni/repo-spec.yaml path");
   const lockKey = `org:${source.kind}:${ref}`;
   await tx`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
   const found = await tx`
@@ -201,7 +241,5 @@ export async function readOrgSource(sql: SqlTag, userId: string): Promise<OrgSou
   const rows = await sql`
     SELECT owner_source_kind, owner_source_ref FROM agent_principals
     WHERE user_id = ${userId} AND kind = 'org' LIMIT 1`;
-  const kind = str(rows[0]?.owner_source_kind);
-  const ref = str(rows[0]?.owner_source_ref);
-  return kind === "repo-spec" && ref ? { kind, ref } : null;
+  return orgSourceFromKey(str(rows[0]?.owner_source_kind), str(rows[0]?.owner_source_ref));
 }

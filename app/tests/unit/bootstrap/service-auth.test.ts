@@ -40,7 +40,7 @@ const ok = (body: string, init: ResponseInit = {}) => Promise.resolve(new Respon
 describe("fetchRepoSpecFromGithub", () => {
   it("reads the default branch through the contents API with the raw Accept header, never the raw CDN", async () => {
     const fetchImpl = vi.fn((_url: unknown, _init?: RequestInit) => ok("version: 1\n"));
-    expect(await fetchRepoSpecFromGithub("https://github.com/Cogni-DAO/Poly", fetchImpl as unknown as typeof fetch)).toBe("version: 1\n");
+    expect(await fetchRepoSpecFromGithub("https://github.com/Cogni-DAO/Poly", undefined, fetchImpl as unknown as typeof fetch)).toBe("version: 1\n");
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.github.com/repos/cogni-dao/poly/contents/.cogni/repo-spec.yaml");
     expect(url).not.toContain("raw.githubusercontent.com");
@@ -48,19 +48,28 @@ describe("fetchRepoSpecFromGithub", () => {
     expect(init.signal).toBeDefined();
   });
 
+  it("a monorepo path is read from that path in the same repo; a traversal or absolute path is refused before any request", async () => {
+    const fetchImpl = vi.fn((_url: unknown, _init?: RequestInit) => ok("version: 1\n"));
+    await fetchRepoSpecFromGithub(REF, "nodes/operator/.cogni/repo-spec.yaml", fetchImpl as unknown as typeof fetch);
+    expect((fetchImpl.mock.calls[0] as [string])[0]).toBe("https://api.github.com/repos/cogni-dao/poly/contents/nodes/operator/.cogni/repo-spec.yaml");
+    for (const path of ["../.cogni/repo-spec.yaml", "/x/.cogni/repo-spec.yaml"])
+      await expect(fetchRepoSpecFromGithub(REF, path, fetchImpl as unknown as typeof fetch), path).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("a 403 or 429 (rate limit), any other failure, a network error and an oversize body are OwnerSourceUnavailableError", async () => {
     for (const status of [403, 429, 404, 500]) {
       const fetchImpl = vi.fn(() => Promise.resolve(new Response("x", { status })));
-      await expect(fetchRepoSpecFromGithub(REF, fetchImpl as unknown as typeof fetch), String(status)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+      await expect(fetchRepoSpecFromGithub(REF, undefined, fetchImpl as unknown as typeof fetch), String(status)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
     }
-    await expect(fetchRepoSpecFromGithub(REF, (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+    await expect(fetchRepoSpecFromGithub(REF, undefined, (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
     const big = vi.fn(() => ok("x".repeat(64 * 1024 + 1)));
-    await expect(fetchRepoSpecFromGithub(REF, big as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+    await expect(fetchRepoSpecFromGithub(REF, undefined, big as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
   });
 
   it("refuses a ref that is not a github.com repo before any request", async () => {
     const fetchImpl = vi.fn();
-    await expect(fetchRepoSpecFromGithub("https://evil.example/a/b", fetchImpl as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+    await expect(fetchRepoSpecFromGithub("https://evil.example/a/b", undefined, fetchImpl as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
