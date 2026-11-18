@@ -20,6 +20,7 @@ import type { Logger } from "pino";
 import type { Address, Hex, PublicClient } from "viem";
 
 import { resolveAction } from "../actions";
+import { executeRoleSignal, type RoleSignalPort } from "../role-action";
 import { COGNI_TOPIC0, parseCogniAction, parseRepoRef } from "../signal-parser";
 import type { ActionResult } from "../signal-types";
 
@@ -59,6 +60,8 @@ export interface SignalHandlerDeps {
     readonly dao_contract: string;
     readonly chain_id: string;
   };
+  /** Applies grant:role / revoke:role (the node's agent authority). Absent: a role signal is refused. */
+  readonly roles?: RoleSignalPort;
   readonly log: Logger;
 }
 
@@ -178,6 +181,23 @@ export async function handleSignal(
         action: "expired",
         error: "signal deadline has passed",
       };
+    }
+
+    // 6b. Role signals write a grant row: no VCS, no Octokit
+    if (signal.target === "role") {
+      const result = await executeRoleSignal(signal, txHash, deps.roles, log);
+      if (result.success) markTxExecuted(txHash);
+      log.info(
+        {
+          event: EVENT_NAMES.SIGNAL_EXECUTION_COMPLETE,
+          action: signal.action,
+          target: signal.target,
+          outcome: result.success ? "success" : "error",
+          errorCode: result.success ? undefined : result.action,
+        },
+        EVENT_NAMES.SIGNAL_EXECUTION_COMPLETE
+      );
+      return result;
     }
 
     // 7. Resolve action handler

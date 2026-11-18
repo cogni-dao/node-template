@@ -58,6 +58,7 @@ import type { NodeAdminAuthority } from "@cogni/knowledge-store";
 import type { Logger } from "pino";
 import { EVENT_NAMES, failureFields } from "@/shared/observability";
 import { buildPermissionCatalog, buildRequiresById } from "./agent-permissions";
+import { applyDaoRole } from "./dao-role";
 
 /** The service-role postgres.js client (`serviceDb.$client`): a tagged template that can also open a transaction. */
 export interface AgentAuthoritySql extends SqlTag {
@@ -81,6 +82,16 @@ export interface AgentToolAuthority {
   revokeRole(
     input: PrincipalRef & { scope: string; me: ApprovalCaller }
   ): Promise<{ principalUserId: string; revoked: boolean }>;
+  /**
+   * A passed DAO `grant:role` / `revoke:role` vote: turn one of this node's AI permissions On or Off. `signalTx` is the signal's transaction hash,
+   * logged with the decision. Replay is a no-op (`changed: false`); an undeclared scope or unknown principal throws AgentRolesError.
+   */
+  applyRole(input: {
+    action: "grant" | "revoke";
+    principalSlug: string;
+    scope: string;
+    signalTx: string;
+  }): Promise<{ changed: boolean }>;
   /** Dismiss a pending NODE ask (the agent then sees `denied`). */
   denyRequest(
     input: PrincipalRef & { scope: string; me: ApprovalCaller }
@@ -300,6 +311,29 @@ export function createAgentToolAuthority(deps: {
           EVENT_NAMES.AGENT_ROLE_REVOKED
         );
       return result;
+    },
+    async applyRole(input) {
+      const result = await withStore((store) =>
+        applyDaoRole(store, { ...input, declaredScopes, scopeKinds })
+      );
+      if (result.changed)
+        deps.log.info(
+          {
+            event:
+              input.action === "grant"
+                ? EVENT_NAMES.AGENT_ROLE_GRANTED
+                : EVENT_NAMES.AGENT_ROLE_REVOKED,
+            principalUserId: result.principalUserId,
+            scope: input.scope,
+            resource: "node",
+            via: "dao_signal",
+            signalTx: input.signalTx,
+          },
+          input.action === "grant"
+            ? EVENT_NAMES.AGENT_ROLE_GRANTED
+            : EVENT_NAMES.AGENT_ROLE_REVOKED
+        );
+      return { changed: result.changed };
     },
     async denyRequest(input) {
       const result = await withStore((store) =>
