@@ -19,12 +19,7 @@ import Link from "next/link";
 
 import { fetchKnowledgeEntry } from "../_api/fetchKnowledgeEntry";
 import { CopyLinkButton } from "./CopyLinkButton";
-import {
-	KnowledgeGoalsBoard,
-	KnowledgeKpiEvidence,
-	KnowledgeMetricEvidence,
-} from "./GoalsMount";
-import { KnowledgeEntryFields } from "./KnowledgeEntryFields";
+import { KnowledgeEntryBody } from "./KnowledgeEntryBody";
 
 export function KnowledgeEntryView({ id }: { readonly id: string }) {
 	const query = useQuery({
@@ -86,19 +81,7 @@ export function KnowledgeEntryView({ id }: { readonly id: string }) {
 						</div>
 					</div>
 
-					{query.data.entryType === "goal" && (
-						<KnowledgeGoalsBoard goalId={query.data.id} />
-					)}
-					{query.data.metricSpec && <KnowledgeMetricEvidence id={query.data.id} />}
-					{query.data.entryType === "hypothesis" && (
-						<KnowledgeKpiEvidence
-							kpiBindings={query.data.kpiBindings}
-							kpis={query.data.kpis}
-						/>
-					)}
-					<div className="mt-2">
-						<KnowledgeEntryFields item={query.data} />
-					</div>
+					<KnowledgeEntryBody item={query.data} />
 				</>
 			)}
 		</div>
