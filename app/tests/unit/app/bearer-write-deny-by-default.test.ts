@@ -155,8 +155,9 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       "chat.completions",
       "identity.wallet.bind",
       "identity.wallet.challenge",
-      // An owner closes their own inbox with no admin; the service runs the one admin check for anyone else's (task.0144).
+      // The service runs the one admin check on the caller itself, for a session and a bearer alike; close lets an owner close their own inbox without it (task.0144).
       "knowledge.contributions.close",
+      "knowledge.contributions.merge",
     ]);
   });
 

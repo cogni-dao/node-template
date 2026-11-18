@@ -84,9 +84,8 @@ describe("agent.json identity", () => {
       },
     });
     expect(scopes).toContain("work_item:transition");
-    // The merge route is the route twin of knowledge:write (task.0144), so it is offered; a scope no outside route uses is not.
-    expect(scopes).toContain("knowledge:write");
-    expect(scopes).not.toContain("vcs:merge_pr");
+    // A scope no outside route uses (the tool has no route twin) is not offered.
+    expect(scopes).not.toContain("knowledge:write");
   });
 
   it("shows a new declaration with no discovery edit", async () => {

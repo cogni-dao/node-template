@@ -97,20 +97,6 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
       "knowledge.domains.create",
     ],
   },
-  // MERGE_IS_ADMIN (task.0144): merge takes the admin-subject scope that `core__knowledge_write` already declares (`knowledge:write`, same words; a test pins the
-  // two together), so no new grant exists. A bearer needs a live role row AND the one admin check on its own bound wallet; a session needs the admin check. The service
-  // runs the same check again before any write. Close is not here: its owner closes their own inbox with no admin, so the route declares `bearerWrite` and the service
-  // runs the one admin check for anyone else's inbox.
-  "knowledge.merge": {
-    requires: {
-      scope: "knowledge:write",
-      kind: "node",
-      subject: "admin",
-      label: "Save notes to this node's knowledge base",
-      description: "Save notes straight into the knowledge base.",
-    },
-    routes: ["knowledge.contributions.merge"],
-  },
 };
 
 /** Tools that have no node route, with the reason. A new tool must be added here or to `SAME_DOOR_ROUTES`. */
