@@ -175,7 +175,8 @@ describe("a refused move writes nothing", () => {
     ["cancelled", "needs_triage", "terminal"],
     ["needs_implement", "blocked", "path"],
     ["needs_implement", "needs_closeout", "path"],
-    ["needs_triage", "needs_implement", "triage"],
+    ["needs_triage", "needs_implement", "path"],
+    ["needs_triage", "needs_design", "triage"],
     ["needs_implement", "needs_implementation_review", "pr"],
   ])("%s -> %s is gate_unmet (%s)", async (from, to, missing) => {
     const { queries, make } = world(from);
@@ -189,11 +190,11 @@ describe("a refused move writes nothing", () => {
   });
 
   it("a forward move on an artifact written before the item entered the stage is refused", async () => {
-    const stale = artifactRow("triage", `work:${ID}`, "implement", {
+    const stale = artifactRow("triage", `work:${ID}`, "design", {
       item_revision: STATUS_REVISION - 1,
     });
     const { queries, make } = world("needs_triage", { artifacts: [stale] });
-    await expect(patchStatus(make(), "needs_implement")).rejects.toMatchObject({
+    await expect(patchStatus(make(), "needs_design")).rejects.toMatchObject({
       name: "WorkItemGateUnmetError",
       missing: "triage",
     });
@@ -224,12 +225,12 @@ describe("a back move on the design route", () => {
 
 describe("status_revision", () => {
   it("is restamped by a forward move on its exit artifact", async () => {
-    const triage = artifactRow("triage", `work:${ID}`, "implement");
+    const triage = artifactRow("triage", `work:${ID}`, "design");
     const { queries, make } = world("needs_triage", { artifacts: [triage] });
-    const patched = await patchStatus(make(), "needs_implement");
-    expect(patched.status).toBe("needs_implement");
+    const patched = await patchStatus(make(), "needs_design");
+    expect(patched.status).toBe("needs_design");
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
-    expect(update).toContain("status = 'needs_implement'");
+    expect(update).toContain("status = 'needs_design'");
     expect(update).toContain("status_revision = revision + 1");
     expect(queries.filter((q) => q.startsWith("SELECT dolt_add"))).toEqual([
       "SELECT dolt_add('work_items')",
@@ -392,8 +393,8 @@ describe("stage lines are not events", () => {
   it("a fast write emits no stage line at info; the same lines go to debug when the logger has one", async () => {
     const info = vi.fn();
     const debug = vi.fn();
-    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "implement")] });
-    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn(), debug } }), "needs_implement");
+    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "design")] });
+    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn(), debug } }), "needs_design");
     const stage = (calls: unknown[][]) =>
       calls.filter(([fields]) => String((fields as { event?: string }).event).startsWith("adapter.work_items.stage_"));
     expect(stage(info.mock.calls)).toEqual([]);
@@ -402,8 +403,8 @@ describe("stage lines are not events", () => {
 
   it("a logger with no debug drops the fast lines and does not throw", async () => {
     const info = vi.fn();
-    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "implement")] });
-    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn() } }), "needs_implement");
+    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "design")] });
+    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn() } }), "needs_design");
     expect(info).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "adapter.work_items.stage_complete" }),
       expect.anything()
