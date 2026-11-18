@@ -33,7 +33,7 @@ import {
 } from "@cogni/knowledge-base-ui";
 import { WorkMoveLinks } from "@cogni/knowledge-base-ui/goals";
 import type { WorkItemDto, WorkItemsGetOutput } from "@cogni/node-contracts";
-import { type ArtifactKind, scorecardMarkdown } from "@cogni/work-items";
+import { type ArtifactKind, parseArtifactSubject, scorecardMarkdown } from "@cogni/work-items";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -68,15 +68,19 @@ function verdictTone(verdict: string): CitationTone {
 	return "neutral";
 }
 
-/** What an artifact judged, short: "PR #409 @ 2dea498", "inbox cef83e76", "build 2dea498", or the item. */
+/** What an artifact judged, short: "PR #409 @ 2dea498", "inbox cef83e76", "build 2dea498", or the item. The package parses subjects. */
 function subjectLabel(subject: string): string {
-	const pr = /\/pull\/(\d+)@([0-9a-f]{7})/.exec(subject);
-	if (pr) return `PR #${pr[1]} @ ${pr[2]}`;
-	const inbox = /^knowledge:contrib-.*?([0-9a-z]{8})@/.exec(subject);
-	if (inbox) return `inbox ${inbox[1]}`;
-	const build = /@([0-9a-f]{7})[0-9a-f]*$/.exec(subject);
-	if (build) return `build ${build[1]}`;
-	return "this item";
+	const parsed = parseArtifactSubject(subject);
+	switch (parsed?.form) {
+		case "pr":
+			return `PR #${parsed.url.split("/").pop()} @ ${parsed.head.slice(0, 7)}`;
+		case "knowledge":
+			return `inbox ${parsed.contribution.slice(-8)}`;
+		case "build":
+			return `build ${parsed.buildSha.slice(0, 7)}`;
+		default:
+			return "this item";
+	}
 }
 
 /** The row text: kind, its iteration number and what it judged, e.g. "Design review 3 · inbox cef83e76". */
