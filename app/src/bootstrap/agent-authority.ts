@@ -114,6 +114,10 @@ export interface AgentToolAuthority {
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
    */
   nameTaken(name: string): Promise<boolean>;
+  /** The wallets bound to this user (`user_bindings`, provider `wallet`), for the self-check (`/api/v1/agent/me`). */
+  boundWallets(userId: string): Promise<string[]>;
+  /** True when this user is an AI (it has an `agent_principals` row, internal or external). Kind comes from the principal, never the credential. */
+  isAgent(userId: string): Promise<boolean>;
   /** The agent's own rows by state. */
   listOwnAccess(
     principalUserId: string
@@ -388,6 +392,17 @@ export function createAgentToolAuthority(deps: {
         SELECT 1 AS taken FROM agent_principals
         WHERE lower(regexp_replace(btrim(slug), '[[:space:]]+', ' ', 'g')) = ${key}
         LIMIT 1`;
+      return rows.length > 0;
+    },
+    async boundWallets(userId) {
+      const rows = (await deps.sql`
+        SELECT external_id FROM user_bindings
+        WHERE user_id = ${userId} AND provider = 'wallet'
+        ORDER BY external_id LIMIT 10`) as ReadonlyArray<{ external_id: string }>;
+      return rows.map((row) => row.external_id);
+    },
+    async isAgent(userId) {
+      const rows = await deps.sql`SELECT 1 AS agent FROM agent_principals WHERE user_id = ${userId} LIMIT 1`;
       return rows.length > 0;
     },
     listOwnAccess: (principalUserId) =>
