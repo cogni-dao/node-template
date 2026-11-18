@@ -12,8 +12,8 @@
  *   - ONE_WALLET_ONE_KEY: the binding is keyed by the lowercase address (`walletKey`); EIP-55 is only the input checksum.
  *   - NONCE_CONSUMED_BEFORE_BINDING: a replayed signed message is refused (400 `invalid_nonce`) and binds nothing.
  *   - NO_AUTO_MERGE: an address another principal holds is 409 `already_linked`, never re-pointed.
- *   - AGENT_WALLET_IS_NOT_A_PAYEE: an agent may bind a wallet (it makes the agent an admin when the DAO lists it); payout and claimant
- *     resolution skip agent-owned wallets, and the database refuses a payout leaf for one.
+ *   - AUTH_IS_NOT_PAYMENT: any principal may bind a wallet (it makes an agent an admin when the DAO lists it); the binding pays nothing. Payout is its own
+ *     config (`/api/v1/identity/payout-address`, `/api/v1/identity/beneficiary`).
  *   - OWN_DATA_ONLY: declared `bearerWrite`; the only row written is the caller's own binding.
  * Side-effects: IO (nonce redemption, binding and evidence rows)
  * Links: https://node-template.cognidao.org/knowledge/identity-north-star-design

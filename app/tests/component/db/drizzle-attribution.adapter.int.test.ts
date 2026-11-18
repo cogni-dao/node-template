@@ -52,10 +52,10 @@ describe("DrizzleAttributionAdapter (Component)", () => {
 
   beforeAll(async () => {
     actor = await seedTestActor(db);
-    // Settlement ownership is decided by the wallet BINDING (users.wallet_address is display), so seed the binding a SIWE login would write.
+    // Settlement ownership is decided by the payout config (AUTH_IS_NOT_PAYMENT): seed the explicit payout address the owner sets on /profile.
     await db.execute(sql`
-      INSERT INTO user_bindings (id, user_id, provider, external_id)
-      VALUES (gen_random_uuid()::text, ${actor.user.id}, 'wallet', ${actor.user.walletAddress.toLowerCase()})
+      INSERT INTO payout_addresses (user_id, address)
+      VALUES (${actor.user.id}, ${actor.user.walletAddress.toLowerCase()})
       ON CONFLICT DO NOTHING`);
   });
 

@@ -11,6 +11,7 @@
  * - APPEND_ONLY_EVENTS: identity_events rows are append-only; DB trigger rejects UPDATE/DELETE.
  * - USER_ID_AT_CREATION: All FKs reference users.id (UUID).
  * - RLS_ENABLED: Both tables have row-level security enabled.
+ * - AUTH_IS_NOT_PAYMENT: `payout_addresses` + `payout_beneficiaries` (below) are the only payout config; claimant resolution never reads the binding tables for a wallet.
  * Side-effects: none (schema definitions only)
  * @public
  */
@@ -163,3 +164,68 @@ export const identitySigninChallenges = pgTable(
 export type IdentitySigninChallenge = InferSelectModel<
 	typeof identitySigninChallenges
 >;
+
+/**
+ * PAYOUT CONFIG (task.0153, AUTH_IS_NOT_PAYMENT). Where a principal's earnings go is its own setting, like a billing address. It is never read from
+ * `user_bindings` (the sign-in and admin wallets) or `users.wallet_address`. No row = unpaid: the claim is held, whatever the principal's kind.
+ * Service-role writes only: ENABLE + FORCE RLS, no policy (the migration adds FORCE).
+ */
+export const payoutAddresses = pgTable(
+	"payout_addresses",
+	{
+		userId: text("user_id")
+			.primaryKey()
+			.references(() => users.id),
+		/** Lowercase 0x address. A setting, not a proof: the owner chooses where to be paid. */
+		address: text("address").notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		check(
+			"payout_addresses_address_lower_hex",
+			sql`${table.address} ~ '^0x[0-9a-f]{40}$'`,
+		),
+	],
+).enableRLS();
+
+/**
+ * BENEFICIARY ROW (task.0154, BENEFICIARY_IS_ACCEPTED). One live row per AI earner: the AI proposes with its key (the row holds only the hash of a one-time
+ * link token), the human accepts signed in on /profile (the session user becomes `beneficiary_user_id`). An accepted row is in force from `accepted_at` until
+ * `revoked_at`; claimant resolution reads it as of the liability's cutoff (FREEZE_AT_CUTOFF). The earner is never rewritten.
+ * Service-role writes only: ENABLE + FORCE RLS, no policy (the migration adds FORCE).
+ */
+export const payoutBeneficiaries = pgTable(
+	"payout_beneficiaries",
+	{
+		id: text("id").primaryKey(),
+		earnerUserId: text("earner_user_id")
+			.notNull()
+			.references(() => users.id),
+		beneficiaryUserId: text("beneficiary_user_id").references(() => users.id),
+		/** sha256 of the one-time accept token; null once accepted. */
+		linkHash: text("link_hash"),
+		linkExpiresAt: timestamp("link_expires_at", { withTimezone: true }),
+		proposedAt: timestamp("proposed_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+	},
+	(table) => [
+		uniqueIndex("payout_beneficiaries_one_live_per_earner")
+			.on(table.earnerUserId)
+			.where(sql`${table.revokedAt} IS NULL`),
+		uniqueIndex("payout_beneficiaries_link_hash_unique").on(table.linkHash),
+		index("payout_beneficiaries_beneficiary_idx").on(table.beneficiaryUserId),
+		check(
+			"payout_beneficiaries_no_self_benefit",
+			sql`${table.beneficiaryUserId} IS NULL OR ${table.beneficiaryUserId} <> ${table.earnerUserId}`,
+		),
+		check(
+			"payout_beneficiaries_accepted_shape",
+			sql`(${table.acceptedAt} IS NULL) = (${table.beneficiaryUserId} IS NULL)`,
+		),
+	],
+).enableRLS();

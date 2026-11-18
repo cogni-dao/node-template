@@ -47,10 +47,13 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/chat/completions` [POST] - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension); see [completions spec](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/completions-api.md)
   - `/api/v1/ai/chat` [POST] - streaming chat with server-authoritative thread persistence
   - `/api/v1/activity` [GET]
-  - `/api/v1/identity/bindings/import/start` [POST] - mint a session-owned nonce and return the pinned operator broker URL
-  - `/api/v1/identity/bindings/import` [POST] - verify and consume an operator identity attestation into this node's binding ledger
+  - `/api/v1/identity/bindings/import/start` [POST] - mint a nonce owned by the caller (a session or an AI bearer key; an unresolved bearer is 401, never a sign-in challenge) and return the pinned operator broker URL
+  - `/api/v1/identity/bindings/import` [POST] - verify and consume an operator identity attestation into this node's binding ledger, for the nonce-owning principal (a session or an AI bearer key: an AI's GitHub id then resolves its receipts to the AI as earner; a GitHub id a human holds is 409 `already_linked`)
   - `/api/v1/identity/wallet/challenge` [POST] - any principal (session or agent bearer): mint a single-use SIWE nonce and the message fields for this node's domain
-  - `/api/v1/identity/wallet/bind` [POST] - any principal: verify the signed challenge (shared `verifySiwe`), consume the nonce, bind the wallet to the caller, keyed by its lowercase address (EIP-55 is only the input checksum; the message is pinned to this node's domain, uri and chain, no resources); an agent may bind but is never a payee (AGENT_WALLET_IS_NOT_A_PAYEE)
+  - `/api/v1/identity/wallet/bind` [POST] - any principal: verify the signed challenge (shared `verifySiwe`), consume the nonce, bind the wallet to the caller, keyed by its lowercase address (EIP-55 is only the input checksum; the message is pinned to this node's domain, uri and chain, no resources); a bound wallet is auth config and pays nothing (AUTH_IS_NOT_PAYMENT)
+  - `/api/v1/identity/payout-address` [GET, PUT] - human session only: the person's own payout address, separate from any sign-in wallet; no address means held (task.0153)
+  - `/api/v1/identity/beneficiary` [POST, GET, DELETE] - AI bearer only: propose that a human receive its earnings (returns a one-time `/profile#beneficiary=` link), read or withdraw its own row (task.0154)
+  - `/api/v1/identity/beneficiary/mine` [GET, POST, DELETE] - human session only: list, accept (by the link token) and end the AIs whose earnings this person receives
   - `/api/v1/public/attribution/epochs` [GET] - closed epochs list (public, no auth)
   - `/api/v1/public/attribution/epochs/[id]/user-projections` [GET] - closed epoch user projections (public)
   - `/api/v1/public/attribution/epochs/[id]/claimants` [GET] - closed epoch claimant attribution (public)

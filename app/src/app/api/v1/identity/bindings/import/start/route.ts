@@ -24,8 +24,8 @@ import {
 	createSigninChallenge,
 } from "@/app/_facades/identity/operator-attested-binding.server";
 import { getOperatorIssuerUrl } from "@/app/_lib/auth/operator-attestation";
+import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { getServerSessionUser } from "@/lib/auth/server";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env/server";
 import {
@@ -46,14 +46,22 @@ function configuredNodeOrigin(): string | null {
 
 export const POST = wrapRouteHandlerWithLogging(
 	{
-		routeId: identityAttestationStartOperation.id,
+		routeId: "identity.attestation.start.v1",
 		// Optional, not required. A signed-in caller is LINKING GitHub to their existing
 		// user; a signed-out caller is SIGNING IN with it. Gating this leg on a session is
 		// what made a wallet the only door onto a node (task.5042) — the attestation could
 		// only ever attach to a user who had already arrived some other way.
-		auth: { mode: "optional", getSessionUser: getServerSessionUser },
+		//
+		// An AI bearer key is a signed-in caller too: it gets a nonce owned by its own principal (task.0091). A bearer that does not
+		// resolve is refused, never downgraded to a sign-in challenge (BEARER_CLAIMS_EXCLUSIVE).
+		bearerWrite:
+			"mints a one-time nonce owned by the caller and touches no one else's data; binding it still needs the operator's GitHub attestation",
+		auth: { mode: "optional", getSessionUser },
 	},
-	async (_ctx, _request, sessionUser) => {
+	async (_ctx, request, sessionUser) => {
+		if (!sessionUser && request.headers.get("authorization")) {
+			return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+		}
 		const nodeOrigin = configuredNodeOrigin();
 		if (!nodeOrigin) {
 			return NextResponse.json(

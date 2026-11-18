@@ -116,6 +116,7 @@ import {
   sql,
 } from "drizzle-orm";
 import type { Database } from "../client";
+import { resolvePayoutAddresses } from "./payout-address";
 
 // ── Row mappers ─────────────────────────────────────────────────
 
@@ -1979,20 +1980,16 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         }
 
         const normalizedAccount = resolution.account.toLowerCase();
-        const walletBindings = await tx
-          .select({ externalId: userBindings.externalId })
-          .from(userBindings)
-          .where(
-            and(
-              eq(userBindings.userId, resolution.resolvedUserId),
-              eq(userBindings.provider, "wallet")
-            )
-          )
-          .for("share");
-        // Only the user's wallet bindings decide ownership; `users.wallet_address` is display (never an allow).
-        const ownsAccount = walletBindings.some(
-          (binding) => binding.externalId.toLowerCase() === normalizedAccount
+        // AUTH_IS_NOT_PAYMENT: the account must be the earner's payout address (or its accepted beneficiary's) as of the liability's cutoff.
+        // Sign-in wallet bindings and `users.wallet_address` never decide a payee.
+        const payoutByEarner = await resolvePayoutAddresses(
+          tx,
+          [resolution.resolvedUserId],
+          liability.createdAt
         );
+        const ownsAccount =
+          payoutByEarner.get(resolution.resolvedUserId)?.toLowerCase() ===
+          normalizedAccount;
         if (!ownsAccount) return { status: "conflict" } as const;
 
         liabilityTotal += liability.amountAtomic;

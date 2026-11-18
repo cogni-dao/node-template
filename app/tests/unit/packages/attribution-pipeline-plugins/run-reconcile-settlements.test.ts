@@ -47,6 +47,7 @@ function liability(overrides: Record<string, unknown> = {}) {
     amountAtomic: 7n,
     receiptIds: ["receipt-1"],
     settledRevisionId: null,
+    createdAt: new Date("2026-11-01T00:00:00.000Z"),
     ...overrides,
   };
 }
@@ -104,6 +105,26 @@ describe("runReconcileSettlements", () => {
       unresolvedLiabilityCount: 1,
     });
     expect(append).not.toHaveBeenCalled();
+  });
+
+  it("resolves each liability as of its own epoch cutoff, never as of now (a later acceptance cannot reinterpret earlier work)", async () => {
+    const early = new Date("2026-10-01T00:00:00.000Z");
+    const late = new Date("2026-11-01T00:00:00.000Z");
+    const store = {
+      listPendingClaimantLiabilities: vi.fn().mockResolvedValue([
+        liability({ id: "l-early", createdAt: early }),
+        liability({ id: "l-late", createdAt: late }),
+      ]),
+      getLatestSettlementRevision: vi.fn(),
+      getSettlementLeavesForRevision: vi.fn(),
+      appendSettlementRevisionAtomic: vi.fn(),
+    };
+    const walletResolver = resolver(null);
+
+    await runReconcileSettlements(deps(store, walletResolver), { kind: "collect_retry" });
+
+    const calls = vi.mocked(walletResolver.resolveWallets).mock.calls;
+    expect(calls.map(([, asOf]) => asOf?.toISOString()).sort()).toEqual([early.toISOString(), late.toISOString()]);
   });
 
   it("settles the exact fixed amount once and makes a retry a no-op", async () => {

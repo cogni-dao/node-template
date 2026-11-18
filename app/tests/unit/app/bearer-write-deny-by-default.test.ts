@@ -40,6 +40,10 @@ const MODE_NONE_SELF_AUTHENTICATED: Readonly<Record<string, string>> = {
   "agent.mine.preview": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.on": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.off": "human plane: refuseNonSession() then the signed-in person",
+  "identity.payout-address.set": "human plane: refuseNonSession() then the signed-in person's own payout row",
+  "identity.beneficiary.mine.accept": "human plane: refuseNonSession() then the signed-in person accepts by a one-time token",
+  "identity.beneficiary.mine.preview": "human plane: refuseNonSession() then a read-only look at what a link token names (writes nothing)",
+  "identity.beneficiary.mine.revoke": "human plane: refuseNonSession() then the signed-in person ends their own side of the row",
   "agent.credentials.rotate": "credentialBearerRoute verifies the caller's own revocable key (active or renew_only) and acts on that credential only",
   "agent.credentials.confirm": "credentialBearerRoute verifies the caller's own revocable key and acts on that credential only",
   "agent.credentials.revoke": "credentialBearerRoute verifies the caller's own revocable key and acts on that credential only",
@@ -153,6 +157,11 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       "ai.chat",
       "ai.threads.delete",
       "chat.completions",
+      // An AI binds its own GitHub account: its own nonce (start), then the operator's attestation for it (task.0091).
+      "identity.attestation.start.v1",
+      "identity.beneficiary.propose",
+      "identity.beneficiary.withdraw",
+      "identity.bindings.import",
       "identity.wallet.bind",
       "identity.wallet.challenge",
       // The service runs the one admin check on the caller itself, for a session and a bearer alike; close lets an owner close their own inbox without it (task.0144).

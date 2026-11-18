@@ -4,9 +4,9 @@
 /**
  * Module: `@tests/component/db/wallet-bind-owner.int.test`
  * Purpose: ONE_WALLET_ONE_KEY on a real database: an agent binds W, then a SIWE login with W in checksummed form cannot create a second owner,
- *   and claimant resolution never pays the wallet to either of them.
+ *   and claimant resolution never pays a sign-in wallet to either of them (AUTH_IS_NOT_PAYMENT).
  * Scope: `createBinding` (the login write), the unique index, and DrizzleClaimantWalletResolver, as the real service role.
- * Invariants: ONE_WALLET_ONE_KEY; NO_AUTO_MERGE; AGENT_WALLET_IS_NOT_A_PAYEE.
+ * Invariants: ONE_WALLET_ONE_KEY; NO_AUTO_MERGE; AUTH_IS_NOT_PAYMENT.
  * Side-effects: IO (testcontainers Postgres)
  * @internal
  */
@@ -26,7 +26,7 @@ vi.mock("next-auth/react", () => ({ getCsrfToken: async () => "csrfnonce12345" }
 
 import { createBinding } from "@/adapters/server/identity/create-binding";
 
-describe("an agent-bound wallet has one owner and is never paid (real Postgres)", () => {
+describe("an agent-bound wallet has one owner and a sign-in wallet is never paid (real Postgres)", () => {
   let service: Sql;
   const users: string[] = [];
   const hex = () => `0x${randomUUID().replaceAll("-", "").padEnd(40, "a").slice(0, 40)}`;
@@ -72,7 +72,7 @@ describe("an agent-bound wallet has one owner and is never paid (real Postgres)"
     const owners = await service`SELECT user_id FROM user_bindings WHERE provider = 'wallet' AND lower(external_id) = ${wallet}`;
     expect(owners.map((r) => r.user_id)).toEqual([agent]);
 
-    // The human's login row carries W (display casing), but W belongs to an agent: nobody is paid.
+    // W is a sign-in wallet for the agent and the human's login row carries it too: neither has a payout address, so nobody is paid.
     const resolved = await new DrizzleClaimantWalletResolver(db).resolveWallets([`user:${human}`, `user:${agent}`]);
     expect(resolved.map((r) => r.wallet)).toEqual([null, null]);
   });

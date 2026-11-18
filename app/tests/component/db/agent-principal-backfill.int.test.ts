@@ -3,8 +3,8 @@
 
 /**
  * Module: `@tests/component/db/agent-principal-backfill.int.test`
- * Purpose: The 0044 backfill selector against real Postgres. The defect it guards: a human misread as an agent loses payouts (the payout guard keys on
- *   `agent_principals`), so the selector must pick a registered agent with no principal row and none of the three human creation paths.
+ * Purpose: The 0044 backfill selector against real Postgres. The defect it guards: a human misread as an agent gets a wrong kind label (0045 retired the payout guard that keyed on
+ *   `agent_principals`; kind now decides no payout), so the selector must pick a registered agent with no principal row and none of the three human creation paths.
  * Scope: Runs the migration file's own INSERT statement (not a copy) over fixtures that mirror each creation path in `auth.ts` and
  *   `operator-attested-binding.server.ts`. Everything runs in one transaction that is rolled back, so no row leaks to other tests
  *   (`identity_events` is append-only and could not be cleaned up otherwise).
