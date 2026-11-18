@@ -1077,10 +1077,16 @@ describe("v2 enrollment and requester SQL", () => {
 
   it('the native cumulative deadline rolls back audit bookkeeping and leaves purge work available',async()=> {
     await qualifyFixtureAudit();
-    const result=await maintenanceTick(client(),async tx=> {
-      await tx`UPDATE agent_authority_maintenance SET audit_cursors='{"mustRollback":true}'::jsonb WHERE id='service-enrollment'`;
-      await tx`SELECT pg_sleep(3)`;
-    });
+    // The tick cancels its pending statement at the deadline. A cancel is a separate request that can land after the statement is gone, so the tick gets a
+    // connection of its own that is ended (after the cancelled statement's rejection has settled) before any other statement can reuse it.
+    const own=postgres(container.getConnectionUri(),{max:1});
+    let result:Awaited<ReturnType<typeof maintenanceTick>>;
+    try {
+      result=await maintenanceTick(own as unknown as CredentialSql,async tx=> {
+        await tx`UPDATE agent_authority_maintenance SET audit_cursors='{"mustRollback":true}'::jsonb WHERE id='service-enrollment'`;
+        await tx`SELECT pg_sleep(3)`;
+      });
+    } finally { await own.end({timeout:5}); }
     expect(result).toEqual({processed:0,due:true});
     expect((await db`SELECT audit_cursors FROM agent_authority_maintenance WHERE id='service-enrollment'`)[0]?.audit_cursors).toEqual({});
   },10000);

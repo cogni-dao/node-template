@@ -558,8 +558,11 @@ describe("agent service enrollments (real Postgres)", () => {
       await setup.lapse(e.principalUserId);
       await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp() WHERE id = 'service-enrollment'`;
       const before = (await service`SELECT next_run_at FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0]?.next_run_at;
-      const delayed = Object.assign(client().bind(null), {
-        begin: <T>(fn: (tx: SqlTag) => Promise<T>) => client().begin(async (tx) => {
+      // The tick cancels pending statements at its deadline; a late cancel must not reach a connection the next test reuses, so the tick owns one that is ended.
+      const own = postgres(providerServiceUrl, { max: 1 });
+      const ownClient = own as unknown as CredentialSql;
+      const delayed = Object.assign(ownClient.bind(null), {
+        begin: <T>(fn: (tx: SqlTag) => Promise<T>) => ownClient.begin(async (tx) => {
           const observed = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => {
             const sql = strings.join("?");
             let pending = tx(strings, ...values) as ReturnType<SqlTag> & { cancel: () => void };
@@ -577,7 +580,9 @@ describe("agent service enrollments (real Postgres)", () => {
         }),
       }) as CredentialSql;
       const start = Date.now();
-      expect(await maintenanceTick(delayed)).toEqual({ processed: 0, due: true });
+      let outcome: Awaited<ReturnType<typeof maintenanceTick>>;
+      try { outcome = await maintenanceTick(delayed); } finally { await own.end({ timeout: 5 }); }
+      expect(outcome).toEqual({ processed: 0, due: true });
       expect(Date.now() - start).toBeLessThan(3000); //2s server work plus bounded cancellation/rollback transport margin.
       expect((await service`SELECT status FROM agent_service_enrollments WHERE principal_user_id = ${e.principalUserId}`)[0]?.status).toBe("open");
       expect((await service`SELECT next_run_at FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0]?.next_run_at).toEqual(before);
