@@ -36,6 +36,7 @@ const JTI = "44444444-4444-4444-8444-444444444444";
 const mockGetSessionUser = vi.fn();
 const mockRedeemBinding = vi.fn();
 const mockCreateNonce = vi.fn();
+const mockCreateSigninChallenge = vi.fn();
 let mockDomain: string | undefined = "test.cognidao.org";
 let mockNodeOrigin = "https://node.test.example";
 
@@ -47,14 +48,16 @@ vi.mock("@/shared/env/server", () => ({
 	}),
 }));
 
-vi.mock("@/lib/auth/server", () => ({
-	getServerSessionUser: (...args: unknown[]) => mockGetSessionUser(...args),
+// The routes resolve the caller with the agent-first resolver (a session cookie or an AI bearer key).
+vi.mock("@/app/_lib/auth/session", () => ({
+	getSessionUser: (...args: unknown[]) => mockGetSessionUser(...args),
 }));
 
 vi.mock("@/shared/config", () => ({ getNodeId: () => NODE_ID }));
 
 vi.mock("@/app/_facades/identity/operator-attested-binding.server", () => ({
 	createIdentityAttestationNonce: (...args: unknown[]) => mockCreateNonce(...args),
+	createSigninChallenge: (...args: unknown[]) => mockCreateSigninChallenge(...args),
 	redeemAttestedGithubBinding: (...args: unknown[]) =>
 		mockRedeemBinding(...args),
 }));
@@ -388,6 +391,28 @@ describe("POST /api/v1/identity/bindings/import", () => {
 
 		expect(res.status).toBe(400);
 	});
+
+	it("an AI bearer key binds the attested GitHub account to its own principal, only with a valid proof (task.0091)", async () => {
+		mockGetSessionUser.mockResolvedValue({
+			id: USER_ID,
+			walletAddress: null,
+			displayName: null,
+			avatarColor: null,
+			via: "bearer",
+		});
+
+		const forged = await IMPORT_POST(
+			makeRequest({ token: await mintToken({ key: attackerKey }) }),
+		);
+		expect(forged.status).toBe(401);
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
+
+		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));
+		expect(res.status).toBe(201);
+		expect(mockRedeemBinding).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: USER_ID, githubId: "12345" }),
+		);
+	});
 });
 
 describe("POST /api/v1/identity/bindings/import/start", () => {
@@ -436,6 +461,29 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 		expect(authorizeUrl.searchParams.get("return_to")).toBe(
 			"https://node.test.example/profile",
 		);
+	});
+
+	it("an AI bearer key gets a nonce owned by its own principal; an unresolved bearer is refused, never handed a sign-in challenge (task.0091)", async () => {
+		mockGetSessionUser.mockResolvedValue({
+			id: USER_ID,
+			walletAddress: null,
+			displayName: null,
+			avatarColor: null,
+			via: "bearer",
+		});
+		const bearer = (token: string) =>
+			new NextRequest(
+				"http://localhost:3200/api/v1/identity/bindings/import/start",
+				{ method: "POST", headers: { authorization: `Bearer ${token}` } },
+			);
+		expect((await START_POST(bearer("good"))).status).toBe(200);
+		expect(mockCreateNonce).toHaveBeenCalledWith(USER_ID);
+
+		mockGetSessionUser.mockResolvedValue(null);
+		mockCreateNonce.mockClear();
+		expect((await START_POST(bearer("revoked"))).status).toBe(401);
+		expect(mockCreateNonce).not.toHaveBeenCalled();
+		expect(mockCreateSigninChallenge).not.toHaveBeenCalled();
 	});
 
 	it.each([undefined, "https://test.cognidao.org", "test.cognidao.org/path"])(
