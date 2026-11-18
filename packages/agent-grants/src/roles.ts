@@ -29,6 +29,7 @@ import {
   newLinkToken,
   resourceOfKind,
 } from "./approval";
+import type { OrgOwners } from "./orgs";
 import type { AgentGrantsStore, GrantResource, PendingAskView, RoleState, ScopeKind } from "./types";
 
 export type RolesErrorCode =
@@ -231,32 +232,60 @@ export async function previewAsk(
 /**
  * The account owner turns a pending ACCOUNT ask On, by its link token. The row takes an account the approver owns and has no end date: like a node
  * row it lasts until Off. A node-admin has no say here (R12). Returns false for a token that is not usable.
+ *
+ * ORG ACCOUNTS (0.9.0): with `accountId` and `owners`, the approver decides on that ONE account. A person's own account keeps the statement above; an org's
+ * account needs `canApprove` through `owners(orgSource)` (read now, refused on a failed read) and then writes through `approveAccountByLinkOnOrg`.
  */
 export async function approveAccountAsk(
   store: AgentGrantsStore,
-  input: { me: ApprovalCaller; token: string }
+  input: { me: ApprovalCaller; token: string; accountId?: string | undefined; owners?: OrgOwners | undefined }
 ): Promise<{ approved: boolean }> {
   const pending = await previewAsk(store, { token: input.token, resource: "account" });
   if (!pending) return { approved: false };
+  const linkHash = await hashLinkToken(input.token);
+  if (input.accountId !== undefined) {
+    const door = await decisionDoor(store, input.me, pending.principalUserId, input.accountId, input.owners);
+    if (door === "own") return { approved: await store.approveAccountByLink({ linkHash, approvedBy: input.me.userId }) };
+    return { approved: (await store.approveAccountByLinkOnOrg?.({ linkHash, approvedBy: input.me.userId, accountId: input.accountId })) ?? false };
+  }
   if (!(await canApprove(store, input.me, { resource: "account", principalUserId: pending.principalUserId })))
     throw new AgentRolesError("not_allowed", "only the owner of an account decides access to it");
-  const approved = await store.approveAccountByLink({
-    linkHash: await hashLinkToken(input.token),
-    approvedBy: input.me.userId,
-  });
+  const approved = await store.approveAccountByLink({ linkHash, approvedBy: input.me.userId });
   return { approved };
 }
 
-/** The account owner dismisses a pending ACCOUNT ask (the x). It needs the token: an undecided ask has no account yet (R15). */
+/**
+ * Through which door may `me` decide a row for `principalUserId` on the named account? `own`: `me` owns the account (the human-owned statements apply, unchanged).
+ * `org`: `me` is one of the owners of the org that owns it. Anything else throws `not_allowed`; a failed owner read throws `OwnerSourceUnavailableError`.
+ */
+async function decisionDoor(
+  store: AgentGrantsStore,
+  me: ApprovalCaller,
+  principalUserId: string,
+  accountId: string,
+  owners: OrgOwners | undefined
+): Promise<"own" | "org"> {
+  if (!(await canApprove(store, me, { resource: "account", principalUserId, accountId }, owners)))
+    throw new AgentRolesError("not_allowed", "only the owner of an account decides access to it");
+  return (await store.ownsAccount(me.userId, accountId)) ? "own" : "org";
+}
+
+/** The account owner dismisses a pending ACCOUNT ask (the x). It needs the token: an undecided ask has no account yet (R15). `accountId` and `owners` as in `approveAccountAsk`. */
 export async function denyAccountAsk(
   store: AgentGrantsStore,
-  input: { me: ApprovalCaller; token: string }
+  input: { me: ApprovalCaller; token: string; accountId?: string | undefined; owners?: OrgOwners | undefined }
 ): Promise<{ denied: boolean }> {
   const pending = await previewAsk(store, { token: input.token, resource: "account" });
   if (!pending) return { denied: false };
+  const linkHash = await hashLinkToken(input.token);
+  if (input.accountId !== undefined) {
+    const door = await decisionDoor(store, input.me, pending.principalUserId, input.accountId, input.owners);
+    if (door === "own") return { denied: await store.denyAccountByLink({ linkHash, deniedBy: input.me.userId }) };
+    return { denied: (await store.denyAccountByLinkOnOrg?.({ linkHash, deniedBy: input.me.userId, accountId: input.accountId })) ?? false };
+  }
   if (!(await canApprove(store, input.me, { resource: "account", principalUserId: pending.principalUserId })))
     throw new AgentRolesError("not_allowed", "only the owner of an account decides access to it");
-  return { denied: await store.denyAccountByLink({ linkHash: await hashLinkToken(input.token), deniedBy: input.me.userId }) };
+  return { denied: await store.denyAccountByLink({ linkHash, deniedBy: input.me.userId }) };
 }
 
 /**
@@ -289,11 +318,27 @@ export async function grantInternalOnAccount(
   return { principalUserId: input.principalUserId, created };
 }
 
-/** The account owner turns a live ACCOUNT row Off, by id. A row on someone else's account is invisible: `revoked: false`. */
+/**
+ * The account owner turns a live ACCOUNT row Off, by id. A row on someone else's account is invisible: `revoked: false`.
+ *
+ * ORG ACCOUNTS (0.9.0): when the person's own statement finds nothing and `owners` is given, a live row on an org-owned account is revoked if `me` is one of the org's owners
+ * (`canApprove` through `owners(orgSource)`, never the asking principal). A row on any other account stays invisible.
+ */
 export async function revokeAccountRow(
   store: AgentGrantsStore,
-  input: { me: ApprovalCaller; rowId: string }
+  input: { me: ApprovalCaller; rowId: string; owners?: OrgOwners | undefined }
 ): Promise<{ revoked: boolean }> {
   // The statement joins billing_accounts.owner_user_id = me, which is exactly canApprove for an account row with an account.
-  return { revoked: await store.revokeAccountRole({ rowId: input.rowId, ownerUserId: input.me.userId }) };
+  if (await store.revokeAccountRole({ rowId: input.rowId, ownerUserId: input.me.userId })) return { revoked: true };
+  if (!input.owners || !store.accountRoleOf || !store.revokeAccountRoleOnOrg) return { revoked: false };
+  const row = await store.accountRoleOf(input.rowId);
+  if (!row) return { revoked: false };
+  const allowed = await canApprove(
+    store,
+    input.me,
+    { resource: "account", principalUserId: row.principalUserId, accountId: row.accountId },
+    input.owners
+  );
+  if (!allowed) return { revoked: false };
+  return { revoked: await store.revokeAccountRoleOnOrg({ rowId: input.rowId, accountId: row.accountId }) };
 }

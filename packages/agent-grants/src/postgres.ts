@@ -15,6 +15,8 @@
  *   - ACCOUNT_LIVE (R1, R14, durable): an account row is live when approved, unrevoked and (`expires_at` is null, i.e. until Off, or in the future); expired is read, and an expired live
  *     row is closed (`revoked_at = now()`) before an ask or a direct On on the same (AI, scope), so the old index frees.
  *   - The decision statements carry the owner join themselves (`billing_accounts.owner_user_id = approver`), so a caller cannot widen them.
+ *   - ORG_DECISION_SQL (0.9.0): an org's owners are read from its owner source at decision time, so the `...OnOrg` statements cannot join them; `canApprove` with `owners` is the
+ *     gate and each statement pins the write to one account whose owner user is an `org` principal. The human-owned statements above are unchanged.
  *   - `agent_roles` has FORCE RLS and one narrow select policy (an account row naming the connection's own user): only a service-role
  *     connection writes it or reads the rest. `agent_principals` has a read-only select policy for every role; only a service-role
  *     connection writes it.
@@ -399,6 +401,56 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         FROM billing_accounts b
         WHERE r.id = ${rowId} AND r.resource = 'account' AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL
           AND b.id = r.account_id AND b.owner_user_id = ${ownerUserId}
+        RETURNING r.id`;
+      return rows.length > 0;
+    },
+    async accountRoleOf(rowId) {
+      const rows = await sql`
+        SELECT account_id, principal_user_id FROM agent_roles
+        WHERE id = ${rowId} AND resource = 'account' AND account_id IS NOT NULL LIMIT 1`;
+      const accountId = str(rows[0]?.account_id);
+      const principalUserId = str(rows[0]?.principal_user_id);
+      return accountId && principalUserId ? { accountId, principalUserId } : null;
+    },
+    async approveAccountByLinkOnOrg({ linkHash, approvedBy, accountId }) {
+      // ORG_DECISION_SQL: the owner list lives in the owner source, so `canApprove` (with `owners`) already said yes; this statement pins the row to ONE account
+      // whose owner user is an org (never a person's account), and keeps the same link, self-approval and single-use rules as `approveAccountByLink`.
+      const rows = await sql`
+        UPDATE agent_roles r
+        SET approved_by = ${approvedBy}, granted_at = now(), account_id = b.id,
+            expires_at = NULL,
+            link_consumed_at = now(), link_hash = NULL
+        FROM billing_accounts b
+        WHERE r.link_hash = ${linkHash} AND r.resource = 'account'
+          AND r.approved_by IS NULL AND r.revoked_at IS NULL
+          AND r.link_consumed_at IS NULL AND r.link_expires_at > now()
+          AND b.id = ${accountId} AND r.principal_user_id <> ${approvedBy}
+          AND EXISTS (SELECT 1 FROM agent_principals p WHERE p.user_id = b.owner_user_id AND p.kind = 'org')
+        RETURNING r.id`;
+      return rows.length > 0;
+    },
+    async denyAccountByLinkOnOrg({ linkHash, deniedBy, accountId }) {
+      const rows = await sql`
+        UPDATE agent_roles r
+        SET revoked_at = now(), link_consumed_at = now(), link_hash = NULL
+        WHERE r.link_hash = ${linkHash} AND r.resource = 'account'
+          AND r.approved_by IS NULL AND r.revoked_at IS NULL
+          AND r.link_consumed_at IS NULL AND r.link_expires_at > now()
+          AND r.principal_user_id <> ${deniedBy}
+          AND EXISTS (
+            SELECT 1 FROM billing_accounts b
+            JOIN agent_principals p ON p.user_id = b.owner_user_id AND p.kind = 'org'
+            WHERE b.id = ${accountId})
+        RETURNING r.id`;
+      return rows.length > 0;
+    },
+    async revokeAccountRoleOnOrg({ rowId, accountId }) {
+      const rows = await sql`
+        UPDATE agent_roles r SET revoked_at = now()
+        FROM billing_accounts b
+        WHERE r.id = ${rowId} AND r.resource = 'account' AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL
+          AND r.account_id = ${accountId} AND b.id = r.account_id
+          AND EXISTS (SELECT 1 FROM agent_principals p WHERE p.user_id = b.owner_user_id AND p.kind = 'org')
         RETURNING r.id`;
       return rows.length > 0;
     },

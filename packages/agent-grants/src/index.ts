@@ -68,6 +68,19 @@ export {
 export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildAccountAiView, buildAskView, buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
+export {
+  createPostgresPayerBindingStore,
+  decidePayerBinding,
+  MAX_PENDING_PAYER_BINDINGS,
+  type PayerAskOutcome,
+  type PayerAskResult,
+  type PayerBindingRow,
+  type PayerBindingState,
+  type PayerBindingStore,
+  payerFor,
+  requestPayerBinding,
+  revokePayerBinding,
+} from "./payer";
 export { type PrincipalKind, principalKindOf, writeExternalPrincipal } from "./principals";
 export {
   AgentRolesError,

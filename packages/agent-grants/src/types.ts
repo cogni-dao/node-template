@@ -209,6 +209,20 @@ export interface AgentGrantsStore {
   }): Promise<boolean>;
   /** Revokes a live ACCOUNT row by id, only where its account is owned by `ownerUserId`. False otherwise (a foreign row is invisible). */
   revokeAccountRole(input: { rowId: string; ownerUserId: string }): Promise<boolean>;
+  /**
+   * ORG DECISIONS (0.9.0, optional): an org's owners are read at decision time from its owner source and cannot be a SQL join, so the package's `canApprove` (with
+   * `owners`) is the gate and these statements only pin the write to an account whose owner user is an org. A store without orgs omits them, and a decision on an
+   * org-owned account is then refused.
+   *
+   * The account and principal a live ACCOUNT row names, or null for a node row, an unknown id or an account row with no account yet.
+   */
+  accountRoleOf?(rowId: string): Promise<{ accountId: string; principalUserId: string } | null>;
+  /** The owner's yes on a pending ACCOUNT row found by its link token, onto `accountId`, only when that account's owner user is an org. */
+  approveAccountByLinkOnOrg?(input: { linkHash: string; approvedBy: string; accountId: string }): Promise<boolean>;
+  /** The owner's no on a pending ACCOUNT ask found by its link token, only when `accountId` belongs to an org. */
+  denyAccountByLinkOnOrg?(input: { linkHash: string; deniedBy: string; accountId: string }): Promise<boolean>;
+  /** Revokes a live ACCOUNT row by id, only where its account is `accountId` and that account's owner user is an org. */
+  revokeAccountRoleOnOrg?(input: { rowId: string; accountId: string }): Promise<boolean>;
 }
 
 /** Hands the guard a store bound to one transaction or connection. */

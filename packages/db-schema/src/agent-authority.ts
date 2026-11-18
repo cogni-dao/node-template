@@ -202,3 +202,42 @@ export const agentCredentials = pgTable(
     index("agent_credentials_user_idx").on(table.userId),
   ]
 ).enableRLS();
+
+/**
+ * A payer binding (story.0038 phase 2): the subject's runs are billed to `billing_account_id` once an owner of that account approves. Pending = `approved_by IS NULL`
+ * and not revoked. Live = approved and not revoked. One open (pending or live) row per subject. Never deleted: `revoked_at` ends it. The binding is the consent
+ * (PAYER_IS_AUTHORIZED); there is no spend scope. Service-role only: ENABLE + FORCE RLS and no policy (FORCE is added by hand in the migration).
+ */
+export const payerBindings = pgTable(
+  "payer_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    subjectUserId: text("subject_user_id")
+      .notNull()
+      .references(() => users.id),
+    billingAccountId: text("billing_account_id")
+      .notNull()
+      .references(() => billingAccounts.id),
+    approvedBy: text("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: text("revoked_by").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("payer_bindings_open_per_subject")
+      .on(table.subjectUserId)
+      .where(sql`${table.revokedAt} IS NULL`),
+    index("payer_bindings_account_idx").on(table.billingAccountId),
+    check(
+      "payer_bindings_no_self_approval",
+      sql`${table.approvedBy} IS NULL OR ${table.approvedBy} <> ${table.subjectUserId}`
+    ),
+    check(
+      "payer_bindings_approval_is_paired",
+      sql`(${table.approvedBy} IS NULL) = (${table.approvedAt} IS NULL)`
+    ),
+  ]
+).enableRLS();

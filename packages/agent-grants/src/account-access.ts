@@ -20,6 +20,7 @@
  */
 
 import type { ApprovalCaller } from "./approval";
+import type { OrgOwners } from "./orgs";
 import { buildAccountAiView } from "./node-ai";
 import {
   AgentRolesError,
@@ -97,7 +98,11 @@ export async function listMine(
 }
 
 export type MineOnInput =
-  | { readonly token: string }
+  | {
+      readonly token: string;
+      /** An org account the approver decides for (0.9.0); absent = the person's own account. */
+      readonly accountId?: string | undefined;
+    }
   | { readonly principalUserId: string; readonly scope: string };
 
 export interface MineOnResult {
@@ -122,6 +127,8 @@ export async function turnMineOn(
     readonly scopeKinds: ScopeKinds;
     /** Creates the person's billing account when none exists; returns its id. Injected by the node. */
     readonly ensureAccount?: ((userId: string) => Promise<string>) | undefined;
+    /** Owner sources: with them a decision on an org-owned account passes for each of the org's owners. */
+    readonly owners?: OrgOwners | undefined;
   }
 ): Promise<MineOnResult> {
   const { me, on } = input;
@@ -129,8 +136,9 @@ export async function turnMineOn(
     // A token that is not usable, or an ask that is the person's own, creates nothing.
     const ask = await previewAsk(store, { token: on.token, resource: "account" });
     if (!ask || ask.principalUserId === me.userId) return { changed: false, via: "link" };
-    await input.ensureAccount?.(me.userId);
-    const { approved } = await approveAccountAsk(store, { me, token: on.token });
+    // An org decision names the org's account, so the approver's own account is not needed.
+    if (on.accountId === undefined) await input.ensureAccount?.(me.userId);
+    const { approved } = await approveAccountAsk(store, { me, token: on.token, accountId: on.accountId, owners: input.owners });
     return { changed: approved, via: "link" };
   }
   if (!input.declaredScopes.includes(on.scope)) throw new AgentRolesError("invalid_scope", "scope is not declared");
@@ -151,7 +159,13 @@ export async function turnMineOn(
   return { changed: created, via: "direct", principalUserId: on.principalUserId, scope: on.scope };
 }
 
-export type MineOffInput = { readonly rowId: string } | { readonly token: string };
+export type MineOffInput =
+  | { readonly rowId: string }
+  | {
+      readonly token: string;
+      /** An org account the approver dismisses the ask for (0.9.0). */
+      readonly accountId?: string | undefined;
+    };
 
 /**
  * The person turns a live ACCOUNT row Off by id (a row on someone else's account is invisible: `changed: false`), or dismisses a waiting ask by its
@@ -159,12 +173,12 @@ export type MineOffInput = { readonly rowId: string } | { readonly token: string
  */
 export async function turnMineOff(
   store: AgentGrantsStore,
-  input: { readonly me: ApprovalCaller; readonly off: MineOffInput }
+  input: { readonly me: ApprovalCaller; readonly off: MineOffInput; readonly owners?: OrgOwners | undefined }
 ): Promise<{ changed: boolean; via: "row" | "link" }> {
   if ("rowId" in input.off) {
-    const { revoked } = await revokeAccountRow(store, { me: input.me, rowId: input.off.rowId });
+    const { revoked } = await revokeAccountRow(store, { me: input.me, rowId: input.off.rowId, owners: input.owners });
     return { changed: revoked, via: "row" };
   }
-  const { denied } = await denyAccountAsk(store, { me: input.me, token: input.off.token });
+  const { denied } = await denyAccountAsk(store, { me: input.me, token: input.off.token, accountId: input.off.accountId, owners: input.owners });
   return { changed: denied, via: "link" };
 }
