@@ -13,8 +13,9 @@
  *   - NO_SECRETS_ON_ARGV: the key is read from the environment (`COGNI_NODE_API_KEY`, or the variable `--key-env` names), never
  *     from an argument, never printed. The script needs no database credential.
  *   - DRY_RUN_BY_DEFAULT: without `--apply` nothing is written; every item prints one plan row.
- *   - LEGACY_BACK_TO_TRIAGE: an item still in needs_closeout or blocked first moves to needs_triage (the only move a legacy status
- *     allows); a blocked item stops there. `--legacy` lists every such item on the target.
+ *   - LEGACY_BACK_TO_TRIAGE: a blocked item moves to needs_triage and stops there. An item in needs_closeout (the stage after merge)
+ *     whose PR is merged closes out on a fixture with `--backfill`; any other needs_closeout item moves to needs_triage. `--legacy`
+ *     lists every needs_closeout and blocked item on the target.
  *   - NO_AI: it calls no model and spends no AI budget; owners advance items past implementation review with real artifacts.
  *   - FACTS_ONLY: needs_triage -> needs_implement happens only when the item already has six nonzero scores and a `goal:` label;
  *     it records a `triage` artifact (route `implement`; `research` for a spike whose `pr` is a hub inbox) first. needs_implement
@@ -314,6 +315,12 @@ async function recordTriage(item, verdict) {
 /** Walk one item with the moves its facts justify. Returns nothing; the caller re-reads. */
 async function walk(state, setPr, ledgerTarget) {
 	let { item } = state;
+	// needs_closeout is the stage after merge: a merged item there closes out on a fixture (--backfill); any other goes to triage.
+	if (item.status === "needs_closeout" && values.backfill && (await prFacts(item.pr))?.merged) {
+		const reason = "Legacy backfill fixture: merged before the artifact ladder (story.0047); walks to its real stage.";
+		if (await fixture(item, "closeout", { subject: `work:${item.id}`, verdict: "done" })) await patch(item, { status: "done" }, reason);
+		return;
+	}
 	if (LEGACY.includes(item.status)) {
 		const ok = await patch(item, { status: "needs_triage" }, "Legacy status retired by the artifact-gated ladder (story.0047); re-enters at triage to advance with real artifacts.");
 		if (!ok || item.status === "blocked") return;
