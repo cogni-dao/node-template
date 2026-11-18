@@ -11,6 +11,7 @@
  *   - ONE_ROW_RENDERER: rows are `CitationRow` in `CITATION_LIST_CLASS`; no bespoke layout.
  *   - ONE_SPEC_REF_TYPE: the package's `parseSpecRef` decides what is a design link; no second pattern here.
  *   - ONE_EMPTY_STATE: nothing linked draws the heading and one muted line, as every work-item section does.
+ *   - NEVER_FALSE_NONE: when the host read only part of the item's links (`roadmapsPartial`), the section says more are under Links.
  *   - ROADMAP_FIRST: the roadmap (why this item, in what order) comes before the designs (how it is built).
  * Side-effects: none
  * Links: hub work-item-design-links, ./citation-links.tsx, ./work-pull-links.tsx
@@ -36,12 +37,15 @@ export const defaultDesignHref = (atomId: string): string => `/knowledge/${encod
 export function WorkDesignLinks({
   specRefs,
   roadmapIds = [],
+  roadmapsPartial = false,
   hrefFor = defaultDesignHref,
   LinkComponent = DefaultCitationLink,
 }: {
   readonly specRefs: readonly string[];
   /** Roadmap atoms that track this item: the sources of its incoming `tracks` edges. */
   readonly roadmapIds?: readonly string[];
+  /** The host read only its bounded share of the item's links; more may track it. The section says so, never "none". */
+  readonly roadmapsPartial?: boolean;
   /** The node's page for one atom id. Default `/knowledge/{id}`. */
   readonly hrefFor?: (atomId: string) => string;
   /** The node's link (for example one that peeks an entry in a side sheet). Default `<a>`. */
@@ -52,7 +56,9 @@ export function WorkDesignLinks({
     <section aria-label="Design" data-work-design="links" className="flex flex-col gap-1.5">
       <h3 className={CITATION_HEADING_CLASS}>Design</h3>
       {roadmaps.length === 0 && specRefs.length === 0 ? (
-        <span className={WORK_SECTION_EMPTY_CLASS}>No design linked yet</span>
+        <span className={WORK_SECTION_EMPTY_CLASS}>
+          {roadmapsPartial ? "No design linked; more links are under Links" : "No design linked yet"}
+        </span>
       ) : (
         <div className={CITATION_LIST_CLASS}>
           {roadmaps.map((id) => (
@@ -86,6 +92,7 @@ export function WorkDesignLinks({
               </code>
             );
           })}
+          {roadmapsPartial && <span className={`flex min-h-8 items-center ${WORK_SECTION_EMPTY_CLASS}`}>More links are under Links</span>}
         </div>
       )}
     </section>

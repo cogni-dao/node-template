@@ -33,6 +33,7 @@ import {
 	WorkExpectations,
 	WorkPullLinks,
 	type WorkMetric,
+	WORK_SECTION_EMPTY_CLASS,
 } from "@cogni/knowledge-base-ui";
 import { WorkMoveLinks } from "@cogni/knowledge-base-ui/goals";
 import type { WorkItemDto, WorkItemsGetOutput } from "@cogni/node-contracts";
@@ -44,6 +45,7 @@ import { SheetDescription, SheetHeader, SheetTitle } from "@/components/sheet";
 import type { ReactElement } from "react";
 import { Markdown } from "@/components/markdown";
 
+import { type CitationLinkDto, fetchCitationLinks } from "../../_api/fetchCitationLinks";
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
 import { PeekLink } from "../../_components/EntityPeek";
 import {
@@ -102,11 +104,41 @@ const ScrollKeepingLink: CitationLinkComponent = ({ entityId: _entityId, href, .
 );
 
 
-/** The roadmaps that track this item: the sources of its incoming `tracks` edges on the read's first links page (story.0069). */
-function roadmapIds(read: WorkItemsGetOutput | null): string[] {
-	return (read?.links?.items ?? [])
+/** Link pages the Design section reads for roadmaps: the read's first page, then at most three more (bounded-data-reads). */
+const ROADMAP_LINK_PAGES = 4;
+
+type LinkPage = { readonly items: readonly CitationLinkDto[]; readonly nextCursor: string | null };
+
+/** The knowledge sources of the item's incoming `tracks` edges: the roadmaps that track it (story.0069). */
+function roadmapSources(pages: readonly LinkPage[]): string[] {
+	return pages
+		.flatMap((page) => page.items)
 		.filter((link) => link.direction === "in" && link.citationType === "tracks" && link.source.kind === "knowledge")
 		.map((link) => link.source.id);
+}
+
+/** Page 1 rides the item read; later pages follow `nextCursor` through the citations route, within `ROADMAP_LINK_PAGES`. */
+function useRoadmaps(read: WorkItemsGetOutput | null): { readonly ids: string[]; readonly partial: boolean } {
+	const first = read?.links && !read.links.unavailable ? read.links : undefined;
+	const more = useQuery({
+		queryKey: ["work-item-roadmap-links", read?.id, first?.nextCursor],
+		queryFn: async ({ signal }) => {
+			const pages: LinkPage[] = [];
+			let cursor = first?.nextCursor ?? null;
+			while (cursor !== null && pages.length < ROADMAP_LINK_PAGES - 1) {
+				const page = await fetchCitationLinks(read?.id as string, cursor, signal);
+				pages.push({ items: page.links, nextCursor: page.nextCursor });
+				cursor = page.nextCursor;
+			}
+			return pages;
+		},
+		enabled: first?.nextCursor != null,
+		retry: false,
+	});
+	if (!first) return { ids: [], partial: read?.links?.unavailable === true };
+	const pages = [first, ...(more.data ?? [])];
+	const last = pages[pages.length - 1];
+	return { ids: roadmapSources(pages), partial: last?.nextCursor != null };
 }
 
 const ROW = "flex min-w-0 items-center justify-between gap-3";
@@ -187,6 +219,7 @@ export function WorkItemDetailBody({
 	const historyLoading = historyCursor !== null && olderHistory.isLoading;
 	const artifactsUnavailable = artifactPage?.unavailable === true || (artifactsCursor !== null && olderArtifacts.isError);
 	const historyUnavailable = historyPage?.unavailable === true || (historyCursor !== null && olderHistory.isError);
+	const roadmaps = useRoadmaps(read);
 	const selected = read?.artifact;
 	const selectedArtifact = selected !== undefined && "id" in selected ? selected : undefined;
 	const selectedBody = selectedArtifact && (
@@ -263,7 +296,7 @@ export function WorkItemDetailBody({
 							LinkComponent={PeekLink}
 						/>
 						{/* Design, between Moves and Artifacts: the design atoms the item is built against (story.0069). */}
-						<WorkDesignLinks specRefs={item.specRefs} roadmapIds={roadmapIds(read)} LinkComponent={PeekLink} />
+						<WorkDesignLinks specRefs={item.specRefs} roadmapIds={roadmaps.ids} roadmapsPartial={roadmaps.partial} LinkComponent={PeekLink} />
 						{/* Artifacts, right below Moves and drawn like it: each review or validation that lets the item move (story.0058).
 						    The selected one opens inline under its row; selecting it again closes it. */}
 						{read?.artifactRefs !== undefined && (
@@ -274,7 +307,7 @@ export function WorkItemDetailBody({
 								) : artifactsUnavailable ? (
 									<span className="text-muted-foreground text-sm">Reviews are unavailable</span>
 								) : !artifactPage?.refs.length ? (
-									<span className="text-muted-foreground text-sm">No reviews yet</span>
+									<span className={WORK_SECTION_EMPTY_CLASS}>No reviews yet</span>
 								) : (
 									<div className={CITATION_LIST_CLASS}>
 										{artifactPage.refs.map((ref) => {

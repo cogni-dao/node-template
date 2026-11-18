@@ -166,6 +166,47 @@ describe("WorkItemDetail accessibility", () => {
       "/knowledge/work-item-design-links"
     );
   });
+  it("finds the roadmap on a later links page, and never says none while links remain unread (story.0069)", async () => {
+    const link = (n: number, over: Record<string, unknown> = {}) => ({
+      id: `c${n}`,
+      direction: "out",
+      citationType: "supports",
+      source: { id: item.id, kind: "work", title: null, href: `/work/items/${item.id}` },
+      target: { id: `atom-${n}`, kind: "knowledge", title: null, href: `/knowledge/atom-${n}` },
+      context: null,
+      label: "supports",
+      tone: "positive",
+      ...over,
+    });
+    const tracks = link(6, {
+      direction: "in",
+      citationType: "tracks",
+      source: { id: "roadmap-ai-work-converges", kind: "knowledge", title: null, href: "/knowledge/roadmap-ai-work-converges" },
+      target: { id: item.id, kind: "work", title: null, href: `/work/items/${item.id}` },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input).includes("/api/v1/citations/")
+        ? new Response(JSON.stringify({ links: [tracks], nextCursor: null }), { status: 200 })
+        : new Response("{}", { status: 503 })
+    );
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          links: { items: [1, 2, 3, 4, 5].map((n) => link(n)), nextCursor: "c5" },
+        } as never}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByRole("link", { name: "roadmap roadmap-ai-work-converges" })).toHaveAttribute(
+      "href",
+      "/knowledge/roadmap-ai-work-converges"
+    );
+    expect(fetchSpy.mock.calls.map((call) => String(call[0]))).toContain("/api/v1/citations/task.5174?cursor=c5");
+  });
   it("shows artifact and history refs, and the selected validation's scorecard, only when the read carries them", () => {
     render(
       <WorkItemDetail
