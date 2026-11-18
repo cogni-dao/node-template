@@ -34,6 +34,7 @@ import {
   createPostgresPayerBindingStore,
   buildNodeAiView,
   decidePayerBinding,
+  ownersForBinding,
   payerFor,
   requestPayerBinding,
   revokePayerBinding,
@@ -432,12 +433,19 @@ export function createAgentToolAuthority(deps: {
       return { id: outcome.id, state: outcome.state, created: outcome.created };
     },
     async decidePayerBinding(me, id, approve) {
+      // OWNERS_READ_BEFORE_THE_TRANSACTION: the org's owners (a GitHub read) are read before `begin`, so no database connection waits on it.
+      const owners = await ownersForBinding(
+        createPostgresPayerBindingStore(deps.sql),
+        createPostgresAgentGrantsStore(deps.sql),
+        deps.owners,
+        id
+      );
       const result = await deps.sql.begin((tx) =>
         decidePayerBinding(createPostgresPayerBindingStore(tx), createPostgresAgentGrantsStore(tx), {
           me,
           id,
           approve,
-          owners: deps.owners,
+          owners,
         })
       );
       if (result.decided)
@@ -453,11 +461,17 @@ export function createAgentToolAuthority(deps: {
       return { changed: result.decided };
     },
     async revokePayerBinding(me, id) {
+      const owners = await ownersForBinding(
+        createPostgresPayerBindingStore(deps.sql),
+        createPostgresAgentGrantsStore(deps.sql),
+        deps.owners,
+        id
+      );
       const result = await deps.sql.begin((tx) =>
         revokePayerBinding(createPostgresPayerBindingStore(tx), createPostgresAgentGrantsStore(tx), {
           me,
           id,
-          owners: deps.owners,
+          owners,
         })
       );
       if (result.revoked)

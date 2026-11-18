@@ -106,6 +106,7 @@ export {
   TOOL_CATALOG,
   VCS_TOOL_BUNDLE,
   type ToolCatalog,
+  withoutRemoteNodeArgument,
 } from "./catalog";
 // Runtime adapter
 export {

@@ -24,8 +24,7 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
-export const KnowledgeReadInputSchema = z
-  .object({
+const knowledgeReadFields = {
     id: z
       .string()
       .optional()
@@ -45,6 +44,17 @@ export const KnowledgeReadInputSchema = z
       .max(50)
       .optional()
       .describe("Max results for list mode (1-50, default 20)"),
+};
+const idOrDomain = { message: "Either 'id' or 'domain' is required" };
+
+/** The input without `node`: what the model sees on a node that has no link targets. */
+export const KnowledgeReadLocalInputSchema = z
+  .object(knowledgeReadFields)
+  .refine((d) => d.id || d.domain, idOrDomain);
+
+export const KnowledgeReadInputSchema = z
+  .object({
+    ...knowledgeReadFields,
     node: z
       .string()
       .regex(REMOTE_ALIAS_PATTERN)
@@ -53,9 +63,7 @@ export const KnowledgeReadInputSchema = z
         "Alias of another node whose knowledge to read instead of this node's own. Only aliases the server lists work."
       ),
   })
-  .refine((d) => d.id || d.domain, {
-    message: "Either 'id' or 'domain' is required",
-  });
+  .refine((d) => d.id || d.domain, idOrDomain);
 export type KnowledgeReadInput = z.infer<typeof KnowledgeReadInputSchema>;
 
 export const KnowledgeReadEntrySchema = KnowledgeRowSchema.extend({
@@ -75,6 +83,11 @@ export type KnowledgeReadRedacted = KnowledgeReadOutput;
 
 export const KNOWLEDGE_READ_NAME = "core__knowledge_read" as const;
 
+const KNOWLEDGE_READ_DESCRIPTION =
+  "Read knowledge entries from the node's knowledge store. " +
+  "Use with 'id' to get a specific entry, or 'domain' to list entries (optionally filtered by tags). " +
+  "Each entry includes a confidence score (0-100): 30=draft, 80=verified, 95+=hardened. ";
+
 export const knowledgeReadContract: ToolContract<
   typeof KNOWLEDGE_READ_NAME,
   KnowledgeReadInput,
@@ -82,11 +95,7 @@ export const knowledgeReadContract: ToolContract<
   KnowledgeReadRedacted
 > = {
   name: KNOWLEDGE_READ_NAME,
-  description:
-    "Read knowledge entries from the node's knowledge store. " +
-    "Use with 'id' to get a specific entry, or 'domain' to list entries (optionally filtered by tags). " +
-    "Each entry includes a confidence score (0-100): 30=draft, 80=verified, 95+=hardened. " +
-    "Pass 'node' (a configured node alias) to read that node's knowledge instead.",
+  description: `${KNOWLEDGE_READ_DESCRIPTION}Pass 'node' (a configured node alias) to read that node's knowledge instead.`,
   effect: "read_only",
   inputSchema: KnowledgeReadInputSchema,
   outputSchema: KnowledgeReadOutputSchema,
@@ -186,3 +195,16 @@ export const knowledgeReadBoundTool: BoundTool<
   contract: knowledgeReadContract,
   implementation: knowledgeReadStubImplementation,
 };
+
+/**
+ * The same tool without the `node` argument, for a node with no link targets: the argument is advertised to the model only when it can work. The implementation is the same and
+ * refuses an alias with no remote capability, so a model that sends `node` anyway (the schema strips it) reads this node's own store.
+ */
+export const knowledgeReadLocalBoundTool = {
+  contract: {
+    ...knowledgeReadContract,
+    description: KNOWLEDGE_READ_DESCRIPTION.trimEnd(),
+    inputSchema: KnowledgeReadLocalInputSchema,
+  },
+  implementation: knowledgeReadStubImplementation,
+} as unknown as typeof knowledgeReadBoundTool;

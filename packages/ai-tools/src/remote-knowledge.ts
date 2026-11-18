@@ -12,7 +12,9 @@
  *     Redirects are never followed (`redirect: "manual"`; any 3xx is `unavailable`). 10 s timeout. The body is capped at 1 MiB while it streams.
  *   - NO_HEADERS_BACK: only parsed knowledge rows leave the transport; no response header is returned or logged.
  *   - REDACT_SECRET_SHAPES: any `cogni_ag_sk_` key or JWT-shaped string in a body is replaced before the body is parsed.
- *   - DENIAL_IS_FIXED: a 401 or 403 from the target is `policy_denied`, which the tools turn into one fixed non-retryable receipt; nothing from the target's body is passed on.
+ *   - DENIAL_IS_FIXED: a 401 or 403 from the target is `policy_denied`, which the tools turn into one fixed non-retryable receipt; nothing from the target's body is passed on. Every other
+ *     failure (5xx, timeout, network, oversized body) is retryable `unavailable`.
+ *   - ID_IS_CHECKED: a model-chosen id must match `REMOTE_KNOWLEDGE_ID_PATTERN` before a URL is built. BOUNDED_CONTENT: each entry's content is cut to `REMOTE_ENTRY_CONTENT_MAX_CHARS`.
  *   - CAPABILITY_INJECTION (tool-credential-brokering): no connection id or credential is a tool argument; the Authorization header exists only inside `fetch`.
  * Side-effects: IO (HTTPS GET to a configured node)
  * Links: https://node-template.cognidao.org/knowledge/tool-credential-brokering, https://node-template.cognidao.org/knowledge/node-service-enrollment
@@ -39,18 +41,25 @@ export const REMOTE_KNOWLEDGE_SERVICE = "node-ai";
 
 export const REMOTE_TIMEOUT_MS = 10_000;
 export const REMOTE_MAX_BODY_BYTES = 1024 * 1024;
+/** Each remote entry's `content` is cut to this many characters before it reaches the model. */
+export const REMOTE_ENTRY_CONTENT_MAX_CHARS = 64 * 1024;
 
-export type RemoteKnowledgeErrorCode = "unknown_alias" | "policy_denied" | "unavailable";
+/** A knowledge id the transport will put in a URL: an alphanumeric start, then letters, digits, dot, dash, underscore; never `.` or `..`. */
+export const REMOTE_KNOWLEDGE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
+
+export type RemoteKnowledgeErrorCode = "unknown_alias" | "invalid_id" | "policy_denied" | "unavailable";
 
 const FIXED_MESSAGE: Record<RemoteKnowledgeErrorCode, string> = {
   unknown_alias: "Unknown node alias",
+  invalid_id: "Invalid knowledge id",
   policy_denied: "Tool call denied by policy",
   unavailable: "Remote knowledge is unavailable",
 };
 
 /**
- * A refusal from the remote read. `policy_denied` and `unavailable` carry a non-retryable receipt (the tool runner keeps only a structured, bounded one), so the
- * model is told once and the call is never retried. The message is always one of three fixed strings.
+ * A refusal from the remote read. ONLY `policy_denied` (the target's 401 or 403) carries a non-retryable receipt (the tool runner keeps only a structured, bounded one), so the
+ * model is told once and the call is never retried. `unavailable` (a 5xx, a timeout, a network failure, an oversized or unreadable body) is retryable: it has no receipt. The message
+ * is always one of four fixed strings.
  */
 export class RemoteKnowledgeError extends Error {
   readonly code: RemoteKnowledgeErrorCode;
@@ -59,7 +68,7 @@ export class RemoteKnowledgeError extends Error {
     super(FIXED_MESSAGE[code]);
     this.name = "RemoteKnowledgeError";
     this.code = code;
-    if (code !== "unknown_alias") this.receipt = { code, retryable: false, lookup: { tool: "remote_knowledge", node: alias } };
+    if (code === "policy_denied") this.receipt = { code, retryable: false, lookup: { tool: "remote_knowledge", node: alias } };
   }
 }
 
@@ -179,6 +188,9 @@ export function createRemoteKnowledgeTransport(deps: {
     }
   }
 
+  const capContent = (row: KnowledgeEntry): KnowledgeEntry =>
+    row.content.length > REMOTE_ENTRY_CONTENT_MAX_CHARS ? { ...row, content: `${row.content.slice(0, REMOTE_ENTRY_CONTENT_MAX_CHARS)}…` } : row;
+
   const rows = (body: unknown): KnowledgeEntry[] => {
     const items = (body as { items?: unknown } | null)?.items;
     if (!Array.isArray(items)) return [];
@@ -191,14 +203,17 @@ export function createRemoteKnowledgeTransport(deps: {
   return {
     originOf: (alias) => targets.get(alias)?.origin,
     async get(alias, id) {
+      if (!targets.has(alias)) throw new RemoteKnowledgeError("unknown_alias", null);
+      // Checked before any URL is built or any assertion is signed: the id is model-chosen text.
+      if (!REMOTE_KNOWLEDGE_ID_PATTERN.test(id) || id === "." || id === "..") throw new RemoteKnowledgeError("invalid_id", alias);
       const body = await getJson(alias, `/api/v1/knowledge/${encodeURIComponent(id)}`);
       if (body === null) return null;
       const parsed = KnowledgeRowSchema.safeParse(body);
-      return parsed.success ? parsed.data : null;
+      return parsed.success ? capContent(parsed.data) : null;
     },
     async list(alias, { domain, limit }) {
       const body = await getJson(alias, "/api/v1/knowledge", new URLSearchParams({ domain, limit: String(limit) }));
-      return rows(body).slice(0, limit);
+      return rows(body).slice(0, limit).map(capContent);
     },
     async search(alias, { domain, query, limit }) {
       const body = await getJson(
@@ -210,7 +225,8 @@ export function createRemoteKnowledgeTransport(deps: {
       const needle = query.toLowerCase();
       return rows(body)
         .filter((row) => row.title.toLowerCase().includes(needle) || row.content.toLowerCase().includes(needle))
-        .slice(0, limit);
+        .slice(0, limit)
+        .map(capContent);
     },
   };
 }

@@ -71,15 +71,20 @@ export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
   createPostgresPayerBindingStore,
   decidePayerBinding,
-  MAX_PENDING_PAYER_BINDINGS,
+  MAX_PENDING_PER_ACCOUNT,
   type PayerAskOutcome,
   type PayerAskResult,
   type PayerBindingRow,
   type PayerBindingState,
   type PayerBindingStore,
+  ownersForBinding,
+  PENDING_BINDING_TTL_DAYS,
   payerFor,
+  payerScopeUserFor,
   requestPayerBinding,
   revokePayerBinding,
+  type RunPayerDeps,
+  selectRunPayer,
 } from "./payer";
 export { type PrincipalKind, principalKindOf, writeExternalPrincipal } from "./principals";
 export {

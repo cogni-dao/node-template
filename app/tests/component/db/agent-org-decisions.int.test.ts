@@ -18,6 +18,8 @@ import {
   createPostgresPayerBindingStore,
   decidePayerBinding,
   denyAccountAsk,
+  MAX_PENDING_PER_ACCOUNT,
+  ownersForBinding,
   hashLinkToken,
   newLinkToken,
   payerFor,
@@ -201,10 +203,65 @@ describe("org decisions and payer bindings (real Postgres)", () => {
       const personal = randomUUID();
       await tx`INSERT INTO billing_accounts (id, owner_user_id, balance_credits) VALUES (${personal}, ${approver}, 0)`;
       const other = await user(tx, "other");
-      const second = await payer.request({ subjectUserId: other, billingAccountId: personal, maxPendingTotal: 100 });
+      const second = await payer.request({ subjectUserId: other, billingAccountId: personal, maxPendingPerAccount: 20 });
       expect(second.result).toBe("created");
       expect(await payer.approve({ id: second.id as string, approvedBy: svc })).toBe(false);
       expect(await payer.approve({ id: second.id as string, approvedBy: approver })).toBe(true);
+    });
+  });
+  it("an account holds at most MAX_PENDING_PER_ACCOUNT unexpired pending asks (counted in the insert), an expired ask is neither counted nor decidable, and an unknown account writes nothing", async () => {
+    await rolledBack(async (tx) => {
+      const sql = tx as unknown as SqlTag;
+      const grants = createPostgresAgentGrantsStore(sql);
+      const payer = createPostgresPayerBindingStore(sql);
+      const org = await ensureOrg(sql, SRC);
+      const owner = await user(tx, "owner");
+      const owners: OrgOwners = { owners: async () => [owner] };
+      const subjects: string[] = [];
+      for (let i = 0; i < MAX_PENDING_PER_ACCOUNT; i++) {
+        const subject = await user(tx, `s${i}`);
+        subjects.push(subject);
+        await requestPayerBinding(payer, { subjectUserId: subject, billingAccountId: org.billingAccountId });
+      }
+      const extra = await user(tx, "extra");
+      await tx`SAVEPOINT cap`;
+      await expect(requestPayerBinding(payer, { subjectUserId: extra, billingAccountId: org.billingAccountId })).rejects.toMatchObject({ code: "too_many_requests" });
+      await tx`ROLLBACK TO SAVEPOINT cap`;
+      expect(await tx`SELECT 1 FROM payer_bindings WHERE billing_account_id = ${org.billingAccountId}`).toHaveLength(MAX_PENDING_PER_ACCOUNT);
+
+      // Eight days later the first ask has expired: it is not counted, cannot be decided, and its subject's next ask replaces it.
+      const first = (await tx`SELECT id FROM payer_bindings WHERE subject_user_id = ${subjects[0] as string}`)[0]?.id as string;
+      await tx`UPDATE payer_bindings SET created_at = now() - interval '8 days' WHERE id = ${first}`;
+      expect((await decidePayerBinding(payer, grants, { me: { userId: owner, admin: null }, id: first, approve: true, owners })).decided).toBe(false);
+      expect(await payer.get(first)).toBeNull();
+      expect((await requestPayerBinding(payer, { subjectUserId: extra, billingAccountId: org.billingAccountId })).created).toBe(true);
+      const again = await requestPayerBinding(payer, { subjectUserId: subjects[0] as string, billingAccountId: org.billingAccountId }).catch((e: unknown) => e);
+      // The account is full again with `extra`, so the replacement is refused; the expired row was closed either way (one open row per subject).
+      expect(again).toMatchObject({ code: "too_many_requests" });
+
+      // An unknown account answers like a known one and writes no row.
+      const stranger = await user(tx, "stranger");
+      const decoy = await requestPayerBinding(payer, { subjectUserId: stranger, billingAccountId: randomUUID() });
+      expect(decoy).toMatchObject({ state: "pending", created: true });
+      expect(await tx`SELECT 1 FROM payer_bindings WHERE subject_user_id = ${stranger}`).toHaveLength(0);
+    });
+  });
+
+  it("ownersForBinding reads an org's owners before the decision, and is undefined for a person's account", async () => {
+    await rolledBack(async (tx) => {
+      const sql = tx as unknown as SqlTag;
+      const grants = createPostgresAgentGrantsStore(sql);
+      const payer = createPostgresPayerBindingStore(sql);
+      const org = await ensureOrg(sql, SRC);
+      const [owner, svc, human] = [await user(tx, "owner"), await user(tx, "svc"), await user(tx, "human")] as [string, string, string];
+      const asked = await requestPayerBinding(payer, { subjectUserId: svc, billingAccountId: org.billingAccountId });
+      const pre = await ownersForBinding(payer, grants, { owners: async () => [owner] }, asked.id);
+      expect(await pre?.owners(SRC)).toEqual([owner]);
+      expect((await decidePayerBinding(payer, grants, { me: { userId: owner, admin: null }, id: asked.id, approve: true, owners: pre })).decided).toBe(true);
+      const personal = randomUUID();
+      await tx`INSERT INTO billing_accounts (id, owner_user_id, balance_credits) VALUES (${personal}, ${human}, 0)`;
+      const other = await requestPayerBinding(payer, { subjectUserId: await user(tx, "other"), billingAccountId: personal });
+      expect(await ownersForBinding(payer, grants, { owners: async () => [owner] }, other.id)).toBeUndefined();
     });
   });
 });

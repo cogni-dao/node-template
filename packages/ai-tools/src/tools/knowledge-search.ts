@@ -26,7 +26,7 @@ import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
-export const KnowledgeSearchInputSchema = z.object({
+const knowledgeSearchFields = {
   domain: z
     .string()
     .min(1)
@@ -47,6 +47,13 @@ export const KnowledgeSearchInputSchema = z.object({
     .max(20)
     .optional()
     .describe("Maximum results (1-20, default 10)"),
+};
+
+/** The input without `node`: what the model sees on a node that has no link targets. */
+export const KnowledgeSearchLocalInputSchema = z.object(knowledgeSearchFields);
+
+export const KnowledgeSearchInputSchema = z.object({
+  ...knowledgeSearchFields,
   node: z
     .string()
     .regex(REMOTE_ALIAS_PATTERN)
@@ -75,6 +82,11 @@ export type KnowledgeSearchRedacted = KnowledgeSearchOutput;
 
 export const KNOWLEDGE_SEARCH_NAME = "core__knowledge_search" as const;
 
+const KNOWLEDGE_SEARCH_DESCRIPTION =
+  "Search the node's knowledge store for domain-specific facts, claims, and curated assertions. " +
+  "Returns entries with confidence scores and canonical sourceUrl provenance for the content read. Search BEFORE using web search — " +
+  "the knowledge store contains verified, curated information relevant to this node's domain.";
+
 export const knowledgeSearchContract: ToolContract<
   typeof KNOWLEDGE_SEARCH_NAME,
   KnowledgeSearchInput,
@@ -82,11 +94,7 @@ export const knowledgeSearchContract: ToolContract<
   KnowledgeSearchRedacted
 > = {
   name: KNOWLEDGE_SEARCH_NAME,
-  description:
-    "Search the node's knowledge store for domain-specific facts, claims, and curated assertions. " +
-    "Returns entries with confidence scores and canonical sourceUrl provenance for the content read. Search BEFORE using web search — " +
-    "the knowledge store contains verified, curated information relevant to this node's domain. " +
-    "Pass 'node' (a configured node alias) to search that node's knowledge instead.",
+  description: `${KNOWLEDGE_SEARCH_DESCRIPTION} Pass 'node' (a configured node alias) to search that node's knowledge instead.`,
   effect: "read_only",
   inputSchema: KnowledgeSearchInputSchema,
   outputSchema: KnowledgeSearchOutputSchema,
@@ -171,3 +179,13 @@ export const knowledgeSearchBoundTool: BoundTool<
   contract: knowledgeSearchContract,
   implementation: knowledgeSearchStubImplementation,
 };
+
+/** The same tool without the `node` argument, for a node with no link targets (see `knowledgeReadLocalBoundTool`). */
+export const knowledgeSearchLocalBoundTool = {
+  contract: {
+    ...knowledgeSearchContract,
+    description: KNOWLEDGE_SEARCH_DESCRIPTION,
+    inputSchema: KnowledgeSearchLocalInputSchema,
+  },
+  implementation: knowledgeSearchStubImplementation,
+} as unknown as typeof knowledgeSearchBoundTool;

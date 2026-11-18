@@ -20,7 +20,7 @@ import type {
 	RepoCapability,
 	WebSearchCapability,
 } from "@cogni/ai-tools";
-import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { CORE_TOOL_BUNDLE, withoutRemoteNodeArgument } from "@cogni/ai-tools";
 import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
 	createDefaultRegistries,
@@ -1143,8 +1143,14 @@ function createContainer(): Container {
 		metrics: () => goalMetrics,
 		goalProgress,
 	});
+	// The knowledge tools advertise their `node` argument only when this deployment lists a link target (.cogni/service-links.yaml).
 	const toolSource = createBoundToolSource(
-		[...CORE_TOOL_BUNDLE, ...NODE_LOCAL_TOOL_BUNDLE],
+		[
+			...(serviceLinks.targets.length > 0
+				? CORE_TOOL_BUNDLE
+				: withoutRemoteNodeArgument(CORE_TOOL_BUNDLE)),
+			...NODE_LOCAL_TOOL_BUNDLE,
+		],
 		{ ...toolBindings, ...metricTools.bindings, ...NODE_LOCAL_TOOL_BINDINGS },
 	);
 

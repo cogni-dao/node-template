@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AgentRolesError,
   approveAccountAsk,
@@ -9,15 +9,20 @@ import {
   decidePayerBinding,
   denyAccountAsk,
   hashLinkToken,
+  MAX_PENDING_PER_ACCOUNT,
   newLinkToken,
+  ownersForBinding,
+  PENDING_BINDING_TTL_DAYS,
   payerFor,
+  payerScopeUserFor,
   requestPayerBinding,
   revokeAccountRow,
   revokePayerBinding,
+  selectRunPayer,
 } from "../src";
 import { type OrgSource, OwnerSourceUnavailableError } from "../src/orgs";
 import { memoryStore } from "./memory-store";
-import { MAX_PENDING_PAYER_BINDINGS, memoryPayerStore } from "./payer-store";
+import { memoryPayerStore } from "./payer-store";
 
 const SRC: OrgSource = { kind: "repo-spec", ref: "https://github.com/cogni-dao/toks5" };
 const owners = (list: string[]) => ({ owners: async () => list });
@@ -106,11 +111,50 @@ describe("payer binding lifecycle", () => {
     await expect(requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "nope" })).rejects.toMatchObject({ code: "not_allowed" });
   });
 
-  it("an unknown account and a flood of asks are refused", async () => {
+  it("an unknown account answers like a known one (a pending id) and writes no row", async () => {
     const { payer } = fixture();
-    await expect(requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "nope" })).rejects.toMatchObject({ code: "principal_not_found" });
-    for (let i = 0; i < MAX_PENDING_PAYER_BINDINGS; i++) await requestPayerBinding(payer, { subjectUserId: `s${i}`, billingAccountId: "acct-org" });
+    const known = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
+    const unknown = await requestPayerBinding(payer, { subjectUserId: "svc2", billingAccountId: "no-such-account" });
+    expect(Object.keys(unknown).sort()).toEqual(Object.keys(known).sort());
+    expect(unknown).toMatchObject({ state: "pending", created: true });
+    expect(unknown.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(payer.rows.filter((b) => b.subject === "svc2")).toHaveLength(0);
+    expect(await payerFor(payer, "svc2")).toBeNull();
+  });
+
+  it("an account holds at most MAX_PENDING_PER_ACCOUNT pending asks; another account is unaffected, and a subject holds one", async () => {
+    const { grants, payer, me } = fixture();
+    for (let i = 0; i < MAX_PENDING_PER_ACCOUNT; i++) await requestPayerBinding(payer, { subjectUserId: `s${i}`, billingAccountId: "acct-org" });
     await expect(requestPayerBinding(payer, { subjectUserId: "one-more", billingAccountId: "acct-org" })).rejects.toMatchObject({ code: "too_many_requests" });
+    // The same subject asking again is the same row, not a second ask.
+    expect((await requestPayerBinding(payer, { subjectUserId: "s0", billingAccountId: "acct-org" })).created).toBe(false);
+    // Another account has its own count.
+    expect((await requestPayerBinding(payer, { subjectUserId: "one-more", billingAccountId: "acct-alice" })).created).toBe(true);
+    // A decided ask frees a slot.
+    const first = payer.rows[0]?.id as string;
+    await decidePayerBinding(payer, grants, { me: me("bob"), id: first, approve: false, owners: owners(["bob"]) });
+    expect((await requestPayerBinding(payer, { subjectUserId: "late", billingAccountId: "acct-org" })).created).toBe(true);
+  });
+
+  it("a pending ask expires after the TTL: it is not counted, cannot be decided, and the subject's next ask replaces it", async () => {
+    const { grants, payer, me } = fixture();
+    const day = 86_400_000;
+    const old = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
+    for (let i = 0; i < MAX_PENDING_PER_ACCOUNT - 1; i++) await requestPayerBinding(payer, { subjectUserId: `s${i}`, billingAccountId: "acct-org" });
+    await expect(requestPayerBinding(payer, { subjectUserId: "x", billingAccountId: "acct-org" })).rejects.toMatchObject({ code: "too_many_requests" });
+    payer.clock.now += PENDING_BINDING_TTL_DAYS * day;
+    // Expired: refused at decide time (nothing to decide), and filtered from the count.
+    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id: old.id, approve: true, owners: owners(["bob"]) })).decided).toBe(false);
+    expect(await payerFor(payer, "svc")).toBeNull();
+    expect((await requestPayerBinding(payer, { subjectUserId: "x", billingAccountId: "acct-org" })).created).toBe(true);
+    // The subject's own expired ask is replaced by a fresh one that can be approved.
+    const fresh = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
+    expect(fresh).toMatchObject({ created: true });
+    expect(fresh.id).not.toBe(old.id);
+    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id: fresh.id, approve: true, owners: owners(["bob"]) })).decided).toBe(true);
+    // A live binding does not expire.
+    payer.clock.now += 365 * day;
+    expect(await payerFor(payer, "svc")).toBe("acct-org");
   });
 
   it("deny dismisses a pending ask and a later ask starts again", async () => {
@@ -198,5 +242,69 @@ describe("org account decisions (approve, deny, revoke a grant row)", () => {
     const store = org();
     store.roles.push({ id: "r-h", principal: "agent", scope: ASK_SCOPE, revoked: false, approvedBy: "alice", resource: "account", accountId: "acct-alice", grantedAt: 1, expiresAt: null, revokedAt: null, linkHash: null, linkExpiresAt: null, linkConsumed: false, seq: 99 });
     expect((await revokeAccountRow(store, { me: me("alice"), rowId: "r-h" })).revoked).toBe(true);
+  });
+});
+
+describe("ownersForBinding (the owner read happens before the decision transaction)", () => {
+  it("reads an org's owners once, answers only for that source, and is undefined for a person's account or an unknown binding", async () => {
+    const { grants, payer, me } = fixture();
+    const { id } = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
+    const read = vi.fn(async () => ["bob"]);
+    const pre = await ownersForBinding(payer, grants, { owners: read }, id);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(await pre?.owners(SRC)).toEqual(["bob"]);
+    expect(await pre?.owners({ kind: "repo-spec", ref: "https://github.com/cogni-dao/other" })).toEqual([]);
+    expect(read).toHaveBeenCalledTimes(1);
+    // The decision uses the list read earlier: no second read, and a non-owner is still refused.
+    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id, approve: true, owners: pre })).decided).toBe(true);
+    expect(read).toHaveBeenCalledTimes(1);
+    const personal = await requestPayerBinding(payer, { subjectUserId: "svc2", billingAccountId: "acct-alice" });
+    expect(await ownersForBinding(payer, grants, { owners: read }, personal.id)).toBeUndefined();
+    expect(await ownersForBinding(payer, grants, { owners: read }, "00000000-0000-4000-8000-00000000ffff")).toBeUndefined();
+    expect(await ownersForBinding(payer, grants, undefined, id)).toBeUndefined();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed read throws before anything is decided, and a stale list does not let a non-owner through", async () => {
+    const { grants, payer, me } = fixture();
+    const { id } = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
+    await expect(ownersForBinding(payer, grants, down, id)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+    const pre = await ownersForBinding(payer, grants, owners(["bob"]), id);
+    await expect(decidePayerBinding(payer, grants, { me: me("dave"), id, approve: true, owners: pre })).rejects.toMatchObject({ code: "not_allowed" });
+  });
+});
+
+describe("selectRunPayer and payerScopeUserFor (pure run-path decisions)", () => {
+  const OWN = { id: "acct-svc", ownerUserId: "svc" };
+  const ORG = { id: "acct-org", ownerUserId: "org1" };
+  const deps = (bound: string | null | Error) => ({
+    payerFor: vi.fn(async () => {
+      if (bound instanceof Error) throw bound;
+      return bound;
+    }),
+    getAccount: vi.fn(async (id: string) => ({ [ORG.id]: ORG, [OWN.id]: OWN })[id] ?? null),
+  });
+
+  it("bills the bound account only for a live binding that names another, existing account", async () => {
+    expect(await selectRunPayer(deps(ORG.id), { subjectUserId: "svc", own: OWN })).toEqual({ account: ORG, bound: true });
+    const none = deps(null);
+    expect(await selectRunPayer(none, { subjectUserId: "svc", own: OWN })).toEqual({ account: OWN, bound: false });
+    expect(none.getAccount).not.toHaveBeenCalled();
+    expect((await selectRunPayer(deps(OWN.id), { subjectUserId: "svc", own: OWN })).bound).toBe(false);
+    expect(await selectRunPayer(deps("acct-gone"), { subjectUserId: "svc", own: OWN })).toEqual({ account: OWN, bound: false });
+  });
+
+  it("a failed binding read throws, so no run starts on a guessed payer", async () => {
+    await expect(selectRunPayer(deps(new Error("db down")), { subjectUserId: "svc", own: OWN })).rejects.toThrow("db down");
+  });
+
+  it("the run reads the bound account in its owner's scope only when the actor's live binding names exactly that account", async () => {
+    expect(await payerScopeUserFor(deps(ORG.id), { actorUserId: "svc", billingAccountId: ORG.id })).toBe("org1");
+    const own = deps(ORG.id);
+    expect(await payerScopeUserFor(own, { actorUserId: "svc", billingAccountId: OWN.id })).toBe("svc");
+    expect(own.payerFor).not.toHaveBeenCalled();
+    expect(await payerScopeUserFor(deps(null), { actorUserId: "svc", billingAccountId: ORG.id })).toBe("svc");
+    expect(await payerScopeUserFor(deps("acct-other"), { actorUserId: "svc", billingAccountId: ORG.id })).toBe("svc");
+    expect(await payerScopeUserFor(deps(ORG.id), { actorUserId: "svc", billingAccountId: "acct-gone" })).toBe("svc");
   });
 });

@@ -2,10 +2,13 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { CORE_TOOL_BUNDLE, withoutRemoteNodeArgument } from "../src/catalog";
 import { createKnowledgeReadImplementation } from "../src/tools/knowledge-read";
 import { createKnowledgeSearchImplementation } from "../src/tools/knowledge-search";
 import {
   createRemoteKnowledgeTransport,
+  REMOTE_ENTRY_CONTENT_MAX_CHARS,
   REMOTE_MAX_BODY_BYTES,
   RemoteKnowledgeError,
   redactSecretShapes,
@@ -52,17 +55,31 @@ describe("remote knowledge transport", () => {
     expect(h.remote.originOf("toks5")).toBe(TARGET.origin);
   });
 
-  it("sends one GET to the configured origin with a signed header, redirects off, a timeout signal, and a model-chosen id is encoded", async () => {
+  it("sends one GET to the configured origin with a signed header, redirects off and a timeout signal", async () => {
     const h = harness(() => jsonResponse(row()));
-    await h.remote.get("toks5", "../admin?x=1#frag");
+    await h.remote.get("toks5", "k1.v2-a_b");
     const [call] = h.calls;
-    expect(call?.url).toBe("https://toks5.example.org/api/v1/knowledge/..%2Fadmin%3Fx%3D1%23frag");
+    expect(call?.url).toBe("https://toks5.example.org/api/v1/knowledge/k1.v2-a_b");
     expect(call?.init.method).toBe("GET");
     expect(call?.init.redirect).toBe("manual");
     expect(call?.init.signal).toBeInstanceOf(AbortSignal);
     expect((call?.init.headers as Record<string, string>).authorization).toBe("Bearer signed-assertion");
     expect(call?.init.body).toBeUndefined();
     expect(h.authorize).toHaveBeenCalledWith(TARGET, "knowledge:read");
+  });
+
+  it("an id that is not a knowledge id is refused before any URL is built or any assertion is signed", async () => {
+    const h = harness(() => jsonResponse(row()));
+    const bad = ["", ".", "..", "../admin", "..%2fadmin", "a/b", "a\\b", "-start", ".hidden", "a?b=1", "a#frag", "a b", "a\nb", "é", "a".repeat(257), "https://evil.example/x"];
+    for (const id of bad) {
+      await expect(h.remote.get("toks5", id), JSON.stringify(id)).rejects.toMatchObject({ code: "invalid_id", message: "Invalid knowledge id" });
+    }
+    expect(h.authorize).not.toHaveBeenCalled();
+    expect(h.fetchImpl).not.toHaveBeenCalled();
+    // The longest allowed id, and ids with dots inside, pass.
+    await h.remote.get("toks5", `a${"b".repeat(255)}`);
+    await h.remote.get("toks5", "v1.2..3");
+    expect(h.calls).toHaveLength(2);
   });
 
   it("list and search use only the list path on the configured origin", async () => {
@@ -88,7 +105,7 @@ describe("remote knowledge transport", () => {
     }
   });
 
-  it("a 404 is an absent entry; a 5xx, a redirect and a network failure are unavailable, never followed", async () => {
+  it("a 404 is an absent entry; a 5xx, a redirect and a network failure are retryable unavailable (no receipt), never followed", async () => {
     expect(await harness(() => new Response("{}", { status: 404 })).remote.get("toks5", "k1")).toBeNull();
     for (const response of [
       () => new Response("{}", { status: 503 }),
@@ -98,7 +115,9 @@ describe("remote knowledge transport", () => {
       },
     ]) {
       const h = harness(response);
-      await expect(h.remote.get("toks5", "k1")).rejects.toMatchObject({ code: "unavailable" });
+      const error = await h.remote.get("toks5", "k1").catch((e: unknown) => e);
+      expect(error).toMatchObject({ code: "unavailable", message: "Remote knowledge is unavailable" });
+      expect((error as RemoteKnowledgeError).receipt).toBeUndefined();
       expect(h.calls).toHaveLength(1);
     }
   });
@@ -111,7 +130,22 @@ describe("remote knowledge transport", () => {
         }),
       { timeoutMs: 25 }
     );
-    await expect(h.remote.get("toks5", "k1")).rejects.toMatchObject({ code: "unavailable" });
+    const error = await h.remote.get("toks5", "k1").catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "unavailable" });
+    // A timeout is retryable: no terminal receipt.
+    expect((error as RemoteKnowledgeError).receipt).toBeUndefined();
+  });
+
+  it("cuts each entry's content to 64 KiB before it reaches the model (get, list and search)", async () => {
+    const long = "x".repeat(REMOTE_ENTRY_CONTENT_MAX_CHARS + 500);
+    const h = harness((url) => (url.includes("?") ? jsonResponse({ items: [row({ content: long })], domains: [] }) : jsonResponse(row({ content: long }))));
+    const got = await h.remote.get("toks5", "k1");
+    expect(got?.content.length).toBe(REMOTE_ENTRY_CONTENT_MAX_CHARS + 1);
+    expect(got?.content.endsWith("…")).toBe(true);
+    expect((await h.remote.list("toks5", { domain: "meta", limit: 5 }))[0]?.content.length).toBe(REMOTE_ENTRY_CONTENT_MAX_CHARS + 1);
+    expect((await h.remote.search("toks5", { domain: "meta", query: "xxx", limit: 5 }))[0]?.content.length).toBe(REMOTE_ENTRY_CONTENT_MAX_CHARS + 1);
+    const short = await harness(() => jsonResponse(row({ content: "short" }))).remote.get("toks5", "k1");
+    expect(short?.content).toBe("short");
   });
 
   it("a body over the cap is refused while it streams, whatever content-length says", async () => {
@@ -170,5 +204,30 @@ describe("the stock knowledge tools with a `node` argument", () => {
     await expect(search.execute({ domain: "meta", query: "x", node: "nope" }, undefined as never)).rejects.toThrow("Unknown node alias");
     const bare = createKnowledgeReadImplementation({ knowledgeCapability: local as never });
     await expect(bare.execute({ id: "k1", node: "toks5" }, undefined as never)).rejects.toThrow("Unknown node alias");
+  });
+});
+
+describe("the `node` argument is advertised only when the node has link targets", () => {
+  const find = (bundle: ReturnType<typeof withoutRemoteNodeArgument>, name: string) => bundle.find((t) => t.contract.name === name);
+  const props = (tool: ReturnType<typeof find>) => Object.keys((z.toJSONSchema(tool?.contract.inputSchema as never) as { properties: Record<string, unknown> }).properties);
+
+  it("the stock bundle advertises `node`; the local bundle leaves it out of both tools' schema and description and keeps every other tool", () => {
+    const local = withoutRemoteNodeArgument(CORE_TOOL_BUNDLE);
+    for (const name of ["core__knowledge_read", "core__knowledge_search"]) {
+      expect(props(find(CORE_TOOL_BUNDLE, name)), name).toContain("node");
+      expect(find(CORE_TOOL_BUNDLE, name)?.contract.description).toContain("'node'");
+      expect(props(find(local, name)), name).not.toContain("node");
+      expect(find(local, name)?.contract.description).not.toContain("'node'");
+      expect(find(local, name)?.contract.name).toBe(name);
+    }
+    expect(local.map((t) => t.contract.name)).toEqual(CORE_TOOL_BUNDLE.map((t) => t.contract.name));
+    const others = local.filter((t) => !t.contract.name.startsWith("core__knowledge_re") && t.contract.name !== "core__knowledge_search");
+    expect(others.every((t, i) => t === CORE_TOOL_BUNDLE.filter((x) => others.some((o) => o.contract.name === x.contract.name))[i])).toBe(true);
+  });
+
+  it("a model that sends `node` to a local-only tool has it stripped by the schema, so the local store answers", () => {
+    const local = find(withoutRemoteNodeArgument(CORE_TOOL_BUNDLE), "core__knowledge_read");
+    const parsed = (local?.contract.inputSchema as z.ZodType).parse({ id: "k1", node: "toks5" }) as Record<string, unknown>;
+    expect(parsed).toEqual({ id: "k1" });
   });
 });

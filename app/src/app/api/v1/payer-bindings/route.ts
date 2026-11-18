@@ -8,7 +8,9 @@
  * Scope: HTTP validation and delegation to the agent authority (`requestPayerBinding` in `@cogni-dao/agent-grants`). The subject is always the authenticated caller, never a body field.
  * Invariants:
  *   - PAYER_IS_AUTHORIZED: the ask grants nothing. A run bills the account only after an owner of that account approves (`POST /api/v1/payer-bindings/{id}/decision`).
- *   - One open binding per subject: the same account again returns the same row; another account replaces a pending ask, and is 409 `already_bound` while a live binding exists.
+ *   - One open binding per subject: the same account again returns the same row; another account replaces a pending ask, and is 409 `already_bound` while a live binding exists. An account holds
+ *     at most 20 pending asks (429 `too_many_requests`); a pending ask ends after 7 days.
+ *   - UNKNOWN_ACCOUNT_IS_INDISTINGUISHABLE: an account that does not exist gets the same 201 `{ id, status: "pending" }` as one that does (a random id), and nothing is written.
  *   - A store failure is 503 `authz_unavailable`, with its failure class logged and no message.
  * Side-effects: IO (service-role database write)
  * Links: https://node-template.cognidao.org/knowledge/node-relationships-design
@@ -50,7 +52,6 @@ export const POST = wrapRouteHandlerWithLogging(
       return json(payerBindingAskOperation.output.parse({ id: outcome.id, status: outcome.state }), outcome.created ? 201 : 200);
     } catch (error) {
       if (error instanceof AgentRolesError) {
-        if (error.code === "principal_not_found") return json({ error: "not_found" }, 404);
         if (error.code === "not_allowed") return json({ error: "already_bound" }, 409);
         if (error.code === "too_many_requests") return json({ error: "too_many_requests" }, 429);
       }
