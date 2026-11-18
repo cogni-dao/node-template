@@ -560,7 +560,7 @@ describe("the stage order", () => {
 
   it("structurally allows any move back and only the forward targets of a stage", () => {
     expect(isValidTransition("needs_validation", "needs_triage")).toBe(true);
-    expect(isValidTransition("needs_triage", "needs_implement")).toBe(true);
+    expect(isValidTransition("needs_triage", "needs_implement")).toBe(false);
     expect(isValidTransition("needs_triage", "needs_merge")).toBe(false);
     expect(isValidTransition("needs_design", "needs_implement")).toBe(false);
     expect(isValidTransition("done", "needs_merge")).toBe(false);

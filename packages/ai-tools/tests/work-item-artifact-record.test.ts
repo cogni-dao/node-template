@@ -23,7 +23,7 @@ import {
 } from "../src/tools/work-item-artifact-record";
 import { workItemUpdateContract } from "../src/tools/work-item-update";
 
-const TRIAGE = { kind: "triage", subject: "work:task.1", verdict: "implement", note: "no KPI measures this yet" };
+const TRIAGE = { kind: "triage", subject: "work:task.1", verdict: "design", note: "no KPI measures this yet" };
 const STORED = {
   id: "wia-1",
   itemId: "task.1",
@@ -56,6 +56,8 @@ describe("core__work_item_artifact_record", () => {
       WorkItemArtifactRecordInputSchema.safeParse({ id: "task.1", artifact: { ...TRIAGE, kind: "design_waiver" } }).success
     ).toBe(false);
     expect(WorkItemArtifactRecordInputSchema.safeParse({ id: "task.1", artifact: TRIAGE }).success).toBe(true);
+    // Triage never routes straight to implement: every change passes design review.
+    expect(WorkItemArtifactRecordInputSchema.safeParse({ id: "task.1", artifact: { ...TRIAGE, verdict: "implement" } }).success).toBe(false);
   });
 
   it("records through the capability and returns the route's 201 body", async () => {

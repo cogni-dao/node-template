@@ -59,7 +59,7 @@ export function isLegacyStatus(status: WorkItemStatus): boolean {
  */
 export const FORWARD_TARGETS: ReadonlyMap<WorkItemStatus, readonly WorkItemStatus[]> =
   new Map<WorkItemStatus, readonly WorkItemStatus[]>([
-    ["needs_triage", ["needs_research", "needs_design", "needs_implement"]],
+    ["needs_triage", ["needs_research", "needs_design"]],
     ["needs_research", ["done"]],
     ["needs_design", ["needs_design_review"]],
     ["needs_design_review", ["needs_implement"]],
