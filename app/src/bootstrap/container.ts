@@ -1102,7 +1102,7 @@ function createContainer(): Container {
 	// story.0038 phase 2: other nodes' knowledge through the stock tools. The signer is read lazily (it is built with `serviceAuth` below).
 	const serviceLinks = createServiceLinks({
 		env,
-		signer: () => serviceAuth.signer,
+		signer: () => serviceAuth.getSigner(),
 		log,
 	});
 

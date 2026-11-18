@@ -49,7 +49,7 @@ export interface ServiceLinks {
 export function createServiceLinks(deps: {
   readonly env: { readonly SERVICE_LINK_TARGETS?: string | undefined };
   /** Read lazily: the signer is built after the tool bindings. */
-  readonly signer: () => ServiceAssertionSigner | null;
+  readonly signer: () => Promise<ServiceAssertionSigner | null>;
   readonly log: Logger;
   readonly fetchImpl?: typeof fetch;
 }): ServiceLinks {
@@ -58,7 +58,7 @@ export function createServiceLinks(deps: {
   const doFetch = deps.fetchImpl ?? fetch;
 
   const authorize = async (target: RemoteKnowledgeTarget, scope: string): Promise<string> => {
-    const signer = deps.signer();
+    const signer = await deps.signer();
     if (!signer) throw new Error("no signer");
     return signer.authorizationHeader({ service: REMOTE_KNOWLEDGE_SERVICE, audienceNodeId: target.nodeId, scope });
   };
@@ -89,7 +89,7 @@ export function createServiceLinks(deps: {
     async ask(alias, scope) {
       const target = byAlias.get(alias);
       if (!target) return { ok: false, reason: "unknown_alias" };
-      const signer = deps.signer();
+      const signer = await deps.signer();
       if (!signer) return { ok: false, reason: "no_signer" };
       let response: Response;
       try {

@@ -184,6 +184,16 @@ describe("org account decisions (approve, deny, revoke a grant row)", () => {
     expect(row?.revoked).toBe(true);
   });
 
+  it("with the owner source down, a live grant still authorizes the agent and an org owner's read is refused", async () => {
+    const store = org();
+    const token = await asked(store, "agent");
+    await approveAccountAsk(store, { me: me("bob"), token, accountId: "acct-org", owners: owners(["bob"]) });
+    // A live grant never waits on the owner read (OWNERS_READ_AT_DECISION): the call reads the grant row alone.
+    expect(await authorizeAccount(store, { via: "bearer", callerUserId: "agent", scope: ASK_SCOPE, accountId: "acct-org", owners: down })).toBe("delegated");
+    // An owner reading through the source is refused while it is unreadable, never allowed.
+    await expect(authorizeAccount(store, { via: "session", callerUserId: "bob", scope: ASK_SCOPE, accountId: "acct-org", owners: down })).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+  });
+
   it("a human-owned account keeps its own statement: the owner revokes without any owner source", async () => {
     const store = org();
     store.roles.push({ id: "r-h", principal: "agent", scope: ASK_SCOPE, revoked: false, approvedBy: "alice", resource: "account", accountId: "acct-alice", grantedAt: 1, expiresAt: null, revokedAt: null, linkHash: null, linkExpiresAt: null, linkConsumed: false, seq: 99 });
