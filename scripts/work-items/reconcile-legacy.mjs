@@ -13,9 +13,9 @@
  *   - NO_SECRETS_ON_ARGV: the key is read from the environment (`COGNI_NODE_API_KEY`, or the variable `--key-env` names), never
  *     from an argument, never printed. The script needs no database credential.
  *   - DRY_RUN_BY_DEFAULT: without `--apply` nothing is written; every item prints one plan row.
- *   - LEGACY_BACK_TO_TRIAGE: a blocked item moves to needs_triage and stops there. An item in needs_closeout (the stage after merge)
- *     whose PR is merged closes out on a fixture with `--backfill`; any other needs_closeout item moves to needs_triage. `--legacy`
- *     lists every needs_closeout and blocked item on the target.
+ *   - LEGACY_BACK_TO_TRIAGE: only `blocked` is legacy: a blocked item moves to needs_triage and stops there. needs_closeout is the
+ *     stage after merge: with `--backfill` an item there whose PR is merged closes out on a fixture; any other stays where it is.
+ *     `--legacy` lists every needs_closeout and blocked item on the target.
  *   - NO_AI: it calls no model and spends no AI budget; owners advance items past implementation review with real artifacts.
  *   - FACTS_ONLY: needs_triage -> needs_implement happens only when the item already has six nonzero scores and a `goal:` label;
  *     it records a `triage` artifact (route `implement`; `research` for a spike whose `pr` is a hub inbox) first. needs_implement
@@ -76,18 +76,21 @@ const LADDER = [
 	"needs_implementation_review",
 	"needs_validation",
 	"needs_merge",
+	"needs_closeout",
 	"done",
 ];
 const INBOX_URL = /^https?:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?\/knowledge\/inbox\/contrib-[a-z0-9-]{1,200}$/;
 const ID = /^[a-z]+\.[0-9]+$/;
-const LEGACY = ["needs_closeout", "blocked"];
+const LEGACY = ["blocked"];
+/** What `--legacy` lists: blocked items, and needs_closeout items a backfill may close out. */
+const LISTED = ["needs_closeout", "blocked"];
 
 /** Every item on the target still in a legacy status, paged with the list cursor. */
 async function legacyIds() {
 	const ids = [];
 	let cursor;
 	do {
-		const query = `statuses=${LEGACY.join(",")}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+		const query = `statuses=${LISTED.join(",")}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
 		const res = await call("GET", `/work/items?${query}`);
 		if (res.status !== 200) usage(`listing legacy items failed: ${res.status} ${res.json.errorCode ?? ""}`);
 		ids.push(...(res.json.items ?? []).map((item) => item.id));
@@ -240,9 +243,11 @@ function plan(item, artifacts, setPr, ledgerTarget) {
 	const pr = setPr.get(item.id) ?? item.pr;
 	const missing = [];
 	let next = "none";
-	if (LEGACY.includes(status)) {
-		next = status === "blocked" ? "-> needs_triage, then stay: a blocker in blockedBy" : "-> needs_triage, then re-read";
-		if (status === "blocked") missing.push("a blocker in blockedBy");
+	if (status === "blocked") {
+		next = "-> needs_triage, then stay: a blocker in blockedBy";
+		missing.push("a blocker in blockedBy");
+	} else if (status === "needs_closeout") {
+		next = values.backfill ? "closeout fixture -> done, only if its PR is merged; else stay" : "stay: its owner closes out";
 	} else if (status === "needs_triage" && ledgerTarget === "needs_triage") {
 		next = "stay: the ledger target is needs_triage (a blocker in blockedBy, then a fresh triage)";
 		missing.push("a blocker in blockedBy");
@@ -270,6 +275,7 @@ function plan(item, artifacts, setPr, ledgerTarget) {
 	} else {
 		next = "stay: later stages need a real reviewer or validator";
 	}
+	if (status === "needs_closeout") return { next, missing: ["a closeout artifact"], pr };
 	if (isStory(item)) missing.push("children done or cancelled, then a live validation");
 	else if (!hasDeliverable(pr)) missing.push("pr naming a deliverable");
 	else {
@@ -316,7 +322,8 @@ async function recordTriage(item, verdict) {
 async function walk(state, setPr, ledgerTarget) {
 	let { item } = state;
 	// needs_closeout is the stage after merge: a merged item there closes out on a fixture (--backfill); any other goes to triage.
-	if (item.status === "needs_closeout" && values.backfill && (await prFacts(item.pr))?.merged) {
+	if (item.status === "needs_closeout") {
+		if (!values.backfill || !(await prFacts(item.pr))?.merged) return;
 		const reason = "Legacy backfill fixture: merged before the artifact ladder (story.0047); walks to its real stage.";
 		if (await fixture(item, "closeout", { subject: `work:${item.id}`, verdict: "done" })) await patch(item, { status: "done" }, reason);
 		return;
