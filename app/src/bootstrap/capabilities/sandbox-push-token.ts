@@ -9,7 +9,7 @@
  * Invariants:
  *   - WARN_NEVER_BLOCK: no key, or a failed mint, logs a warning and returns no env; the call still runs and only
  *     git push fails.
- *   - CACHE_UNTIL_NEAR_EXPIRY: one mint serves every call until 10 minutes before the token expires.
+ *   - CACHE_UNTIL_NEAR_EXPIRY: one mint serves every call until 20 minutes before the token expires, longer than any call.
  *   - BACK_OFF_ON_FAILURE: after a failed mint, calls skip minting for 60 seconds, so an operator outage
  *     never adds the mint timeout to every call.
  *   - TOKEN_NEVER_LOGGED: logs carry the status and error code only.
@@ -22,7 +22,8 @@ import type { ServerEnv } from "@/shared/env";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 const logger = makeLogger({ component: "SandboxPushToken" });
-const REFRESH_BEFORE_MS = 10 * 60_000;
+// Longer than the longest sandbox call (15 min), so a token never expires mid-call.
+const REFRESH_BEFORE_MS = 20 * 60_000;
 const MINT_TIMEOUT_MS = 15_000;
 const FAILURE_BACKOFF_MS = 60_000;
 
