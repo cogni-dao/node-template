@@ -40,7 +40,7 @@ const MODE_NONE_SELF_AUTHENTICATED: Readonly<Record<string, string>> = {
   "agent.mine.preview": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.on": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.off": "human plane: refuseNonSession() then the signed-in person",
-  "agent.service-enrollment.create": "verifies the caller's signed service assertion (RFC 7523) against a trusted home's published keys, then writes one pending ask for that service principal; it grants nothing",
+  "v1/public/agent/service-enrollments/route.ts#POST": "verifies the caller's signed service assertion (RFC 7523) against a trusted home's published keys, then writes one pending ask for that service principal; it grants nothing",
   "agent.credentials.rotate": "credentialBearerRoute verifies the caller's own revocable key (active or renew_only) and acts on that credential only",
   "agent.credentials.confirm": "credentialBearerRoute verifies the caller's own revocable key and acts on that credential only",
   "agent.credentials.revoke": "credentialBearerRoute verifies the caller's own revocable key and acts on that credential only",

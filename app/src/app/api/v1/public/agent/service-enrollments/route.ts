@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/public/agent/service-enrollments`
  * Purpose: A service on a trusted home node asks this node for one permission (story.0038). The ask is signed: `Authorization: Bearer <assertion>` and body `{ scope }`.
  *   X (this node) verifies the assertion against the home's published keys, creates or reuses ONE principal per (issuer, service), and writes ONE pending ask.
- * Scope: HTTP validation, the assertion check and delegation to the agent authority. No authority logic, no session (`auth.mode: none`: the assertion is the credential).
+ * Scope: HTTP validation, the assertion check and delegation to the agent authority. No authority logic, no session (the public wrapper, `auth.mode: none`: the assertion is the credential).
  * Invariants:
  *   - NOTHING_IS_GRANTED: the answer is `pending` (201 when the ask is new, 200 when it already waited) or `granted` (200, a live grant exists). An admin turns the ask On in
  *     `/admin/ai-access`; this route never writes an approver.
@@ -20,7 +20,7 @@ import { AgentRolesError } from "@cogni/agent-grants";
 import { serviceEnrollmentOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
-import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { wrapPublicRoute } from "@/bootstrap/http";
 import { EVENT_NAMES, failureFields } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
@@ -35,8 +35,9 @@ function bearerOf(request: Request): string | null {
   return header.slice(7).trimStart() || null;
 }
 
-export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "agent.service-enrollment.create", auth: { mode: "none" } },
+// wrapPublicRoute: rate limited per IP, no session (the signed assertion is the credential). A POST answer is never cached.
+export const POST = wrapPublicRoute(
+  { routeId: "agent.service-enrollment.create", cacheTtlSeconds: 0, staleWhileRevalidateSeconds: 0 },
   async (ctx, request) => {
     const token = bearerOf(request);
     if (!token) return json({ error: "invalid_token" }, 401);
