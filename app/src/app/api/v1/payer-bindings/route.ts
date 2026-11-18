@@ -10,7 +10,9 @@
  *   - PAYER_IS_AUTHORIZED: the ask grants nothing. A run bills the account only after an owner of that account approves (`POST /api/v1/payer-bindings/{id}/decision`).
  *   - One open binding per subject: the same account again returns the same row; another account replaces a pending ask, and is 409 `already_bound` while a live binding exists. An account holds
  *     at most 20 pending asks (429 `too_many_requests`); a pending ask ends after 7 days.
- *   - UNKNOWN_ACCOUNT_IS_INDISTINGUISHABLE: an account that does not exist gets the same 201 `{ id, status: "pending" }` as one that does (a random id), and nothing is written.
+ *   - ONE_ANSWER: a new ask, a repeat ask and an ask for an unknown account are all 201 `{ id, status: "pending" }`. KNOWN LEAK: an existing account that already holds 20 pending asks answers 429,
+ *     which tells a caller the account exists and is full; an unknown account never does.
+ *   - UNKNOWN_ACCOUNT_IS_INDISTINGUISHABLE: an account that does not exist gets the same 201 `{ id, status: "pending" }` as one that does (a random id), and nothing is written. A rejected ask for an unknown account leaves the subject's other pending ask untouched.
  *   - A store failure is 503 `authz_unavailable`, with its failure class logged and no message.
  * Side-effects: IO (service-role database write)
  * Links: https://node-template.cognidao.org/knowledge/node-relationships-design
@@ -49,7 +51,8 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!parsed.success) return json({ error: "invalid input" }, 400);
     try {
       const outcome = await getContainer().agentAuthority.requestPayerBinding(sessionUser.id, parsed.data.billingAccountId);
-      return json(payerBindingAskOperation.output.parse({ id: outcome.id, status: outcome.state }), outcome.created ? 201 : 200);
+      // One answer for a new ask, a repeat of the same ask and an ask for an account that does not exist: 201 `{ id, status: "pending" }`. Whether the binding is live is learned by use, never from the ask.
+      return json(payerBindingAskOperation.output.parse({ id: outcome.id, status: "pending" }), 201);
     } catch (error) {
       if (error instanceof AgentRolesError) {
         if (error.code === "not_allowed") return json({ error: "already_bound" }, 409);

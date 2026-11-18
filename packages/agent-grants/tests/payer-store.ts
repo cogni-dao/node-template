@@ -58,11 +58,11 @@ export function memoryPayerStore(init: {
       const current = slot(subjectUserId);
       if (current && !expired(current) && current.account === billingAccountId) return { result: "existing", id: current.id };
       if (current?.approvedBy) return { result: "already_bound", id: null };
+      if (!(billingAccountId in init.accounts)) return { result: "unknown_account", id: null };
       if (current) {
         current.revoked = true;
         current.revokedBy = subjectUserId;
       }
-      if (!(billingAccountId in init.accounts)) return { result: "unknown_account", id: null };
       if (rows.filter((r) => r.account === billingAccountId && !r.revoked && !r.approvedBy && !expired(r)).length >= maxPendingPerAccount) return { result: "too_many", id: null };
       const row: Binding = { id: `00000000-0000-4000-8000-${String(++seq).padStart(12, "0")}`, subject: subjectUserId, account: billingAccountId, approvedBy: null, revoked: false, revokedBy: null, createdAt: clock.now };
       rows.push(row);

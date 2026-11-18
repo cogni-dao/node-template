@@ -225,9 +225,17 @@ describe("the `node` argument is advertised only when the node has link targets"
     expect(others.every((t, i) => t === CORE_TOOL_BUNDLE.filter((x) => others.some((o) => o.contract.name === x.contract.name))[i])).toBe(true);
   });
 
-  it("a model that sends `node` to a local-only tool has it stripped by the schema, so the local store answers", () => {
-    const local = find(withoutRemoteNodeArgument(CORE_TOOL_BUNDLE), "core__knowledge_read");
-    const parsed = (local?.contract.inputSchema as z.ZodType).parse({ id: "k1", node: "toks5" }) as Record<string, unknown>;
-    expect(parsed).toEqual({ id: "k1" });
+  it("a local-only tool refuses a call that carries `node` (a validation error), and still accepts the same call without it", () => {
+    for (const [name, ok] of [
+      ["core__knowledge_read", { id: "k1" }],
+      ["core__knowledge_search", { domain: "meta", query: "x" }],
+    ] as const) {
+      const schema = find(withoutRemoteNodeArgument(CORE_TOOL_BUNDLE), name)?.contract.inputSchema as z.ZodType;
+      expect(schema.safeParse(ok).success, name).toBe(true);
+      expect(schema.safeParse({ ...ok, node: "toks5" }).success, name).toBe(false);
+      expect(schema.safeParse({ ...ok, anything: 1 }).success, name).toBe(false);
+      // The stock tool still takes `node`.
+      expect((find(CORE_TOOL_BUNDLE, name)?.contract.inputSchema as z.ZodType).safeParse({ ...ok, node: "toks5" }).success, name).toBe(true);
+    }
   });
 });

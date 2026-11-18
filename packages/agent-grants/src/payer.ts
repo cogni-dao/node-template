@@ -18,7 +18,8 @@
  *     refused on a failed read). NO_SELF_APPROVAL: the subject never decides its own binding. The statement also pins the account to one a person owns or an org owns.
  *   - OWNERS_READ_BEFORE_THE_TRANSACTION: `ownersForBinding` reads an org's owners (a network read) before the node opens its transaction, so no database connection waits on it.
  *   - NEVER_CACHED: `payerFor` reads the table on every call, so Off refuses the next run.
- *   - UNKNOWN_ACCOUNT_IS_INDISTINGUISHABLE: an ask for an account that does not exist answers like an ask for one that does (a pending binding with an id) and writes no row.
+ *   - UNKNOWN_ACCOUNT_IS_INDISTINGUISHABLE: an ask for an account that does not exist answers like an ask for one that does (a pending binding with an id), writes no row and closes nothing (the
+ *     subject's other pending ask stays). Known leak: an existing account already holding `MAX_PENDING_PER_ACCOUNT` pending asks is `too_many`, which an unknown account never is.
  *   - A subject is any principal: a human, an agent or a service principal minted from another node's signed assertion.
  * Side-effects: IO (store reads and writes)
  * Links: https://node-template.cognidao.org/knowledge/node-relationships-design (PAYER_IS_AUTHORIZED), https://node-template.cognidao.org/knowledge/node-service-enrollment
@@ -250,6 +251,9 @@ export function createPostgresPayerBindingStore(sql: SqlTag): PayerBindingStore 
       const current = open[0];
       if (current && current.expired !== true && current.billing_account_id === billingAccountId) return { result: "existing", id: str(current.id) };
       if (current?.approved_by) return { result: "already_bound", id: null };
+      // The account must exist BEFORE anything is closed: an ask for an unknown account writes nothing and leaves the subject's other pending ask alone.
+      const known = await sql`SELECT 1 AS ok FROM billing_accounts WHERE id = ${billingAccountId} LIMIT 1`;
+      if (known.length === 0) return { result: "unknown_account", id: null };
       if (current) {
         // A pending ask for another account, or this subject's own expired ask, is replaced: the unique index allows one open row.
         await sql`
@@ -268,9 +272,7 @@ export function createPostgresPayerBindingStore(sql: SqlTag): PayerBindingStore 
         RETURNING id`;
       const id = str(inserted[0]?.id);
       if (id) return { result: "created", id };
-      // Nothing was written: no such account, a concurrent ask by this subject, or the cap.
-      const known = await sql`SELECT 1 AS ok FROM billing_accounts WHERE id = ${billingAccountId} LIMIT 1`;
-      if (known.length === 0) return { result: "unknown_account", id: null };
+      // Nothing was written: a concurrent ask by this subject, or the cap.
       const raced = await sql`
         SELECT id, billing_account_id FROM payer_bindings WHERE subject_user_id = ${subjectUserId} AND revoked_at IS NULL LIMIT 1`;
       if (raced[0]) return raced[0].billing_account_id === billingAccountId ? { result: "existing", id: str(raced[0].id) } : { result: "already_bound", id: null };

@@ -47,9 +47,12 @@ const knowledgeReadFields = {
 };
 const idOrDomain = { message: "Either 'id' or 'domain' is required" };
 
-/** The input without `node`: what the model sees on a node that has no link targets. */
+/**
+ * The input without `node`: what the model sees on a node that has no link targets. STRICT: a call that carries `node` (or any unknown key) is a validation error, never a silent read
+ * of this node's own store.
+ */
 export const KnowledgeReadLocalInputSchema = z
-  .object(knowledgeReadFields)
+  .strictObject(knowledgeReadFields)
   .refine((d) => d.id || d.domain, idOrDomain);
 
 export const KnowledgeReadInputSchema = z

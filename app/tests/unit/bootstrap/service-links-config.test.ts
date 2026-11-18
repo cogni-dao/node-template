@@ -11,12 +11,16 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseServiceLinksFile } from "@cogni/repo-spec";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
 
 const ROOT = resolve(__dirname, "../../../..");
 const SHIPPED = readFileSync(resolve(ROOT, ".cogni/service-links.yaml"), "utf8");
 const log = { debug: vi.fn(), warn: vi.fn() };
+beforeEach(() => {
+  log.debug.mockClear();
+  log.warn.mockClear();
+});
 const load = (environment: string | undefined, read: (file: string) => string = () => SHIPPED, repoRoot: string | undefined = "/repo") =>
   loadServiceLinksConfig({ environment, repoRoot, log: log as never, read });
 
@@ -49,10 +53,38 @@ describe("the shipped .cogni/service-links.yaml", () => {
   });
 });
 
+describe("what the loader logs", () => {
+  it("an unreadable file and a malformed file are ONE warning naming the reason, never the contents", () => {
+    expect(
+      load("candidate-a", () => {
+        throw new Error("ENOENT secret-path");
+      })
+    ).toEqual({ trustedHomes: [], targets: [] });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn.mock.calls[0]?.[0]).toMatchObject({ reason: "file_unreadable", environment: "candidate-a" });
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("secret-path");
+    log.warn.mockClear();
+    for (const text of ["a: [unclosed", "- a\n- list", "candidate-a: nope", "candidate-a:\n  - x"]) {
+      expect(load("candidate-a", () => text), text).toEqual({ trustedHomes: [], targets: [] });
+    }
+    expect(log.warn).toHaveBeenCalledTimes(4);
+    expect(log.warn.mock.calls.every(([fields]) => (fields as { reason: string }).reason === "file_malformed")).toBe(true);
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("unclosed");
+  });
+
+  it("a missing environment key is routine: debug only, no warning; a good file warns nothing", () => {
+    expect(load("preview")).toEqual({ trustedHomes: [], targets: [] });
+    expect(load("candidate-a").targets).toHaveLength(1);
+    expect(load(undefined)).toEqual({ trustedHomes: [], targets: [] });
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalled();
+  });
+});
+
 describe("parseServiceLinksFile and the strict parsers fail closed", () => {
   it("malformed YAML, a non-mapping file and a non-mapping section are none", () => {
     for (const text of ["a: [unclosed", "- just\n- a list", "42", "", "candidate-a: nope", "candidate-a:\n  - x"]) {
-      expect(parseServiceLinksFile(text, "candidate-a"), text).toEqual({ trustedHomes: [], targets: [] });
+      expect(parseServiceLinksFile(text, "candidate-a"), text).toMatchObject({ trustedHomes: [], targets: [] });
     }
   });
 

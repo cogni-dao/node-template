@@ -49,8 +49,11 @@ const knowledgeSearchFields = {
     .describe("Maximum results (1-20, default 10)"),
 };
 
-/** The input without `node`: what the model sees on a node that has no link targets. */
-export const KnowledgeSearchLocalInputSchema = z.object(knowledgeSearchFields);
+/**
+ * The input without `node`: what the model sees on a node that has no link targets. STRICT: a call that carries `node` (or any unknown key) is a validation error, never a silent read
+ * of this node's own store.
+ */
+export const KnowledgeSearchLocalInputSchema = z.strictObject(knowledgeSearchFields);
 
 export const KnowledgeSearchInputSchema = z.object({
   ...knowledgeSearchFields,

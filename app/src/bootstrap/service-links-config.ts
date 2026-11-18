@@ -7,6 +7,7 @@
  *   Public URLs belong in Git config; the signing key is the only secret (`SERVICE_ASSERTION_SIGNING_SEED`).
  * Scope: One file read at boot, keyed by `DEPLOY_ENVIRONMENT`, through the pure parser in `@cogni/repo-spec` and the strict parsers in `@cogni/agent-grants/service-auth`.
  * Invariants:
+ *   - LOUD_ON_MISTAKES: an unreadable or malformed file is one warning naming the reason (never file contents); a missing environment key is routine and logs at debug only.
  *   - FAIL_CLOSED: a missing file, an unreadable or malformed file, a missing `DEPLOY_ENVIRONMENT` or an environment with no key is no homes and no targets (every assertion is
  *     `untrusted_issuer`, every alias is unknown). Another environment's section is never used.
  *   - STRICT_PER_ENTRY: a malformed home or target is dropped by the package parsers; the rest are kept.
@@ -42,10 +43,15 @@ export function loadServiceLinksConfig(deps: {
   try {
     text = (deps.read ?? ((file) => fs.readFileSync(file, "utf8")))(path.join(deps.repoRoot, SERVICE_LINKS_FILE));
   } catch {
-    deps.log.debug({ reason: "service_links_file_unreadable" }, "service_links.config");
+    // The deployment names an environment and a repo root, so the file should be there: this is a mistake, not routine.
+    deps.log.warn({ event: "service_links.config", reason: "file_unreadable", environment: deps.environment }, "service_links.config");
     return NONE;
   }
   const section = parseServiceLinksFile(text, deps.environment);
+  if (section.status === "malformed") {
+    deps.log.warn({ event: "service_links.config", reason: "file_malformed", environment: deps.environment }, "service_links.config");
+    return NONE;
+  }
   const config: ServiceLinksConfig = { trustedHomes: parseTrustedHomes(section.trustedHomes), targets: parseLinkTargets(section.targets) };
   deps.log.debug(
     { environment: deps.environment, trustedHomes: config.trustedHomes.length, targets: config.targets.length },

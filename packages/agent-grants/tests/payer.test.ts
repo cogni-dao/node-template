@@ -122,6 +122,17 @@ describe("payer binding lifecycle", () => {
     expect(await payerFor(payer, "svc2")).toBeNull();
   });
 
+  it("an ask for an unknown account closes nothing: the subject's other pending ask stays and can still be approved", async () => {
+    const { grants, payer, me } = fixture();
+    const kept = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
+    const decoy = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "no-such-account" });
+    expect(decoy).toMatchObject({ state: "pending", created: true });
+    expect(decoy.id).not.toBe(kept.id);
+    expect(payer.rows.filter((b) => b.subject === "svc" && !b.revoked).map((b) => b.id)).toEqual([kept.id]);
+    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id: kept.id, approve: true, owners: owners(["bob"]) })).decided).toBe(true);
+    expect(await payerFor(payer, "svc")).toBe("acct-org");
+  });
+
   it("an account holds at most MAX_PENDING_PER_ACCOUNT pending asks; another account is unaffected, and a subject holds one", async () => {
     const { grants, payer, me } = fixture();
     for (let i = 0; i < MAX_PENDING_PER_ACCOUNT; i++) await requestPayerBinding(payer, { subjectUserId: `s${i}`, billingAccountId: "acct-org" });

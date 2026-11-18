@@ -247,6 +247,19 @@ describe("org decisions and payer bindings (real Postgres)", () => {
     });
   });
 
+  it("an ask for an unknown account closes nothing: the subject's pending ask for a real account stays open", async () => {
+    await rolledBack(async (tx) => {
+      const sql = tx as unknown as SqlTag;
+      const payer = createPostgresPayerBindingStore(sql);
+      const org = await ensureOrg(sql, SRC);
+      const svc = await user(tx, "svc");
+      const kept = await requestPayerBinding(payer, { subjectUserId: svc, billingAccountId: org.billingAccountId });
+      const decoy = await requestPayerBinding(payer, { subjectUserId: svc, billingAccountId: randomUUID() });
+      expect(decoy.id).not.toBe(kept.id);
+      expect(await tx`SELECT id, revoked_at FROM payer_bindings WHERE subject_user_id = ${svc}`).toEqual([{ id: kept.id, revoked_at: null }]);
+    });
+  });
+
   it("ownersForBinding reads an org's owners before the decision, and is undefined for a person's account", async () => {
     await rolledBack(async (tx) => {
       const sql = tx as unknown as SqlTag;

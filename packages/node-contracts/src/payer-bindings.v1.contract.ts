@@ -17,9 +17,10 @@ import { z } from "zod";
 export const payerBindingAskOperation = {
   id: "payer-bindings.ask.v1",
   input: z.object({ billingAccountId: z.string().min(1).max(100) }),
+  /** Always 201 `{ id, status: "pending" }`: a new ask, a repeat and an ask for an unknown account look the same. Known leak: an existing account already holding 20 pending asks answers 429. */
   output: z.object({
     id: z.string().uuid(),
-    status: z.enum(["pending", "live"]),
+    status: z.literal("pending"),
   }),
 } as const;
 
