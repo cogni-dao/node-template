@@ -124,6 +124,10 @@ import {
 } from "@/adapters/server";
 import { ServiceDrizzleAccountService } from "@/adapters/server/accounts/drizzle.adapter";
 import {
+	PrivyNodeLoginSigner,
+	privyLoginClient,
+} from "@/adapters/server/identity/privy-node-login-signer.adapter";
+import {
 	AggregatingModelCatalog,
 	ProviderResolver,
 } from "@/adapters/server/ai/catalog";
@@ -201,6 +205,7 @@ import type {
 	ModelCatalogPort,
 	ModelProviderResolverPort,
 	NodeAdminPort,
+	NodeLoginSignerPort,
 	OnChainVerifier,
 	OperatorWalletPort,
 	PaymentAttemptServiceRepository,
@@ -232,7 +237,7 @@ import {
 } from "@/shared/config";
 import { serverEnv } from "@/shared/env/server-env";
 import { makeLogger } from "@/shared/observability";
-import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
+import { CHAIN_ID, USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
 
 export type UnhandledErrorPolicy = "rethrow" | "respond_500";
@@ -340,6 +345,8 @@ export interface Container {
 	financialLedger: FinancialLedgerPort | undefined;
 	/** Operator wallet — undefined when PRIVY_APP_ID not set */
 	operatorWallet: OperatorWalletPort | undefined;
+	/** Node AI login wallet — undefined unless PRIVY_APP_ID/SECRET and NODE_AI_WALLET_* are set (never the operator wallet) */
+	nodeLoginSigner: NodeLoginSignerPort | undefined;
 	/** Treasury settlement — undefined when operator wallet not configured */
 	treasurySettlement: TreasurySettlementPort | undefined;
 	/** Connection broker — undefined when CONNECTIONS_ENCRYPTION_KEY not set */
@@ -1199,6 +1206,40 @@ function createContainer(): Container {
 				});
 			})();
 
+	// Node AI login wallet (task.0142): absent config means no port and nothing changes. Dedicated wallet, own
+	// authorization key; the constructor refuses the operator wallet address and the operator signing key.
+	const nodeLoginSigner: NodeLoginSignerPort | undefined = (() => {
+		if (
+			env.isTestMode ||
+			!env.PRIVY_APP_ID ||
+			!env.PRIVY_APP_SECRET ||
+			!env.NODE_AI_WALLET_ADDRESS ||
+			!env.NODE_AI_WALLET_SIGNING_KEY
+		)
+			return undefined;
+		// Fail closed: the signer signs for this node's own domain only, so without NEXTAUTH_URL there is no domain to pin.
+		if (!process.env.NEXTAUTH_URL) {
+			log.warn(
+				"NODE_AI_WALLET_* set but NEXTAUTH_URL missing — node AI login signer disabled",
+			);
+			return undefined;
+		}
+		return new PrivyNodeLoginSigner({
+			client: privyLoginClient({
+				appId: env.PRIVY_APP_ID,
+				appSecret: env.PRIVY_APP_SECRET,
+				signingKey: env.NODE_AI_WALLET_SIGNING_KEY,
+				forbiddenSigningKeys: [env.PRIVY_SIGNING_KEY],
+			}),
+			walletAddress: env.NODE_AI_WALLET_ADDRESS,
+			domain: new URL(process.env.NEXTAUTH_URL).host,
+			chainId: CHAIN_ID,
+			forbiddenAddresses: operatorWalletConfig
+				? [operatorWalletConfig.address]
+				: [],
+		});
+	})();
+
 	// ProviderFunding (OpenRouter/Coinbase top-up) was retired — OpenRouter 410'd
 	// programmatic crypto top-up. Outbound vendor funding now flows through the
 	// operator wallet's withdrawToSteward + a manual human checkout. The post-credit
@@ -1321,6 +1362,7 @@ function createContainer(): Container {
 		},
 		financialLedger,
 		operatorWallet,
+		nodeLoginSigner,
 		treasurySettlement: operatorWallet
 			? new SplitTreasurySettlementAdapter(operatorWallet, USDC_TOKEN_ADDRESS)
 			: undefined,

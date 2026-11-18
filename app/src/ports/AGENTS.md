@@ -54,6 +54,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - ThreadPersistencePort, ThreadConflictError, ThreadSummary
 - OperatorWalletPort
 - IdentityBindingRepositoryPort, IdentityBindingTransactionPort
+- NodeLoginSignerPort (the node AI signs a SIWE login for its own domain only; `signLogin` is the one signing method)
 - TreasurySettlementPort, TreasurySettlementOutcome
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 

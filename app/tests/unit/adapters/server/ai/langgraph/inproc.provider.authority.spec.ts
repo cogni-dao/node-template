@@ -334,6 +334,34 @@ describe("V7: a node-ai graph + knowledge:write with knowledge:write", () => {
     });
   });
 
+  // task.0142 P4: with no human subject, the admin check reads the node AI's own bound wallet, and it is asked for the principal's USER id
+  // (the id `user_bindings` is keyed by), never its slug or the role row. Listed in approvers, it passes; removed, the same run is denied.
+  it.each([
+    ["wallet in approvers", "allow", true],
+    ["wallet removed from approvers", "denied", false],
+  ] as const)("a node AI run with no subject: %s", async (_name, decision, reached_) => {
+    const asked: string[] = [];
+    const a = base();
+    const auth: ProviderAgentAuthority = {
+      ...a,
+      guardDeps: {
+        ...a.guardDeps,
+        adminCheck: async (id) => {
+          asked.push(id);
+          return id === NODE_AI_USER ? decision : "denied";
+        },
+      },
+    };
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const run = await start("test-node-ai-writer", auth, undefined, seen, { unattended: true });
+    if (!reached_) {
+      expect(seen).toEqual([]);
+      return;
+    }
+    expect(reached(await run.exec("core__knowledge_write", KNOWLEDGE))).toBe(true);
+    expect(new Set(asked)).toEqual(new Set([NODE_AI_USER]));
+  });
+
   it("allows an admin subject", async () => {
     const seen: Array<{ tool: string; scope: unknown }> = [];
     const a = base();

@@ -265,6 +265,11 @@ export const serverSchema = z.object({
   PRIVY_APP_SECRET: optionalString,
   PRIVY_SIGNING_KEY: optionalString,
 
+  // Node AI login wallet (task.0142) - Optional. A DEDICATED Privy wallet with its OWN authorization key, never the operator's.
+  // The port is built only when PRIVY_APP_ID, PRIVY_APP_SECRET and both of these are set.
+  NODE_AI_WALLET_ADDRESS: optionalString,
+  NODE_AI_WALLET_SIGNING_KEY: optionalString,
+
   // Operator wallet top-up cap (USD)
   // Per operator-wallet.md: MAX_TOPUP_CAP — per-tx ceiling for OpenRouter top-ups.
   OPERATOR_MAX_TOPUP_USD: z.coerce.number().positive().default(500),
