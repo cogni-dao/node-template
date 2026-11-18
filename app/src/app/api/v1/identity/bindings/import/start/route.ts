@@ -46,7 +46,7 @@ function configuredNodeOrigin(): string | null {
 
 export const POST = wrapRouteHandlerWithLogging(
 	{
-		routeId: identityAttestationStartOperation.id,
+		routeId: "identity.attestation.start.v1",
 		// Optional, not required. A signed-in caller is LINKING GitHub to their existing
 		// user; a signed-out caller is SIGNING IN with it. Gating this leg on a session is
 		// what made a wallet the only door onto a node (task.5042) — the attestation could

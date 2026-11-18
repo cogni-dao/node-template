@@ -4,9 +4,9 @@
 /**
  * Module: `@tests/component/db/ai-github-bind.int.test`
  * Purpose: task.0091 on a real database: an AI principal binds a GitHub identity only with a nonce it owns, a GitHub identity a human holds is never taken,
- *   and a receipt authored by the bound GitHub id resolves to the AI as earner (never to a human), with no wallet to pay.
+ *   and a receipt authored by the bound GitHub id resolves to the AI as earner (never to a human), with no payout address, so its claim is held.
  * Scope: the real identity binding repository and service, `DrizzleAttributionAdapter.resolveIdentities` and `DrizzleClaimantWalletResolver`, as the service role.
- * Invariants: OWN_NONCE_REQUIRED; NO_AUTO_MERGE; AGENT_WALLET_IS_NOT_A_PAYEE.
+ * Invariants: OWN_NONCE_REQUIRED; NO_AUTO_MERGE; AUTH_IS_NOT_PAYMENT.
  * Side-effects: IO (testcontainers Postgres)
  * @internal
  */
@@ -63,7 +63,7 @@ describe("an AI binds its GitHub identity so its receipts resolve to the AI (rea
     await service?.end({ timeout: 1 });
   });
 
-  it("a receipt authored by the AI's bound GitHub id resolves to the AI, and the AI has no wallet to pay", async () => {
+  it("a receipt authored by the AI's bound GitHub id resolves to the AI, and the AI has no payout address, so it is held", async () => {
     const aiId = await makeUser(true);
     const gh = githubId();
 

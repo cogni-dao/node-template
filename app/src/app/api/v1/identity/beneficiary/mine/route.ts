@@ -10,7 +10,9 @@
  *   - BENEFICIARY_IS_ACCEPTED: only a human session accepts; the session user becomes the beneficiary. The AI stays the earner and gets no access from this.
  *   - HUMAN_ROUTES_SESSION_ONLY: any `Authorization` header is 403 `human_session_required`, before any read or write.
  *   - NON_DISCLOSING: a token that is wrong, used, expired, revoked or the caller's own AI answers `accepted: false`, never a reason.
- *   - FREEZE_AT_CUTOFF: ending a row never rewrites earlier cutoffs; claims already finalized keep the destination they had.
+ *   - FREEZE_AT_CUTOFF: ending a row never rewrites earlier cutoffs; claims already finalized keep the destination they had. Accepting is not retroactive either:
+ *     earnings finalized before the acceptance stay held, so there is nothing to reconcile here.
+ *   - TOKEN_IS_A_BEARER_CAPABILITY: whoever holds the link token and is signed in as a human can accept; the preview shows the AI's name so the person can tell what they accept.
  * Side-effects: IO (service-role database)
  * Links: https://node-template.cognidao.org/knowledge/node-economic-identity
  * @public
@@ -23,7 +25,6 @@ import { acceptBeneficiary, listMineBeneficiaries, revokeBeneficiary } from "@/a
 import { refuseNonSession } from "@/app/_lib/auth/human-plane";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { reconcilePendingSettlements } from "@/bootstrap/settlement-runtime";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,11 +70,7 @@ export const POST = wrapRouteHandlerWithLogging(
     const parsed = acceptSchema.safeParse(await readBody(request));
     if (!parsed.success) return json({ error: "invalid input" }, 400);
     const accepted = await acceptBeneficiary(person.userId, parsed.data.token);
-    if (accepted) {
-      ctx.log.info({ userId: person.userId }, "[beneficiary] accepted");
-      // Only claims finalized after this acceptance use it (FREEZE_AT_CUTOFF); the retry is for held claims whose cutoff it already covers.
-      await reconcilePendingSettlements(ctx.log).catch((error) => ctx.log.warn({ error }, "[beneficiary] settlement reconcile failed; acceptance kept"));
-    }
+    if (accepted) ctx.log.info({ userId: person.userId }, "[beneficiary] accepted");
     return json({ accepted });
   }
 );

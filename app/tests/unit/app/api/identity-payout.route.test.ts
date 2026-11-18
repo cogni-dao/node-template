@@ -22,6 +22,7 @@ const fake = vi.hoisted(() => ({
     proposeBeneficiary: vi.fn(async () => ({ status: "pending", token: "tok", expiresAt: new Date("2026-12-01T00:00:00Z") })),
     beneficiaryStatus: vi.fn(),
     acceptBeneficiary: vi.fn(async () => true),
+    previewBeneficiary: vi.fn(async () => null),
     listMineBeneficiaries: vi.fn(async () => []),
     revokeBeneficiary: vi.fn(async () => true),
   },
@@ -39,13 +40,14 @@ vi.mock("@/bootstrap/settlement-runtime", () => ({ reconcilePendingSettlements: 
 
 import { DELETE as withdraw, POST as propose } from "@/app/api/v1/identity/beneficiary/route";
 import { POST as accept } from "@/app/api/v1/identity/beneficiary/mine/route";
+import { POST as preview } from "@/app/api/v1/identity/beneficiary/mine/preview/route";
 import { PUT as setAddress } from "@/app/api/v1/identity/payout-address/route";
 
 const as = (id: string, via: "session" | "bearer") => {
   fake.user = { id, walletAddress: null, displayName: null, avatarColor: null, via };
 };
 const req = (url: string, method: string, body?: unknown, headers: Record<string, string> = {}) =>
-  new NextRequest(`http://localhost${url}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  new NextRequest(`http://localhost${url}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 
 describe("payout routes", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -93,5 +95,19 @@ describe("payout routes", () => {
     const ok = await setAddress(req("/api/v1/identity/payout-address", "PUT", { address: checksummed }));
     expect(ok.status).toBe(200);
     expect(fake.facade.setPayoutAddress).toHaveBeenCalledWith("human-1", checksummed.toLowerCase());
+  });
+
+  it("a payout address of zero is refused (defect: earnings sent to the burn address)", async () => {
+    as("human-1", "session");
+    const res = await setAddress(req("/api/v1/identity/payout-address", "PUT", { address: `0x${"0".repeat(40)}` }));
+    expect(res.status).toBe(400);
+    expect(fake.facade.setPayoutAddress).not.toHaveBeenCalled();
+  });
+
+  it("the preview answers valid:false for a bad link and never reaches an AI key", async () => {
+    as("human-1", "session");
+    expect(await (await preview(req("/api/v1/identity/beneficiary/mine/preview", "POST", { token: "bad" }))).json()).toEqual({ valid: false });
+    as("agent-1", "bearer");
+    expect((await preview(req("/api/v1/identity/beneficiary/mine/preview", "POST", { token: "x" }, { authorization: "Bearer key" }))).status).toBe(403);
   });
 });

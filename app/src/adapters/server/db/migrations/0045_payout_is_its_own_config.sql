@@ -28,6 +28,21 @@ CREATE UNIQUE INDEX "payout_beneficiaries_link_hash_unique" ON "payout_beneficia
 CREATE INDEX "payout_beneficiaries_beneficiary_idx" ON "payout_beneficiaries" USING btree ("beneficiary_user_id");--> statement-breakpoint
 -- Hand-written below: RLS FORCE and triggers are outside Drizzle's DDL scope (same as 0036, 0043).
 -- Payout config is written by the BYPASSRLS service role only: ENABLE + FORCE with no policy denies the app role.
+-- ONE-TIME SEED, a setting copied once and never a runtime read (AUTH_IS_NOT_PAYMENT holds): without it every existing human payee is held at cutover,
+-- because payout_addresses starts empty. A human (no agent_principals row) with EXACTLY ONE wallet binding gets that address (lowercased) as the payout
+-- address. A user with several wallet bindings stays unseeded (the choice is ambiguous and the owner sets it on /profile). The zero address is never seeded.
+-- user_bindings has FORCE RLS keyed to a session user and the migrating role sees no tenant, so lift FORCE for this statement only (same as 0043, 0044).
+ALTER TABLE "user_bindings" NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+INSERT INTO "payout_addresses" ("user_id", "address")
+SELECT b."user_id", lower(b."external_id")
+FROM "user_bindings" b
+WHERE b."provider" = 'wallet'
+  AND lower(b."external_id") ~ '^0x[0-9a-f]{40}$'
+  AND lower(b."external_id") <> '0x0000000000000000000000000000000000000000'
+  AND NOT EXISTS (SELECT 1 FROM "agent_principals" ap WHERE ap."user_id" = b."user_id")
+  AND b."user_id" IN (SELECT w."user_id" FROM "user_bindings" w WHERE w."provider" = 'wallet' GROUP BY w."user_id" HAVING count(*) = 1)
+ON CONFLICT ("user_id") DO NOTHING;--> statement-breakpoint
+ALTER TABLE "user_bindings" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "payout_addresses" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "payout_beneficiaries" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 -- AUTH_IS_NOT_PAYMENT replaces AGENT_WALLET_IS_NOT_A_PAYEE (0043): a payee is a principal's explicit payout address (or its accepted beneficiary's), never a

@@ -86,6 +86,24 @@ export async function acceptBeneficiary(sessionUserId: string, token: string): P
   return rows.length === 1;
 }
 
+/** Human side, read-only: who a link token would make this person the beneficiary of. Null for a wrong, used, expired, revoked or own-AI token. */
+export async function previewBeneficiary(sessionUserId: string, token: string): Promise<{ earnerName: string | null } | null> {
+  const [row] = await getServiceDb()
+    .select({ earnerName: users.name })
+    .from(payoutBeneficiaries)
+    .innerJoin(users, eq(users.id, payoutBeneficiaries.earnerUserId))
+    .where(
+      and(
+        eq(payoutBeneficiaries.linkHash, hashToken(token)),
+        ne(payoutBeneficiaries.earnerUserId, sessionUserId),
+        gt(payoutBeneficiaries.linkExpiresAt, new Date()),
+        isNull(payoutBeneficiaries.acceptedAt),
+        isNull(payoutBeneficiaries.revokedAt)
+      )
+    );
+  return row ? { earnerName: row.earnerName } : null;
+}
+
 export interface MineBeneficiary {
   readonly id: string;
   readonly earnerUserId: string;

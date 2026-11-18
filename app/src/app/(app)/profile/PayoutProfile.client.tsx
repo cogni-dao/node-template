@@ -22,6 +22,7 @@ import { Button, Input } from "@/components";
 
 const ADDRESS_PATH = "/api/v1/identity/payout-address";
 const MINE_PATH = "/api/v1/identity/beneficiary/mine";
+const PREVIEW_PATH = "/api/v1/identity/beneficiary/mine/preview";
 const FRAGMENT_KEY = "beneficiary";
 
 interface Mine {
@@ -45,6 +46,9 @@ export function PayoutProfile(): ReactElement {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  // What the link names: undefined while loading, null for a bad or expired link, else the AI's display name (null name = unnamed).
+  const [offer, setOffer] = useState<{ name: string | null } | null | undefined>(undefined);
+  const [linkNote, setLinkNote] = useState<string | null>(null);
   const [mine, setMine] = useState<Mine[]>([]);
 
   const load = useCallback(async () => {
@@ -54,8 +58,14 @@ export function PayoutProfile(): ReactElement {
   }, []);
 
   useEffect(() => {
-    setToken(takeFragmentToken());
+    const found = takeFragmentToken();
+    setToken(found);
     void load();
+    if (!found) return;
+    void fetch(PREVIEW_PATH, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: found }) })
+      .then((res) => (res.ok ? (res.json() as Promise<{ valid: boolean; earnerName?: string | null }>) : null))
+      .then((p) => setOffer(p?.valid ? { name: p.earnerName ?? null } : null))
+      .catch(() => setOffer(null));
   }, [load]);
 
   const save = async () => {
@@ -68,7 +78,9 @@ export function PayoutProfile(): ReactElement {
   };
 
   const decide = async (method: "POST" | "DELETE", body: object) => {
-    await fetch(MINE_PATH, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetch(MINE_PATH, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const result = res.ok ? ((await res.json()) as { accepted?: boolean }) : null;
+    if (method === "POST") setLinkNote(result?.accepted ? null : "That link is no longer valid. Ask the AI for a new one.");
     setToken(null);
     await load();
   };
@@ -90,9 +102,12 @@ export function PayoutProfile(): ReactElement {
         </Button>
       </div>
       {note && <div className="text-destructive text-sm">{note}</div>}
-      {token && (
+      {token && offer === null && <div className="py-3 text-destructive text-sm">That link is invalid or has expired. Ask the AI for a new one.</div>}
+      {token && offer && (
         <div className="py-3">
-          <div className="text-foreground text-sm">An AI account asks to send its earnings to you. Its work stays credited to the AI.</div>
+          <div className="text-foreground text-sm">
+            {offer.name ?? "An AI account"} asks to send its earnings to you. Its work stays credited to the AI; only claims finalized after you accept are paid to you.
+          </div>
           <div className="flex gap-2 pt-2">
             <Button onClick={() => void decide("POST", { token })}>Accept</Button>
             <Button variant="ghost" onClick={() => setToken(null)}>
@@ -101,6 +116,7 @@ export function PayoutProfile(): ReactElement {
           </div>
         </div>
       )}
+      {linkNote && <div className="py-3 text-destructive text-sm">{linkNote}</div>}
       {mine.map((row) => (
         <div key={row.id} className="flex items-center justify-between py-2 text-sm">
           <span>Earnings of {row.earnerName ?? row.earnerUserId} are paid to you.</span>

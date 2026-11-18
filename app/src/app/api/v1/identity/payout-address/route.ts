@@ -30,7 +30,11 @@ export const runtime = "nodejs";
 
 const NO_STORE = { "cache-control": "no-store" } as const;
 const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: NO_STORE });
-const bodySchema = z.object({ address: z.string().refine((a) => isAddress(a, { strict: false }), "not an EVM address") }).strict();
+const ZERO_ADDRESS = `0x${"0".repeat(40)}`;
+/** An EVM address that is not the zero address: earnings sent there are burned. */
+const bodySchema = z
+  .object({ address: z.string().refine((a) => isAddress(a, { strict: false }) && a.toLowerCase() !== ZERO_ADDRESS, "not a payable EVM address") })
+  .strict();
 
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "identity.payout-address.get", auth: { mode: "none" } },
