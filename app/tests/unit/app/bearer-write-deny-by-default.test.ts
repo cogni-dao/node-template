@@ -153,6 +153,8 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       "ai.chat",
       "ai.threads.delete",
       "chat.completions",
+      "identity.wallet.bind",
+      "identity.wallet.challenge",
     ]);
   });
 

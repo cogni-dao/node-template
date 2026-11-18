@@ -28,7 +28,6 @@ import Credentials from "next-auth/providers/credentials";
 import Discord from "next-auth/providers/discord";
 import Google from "next-auth/providers/google";
 import { getCsrfToken } from "next-auth/react";
-import { SiweMessage } from "siwe";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { createBinding } from "@/adapters/server/identity/create-binding";
 import {
@@ -36,6 +35,7 @@ import {
 	resolveAttestedGithubUser,
 } from "@/app/_facades/identity/operator-attested-binding.server";
 import { verifyOperatorAttestation } from "@/app/_lib/auth/operator-attestation";
+import { verifySiwe } from "@/app/_lib/auth/siwe-verify";
 import { reconcileSettlementsAfterBinding } from "@/bootstrap/settlement-runtime";
 import { getNodeId, isLedgerApprover } from "@/shared/config";
 import {
@@ -161,7 +161,6 @@ export const authOptions: NextAuthOptions = {
 						return null;
 					}
 
-					const siwe = new SiweMessage(credentials.message as string);
 					const nextAuthUrl = new URL(
 						process.env.NEXTAUTH_URL ?? "http://localhost:3000",
 					);
@@ -190,21 +189,18 @@ export const authOptions: NextAuthOptions = {
 						.digest("hex")
 						.slice(0, 8);
 					getLog().info(
-						{
-							nonce,
-							address: new SiweMessage(credentials.message as string).address,
-							msgHash: messageHash,
-						},
+						{ nonce, msgHash: messageHash },
 						"[SIWE] Authorize attempt",
 					);
 
-					const result = await siwe.verify({
+					const result = await verifySiwe({
+						message: credentials.message as string,
 						signature: credentials.signature as string,
 						domain: nextAuthUrl.host,
 						nonce,
 					});
 
-					if (!result.success) {
+					if (!result.ok) {
 						getLog().error(
 							{ error: result.error },
 							"[SIWE] Verification failed",
@@ -212,7 +208,7 @@ export const authOptions: NextAuthOptions = {
 						return null;
 					}
 
-					const { data: fields } = result;
+					const fields = result;
 					// Pre-auth wallet lookup must use serviceDb (BYPASSRLS) because
 					// the user ID is unknown before authentication completes.
 					// Per DATABASE_RLS_SPEC.md: SIWE auth callback uses app_service role.

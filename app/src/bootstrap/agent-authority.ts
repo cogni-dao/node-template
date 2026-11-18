@@ -10,8 +10,8 @@
  * Invariants:
  *   - ADMIN_FROM_USER_BINDINGS: the human's wallet(s) come from `user_bindings` (provider = wallet), never from the
  *     request. Any bound admin wallet passes; no wallet is denied; no configured admins is unavailable.
- *   - AGENTS_HOLD_NO_WALLET (a payout guard, not an authority rule): an agent user has no wallet binding, so today it fails `adminCheck`.
- *     Admin is any principal the DAO approves (AUTHORITY_IS_NOT_KIND); an approved AI identity is item I2, so none passes yet.
+ *   - AGENT_WALLET_IS_NOT_A_PAYEE (a payout guard, not an authority rule): an agent may bind a wallet (`/api/v1/identity/wallet/bind`), so it can pass
+ *     `adminCheck` when the DAO lists that wallet (AUTHORITY_IS_NOT_KIND). Claimant resolution skips agent-owned wallets and the database refuses a payout leaf for one.
  *   - DECLARED_SCOPES_FROM_CONTRACTS: the scopes a role may name are exactly those the node's tool contracts declare.
  *   - NO_SECRETS_IN_LOGS: `agent_tool.authz` carries ids, tool, decision and code only.
  * Side-effects: IO (service-role database reads and writes)
