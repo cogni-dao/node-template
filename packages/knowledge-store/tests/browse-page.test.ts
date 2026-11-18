@@ -54,8 +54,8 @@ it("search windows hold a full page of matches and continue after the last one",
   expect(first.items.map((item) => item.id)).toEqual(
     Array.from({ length: 20 }, (_, i) => `row-${String(i * 4 + 3).padStart(3, "0")}`)
   );
-  // Rows before the 21st match; the next window re-reads from the 20th match.
-  expect(first.scannedRows).toBe(83);
+  // Through the 21st match; the next window re-reads from the 20th match.
+  expect(first.scannedRows).toBe(84);
   const next = await store.browseKnowledge({
     ...query,
     cursor: required(first.nextCursor),

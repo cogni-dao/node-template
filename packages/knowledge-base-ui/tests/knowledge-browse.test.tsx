@@ -184,6 +184,19 @@ describe("KnowledgeBrowse", () => {
     expect(reads).toHaveLength(2);
   });
 
+  it("a search window that found its match at the end of the candidates offers no Continue (bug.0048)", async () => {
+    const { fetchBrowse } = recorder(async () =>
+      windowOf({ scannedRows: 257, total: 257 }),
+    );
+    mount(fetchBrowse, windowOf());
+    submitSearch("node-template-selected-decision");
+    await screen.findByText("1 match · end of results");
+    expect(screen.getByText(entry.title)).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Continue search" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
   it("a search the store schema rejects shows the schema's issue and sends nothing", async () => {
     const { reads, fetchBrowse } = recorder(async () => windowOf());
     mount(fetchBrowse, windowOf());

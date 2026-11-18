@@ -141,7 +141,11 @@ export async function scanBrowseSearch<T>(
     for (const row of batch) {
       if (matches(row)) {
         if (found.length === KNOWLEDGE_BROWSE_PAGE_SIZE)
-          return { matches: found, scannedRows, resumeAfter: found.at(-1) };
+          return {
+            matches: found,
+            scannedRows: scannedRows + 1,
+            resumeAfter: found.at(-1),
+          };
         found.push(row);
       }
       scannedRows++;
