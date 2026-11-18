@@ -7,8 +7,8 @@ description: Ship code and durable knowledge through Cogni's complete contributo
 
 This file is only the trigger. The knowledge hub is the authoritative, refinable contract.
 
-Read these entries from this node's authenticated knowledge API, then follow them:
-- `GET /api/v1/knowledge/knowledge-contribution-flow`
+Read these node-owned entries with `COGNI_NODE_API_KEY`, then follow them:
+- `GET https://node-template.cognidao.org/api/v1/knowledge/knowledge-contribution-flow`
 
 Read these operator-owned entries with the separate `COGNI_OPERATOR_NODE_API_KEY`, then follow them:
 - `GET https://cognidao.org/api/v1/knowledge/cicd-e2e-required-sequence`
