@@ -30,6 +30,7 @@ import { NextResponse } from "next/server";
 import { executionErrorToHttpStatus } from "@/app/_facades/ai/execution-error-mapper";
 import { completionStream } from "@/app/_facades/ai/completion.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { startStreamHeartbeat } from "@/app/_lib/ai/stream-heartbeat";
 import { UiMessageEventMapper } from "@/app/_lib/ai/ui-message-event-mapper";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -519,6 +520,7 @@ export const POST = wrapRouteHandlerWithLogging(
 
       const uiStream = createUIMessageStream({
         execute: async ({ writer }) => {
+          const stopHeartbeat = startStreamHeartbeat(writer);
           try {
             let eventSeq = 0;
             const mapper = new UiMessageEventMapper(writer, textPartId, {
@@ -610,6 +612,7 @@ export const POST = wrapRouteHandlerWithLogging(
               throw error;
             }
           } finally {
+            stopHeartbeat();
             const streamMs = performance.now() - streamStartMs;
             aiChatStreamDurationMs.observe(streamMs);
             ctx.log.info(
