@@ -57,11 +57,12 @@ const KIND_TITLES: Readonly<Record<ArtifactKind, string>> = {
 	design_review: "Design review",
 	implementation_review: "Implementation review",
 	validation: "Validation",
+	closeout: "Closeout",
 };
 
 /** A verdict's tone in the shared row pill: green lets the item move, red sends it back, a triage route is neutral. */
 function verdictTone(verdict: string): CitationTone {
-	if (verdict === "approve" || verdict === "pass") return "positive";
+	if (verdict === "approve" || verdict === "pass" || verdict === "done") return "positive";
 	if (verdict === "request_changes" || verdict === "fail") return "negative";
 	if (verdict === "notes") return "warning";
 	return "neutral";
