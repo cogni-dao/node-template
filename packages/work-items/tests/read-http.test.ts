@@ -71,6 +71,11 @@ describe("handleWorkItemGet", () => {
     expect(r.status).toBe(503);
     expect(JSON.stringify(r.body)).not.toContain("host x");
     expect(r.event.errorCode).toBe("backend_unavailable");
+    // task.0162: a reason-less copy reads the base busy reason; a carried reason reaches the body and the event.
+    expect(r.event.reason).toBe("capacity_held");
+    const named = Object.assign(new Error("x"), { name: "WorkItemsBusyError", reason: "read_timeout" });
+    const r2 = await handleWorkItemGet("task.1", deps("", { read: async () => Promise.reject(named) }));
+    expect(r2).toMatchObject({ status: 503, body: { code: "read_timeout" }, event: { errorCode: "backend_unavailable", reason: "read_timeout" } });
 
     const controller = new AbortController();
     controller.abort();

@@ -24,6 +24,8 @@ import {
   workItemsHistoryOperation,
 } from "./history-contract.js";
 import type { HistoryEntry, HistoryPage } from "./history.js";
+import type { WorkItemsBusyReason } from "./errors.js";
+import { backendUnavailableReason } from "./read-handlers.js";
 import { toWorkItemId, type WorkItemId } from "./types.js";
 
 /** The slice of a work-items store the handler reads. */
@@ -79,6 +81,8 @@ export interface HistoryReadLog {
   readonly errorCode?: "not_found" | "history_unavailable" | "invalid_input";
   /** Set on a failed read so the route may warn with the error class. */
   readonly errorName?: string;
+  /** Why the store was busy, when the error names one (task.0162). */
+  readonly reason?: WorkItemsBusyReason;
   /** Database error code (SQLSTATE) from the thrown error, when it carries one. */
   readonly dbCode?: string;
   /** First 300 chars of the thrown error's message, CR/LF collapsed. */
@@ -92,6 +96,11 @@ export interface WorkItemHistoryResult {
 }
 
 const EVENT = "work.items.history_read" as const;
+
+const reasonField = (error: unknown): { reason?: WorkItemsBusyReason } => {
+  const reason = backendUnavailableReason(error);
+  return reason === undefined ? {} : { reason };
+};
 const DB_MESSAGE_MAX = 300;
 
 /** Database error code and bounded single-line message for the failure log (bug.0025). */
@@ -190,6 +199,7 @@ export async function readWorkItemHistory(
         outcome: "error",
         errorCode: "history_unavailable",
         errorName: (error as Error)?.name,
+        ...reasonField(error),
         ...errorDetail(error),
       },
     };

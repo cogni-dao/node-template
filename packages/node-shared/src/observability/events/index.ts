@@ -41,6 +41,8 @@ export const EVENT_NAMES = {
 	// A refused work item write (task.0122): one terminal event per refusal with its errorCode (invalid_input, gate_unmet, revision_conflict, ...); codes and ids only, never a body.
 	// An item envelope part (links, artifacts, readings) that could not be read in time or failed: the envelope is served without it and marked unavailable. One warn per degraded part.
 	WORK_ITEMS_ENVELOPE_DEGRADED: "work.items.envelope_degraded",
+	// A work-item store answered busy with no terminal event of its own (task.0162): one 503 line with its closed `reason`, never the error text.
+	WORK_ITEMS_BACKEND_UNAVAILABLE: "work.items.backend_unavailable",
 	WORK_ITEMS_CREATE_REFUSED: "work.items.create_refused",
 	WORK_ITEMS_PATCH_REFUSED: "work.items.patch_refused",
 	// The success twins: one terminal event per accepted create or patch (route or agent tool), ids and counts only.

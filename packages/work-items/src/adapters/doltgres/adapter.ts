@@ -507,7 +507,7 @@ export class WorkItemMergeConflictError extends Error {
  */
 class UnprovableTransitionError extends WorkItemsBusyError {
   constructor(message: string) {
-    super(message);
+    super(message, "evidence_preserved");
     this.name = "UnprovableTransitionError";
   }
 }
@@ -515,7 +515,8 @@ class UnprovableTransitionError extends WorkItemsBusyError {
 class DoltMergeOutcomeUnknownError extends WorkItemsBusyError {
   constructor() {
     super(
-      "Work-item merge outcome is unknown; adapter requires reconciliation"
+      "Work-item merge outcome is unknown; adapter requires reconciliation",
+      "outcome_unknown"
     );
     this.name = "DoltMergeOutcomeUnknownError";
   }
@@ -1471,7 +1472,10 @@ function isConnectionTerminal(error: unknown): boolean {
  */
 class PreEffectTransportError extends WorkItemsBusyError {
   constructor(readonly stage: string, options?: { cause?: unknown }) {
-    super("Work-item store connection failed before any write; retry shortly");
+    super(
+      "Work-item store connection failed before any write; retry shortly",
+      "connect_timeout"
+    );
     if (options?.cause !== undefined)
       Object.defineProperty(this, "cause", { value: options.cause });
   }
@@ -2048,7 +2052,8 @@ export class DoltgresWorkItemAdapter
               void this.sql.end({ timeout: 0 }).catch(() => undefined);
               reject(
                 new WorkItemsBusyError(
-                  `Work-item writer settlement exceeded ${attemptBudgetMs}ms`
+                  `Work-item writer settlement exceeded ${attemptBudgetMs}ms`,
+                  "writer_settling"
                 )
               );
             }, attemptBudgetMs);
@@ -2143,7 +2148,8 @@ export class DoltgresWorkItemAdapter
             () =>
               reject(
                 new WorkItemsBusyError(
-                  "Work-item store queue wait timed out; retry shortly"
+                  "Work-item store queue wait timed out; retry shortly",
+                  "queue_timeout"
                 )
               ),
             this.queueWaitMs
@@ -2183,7 +2189,8 @@ export class DoltgresWorkItemAdapter
   ): Promise<T> {
     if (this.poisoned) {
       throw new WorkItemsBusyError(
-        "Work-item writer is settling an uncertain operation; retry shortly"
+        "Work-item writer is settling an uncertain operation; retry shortly",
+        "writer_settling"
       );
     }
     const operationPool = this.sql;
@@ -2215,7 +2222,8 @@ export class DoltgresWorkItemAdapter
       } catch (error) {
         if (reserveTimedOut) {
           throw new WorkItemsBusyError(
-            "Work-item store timed out reserving a connection; retry shortly"
+            "Work-item store timed out reserving a connection; retry shortly",
+            "connect_timeout"
           );
         }
         // reserve() takes no lock; a failure here leaves nothing native.
@@ -2269,7 +2277,10 @@ export class DoltgresWorkItemAdapter
           rawConn = undefined;
         }
         throw new WorkItemsBusyError(
-          `Work-item writer admission unavailable: ${error.reason}`
+          `Work-item writer admission unavailable: ${error.reason}`,
+          error.reason === "lock_contended"
+            ? "lock_contended"
+            : "writer_admission"
         );
       }
       if (error instanceof PreEffectTransportError) {
@@ -2441,7 +2452,8 @@ export class DoltgresWorkItemAdapter
     return error instanceof WorkItemsBusyError
       ? error
       : new WorkItemsBusyError(
-          `Work-item branch ${branch} could not be safely proven; preserving evidence`
+          `Work-item branch ${branch} could not be safely proven; preserving evidence`,
+          "evidence_preserved"
         );
   }
 
@@ -2532,13 +2544,15 @@ export class DoltgresWorkItemAdapter
     )) as ReadonlyArray<Record<string, unknown>>;
     if (!commit || parentRows.length !== 1) {
       throw new WorkItemsBusyError(
-        `Work-item branch ${branch} has unprovable commit evidence; preserving evidence`
+        `Work-item branch ${branch} has unprovable commit evidence; preserving evidence`,
+        "evidence_preserved"
       );
     }
     const parent = parentRows[0];
     if (!parent || Number(parent.parent_index) !== 0) {
       throw new WorkItemsBusyError(
-        `Work-item branch ${branch} has non-linear history; preserving evidence`
+        `Work-item branch ${branch} has non-linear history; preserving evidence`,
+        "evidence_preserved"
       );
     }
     const baseHash = String(parent.parent_hash ?? "");
@@ -2548,7 +2562,8 @@ export class DoltgresWorkItemAdapter
       (pending?.branchCommit && pending.branchCommit !== tip)
     ) {
       throw new WorkItemsBusyError(
-        `Work-item branch ${branch} moved from its frozen base; preserving evidence`
+        `Work-item branch ${branch} moved from its frozen base; preserving evidence`,
+        "evidence_preserved"
       );
     }
 
@@ -2572,7 +2587,8 @@ export class DoltgresWorkItemAdapter
       doltBoolean([summary], "schema_change")
     ) {
       throw new WorkItemsBusyError(
-        `Work-item branch ${branch} changed unsupported schema or tables; preserving evidence`
+        `Work-item branch ${branch} changed unsupported schema or tables; preserving evidence`,
+        "evidence_preserved"
       );
     }
     const diffs = (await conn.unsafe(
@@ -2580,7 +2596,8 @@ export class DoltgresWorkItemAdapter
     )) as ReadonlyArray<Record<string, unknown>>;
     if (diffs.length !== 1 || !diffs[0]) {
       throw new WorkItemsBusyError(
-        `Work-item branch ${branch} is not an exact one-row change; preserving evidence`
+        `Work-item branch ${branch} is not an exact one-row change; preserving evidence`,
+        "evidence_preserved"
       );
     }
     const diff = diffs[0];
@@ -2594,7 +2611,8 @@ export class DoltgresWorkItemAdapter
       const artifactCommitAt = asEpoch(commit.date);
       if (artifactCommitAt === undefined) {
         throw new WorkItemsBusyError(
-          `Work-item branch ${branch} has no authoritative commit time; preserving evidence`
+          `Work-item branch ${branch} has no authoritative commit time; preserving evidence`,
+          "evidence_preserved"
         );
       }
       const artifactProof =
@@ -2626,7 +2644,8 @@ export class DoltgresWorkItemAdapter
     const commitAt = asEpoch(commit.date);
     if (commitAt === undefined) {
       throw new WorkItemsBusyError(
-        `Work-item branch ${branch} has no authoritative commit time; preserving evidence`
+        `Work-item branch ${branch} has no authoritative commit time; preserving evidence`,
+        "evidence_preserved"
       );
     }
     const proof =
@@ -2645,7 +2664,8 @@ export class DoltgresWorkItemAdapter
           : "modified";
     if (String(diff.diff_type ?? "").toLowerCase() !== expectedDiffType) {
       throw new WorkItemsBusyError(
-        `Work-item branch ${branch} has the wrong operation shape; preserving evidence`
+        `Work-item branch ${branch} has the wrong operation shape; preserving evidence`,
+        "evidence_preserved"
       );
     }
     return { branch, baseHash, tip, proof, before, after, commitAt };
@@ -2984,7 +3004,8 @@ export class DoltgresWorkItemAdapter
       await this.assertMainClean(conn);
     } catch {
       throw new WorkItemsBusyError(
-        "Work-item main could not be made safe for reconciliation; retry shortly"
+        "Work-item main could not be made safe for reconciliation; retry shortly",
+        "reconcile_unavailable"
       );
     }
   }
@@ -2997,7 +3018,8 @@ export class DoltgresWorkItemAdapter
       branchRows = await conn.unsafe("SELECT name, hash FROM dolt.branches");
     } catch {
       throw new WorkItemsBusyError(
-        "Work-item branch reconciliation could not list evidence; retry shortly"
+        "Work-item branch reconciliation could not list evidence; retry shortly",
+        "reconcile_unavailable"
       );
     }
     const branches = branchRows
@@ -3419,7 +3441,8 @@ export class DoltgresWorkItemAdapter
           if (index >= 0) waiters.splice(index, 1);
           waiter.reject(
             new WorkItemsBusyError(
-              "Work-item read deadline elapsed before native dispatch"
+              "Work-item read deadline elapsed before native dispatch",
+              "read_timeout"
             )
           );
         },
@@ -3454,7 +3477,8 @@ export class DoltgresWorkItemAdapter
       if (Date.now() >= waiter.deadline)
         waiter.reject(
           new WorkItemsBusyError(
-            "Work-item read deadline elapsed before native dispatch"
+            "Work-item read deadline elapsed before native dispatch",
+            "read_timeout"
           )
         );
       else waiter.start();
@@ -3472,7 +3496,8 @@ export class DoltgresWorkItemAdapter
     const startedAt = Date.now();
     if (startedAt >= deadline)
       throw new WorkItemsBusyError(
-        "Work-item read deadline elapsed before native dispatch"
+        "Work-item read deadline elapsed before native dispatch",
+        "read_timeout"
       );
     let timer: ReturnType<typeof setTimeout> | undefined;
     await this.enterReaderQueue(pool, deadline);
@@ -3506,7 +3531,8 @@ export class DoltgresWorkItemAdapter
               this.retireReadPool(pool, context, stage);
               reject(
                 new WorkItemsBusyError(
-                  `Work-item read timed out during ${stage}; retry shortly`
+                  `Work-item read timed out during ${stage}; retry shortly`,
+                  "read_timeout"
                 )
               );
             },
@@ -3523,7 +3549,8 @@ export class DoltgresWorkItemAdapter
       });
       if (isConnectionTerminal(error))
         throw new WorkItemsBusyError(
-          `Work-item reader connection ended during ${stage}; retry shortly`
+          `Work-item reader connection ended during ${stage}; retry shortly`,
+          "read_connection_lost"
         );
       throw error;
     } finally {
@@ -3543,7 +3570,8 @@ export class DoltgresWorkItemAdapter
       );
     if (!this.recreateReadClient) {
       throw new WorkItemsBusyError(
-        "Work-item read lane requires a fresh connection; retry shortly"
+        "Work-item read lane requires a fresh connection; retry shortly",
+        "read_connection_lost"
       );
     }
     try {
@@ -3574,7 +3602,8 @@ export class DoltgresWorkItemAdapter
         "work_items could not rebuild its dedicated read pool"
       );
       throw new WorkItemsBusyError(
-        "Work-item read lane could not reconnect; retry shortly"
+        "Work-item read lane could not reconnect; retry shortly",
+        "read_connection_lost"
       );
     }
     this.logger.info(

@@ -8,8 +8,29 @@ export class WorkItemLeaseConflictError extends Error {
   }
 }
 
+/**
+ * Why the store answered busy (task.0162): the closed set a node logs and returns as the 503 `code`.
+ * Every `WorkItemsBusyError` names one; `backendUnavailableReason` reads it back by error name.
+ */
+export type WorkItemsBusyReason =
+  | "capacity_held"
+  | "queue_timeout"
+  | "writer_settling"
+  | "connect_timeout"
+  | "lock_contended"
+  | "writer_admission"
+  | "evidence_preserved"
+  | "reconcile_unavailable"
+  | "read_timeout"
+  | "read_connection_lost"
+  | "not_configured"
+  | "outcome_unknown";
+
 export class WorkItemsBusyError extends Error {
-  constructor(message = "Work-item store is busy; retry shortly") {
+  constructor(
+    message: string,
+    readonly reason: WorkItemsBusyReason
+  ) {
     super(message);
     this.name = "WorkItemsBusyError";
   }
@@ -20,7 +41,8 @@ export class WorkItemsCapacityError extends WorkItemsBusyError {
   readonly code = "work_items_native_capacity_held" as const;
   constructor(readonly nativeState: "pending" | "unknown") {
     super(
-      `Work-item native capacity is ${nativeState}; retry after settlement`
+      `Work-item native capacity is ${nativeState}; retry after settlement`,
+      "capacity_held"
     );
   }
 }

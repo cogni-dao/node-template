@@ -245,6 +245,7 @@ export {
   WorkItemsCapacityError,
   WorkItemWriteOutcomeUnknownError,
 } from "./errors.js";
+export type { WorkItemsBusyReason } from "./errors.js";
 
 export type {
   WorkItemLease,
@@ -391,6 +392,8 @@ export type {
   WorkSummariesRequestOptions,
 } from "./read-handlers.js";
 export {
+  backendUnavailableBody,
+  backendUnavailableReason,
   classifyWorkReadError,
   handleWorkBoardRequest,
   handleWorkSummariesRequest,

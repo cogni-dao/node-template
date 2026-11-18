@@ -32,6 +32,7 @@ import { EVENT_NAMES } from "@cogni/node-shared";
 import type {
   WorkItem,
   WorkItemId,
+  WorkItemsBusyReason,
   WorkBoardColumnPages,
   WorkItemLease,
   WorkSummaryReadOptions,
@@ -39,6 +40,7 @@ import type {
 } from "@cogni/work-items";
 import {
   createItemRefPorts,
+  backendUnavailableReason,
   composeItemEnvelope,
   judgeMoveSummaries,
   toWorkItemId,
@@ -129,7 +131,10 @@ export class WorkItemLeaseConflictError extends Error {
 }
 
 export class WorkItemsBackendNotReadyError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly reason: WorkItemsBusyReason
+  ) {
     super(message);
     this.name = "WorkItemsBackendNotReadyError";
   }
@@ -199,13 +204,18 @@ function rethrowBackendError(error: unknown): never {
   // baseline failures, write-outcome-unknown) pass through: the route maps them with
   // `workItemWriteErrorResponse`, which matches by name across bundled copies (task.0097).
   // `WorkItemsCapacityError` subclasses `WorkItemsBusyError` and keeps its
-  // name, so held native capacity is also a retryable 503, never a 500.
+  // name, so held native capacity is also a retryable 503, never a 500. The 503 names its
+  // reason (task.0162); a busy-named error that carries none is the base "store busy" case.
   if (
     (error as Error)?.name === "DoltgresNotConfiguredError" ||
     (error as Error)?.name === "WorkItemsBusyError" ||
+    (error as Error)?.name === "UnprovableTransitionError" ||
     (error as Error)?.name === "DoltMergeOutcomeUnknownError"
   ) {
-    throw new WorkItemsBackendNotReadyError(message);
+    throw new WorkItemsBackendNotReadyError(
+      message,
+      backendUnavailableReason(error) ?? "capacity_held"
+    );
   }
   if ((error as Error)?.name === "WorkItemAuthorizationError") {
     const id = (error as { id?: string }).id ?? "unknown";
