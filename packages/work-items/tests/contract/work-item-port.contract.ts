@@ -147,18 +147,18 @@ export function workItemPortContract(
     it("transitionStatus with valid transition succeeds", async () => {
       const item = await ctx.command.create({
         type: "task",
-        title: "To implement",
+        title: "To design",
       });
       const rev = await ctx.getRevision(item.id);
 
-      // needs_triage → needs_implement is valid
+      // needs_triage → needs_design is valid; triage has no edge to implement
       const transitioned = await ctx.command.transitionStatus({
         id: item.id,
         expectedRevision: rev,
-        toStatus: "needs_implement",
+        toStatus: "needs_design",
       });
 
-      expect(transitioned.status).toBe("needs_implement");
+      expect(transitioned.status).toBe("needs_design");
     });
 
     it("transitionStatus with invalid transition throws", async () => {

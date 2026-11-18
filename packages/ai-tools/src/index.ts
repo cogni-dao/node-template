@@ -105,6 +105,8 @@ export {
 } from "./runtime-adapter";
 // Secret tool arguments
 export { declaresSecretArgs, REDACTION_MARKER } from "./secret-args";
+/** The ladder's triage exits, owned by @cogni-dao/work-items; a triage tool guard reads them here, never keeps a copy. */
+export { TRIAGE_ROUTE_STAGES } from "@cogni-dao/work-items";
 export {
   CREDENTIAL_NAME,
   declaredPathsNotStringFields,

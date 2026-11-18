@@ -210,6 +210,7 @@ export {
   refusesPathChange,
   REPO_PATTERN,
   resolvePrRepoPin,
+  TRIAGE_ROUTE_STAGES,
   TRIAGE_SCORE_AXES,
 } from "./gates.js";
 export {

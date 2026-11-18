@@ -40,6 +40,6 @@ curl -X POST https://cognidao.org/api/v1/work/items \
 
 ## Next
 
-`/triage <id>` to route to `/implement` (simple fix) or `/design` (needs investigation).
+`/triage <id>` to route to `/design` (or `/research` when the cause is unknown); every fix passes design review.
 
 #$BUG

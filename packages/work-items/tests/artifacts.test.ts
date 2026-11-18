@@ -303,7 +303,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
       await issuesOf({ ...designReview, subject: "work:task.0028@3" })
     ).toEqual(["subject"]);
     expect(await issuesOf({ ...designReview, subject: "work:task.0028" })).toEqual(["subject"]);
-    // a triage verdict is research, design or implement
+    // a triage verdict is research or design
     expect(
       await issuesOf({ kind: "triage", subject: "work:task.0028", verdict: "approve" })
     ).toEqual(["verdict"]);
@@ -458,13 +458,16 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
     const triage = {
       kind: "triage",
       subject: "work:task.0028",
-      verdict: "implement",
+      verdict: "design",
       note: "Measurement gap: no KPI reads artifacts until task.0103",
     };
     const w = world();
     const own = await recordWorkItemArtifact(w.deps, "task.0028", "router-1", triage);
     expect(own.status).toBe(201);
-    expect(w.stored[0]).toMatchObject({ kind: "triage", verdict: "implement", author: "router-1" });
+    expect(w.stored[0]).toMatchObject({ kind: "triage", verdict: "design", author: "router-1" });
+    // Never straight to implement: every change passes design review (CEO 2026-11-18).
+    const skip = await recordWorkItemArtifact(world().deps, "task.0028", "router-1", { ...triage, verdict: "implement" });
+    expect(skip.status).toBe(400);
     expect(w.stored[0]?.url).toBeUndefined();
     const other = await recordWorkItemArtifact(w.deps, "task.0028", "router-1", { ...triage, subject: "work:task.0099" });
     expect(other.status).toBe(400);

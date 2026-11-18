@@ -431,7 +431,7 @@ describe("createWorkItemCapability", () => {
 });
 
 describe("recordArtifact (task.0122)", () => {
-  const body = { kind: "triage", subject: "work:task.5001", verdict: "implement", note: "no KPI measures this yet" };
+  const body = { kind: "triage", subject: "work:task.5001", verdict: "design", note: "no KPI measures this yet" };
   const ports = {
     workItemQuery: { list: vi.fn(), get: vi.fn() } as unknown as WorkItemQueryPort,
     workItemCommand: {} as unknown as WorkItemCommandPort,

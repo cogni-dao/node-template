@@ -63,7 +63,7 @@ export const workItemArtifactRecordContract: ToolContract<
   description:
     "Record one immutable artifact on a work item: the same operation as POST /api/v1/work/items/{id}/artifacts. " +
     "Input { id, artifact: { kind, subject, verdict, note?, url?, body?, rows? } }. A triage artifact has kind 'triage', subject 'work:<itemId>', " +
-    "verdict research, design or implement (the route you chose) and, when the item declares no `moves`, a one-line `note` naming the measurement gap. " +
+    "verdict research or design (the route you chose; triage never routes straight to implement) and, when the item declares no `moves`, a one-line `note` naming the measurement gap. " +
     "A closeout artifact has kind 'closeout', subject 'work:<itemId>', verdict 'done', a one-line `note` (the KPI reading after one window, or the measurement gap) and a `url` or `body` linking the knowledge refined and the cleanup. " +
     "Recording never moves the item: record the artifact, then patch the status with core__work_item_update. " +
     "The author recorded is you. A refusal returns success=false with a code and nothing was written.",

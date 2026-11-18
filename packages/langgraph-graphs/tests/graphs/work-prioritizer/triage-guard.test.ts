@@ -121,7 +121,6 @@ function setup(opts: { guidance?: boolean; goals?: boolean } = {}) {
   const ROUTE_VERDICT: Record<string, string> = {
     needs_research: "research",
     needs_design: "design",
-    needs_implement: "implement",
   };
   const call = (input: Record<string, unknown>) => {
     const id = input.id as string;
@@ -243,7 +242,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
       update(
         "task.1",
         {
-          status: "needs_implement",
+          status: "needs_design",
           labels: ["area:ai", "goal:delivery"],
           scores: scores(3),
         },
@@ -256,7 +255,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
       id: "task.1",
       expectedRevision: 7,
       reason: "route and score",
-      set: { status: "needs_implement", labels: ["area:ai", "goal:delivery"] },
+      set: { status: "needs_design", labels: ["area:ai", "goal:delivery"] },
     });
     // The guard stored revision 8 and the new status: the old revision is stale.
     expect(await a.call(update("task.1", { scores: scores(2) }))).toContain(
@@ -274,10 +273,14 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
 
   it("routes status and cancels with a reason; never done", async () => {
     const a = setup();
-    for (const n of [1, 2, 3, 4]) a.read(item(`task.${n}`));
+    for (const n of [1, 2, 3, 4, 5]) a.read(item(`task.${n}`));
     expect(
-      await a.call(update("task.1", { status: "needs_implement" })),
+      await a.call(update("task.1", { status: "needs_design" })),
     ).toContain('"revision"');
+    // Never straight to implement: every change passes design review (CEO 2026-11-18).
+    expect(await a.call(update("task.5", { status: "needs_implement" }))).toContain(
+      "route_not_allowed",
+    );
     expect(
       await a.call(
         update(
@@ -294,7 +297,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
       await a.call(update("task.4", { status: "needs_triage" })),
     ).toContain("no_change");
     expect(a.writes.map((w) => (w.set as { status: string }).status)).toEqual([
-      "needs_implement",
+      "needs_design",
       "cancelled",
     ]);
   });
@@ -455,9 +458,9 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     expect(a.receipts.items.get("task.1")?.moves).toEqual(moves);
     expect(await a.call(update("task.1", { moves }))).toBe("no_change");
     expect(
-      await a.call(update("task.1", { status: "needs_implement" })),
+      await a.call(update("task.1", { status: "needs_design" })),
     ).toContain('"revision"');
-    expect(a.writes[0]).toMatchObject({ set: { status: "needs_implement" } });
+    expect(a.writes[0]).toMatchObject({ set: { status: "needs_design" } });
   });
 
   it("sets only status, scores, labels and moves", async () => {
@@ -848,7 +851,7 @@ describe("the triage artifact comes first (task.0122)", () => {
   it("refuses to route an item forward before its triage artifact is recorded", async () => {
     const a = setup();
     a.read(item("task.1"));
-    const out = await a.callRaw(route("task.1", "needs_implement"));
+    const out = await a.callRaw(route("task.1", "needs_design"));
     expect(out).toContain("triage_artifact");
     expect(out).toContain(WORK_ITEM_ARTIFACT_RECORD_NAME);
     expect(a.writes).toHaveLength(0);
@@ -857,29 +860,29 @@ describe("the triage artifact comes first (task.0122)", () => {
   it("routes the item forward after the triage artifact for that route is recorded", async () => {
     const a = setup();
     a.read(item("task.1"));
-    const recorded = await a.record("task.1", triage("task.1", "implement"));
+    const recorded = await a.record("task.1", triage("task.1", "design"));
     expect(recorded).toContain('"artifact"');
     expect(a.artifactWrites).toEqual([
-      { id: "task.1", artifact: triage("task.1", "implement") },
+      { id: "task.1", artifact: triage("task.1", "design") },
     ]);
-    expect(await a.callRaw(route("task.1", "needs_implement"))).toContain('"revision"');
+    expect(await a.callRaw(route("task.1", "needs_design"))).toContain('"revision"');
     expect(a.writes).toHaveLength(1);
   });
 
   it("a triage artifact for another route does not open the route the model asks for", async () => {
     const a = setup();
     a.read(item("task.1"));
-    await a.record("task.1", triage("task.1", "design"));
-    expect(await a.callRaw(route("task.1", "needs_implement"))).toContain("triage_artifact");
-    expect(await a.callRaw(route("task.1", "needs_design"))).toContain('"revision"');
+    await a.record("task.1", triage("task.1", "research"));
+    expect(await a.callRaw(route("task.1", "needs_design"))).toContain("triage_artifact");
+    expect(await a.callRaw(route("task.1", "needs_research"))).toContain('"revision"');
   });
 
   it("a triage artifact of one item does not open another item", async () => {
     const a = setup();
     a.read(item("task.1"));
     a.read(item("task.2"));
-    await a.record("task.1", triage("task.1", "implement"));
-    expect(await a.callRaw(route("task.2", "needs_implement"))).toContain("triage_artifact");
+    await a.record("task.1", triage("task.1", "design"));
+    expect(await a.callRaw(route("task.2", "needs_design"))).toContain("triage_artifact");
   });
 
   it("cancelling and moving back to triage need no artifact", async () => {
@@ -905,27 +908,27 @@ describe("the triage artifact comes first (task.0122)", () => {
         },
         "artifact_shape",
       ],
-      ["task.1", triage("task.2", "implement"), "artifact_shape"],
-      ["task.2", triage("task.2", "implement"), "artifact_source"],
-      ["task.9", triage("task.9", "implement"), "item_not_read"],
+      ["task.1", triage("task.2", "design"), "artifact_shape"],
+      ["task.2", triage("task.2", "design"), "artifact_source"],
+      ["task.9", triage("task.9", "design"), "item_not_read"],
     ] as const) {
       expect(await a.record(id, artifact as never), `${id} ${code}`).toContain(code);
     }
     expect(a.artifactWrites).toHaveLength(0);
     const cold = setup({ guidance: false });
     cold.read(item("task.1"));
-    expect(await cold.record("task.1", triage("task.1", "implement"))).toContain("guidance");
+    expect(await cold.record("task.1", triage("task.1", "design"))).toContain("guidance");
     const noGoals = setup({ goals: false });
     noGoals.read(item("task.1"));
-    expect(await noGoals.record("task.1", triage("task.1", "implement"))).toContain("goals");
+    expect(await noGoals.record("task.1", triage("task.1", "design"))).toContain("goals");
   });
 
   it("records at most five items per run", async () => {
     const a = setup();
     for (let n = 1; n <= 6; n++) a.read(item(`task.${n}`));
     for (let n = 1; n <= 5; n++)
-      expect(await a.record(`task.${n}`, triage(`task.${n}`, "implement"))).toContain('"artifact"');
-    expect(await a.record("task.6", triage("task.6", "implement"))).toContain("write_budget");
+      expect(await a.record(`task.${n}`, triage(`task.${n}`, "design"))).toContain('"artifact"');
+    expect(await a.record("task.6", triage("task.6", "design"))).toContain("write_budget");
     // The same item may be re-recorded: the latest artifact decides.
     expect(await a.record("task.1", triage("task.1", "design"))).toContain('"artifact"');
     expect(a.artifactWrites).toHaveLength(6);
@@ -944,7 +947,7 @@ describe("the triage artifact comes first (task.0122)", () => {
       }),
       [TRIAGE_GUIDANCE_ID],
     );
-    await refusing.invoke({ id: "task.1", artifact: triage("task.1", "implement") } as never);
-    expect(await a.callRaw(route("task.1", "needs_implement"))).toContain("triage_artifact");
+    await refusing.invoke({ id: "task.1", artifact: triage("task.1", "design") } as never);
+    expect(await a.callRaw(route("task.1", "needs_design"))).toContain("triage_artifact");
   });
 });

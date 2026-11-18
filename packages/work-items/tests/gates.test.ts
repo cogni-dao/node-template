@@ -167,21 +167,21 @@ const designRoute = [triage("design", { itemRevision: 1 })];
 
 describe("exit of needs_triage: a triage artifact, six scores, a goal label, moves or a gap", () => {
   const cases: Case[] = [
-    { name: "triage verdict implement routes to needs_implement", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement")], ok: true },
+    { name: "no ladder exit to needs_implement, even with a stored implement triage", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement")], unmet: "path" },
     { name: "verdict design routes to needs_design", from: "needs_triage", to: "needs_design", artifacts: [triage("design")], ok: true },
     { name: "verdict research routes to needs_research", from: "needs_triage", to: "needs_research", artifacts: [triage("research")], ok: true },
-    { name: "no triage artifact is refused", from: "needs_triage", to: "needs_implement", unmet: "triage" },
-    { name: "a verdict that names another route is refused", from: "needs_triage", to: "needs_implement", artifacts: [triage("design")], unmet: "triage" },
-    { name: "a triage artifact written before the item re-entered triage is stale", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement", { itemRevision: SREV - 1 })], unmet: "triage" },
-    { name: "a triage artifact of another item never counts", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement", { itemId: "task.0002" })], unmet: "triage" },
-    { name: "a triage subject that names another item is refused", from: "needs_triage", to: "needs_implement", artifacts: [art("triage", "work:task.0002", "implement")], unmet: "triage" },
-    { name: "five nonzero scores are refused", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement")], item: { scores: { ...SIX, confidence: { v: 0 } } }, unmet: "scores" },
-    { name: "six axes under other names do not count: the named six are required", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement")], item: { scores: { goal: { v: 4 }, time: { v: 3 }, unblocks: { v: 4 }, ease: { v: 3 }, confidence: { v: 4 }, extra: { v: 4 } } }, unmet: "scores" },
-    { name: "seven axes with the six named all nonzero pass", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement")], item: { scores: { ...SIX, extra: { v: 1 } } }, ok: true },
-    { name: "no scores are refused", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement")], item: { scores: null }, unmet: "scores" },
-    { name: "no goal label is refused", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement")], item: { labels: ["area:web"] }, unmet: "goal_label" },
-    { name: "no moves and no measurement gap in the note is refused", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement")], item: { moves: [] }, unmet: "moves_or_gap" },
-    { name: "no moves but a gap in the note passes", from: "needs_triage", to: "needs_implement", artifacts: [triage("implement", { note: "no KPI measures this yet" })], item: { moves: [] }, ok: true },
+    { name: "no triage artifact is refused", from: "needs_triage", to: "needs_design", unmet: "triage" },
+    { name: "a verdict that names another route is refused", from: "needs_triage", to: "needs_design", artifacts: [triage("research")], unmet: "triage" },
+    { name: "a triage artifact written before the item re-entered triage is stale", from: "needs_triage", to: "needs_design", artifacts: [triage("design", { itemRevision: SREV - 1 })], unmet: "triage" },
+    { name: "a triage artifact of another item never counts", from: "needs_triage", to: "needs_design", artifacts: [triage("design", { itemId: "task.0002" })], unmet: "triage" },
+    { name: "a triage subject that names another item is refused", from: "needs_triage", to: "needs_design", artifacts: [art("triage", "work:task.0002", "design")], unmet: "triage" },
+    { name: "five nonzero scores are refused", from: "needs_triage", to: "needs_design", artifacts: [triage("design")], item: { scores: { ...SIX, confidence: { v: 0 } } }, unmet: "scores" },
+    { name: "six axes under other names do not count: the named six are required", from: "needs_triage", to: "needs_design", artifacts: [triage("design")], item: { scores: { goal: { v: 4 }, time: { v: 3 }, unblocks: { v: 4 }, ease: { v: 3 }, confidence: { v: 4 }, extra: { v: 4 } } }, unmet: "scores" },
+    { name: "seven axes with the six named all nonzero pass", from: "needs_triage", to: "needs_design", artifacts: [triage("design")], item: { scores: { ...SIX, extra: { v: 1 } } }, ok: true },
+    { name: "no scores are refused", from: "needs_triage", to: "needs_design", artifacts: [triage("design")], item: { scores: null }, unmet: "scores" },
+    { name: "no goal label is refused", from: "needs_triage", to: "needs_design", artifacts: [triage("design")], item: { labels: ["area:web"] }, unmet: "goal_label" },
+    { name: "no moves and no measurement gap in the note is refused", from: "needs_triage", to: "needs_design", artifacts: [triage("design")], item: { moves: [] }, unmet: "moves_or_gap" },
+    { name: "no moves but a gap in the note passes", from: "needs_triage", to: "needs_design", artifacts: [triage("design", { note: "no KPI measures this yet" })], item: { moves: [] }, ok: true },
     { name: "a jump to needs_implementation_review is refused", from: "needs_triage", to: "needs_implementation_review", artifacts: [triage("implement")], unmet: "path" },
     { name: "a jump to needs_design_review is refused", from: "needs_triage", to: "needs_design_review", artifacts: [triage("design")], unmet: "path" },
     { name: "a jump to needs_validation is refused", from: "needs_triage", to: "needs_validation", artifacts: [triage("implement")], unmet: "path" },
@@ -390,12 +390,13 @@ describe("a migrated item with no triage artifact takes its path from its stage"
 });
 
 describe("one full walk and the re-walk after a move back", () => {
-  it("walks a code item from triage to done, one stage at a time, each on its exit artifact", () => {
+  it("walks a legacy implement-triaged code item from implement to done, one stage at a time, each on its exit artifact", () => {
     const rev = (n: number) => ({ itemRevision: n });
     const triaged = triage("implement", rev(1));
     const review = prReview(HEAD, "approve", rev(5));
     const walk: Case[] = [
-      { name: "triage", from: "needs_triage", to: "needs_implement", artifacts: [triaged], item: { statusRevision: 1 }, ok: true },
+      // Triage no longer exits to implement; an item triaged to implement earlier keeps that path.
+      { name: "no new implement triage", from: "needs_triage", to: "needs_implement", artifacts: [triaged], item: { statusRevision: 1 }, unmet: "path" },
       { name: "implement", from: "needs_implement", to: "needs_implementation_review", artifacts: [triaged], item: { statusRevision: 2 }, ok: true },
       { name: "review", from: "needs_implementation_review", to: "needs_validation", artifacts: [triaged, review], item: { statusRevision: 4 }, ok: true },
       { name: "validation", from: "needs_validation", to: "needs_merge", artifacts: [triaged, review, prValidation(HEAD, PASS, "pass", rev(7))], item: { statusRevision: 6 }, ok: true },
@@ -559,7 +560,7 @@ describe("the stage order", () => {
 
   it("structurally allows any move back and only the forward targets of a stage", () => {
     expect(isValidTransition("needs_validation", "needs_triage")).toBe(true);
-    expect(isValidTransition("needs_triage", "needs_implement")).toBe(true);
+    expect(isValidTransition("needs_triage", "needs_implement")).toBe(false);
     expect(isValidTransition("needs_triage", "needs_merge")).toBe(false);
     expect(isValidTransition("needs_design", "needs_implement")).toBe(false);
     expect(isValidTransition("done", "needs_merge")).toBe(false);
