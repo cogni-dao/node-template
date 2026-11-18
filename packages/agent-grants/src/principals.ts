@@ -6,7 +6,7 @@
  * Purpose: The one writer of an outside agent's `agent_principals` row and the one reader of a user's kind.
  * Scope: Raw SQL over an injected tag. The caller owns the transaction and the service-role connection (`agent_principals` is writable only by BYPASSRLS).
  * Invariants:
- *   - ONE_PRINCIPAL_WRITER: registration and key upgrade both write the external row through `writeExternalPrincipal`, idempotently.
+ *   - ONE_PRINCIPAL_WRITER: registration writes the external row through `writeExternalPrincipal`, idempotently, in the same transaction as the user. Key upgrade only reads it.
  *   - KIND_IS_THE_ROW: a user is an `agent` exactly when it has an `agent_principals` row; no row is a `human`.
  * Side-effects: IO
  * @public

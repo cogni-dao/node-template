@@ -72,7 +72,7 @@ export interface CredentialStore {
   /** The credential whose key hashes to `tokenHash`, with its derived state, else null. Never cached. */
   lookup(tokenHash: string): Promise<CredentialLookup | null>;
   /**
-   * signed key -> pending revocable key for the SAME `users.id`. Creates the external `agent_principals` row when absent. Refuses a wallet user,
+   * signed key -> pending revocable key for the SAME `users.id`. Refuses a user with no `agent_principals` row (a human, reason `wallet_user`; an agent may hold a bound wallet),
    * an internal principal, a user that already holds a live revocable key, and a user with live role rows and no GitHub binding
    * (BINDING_BEFORE_UPGRADE, role read = the node's `HasRoles`). A pending upgrade key from an earlier call is superseded.
    */
