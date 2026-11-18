@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { classifyFiles, decide, parseTestChain, selectUnitFilters } from "./classify-ci-scope.mjs";
-import { pureChain, selectUnitRun } from "./run-unit-tests.mjs";
+import { parseShard, planShard, pureChain, selectUnitRun } from "./run-unit-tests.mjs";
 import { findUndeclaredWorkspaceEdges } from "./workspace-edges.mjs";
 
 const DIRS = ["app", "graphs", "packages/ids", "packages/metrics"];
@@ -99,6 +99,48 @@ const CASES = [
     assert.deepEqual(affected.names, ["@x/a", "@x/c"]);
     // A chain the runner cannot read is never narrowed: it runs the node's own `pnpm test:ci`.
     assert.equal(selectUnitRun({ CI_SCOPE: "affected", UNIT_FILTERS: "@x/a" }, null).mode, "full");
+  }],
+  // task.0138. Defect: a shard plan that drops a package, or runs one twice, makes the required `unit` gate
+  // green over a suite that never ran in full (or pay twice for it). Between the shards, every package of the
+  // set runs exactly once and the split package's vitest files are divided by vitest's own --shard.
+  ["shards run every package exactly once, and the split package on every shard as --shard=i/N", () => {
+    const names = Array.from({ length: 14 }, (_, at) => `@x/p${at}`);
+    const chain = [...names.slice(0, 9), "@x/app", ...names.slice(9)];
+    for (const total of [2, 3, 4, 5, 7, 14, 20]) {
+      const seen = new Map();
+      for (let index = 1; index <= total; index += 1) {
+        const steps = planShard(chain, { index, total }, "@x/app");
+        assert.deepEqual(steps.filter((step) => step.name === "@x/app").map((step) => step.args), [[`--shard=${index}/${total}`]], `split package on ${index}/${total}`);
+        for (const step of steps) if (step.name !== "@x/app") seen.set(step.name, (seen.get(step.name) ?? 0) + 1);
+        // Chain order is kept inside a shard, so a package that must run before another still does.
+        assert.deepEqual(steps.map((step) => step.name), chain.filter((name) => steps.some((step) => step.name === name)), `order on ${index}/${total}`);
+      }
+      assert.deepEqual([...seen.keys()].sort(), [...names].sort(), `every package seen at ${total} shards`);
+      assert.ok([...seen.values()].every((count) => count === 1), `no package twice at ${total} shards`);
+    }
+  }],
+  // Defect: with no split package named, a shard silently runs nothing of the biggest package.
+  ["without a split package every package still runs exactly once across the shards", () => {
+    const chain = ["@x/a", "@x/b", "@x/c", "@x/d", "@x/e"];
+    const all = [1, 2, 3].flatMap((index) => planShard(chain, { index, total: 3 }, "").map((step) => step.name));
+    assert.deepEqual([...all].sort(), [...chain].sort());
+  }],
+  // Defect: a malformed or out-of-range shard parses to something and runs less than asked, unnoticed.
+  ["a malformed shard is rejected, and an empty or 1/1 shard means unsharded", () => {
+    assert.equal(parseShard(undefined), null);
+    assert.equal(parseShard(""), null);
+    assert.equal(parseShard("1/1"), null);
+    assert.deepEqual(parseShard("2/4"), { index: 2, total: 4 });
+    for (const bad of ["0/4", "5/4", "2", "2/", "/4", "a/b", "1/0", "-1/4", "1.5/4", "1/4/4"]) {
+      assert.throws(() => parseShard(bad), /UNIT_SHARD/, bad);
+    }
+  }],
+  // Defect: sharding widens a PR's affected subset back to the whole chain (no saving), or narrows a full run.
+  ["a shard splits the selected set: the affected subset on a PR, the whole chain otherwise", () => {
+    const chain = ["@x/a", "@x/b", "@x/c", "@x/app"];
+    const affected = selectUnitRun({ CI_SCOPE: "affected", UNIT_FILTERS: "@x/b @x/app" }, chain);
+    const run = [1, 2].flatMap((index) => planShard(affected.names, { index, total: 2 }, "@x/app").map((step) => step.name));
+    assert.deepEqual([...run].sort(), ["@x/app", "@x/app", "@x/b"]);
   }],
 ];
 

@@ -24,6 +24,13 @@ description: >-
 # PIN: `uses: cogni-dao/node-template/.github/actions/node-ci@<40-char SHA>`. node-template, the
 # reference consumer, uses `./.github/actions/node-ci` so a change here is proven by its own CI.
 #
+# SHARDED UNIT (task.0138, opt-in; a caller that sets neither input is unchanged): a job cannot be split
+# from inside a composite action, so the caller owns the fan-out. It runs this action in a matrix job
+# (`unit-shard`, one leg per `unit_shard: i/N`) and keeps the required context as a plain job named
+# `unit` that `needs` the matrix, runs under `if: always()` and fails unless every leg succeeded. A
+# skipped, cancelled or failed leg therefore can never score the required `unit` green. The checker pins
+# that shape; see scripts/check-node-ci-workflow.mjs.
+#
 # SCOPE (task.0127 AFFECTED_ON_PR_FULL_ON_QUEUE): on pull_request, run only what the diff can break;
 # merge_group and push always run everything. Scoping skips STEPS, never the job, so every required
 # context still reports. A classifier error leaves the scope output empty, which every gate reads as full.
@@ -38,6 +45,18 @@ inputs:
   db_check:
     description: Run `pnpm db:check` in the static lane. Set to "false" for a node with no schema drift guard yet.
     default: "true"
+  unit_shard:
+    description: >-
+      Unit lane only, opt-in. `<index>/<total>` (for example `2/4`) runs shard 2 of 4 of the unit chain,
+      so a caller can fan the lane out over a matrix and gate it behind one bare-named job (see
+      SHARDED UNIT below). Empty runs the whole chain in this job, exactly as before story.0052's fleet.
+    default: ""
+  unit_split_package:
+    description: >-
+      Unit lane with `unit_shard` only. The one chain package whose vitest suite is split across shards
+      (`--shard=i/N`) instead of assigned to one shard, for example `@cogni/node-template-app`. Empty
+      splits nothing: whole packages are dealt out round-robin.
+    default: ""
   doltgres_command:
     description: >-
       Component lane only. A real-Doltgres acceptance command run after the component tests
@@ -53,9 +72,16 @@ runs:
       env:
         LANE: ${{ inputs.lane }}
         DB_CHECK: ${{ inputs.db_check }}
+        UNIT_SHARD: ${{ inputs.unit_shard }}
       run: |
         case "$LANE" in static|unit|component) ;; *) echo "::error::lane must be static|unit|component, got '$LANE'"; exit 1 ;; esac
         case "$DB_CHECK" in true|false) ;; *) echo "::error::db_check must be true|false, got '$DB_CHECK'"; exit 1 ;; esac
+        # A shard on any other lane would be silently ignored, and a typo would silently run less.
+        if [ -n "$UNIT_SHARD" ]; then
+          [ "$LANE" = unit ] || { echo "::error::unit_shard applies to the unit lane only, lane is '$LANE'"; exit 1; }
+          echo "$UNIT_SHARD" | grep -Eq '^[1-9][0-9]*/[1-9][0-9]*$' || { echo "::error::unit_shard must be <index>/<total>, got '$UNIT_SHARD'"; exit 1; }
+          [ "${UNIT_SHARD%/*}" -le "${UNIT_SHARD#*/}" ] || { echo "::error::unit_shard index exceeds total: '$UNIT_SHARD'"; exit 1; }
+        fi
 
     - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -164,6 +190,8 @@ runs:
       env:
         CI_SCOPE: ${{ steps.scope.outputs.scope }}
         UNIT_FILTERS: ${{ steps.scope.outputs.unit_filters }}
+        UNIT_SHARD: ${{ inputs.unit_shard }}
+        UNIT_SPLIT_PACKAGE: ${{ inputs.unit_split_package }}
       run: node "${{ github.action_path }}/scripts/run-unit-tests.mjs"
 
     # The repo/ripgrep-adapter component test shells out to `rg`.

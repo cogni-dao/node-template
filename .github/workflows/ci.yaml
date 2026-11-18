@@ -45,9 +45,18 @@ jobs:
           lane: static
           node_version: ${{ env.NODE_VERSION }}
 
-  unit:
+  # task.0138: the unit lane is the longest CPU-bound job (the app vitest suite alone is ~150s on 4 vCPU),
+  # so node-template fans it over four runners. The required context `unit` is the plain gate job below,
+  # which reports success only when every shard did. Each shard repeats install and build in parallel, so
+  # the wall clock is setup plus a quarter of the suite. Other nodes keep a single `unit` job running the
+  # action; the checker accepts both shapes.
+  unit-shard:
     runs-on: ubuntu-latest
-    # No `needs`: every lane does its own install and build, so the three run in parallel.
+    strategy:
+      # Let every shard finish: a red run then names all the failing slices, not the first.
+      fail-fast: false
+      matrix:
+        shard: ["1/4", "2/4", "3/4", "4/4"]
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
@@ -58,6 +67,21 @@ jobs:
         with:
           lane: unit
           node_version: ${{ env.NODE_VERSION }}
+          unit_shard: ${{ matrix.shard }}
+          # Split this package's vitest files across the shards; the other packages are dealt out whole.
+          unit_split_package: "@cogni/node-template-app"
+
+  # The required check. `always()` so a failed, cancelled or skipped shard fails it rather than skipping
+  # it (GitHub scores a skipped required check as success); the step asserts the aggregate shard result.
+  unit:
+    needs: [unit-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every unit shard passed
+        env:
+          SHARDS: ${{ needs.unit-shard.result }}
+        run: test "$SHARDS" = success
 
   component:
     runs-on: ubuntu-latest # GitHub-hosted runners provide Docker for testcontainers

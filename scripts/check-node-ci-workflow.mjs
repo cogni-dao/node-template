@@ -258,30 +258,22 @@ const LANES = ["static", "unit", "component"];
 const CI_ACTION_LOCAL = "./.github/actions/node-ci";
 const CI_ACTION_PINNED = /^cogni-dao\/node-template\/\.github\/actions\/node-ci@[0-9a-f]{40}$/;
 
-for (const lane of LANES) {
-  const job = ciWorkflow?.jobs?.[lane];
-  if (!job) {
-    fail(CI_WORKFLOW_PATH, `jobs must include ${lane}`);
-    continue;
-  }
-  // The lanes run in PARALLEL: each does its own install and build, so gating one on another
-  // only serialised the fast gate onto the critical path.
-  if (Object.hasOwn(job, "needs")) {
-    fail(CI_WORKFLOW_PATH, `jobs.${lane} must run in parallel (no \`needs\`); got ${JSON.stringify(job.needs)}`);
-  }
+// A lane's job (or a sharded unit job's matrix leg) runs the node-ci action once, on a full-history
+// checkout, with the lane it is named for. Returns the action step, or undefined after reporting.
+function assertActionCaller(jobId, job, lane) {
   // A required job that cannot fail reports green whatever its steps did.
   if (Object.hasOwn(job, "continue-on-error")) {
-    fail(CI_WORKFLOW_PATH, `jobs.${lane} must not set continue-on-error: it is a required check`);
+    fail(CI_WORKFLOW_PATH, `jobs.${jobId} must not set continue-on-error: it is, or feeds, a required check`);
   }
   const steps = Array.isArray(job.steps) ? job.steps : [];
   const checkout = steps.find((step) => String(step?.uses ?? "").startsWith("actions/checkout@"));
   if (checkout?.with?.["fetch-depth"] !== 0) {
-    fail(CI_WORKFLOW_PATH, `${lane} must check out with fetch-depth: 0 (the classifier diffs a PR against its base)`);
+    fail(CI_WORKFLOW_PATH, `${jobId} must check out with fetch-depth: 0 (the classifier diffs a PR against its base)`);
   }
   const actionSteps = steps.filter((step) => /(^|\/)\.github\/actions\/node-ci(@|$)/.test(String(step?.uses ?? "")));
   if (actionSteps.length !== 1) {
-    fail(CI_WORKFLOW_PATH, `${lane} must run the node-ci action exactly once; found ${actionSteps.length}`);
-    continue;
+    fail(CI_WORKFLOW_PATH, `${jobId} must run the node-ci action exactly once; found ${actionSteps.length}`);
+    return undefined;
   }
   const [action] = actionSteps;
   // A pin is a full commit SHA: a tag or branch is mutable, so a moved ref would change CI under a
@@ -289,13 +281,97 @@ for (const lane of LANES) {
   if (action.uses !== CI_ACTION_LOCAL && !CI_ACTION_PINNED.test(action.uses)) {
     fail(
       CI_WORKFLOW_PATH,
-      `${lane} must call ${CI_ACTION_LOCAL} or cogni-dao/node-template/.github/actions/node-ci@<40-char commit SHA>; got ${JSON.stringify(action.uses)}`
+      `${jobId} must call ${CI_ACTION_LOCAL} or cogni-dao/node-template/.github/actions/node-ci@<40-char commit SHA>; got ${JSON.stringify(action.uses)}`
     );
   }
-  expectEqual(CI_WORKFLOW_PATH, action.with?.lane, lane, `${lane} node-ci lane input`);
-  expectEqual(CI_WORKFLOW_PATH, action.with?.node_version, "${{ env.NODE_VERSION }}", `${lane} node-ci node_version input`);
+  expectEqual(CI_WORKFLOW_PATH, action.with?.lane, lane, `${jobId} node-ci lane input`);
+  expectEqual(CI_WORKFLOW_PATH, action.with?.node_version, "${{ env.NODE_VERSION }}", `${jobId} node-ci node_version input`);
   if (Object.hasOwn(action, "if") || Object.hasOwn(action, "continue-on-error")) {
-    fail(CI_WORKFLOW_PATH, `${lane} node-ci step must not be conditional or continue-on-error: it IS the required check`);
+    fail(CI_WORKFLOW_PATH, `${jobId} node-ci step must not be conditional or continue-on-error: it IS the required check`);
+  }
+  return action;
+}
+
+// SHARDED UNIT (task.0138). The required context `unit` may be one job that runs the lane (every fleet
+// node today), or a plain gate job over a matrix job that runs one shard per leg. The gate is the
+// required check, so it must be impossible for it to pass while a shard did not: it runs under
+// `if: always()` (a bare `needs` would skip it on a failed shard, and GitHub scores a skipped required
+// check as success) and fails unless the aggregate result of the shard job is exactly `success`.
+// The matrix must name every shard 1..N exactly once, or a dropped leg silently stops running a slice.
+function assertShardedUnit(gateJob) {
+  const needs = Array.isArray(gateJob.needs) ? gateJob.needs : [gateJob.needs];
+  const [shardId] = needs;
+  const shardJob = ciWorkflow?.jobs?.[shardId];
+  if (needs.length !== 1 || typeof shardId !== "string" || !shardJob) {
+    fail(CI_WORKFLOW_PATH, `jobs.unit must need exactly one job that runs the shards; got ${JSON.stringify(gateJob.needs)}`);
+    return;
+  }
+  if (Object.hasOwn(gateJob, "continue-on-error")) {
+    fail(CI_WORKFLOW_PATH, "jobs.unit must not set continue-on-error: it is a required check");
+  }
+  if (String(gateJob.if ?? "").replace(/\s+/g, " ").trim() !== "always()") {
+    fail(CI_WORKFLOW_PATH, "jobs.unit gates a sharded unit lane and must run under `if: always()` so a failed shard cannot skip it");
+  }
+  const gateSteps = Array.isArray(gateJob.steps) ? gateJob.steps : [];
+  if (gateSteps.some((step) => /(^|\/)\.github\/actions\/node-ci(@|$)/.test(String(step?.uses ?? "")))) {
+    fail(CI_WORKFLOW_PATH, "jobs.unit is the gate of the sharded unit lane and must not run the lane itself");
+  }
+  const asserts = gateSteps.some((step) => {
+    const variable = /^\s*test "\$(\w+)" = success\s*$/.exec(String(step?.run ?? ""))?.[1];
+    return variable !== undefined && step?.env?.[variable] === `\${{ needs.${shardId}.result }}`;
+  });
+  if (!asserts) {
+    fail(
+      CI_WORKFLOW_PATH,
+      `jobs.unit must fail unless every shard passed: a step running \`test "$VAR" = success\` with VAR set to \${{ needs.${shardId}.result }}`
+    );
+  }
+  if (Object.hasOwn(shardJob, "needs") || Object.hasOwn(shardJob, "if")) {
+    fail(CI_WORKFLOW_PATH, `jobs.${shardId} must run in parallel and unconditionally (no \`needs\` or \`if\`)`);
+  }
+  const matrix = shardJob.strategy?.matrix;
+  const shards = matrix?.shard;
+  const parsed = Array.isArray(shards) ? shards.map((value) => /^([1-9]\d*)\/([1-9]\d*)$/.exec(String(value))) : [];
+  const total = parsed[0] ? Number(parsed[0][2]) : 0;
+  const everyShardOnce =
+    total >= 2 &&
+    parsed.length === total &&
+    parsed.every((match, at) => match && Number(match[2]) === total && Number(match[1]) === at + 1);
+  if (!everyShardOnce || Object.keys(matrix).some((key) => key !== "shard")) {
+    fail(
+      CI_WORKFLOW_PATH,
+      `jobs.${shardId}.strategy.matrix must be only \`shard: ["1/N", ..., "N/N"]\` naming every shard 1..N once (N >= 2); got ${JSON.stringify(matrix)}`
+    );
+  }
+  const action = assertActionCaller(shardId, shardJob, "unit");
+  if (!action) return;
+  expectEqual(CI_WORKFLOW_PATH, action.with?.unit_shard, "${{ matrix.shard }}", `${shardId} node-ci unit_shard input`);
+  if (action.uses === CI_ACTION_LOCAL) {
+    expectEqual(CI_WORKFLOW_PATH, action.with?.unit_split_package, "@cogni/node-template-app", `${shardId} node-ci unit_split_package input`);
+  }
+}
+
+for (const lane of LANES) {
+  const job = ciWorkflow?.jobs?.[lane];
+  if (!job) {
+    fail(CI_WORKFLOW_PATH, `jobs must include ${lane}`);
+    continue;
+  }
+  // The only job allowed a `needs` is the gate of a sharded unit lane.
+  if (lane === "unit" && Object.hasOwn(job, "needs")) {
+    assertShardedUnit(job);
+    continue;
+  }
+  // The lanes run in PARALLEL: each does its own install and build, so gating one on another
+  // only serialised the fast gate onto the critical path.
+  if (Object.hasOwn(job, "needs")) {
+    fail(CI_WORKFLOW_PATH, `jobs.${lane} must run in parallel (no \`needs\`); got ${JSON.stringify(job.needs)}`);
+  }
+  // An unsharded lane takes no shard input: it would run one slice and report the lane green.
+  const action = assertActionCaller(lane, job, lane);
+  if (!action) continue;
+  if (Object.hasOwn(action.with ?? {}, "unit_shard") && String(action.with.unit_shard).trim() !== "") {
+    fail(CI_WORKFLOW_PATH, `${lane} sets unit_shard outside a sharded unit lane: it would run one slice and report the lane green`);
   }
   // node-template, the reference consumer, keeps the full gate: schema drift check on, and the
   // real-Doltgres acceptance lane it owns. A fleet node sets its own inputs.
@@ -313,6 +389,7 @@ for (const lane of LANES) {
     }
   }
 }
+
 // FORK_FREEDOM: CI runs without secrets.
 if (JSON.stringify(ciWorkflow).includes("secrets.")) {
   fail(CI_WORKFLOW_PATH, "ci.yaml must not reference secrets (FORK_FREEDOM)");
@@ -517,6 +594,11 @@ function assertCiAction(actionFile) {
     expectLaneStep(steps, name, "static", command, `static ${name} command`);
   }
   expectLaneStep(steps, "Unit tests", "unit", { fragment: "scripts/run-unit-tests.mjs" }, "unit test command");
+  // The shard input must reach the runner. Dropped, every shard would run the whole chain: green but not faster.
+  const unitStep = steps.find((step) => step?.name === "Unit tests");
+  for (const [variable, input] of [["UNIT_SHARD", "unit_shard"], ["UNIT_SPLIT_PACKAGE", "unit_split_package"]]) {
+    expectEqual(CI_ACTION_PATH, unitStep?.env?.[variable], `\${{ inputs.${input} }}`, `Unit tests ${variable}`);
+  }
   expectLaneStep(steps, "Component tests (testcontainers)", "component", "pnpm test:component", "component test command");
   assertCiScopePolicy(steps);
 }
