@@ -21,6 +21,9 @@ const ACTION = ".github/actions/node-ci/action.yml";
 // node-template carries the action; a fleet node pins it by SHA and has no such file, so the cases that
 // mutate the action are template-only and every other case must still run unchanged in a fleet repo.
 const HAS_ACTION = existsSync(join(REPO_ROOT, ACTION));
+// A node may fan its unit lane over a matrix behind a bare-named `unit` gate (task.0138); the cases that
+// mutate that shape skip in a tree that keeps one plain `unit` job, which every other case still covers.
+const HAS_SHARDED_UNIT = /\n  unit-shard:\n/.test(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yaml"), "utf8"));
 const FILES = [
   ".github/workflows/ci.yaml",
   ...(HAS_ACTION ? [ACTION] : []),
@@ -51,6 +54,17 @@ const edit = (file, from, to) => ({ read, write }) => {
   write(file, before.replace(from, to));
 };
 const actionEdit = (from, to) => Object.assign(edit(ACTION, from, to), { needsAction: true });
+const shardedEdit = (from, to) => Object.assign(edit(".github/workflows/ci.yaml", from, to), { needsShardedUnit: true });
+// Replace one whole top-level job of ci.yaml (from `  <id>:` to the next job or the end of the file).
+const replaceJob = (id, block) => ({ read, write }) => {
+  const path = ".github/workflows/ci.yaml";
+  const before = read(path);
+  const start = before.indexOf(`\n  ${id}:\n`);
+  if (start < 0) throw new Error(`fixture job missing in ${path}: ${id}`);
+  const next = before.slice(start + 1).search(/\n  [A-Za-z0-9_-]+:\n/);
+  const end = next < 0 ? before.length : start + 1 + next;
+  write(path, `${before.slice(0, start)}\n${block}${before.slice(end)}`);
+};
 
 const contractInstall =
   "pnpm --filter @cogni/repo-spec... install --frozen-lockfile --ignore-scripts --config.dedupe-peer-dependents=false";
@@ -395,7 +409,7 @@ const CASES = [
     name: "a job must run the lane it is named for",
     mutate: edit(".github/workflows/ci.yaml", "lane: unit", "lane: static"),
     expectExit: 1,
-    expectMatch: /unit node-ci lane input/,
+    expectMatch: /unit(-shard)? node-ci lane input/,
   },
   // Defect: a key narrowed to the lockfile hits after a package source change, so every lane tests a stale build.
   {
@@ -417,7 +431,7 @@ const CASES = [
   // Defect: a required job that cannot fail reports green whatever its steps did.
   {
     name: "a required lane job must not continue on error",
-    mutate: edit(".github/workflows/ci.yaml", "\n  unit:\n    runs-on: ubuntu-latest\n", "\n  unit:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n"),
+    mutate: edit(".github/workflows/ci.yaml", "\n  unit:\n", "\n  unit:\n    continue-on-error: true\n"),
     expectExit: 1,
     expectMatch: /jobs\.unit must not set continue-on-error/,
   },
@@ -435,13 +449,115 @@ const CASES = [
   // `unit / <called job>`; the required `unit` then never reports and the ruleset deadlocks.
   {
     name: "calling a reusable workflow from a required job cannot provide the bare context",
-    mutate: edit(
-      ".github/workflows/ci.yaml",
-      "\n  unit:\n    runs-on: ubuntu-latest\n",
-      "\n  unit:\n    uses: cogni-dao/node-template/.github/workflows/ci.yml@0000000000000000000000000000000000000000\n"
+    mutate: replaceJob(
+      "unit",
+      "  unit:\n    uses: cogni-dao/node-template/.github/workflows/ci.yml@0000000000000000000000000000000000000000\n"
     ),
     expectExit: 1,
     expectMatch: /required check "unit" must be emitted by exactly one job; found 0/,
+  },
+  // task.0138. Defect: the sharded gate is not `if: always()`, so a failed shard SKIPS the required `unit`,
+  // and GitHub scores a skipped required check as success.
+  {
+    name: "the sharded unit gate must run under always()",
+    mutate: shardedEdit("    if: always()\n", ""),
+    expectExit: 1,
+    expectMatch: /jobs\.unit gates a sharded unit lane and must run under `if: always\(\)`/,
+  },
+  // Defect: the gate runs but never looks at the shards, so unit reports green over a red shard.
+  {
+    name: "the sharded unit gate must assert the shard result",
+    mutate: shardedEdit('        run: test "$SHARDS" = success\n', "        run: echo shards finished\n"),
+    expectExit: 1,
+    expectMatch: /jobs\.unit must fail unless every shard passed/,
+  },
+  {
+    name: "the sharded unit gate must read the shard job it needs, not another job",
+    mutate: shardedEdit("SHARDS: ${{ needs.unit-shard.result }}", "SHARDS: ${{ needs.static.result }}"),
+    expectExit: 1,
+    expectMatch: /jobs\.unit must fail unless every shard passed/,
+  },
+  // Defect: the gate accepts `skipped` or `cancelled` as passing.
+  {
+    name: "the sharded unit gate must accept only success",
+    mutate: shardedEdit('run: test "$SHARDS" = success', 'run: test "$SHARDS" != failure'),
+    expectExit: 1,
+    expectMatch: /jobs\.unit must fail unless every shard passed/,
+  },
+  {
+    name: "the sharded unit gate must not continue on error",
+    mutate: shardedEdit("\n  unit:\n", "\n  unit:\n    continue-on-error: true\n"),
+    expectExit: 1,
+    expectMatch: /jobs\.unit must not set continue-on-error/,
+  },
+  // Defect: a matrix that drops or repeats a shard silently stops running a slice of the suite.
+  {
+    name: "the shard matrix must name every shard exactly once",
+    mutate: shardedEdit('shard: ["1/4", "2/4", "3/4", "4/4"]', 'shard: ["1/4", "2/4", "3/4"]'),
+    expectExit: 1,
+    expectMatch: /naming every shard 1\.\.N once/,
+  },
+  {
+    name: "the shard matrix must not repeat a shard in place of another",
+    mutate: shardedEdit('shard: ["1/4", "2/4", "3/4", "4/4"]', 'shard: ["1/4", "2/4", "3/4", "3/4"]'),
+    expectExit: 1,
+    expectMatch: /naming every shard 1\.\.N once/,
+  },
+  // Defect: an `exclude` or `include` quietly removes or adds a leg the shard list does not show.
+  {
+    name: "the shard matrix must not carry include or exclude legs",
+    mutate: shardedEdit('        shard: ["1/4", "2/4", "3/4", "4/4"]\n', '        shard: ["1/4", "2/4", "3/4", "4/4"]\n        exclude:\n          - shard: "4/4"\n'),
+    expectExit: 1,
+    expectMatch: /naming every shard 1\.\.N once/,
+  },
+  // Defect: a leg that does not receive its shard runs the whole lane (or none of it).
+  {
+    name: "each shard leg must pass its own shard to the action",
+    mutate: shardedEdit("          unit_shard: ${{ matrix.shard }}\n", ""),
+    expectExit: 1,
+    expectMatch: /unit_shard input/,
+  },
+  // Defect: a shard job gated on another job or a condition can skip, and the gate reads that as not-success only
+  // by accident; shards must always run.
+  {
+    name: "a shard job must run unconditionally",
+    mutate: shardedEdit("\n  unit-shard:\n", "\n  unit-shard:\n    if: github.event_name == 'pull_request'\n"),
+    expectExit: 1,
+    expectMatch: /must run in parallel and unconditionally/,
+  },
+  // Defect: the gate also runs the lane, so the shards' work is repeated under the required name.
+  {
+    name: "the gate must not run the lane itself",
+    mutate: shardedEdit(
+      "      - name: Every unit shard passed\n",
+      "      - uses: ./.github/actions/node-ci\n        with:\n          lane: unit\n          node_version: ${{ env.NODE_VERSION }}\n      - name: Every unit shard passed\n"
+    ),
+    expectExit: 1,
+    expectMatch: /must not run the lane itself/,
+  },
+  // Defect (any tree): a plain lane given a shard runs one slice and reports the whole lane green.
+  {
+    name: "a plain lane must not take a shard",
+    mutate: edit(".github/workflows/ci.yaml", "          lane: static\n", '          lane: static\n          unit_shard: "1/2"\n'),
+    expectExit: 1,
+    expectMatch: /static sets unit_shard outside a sharded unit lane/,
+  },
+  // Defect: the action stops forwarding the shard, so every leg runs the whole chain: green but no faster.
+  {
+    name: "the action must forward the shard to the unit runner",
+    mutate: actionEdit("        UNIT_SHARD: ${{ inputs.unit_shard }}\n        UNIT_SPLIT_PACKAGE", "        UNIT_SPLIT_PACKAGE"),
+    expectExit: 1,
+    expectMatch: /Unit tests UNIT_SHARD/,
+  },
+  // Defect: node-template stops splitting its app suite, so the biggest package lands whole on one shard.
+  {
+    name: "node-template must split its app suite across the shards",
+    mutate: Object.assign(
+      edit(".github/workflows/ci.yaml", '          unit_split_package: "@cogni/node-template-app"\n', ""),
+      { needsShardedUnit: true, needsAction: true }
+    ),
+    expectExit: 1,
+    expectMatch: /unit_split_package input/,
   },
 ];
 
@@ -451,6 +567,11 @@ for (const testCase of CASES) {
   if (testCase.mutate.needsAction && !HAS_ACTION) {
     skipped += 1;
     console.log(`skip ${testCase.name} (template-only: no ${ACTION} in this repo)`);
+    continue;
+  }
+  if (testCase.mutate.needsShardedUnit && !HAS_SHARDED_UNIT) {
+    skipped += 1;
+    console.log(`skip ${testCase.name} (this repo keeps one plain unit job)`);
     continue;
   }
   const { code, output } = runCheckerOn(testCase.mutate);
