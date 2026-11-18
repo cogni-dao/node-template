@@ -24,9 +24,15 @@ FROM caddy:2.11.7@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8c
 
 FROM node:22.23.5-trixie-slim@sha256:68c76cfad89921b927eae28ba21407475e29d0ce450afcdbe70c1532db042b64
 
+# Corepack's cache lives outside HOME so the sandbox user owns it and can add
+# another repo's pnpm version at run time without a prompt.
+ENV COREPACK_HOME=/opt/corepack \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
 # Developer tools for coding a node repo: clone, pnpm install, targeted checks,
 # open a pull request. No sudo, no package-manager access at runtime (the
-# workload runs as an unprivileged user). pnpm matches the repo's packageManager.
+# workload runs as an unprivileged user). Corepack runs the pnpm version each
+# repo's packageManager names; the repo-matching version is prepared here.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
@@ -35,6 +41,7 @@ RUN apt-get update \
     curl \
     git \
     jq \
+    procps \
     python3 \
     python3-pip \
     python3-venv \
@@ -47,8 +54,8 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/* \
-  && npm install -g pnpm@9.12.2 \
-  && npm cache clean --force
+  && corepack enable \
+  && corepack prepare pnpm@9.12.2 --activate
 
 COPY --from=execd /execd /usr/local/bin/execd
 # Hardening-floor launcher; must stay root-owned and not group/world-writable.
@@ -63,7 +70,8 @@ RUN chmod 0755 /etc/sandbox /usr/local/bin/sandbox-entrypoint /opt/opensandbox /
   && groupadd --gid 10001 sandbox \
   && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/sandbox --shell /bin/bash sandbox \
   && mkdir -p /workspace \
-  && chown sandbox:sandbox /workspace
+  && chown sandbox:sandbox /workspace \
+  && chown -R sandbox:sandbox "$COREPACK_HOME"
 
 # BUILD_SHA is a fallback only; the platform injects COGNI_REPO_SHA at runtime.
 ARG BUILD_SHA=unknown
