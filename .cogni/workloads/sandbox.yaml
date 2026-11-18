@@ -32,7 +32,7 @@ containers:
       GIT_COMMITTER_NAME: node-template AI
       GIT_COMMITTER_EMAIL: node-template@ai.cognidao.org
       GIT_CONFIG_COUNT: "1"
-      GIT_CONFIG_KEY_0: credential.helper
+      GIT_CONFIG_KEY_0: credential.https://github.com.helper
       GIT_CONFIG_VALUE_0: '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
     readinessProbe:
       httpGet:

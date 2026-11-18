@@ -225,8 +225,10 @@ export const serverSchema = z.object({
   ),
   // The node AI's own operator principal (developer on this node). Optional: without it the sandbox
   // runs and only git push fails. Its push token comes from the operator App (POST /vcs/push-token).
-  COGNI_OPERATOR_API_KEY: optionalString,
-  COGNI_OPERATOR_URL: z.string().url().default("https://cognidao.org"),
+  COGNI_OPERATOR_NODE_API_KEY: optionalString,
+  // The operator that governs this node's repo, declared per environment (no default: a test-org node must
+  // never reach the production operator by accident). Unset → no push token, a warning, and push fails.
+  COGNI_OPERATOR_URL: optionalUrl,
 
   // Tavily Web Search - Optional
   // Required for research graph web search capability

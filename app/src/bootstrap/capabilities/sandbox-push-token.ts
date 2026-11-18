@@ -10,6 +10,8 @@
  *   - WARN_NEVER_BLOCK: no key, or a failed mint, logs a warning and returns no env; the call still runs and only
  *     git push fails.
  *   - CACHE_UNTIL_NEAR_EXPIRY: one mint serves every call until 10 minutes before the token expires.
+ *   - BACK_OFF_ON_FAILURE: after a failed mint, calls skip minting for 60 seconds, so an operator outage
+ *     never adds the mint timeout to every call.
  *   - TOKEN_NEVER_LOGGED: logs carry the status and error code only.
  * Side-effects: IO (HTTPS to the operator); logs `adapter.sandbox.push_token` on failure
  * Links: https://node-template.cognidao.org/knowledge/node-ai-github-apps
@@ -22,10 +24,11 @@ import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 const logger = makeLogger({ component: "SandboxPushToken" });
 const REFRESH_BEFORE_MS = 10 * 60_000;
 const MINT_TIMEOUT_MS = 15_000;
+const FAILURE_BACKOFF_MS = 60_000;
 
 /** Returns the per-call env provider for the sandbox: `{ GH_TOKEN }` when a token is available, else `{}`. */
 export function createSandboxPushTokenEnv(
-  env: Pick<ServerEnv, "COGNI_OPERATOR_API_KEY" | "COGNI_OPERATOR_URL">,
+  env: Pick<ServerEnv, "COGNI_OPERATOR_NODE_API_KEY" | "COGNI_OPERATOR_URL">,
   nodeSlug: string,
   fetchImpl: typeof fetch = fetch,
   now: () => number = Date.now
@@ -33,10 +36,11 @@ export function createSandboxPushTokenEnv(
   let cached: { token: string; expiresAtMs: number } | null = null;
   let inFlight: Promise<Readonly<Record<string, string>>> | null = null;
   let warnedNoKey = false;
+  let failedAtMs = Number.NEGATIVE_INFINITY;
 
   const mint = async (): Promise<Readonly<Record<string, string>>> => {
-    const apiKey = env.COGNI_OPERATOR_API_KEY;
-    if (!apiKey) {
+    const apiKey = env.COGNI_OPERATOR_NODE_API_KEY;
+    if (!apiKey || !env.COGNI_OPERATOR_URL) {
       if (!warnedNoKey) {
         warnedNoKey = true;
         logger.warn(
@@ -67,6 +71,7 @@ export function createSandboxPushTokenEnv(
           },
           EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN
         );
+        failedAtMs = now();
         return {};
       }
       cached = { token: body.token, expiresAtMs: Date.parse(body.expiresAt) };
@@ -76,6 +81,7 @@ export function createSandboxPushTokenEnv(
         { event: EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN, error_code: "transport_error" },
         EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN
       );
+      failedAtMs = now();
       return {};
     }
   };
@@ -84,6 +90,7 @@ export function createSandboxPushTokenEnv(
     if (cached && cached.expiresAtMs - now() > REFRESH_BEFORE_MS) {
       return { GH_TOKEN: cached.token };
     }
+    if (now() - failedAtMs < FAILURE_BACKOFF_MS) return {};
     inFlight ??= mint().finally(() => {
       inFlight = null;
     });
