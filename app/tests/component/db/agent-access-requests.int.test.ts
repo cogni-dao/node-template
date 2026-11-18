@@ -276,7 +276,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     expect((await own())[0]?.n).toBe(before);
   });
 
-  it("human plane is session-only: an Authorization header gets 403 human_session_required, and a non-admin cannot approve", async () => {
+  it("one admin check for every credential: the asking agent's bearer (no admin wallet) is 403 authz_denied, and a non-admin cannot approve", async () => {
     as(agent, "bearer");
     await service`DELETE FROM agent_roles WHERE principal_user_id = ${agent}`;
     await ask(SCOPE);
@@ -290,7 +290,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
         undefined as never
       );
       expect(res.status).toBe(403);
-      expect(await res.json()).toMatchObject({ code: "human_session_required" });
+      expect(await res.json()).toEqual({ error: "authz_denied" });
     }
     // NO_SELF_APPROVAL: the asking agent, even as a signed-in non-admin session, cannot approve its own ask.
     as(agent, "session");

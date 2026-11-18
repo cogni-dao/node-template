@@ -3,13 +3,16 @@
 
 /**
  * Module: `@app/(admin)/_lib/admin-session`
- * Purpose: The ONLY mint of an `AdminSession`. An admin route calls it first and passes the session to `NodeAdminPort`.
- * Scope: Refuses any Authorization header, reads the browser session, runs the container's one `NodeAdminAuthority.check`. Decides nothing else.
+ * Purpose: The ONLY mint of an `AdminSession` (an admin decision). An admin route calls it first and passes it to `NodeAdminPort`.
+ * Scope: Resolves the caller (a same-origin browser session or a bearer, through the one request resolver), then runs the one
+ *   node-admin check on the caller's wallet. Decides nothing else.
  * Invariants:
  *   - ADMIN_ACTS_IN_ADMIN / ONE_MINT: no other file casts to `AdminSession` (import-lock test).
- *   - HUMAN_ROUTES_SESSION_ONLY: any `Authorization` header is 403 `human_session_required`, before any session or admin read. A key never mints.
+ *   - ONE_ADMIN_CHECK (AUTHORITY_IS_NOT_KIND): a session and a bearer reach the same `NodeAdminAuthority`. A session is checked on
+ *     its signed-in wallet; a bearer on the wallets bound to its own user (`agentAuthority.adminCheck`). A session write keeps
+ *     the resolver's same-origin check.
  *   - FAIL_CLOSED_WITH_DISTINCTION: no session 401; not an admin 403 `authz_denied`; admin check down 503 `authz_unavailable`.
- *   - One `admin.action` log per minted session: action name and admin user id, no credential.
+ *   - One `admin.action` log per minted decision: action name, admin user id and `via`, no credential.
  * Side-effects: IO (session read, repo-spec admin read, log)
  * Links: src/ports/node-admin.port.ts, src/bootstrap/node-admin-gate.ts, tests/unit/app/admin-acts-in-admin.test.ts
  * @public
@@ -17,7 +20,6 @@
 
 import { NextResponse } from "next/server";
 
-import { refuseNonSession } from "@/app/_lib/auth/human-plane";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import type { AdminSession } from "@/ports";
@@ -33,23 +35,25 @@ const refuse = (error: string, status: number): AdminSessionResult => ({
 });
 
 /** `action` names the admin act for the `admin.action` log (for example `ai_access.list`). */
-export async function requireAdminSession(request: Request, action: string): Promise<AdminSessionResult> {
+export async function requireAdminSession(_request: Request, action: string): Promise<AdminSessionResult> {
   const container = getContainer();
-  const refused = refuseNonSession(request, container.log);
-  if (refused) return { ok: false, response: refused };
 
-  const user = await getSessionUser();
-  if (!user || user.via !== "session") return refuse("unauthorized", 401);
+  // A key-store outage or a rate-limited key is unavailable, never a pass.
+  const user = await getSessionUser().catch(() => "unavailable" as const);
+  if (user === "unavailable") return refuse("authz_unavailable", 503);
+  if (!user) return refuse("unauthorized", 401);
+  const via = user.via === "session" ? "session" : "bearer";
 
-  const decision = await container.nodeAdmin
-    .check({ userId: user.id, walletAddress: user.walletAddress })
-    .catch(() => ({ ok: false, errorCode: "authz_unavailable" }) as const);
-  if (!decision.ok) {
-    return decision.errorCode === "authz_unavailable"
-      ? refuse("authz_unavailable", 503)
-      : refuse("authz_denied", 403);
-  }
+  const allowed: "allow" | "denied" | "unavailable" =
+    via === "session"
+      ? await container.nodeAdmin
+          .check({ userId: user.id, walletAddress: user.walletAddress })
+          .then((d) => (d.ok ? "allow" : d.errorCode === "authz_unavailable" ? "unavailable" : "denied"))
+          .catch(() => "unavailable" as const)
+      : await container.agentAuthority.adminCheck(user.id).catch(() => "unavailable" as const);
+  if (allowed === "unavailable") return refuse("authz_unavailable", 503);
+  if (allowed !== "allow") return refuse("authz_denied", 403);
 
-  container.log.info({ event: EVENT_NAMES.ADMIN_ACTION, action, adminUserId: user.id }, EVENT_NAMES.ADMIN_ACTION);
+  container.log.info({ event: EVENT_NAMES.ADMIN_ACTION, action, adminUserId: user.id, via }, EVENT_NAMES.ADMIN_ACTION);
   return { ok: true, session: Object.freeze({ userId: user.id }) as AdminSession };
 }

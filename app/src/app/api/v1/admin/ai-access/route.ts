@@ -8,7 +8,7 @@
  * Scope: HTTP validation and the mint. Every handler gets its `AdminSession` from `requireAdminSession()` and calls `NodeAdminPort` with it. No authority logic.
  * Invariants:
  *   - ADMIN_ACTS_IN_ADMIN: the only door for these writes. The old `/api/v1/agent-access/roles` route is gone (404). The AI plane has no twin: an agent asks at `/api/v1/agent/access-requests`; a human admin decides here.
- *   - HUMAN_ROUTES_SESSION_ONLY: any `Authorization` header is 403 `human_session_required` (proxy.ts, then the mint).
+ *   - ONE_ADMIN_CHECK: a session or a bearer reaches the mint, which runs the one node-admin check on the caller's wallet.
  *   - FAIL_CLOSED_WITH_DISTINCTION: non-admin 403 `authz_denied`; no configured admins 503 `authz_unavailable`.
  *   - NODE_DECLARED_SCOPES: an undeclared scope is 400 before any write.
  *   - ADMIN_NEVER_SHOWS_ACCOUNT_ROWS (ONE_GATE): this table lists and decides NODE rows only. An account permission is its owner's alone, on the profile.

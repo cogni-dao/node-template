@@ -9,8 +9,8 @@
  *   - ONE_AUTHORIZE_FN: no other module decides tool authority.
  *   - SCOPED_TOOL_NEEDS_PRINCIPAL: no principal means deny.
  *   - SUBJECT_ONLY_NARROWS: a subject can only remove access, never add it. Every caller has a subject (bearer
- *     agents included). `admin` means a principal the DAO approved (AUTHORITY_IS_NOT_KIND); until the AI-admin item (I2)
- *     ships no AI identity is approved, so an agent fails `admin` checks and passes `member` checks.
+ *     agents included). `admin` means a caller whose bound wallet the DAO lists (AUTHORITY_IS_NOT_KIND): the subject's
+ *     wallet when a run serves one, else the principal's own. An agent with no admin wallet fails `admin` checks.
  *   - FAIL_CLOSED_ON_UNKNOWN: a `kind` outside node|own|account or a `subject` outside member|admin is `policy_denied`.
  *   - ACCOUNT_NEEDS_ACCOUNT (R1, R13): an `account` tool is decided only against one account. With no `accountId` it is denied (`no_account`);
  *     with one, the principal needs a live account row for exactly that account (`hasLiveAccountGrant`). Node rows never satisfy it and
@@ -105,10 +105,14 @@ export async function authorize(
   if (lock.decision === "deny") return lock;
   if (requires.kind === "own" && !subjectUserId) return deny("no_subject");
 
-  if (subjectUserId && requires.subject === "admin") {
+  if (requires.subject === "admin") {
+    // ONE_ADMIN_CHECK: the subject's wallet decides when a run serves one; with no subject, the principal's own bound wallet
+    // decides. Never a pass on the role row alone (fail closed).
+    const adminCandidate = subjectUserId ?? principalId;
+    if (!adminCandidate) return deny("no_principal");
     let admin: Awaited<ReturnType<AdminCheck>>;
     try {
-      admin = await adminCheck(subjectUserId);
+      admin = await adminCheck(adminCandidate);
     } catch {
       return unavailable("admin_check_failed");
     }

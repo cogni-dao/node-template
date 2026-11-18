@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/component/db/agent-roles-route.int.test`
  * Purpose: GET/POST/DELETE /api/v1/admin/ai-access (the admin area, through requireAdminSession and NodeAdminPort) and the guard it controls, against real Postgres
- *   (task.5456, V8 V9): any Authorization header 403 human_session_required, non-admin 403, 503 when no
+ *   (task.5456, V8 V9): a bearer meets the same admin check (no admin wallet 403 authz_denied), non-admin 403, 503 when no
  *   admins are configured, GET shows the live Allow state after grant and after revoke, admin grant allows the next tool call, admin revoke denies it, and the log lines.
  * Scope: The real route handlers, real wrapRouteHandlerWithLogging, real `agent-authority` wiring, real repo-spec
  *   node admin authority and a real database. Only the NextAuth session decode is replaced (`getSessionUser`).
@@ -142,18 +142,15 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
 
   const body = { principal: "prioritizer", scope: "work_item:transition" };
 
-  it("HEADER-REFUSED: any Authorization header on a human route is 403 human_session_required, even for the admin's own session", async () => {
-    for (const user of [sessionUser(agentUser, "bearer"), sessionUser(adminUser, "bearer"), sessionUser(adminUser, "session"), null]) {
-      session.user = user;
-      for (const res of [
-        await call(POST, body, { authorization: "Bearer cogni_ag_sk_v1_x" }),
-        await call(DELETE, body, { authorization: "Bearer cogni_ag_sk_v1_x" }),
-        await getView({ authorization: "Bearer cogni_ag_sk_v1_x" }),
-        await getView({ authorization: "Basic nope" }),
-      ]) {
-        expect(res.status).toBe(403);
-        expect(await res.json()).toMatchObject({ code: "human_session_required" });
-      }
+  it("SAME-DECISION: a bearer with no admin wallet gets the same 403 authz_denied a non-admin session gets, and nothing changes", async () => {
+    session.user = sessionUser(agentUser, "bearer");
+    for (const res of [
+      await call(POST, body, { authorization: "Bearer cogni_ag_sk_v1_x" }),
+      await call(DELETE, body, { authorization: "Bearer cogni_ag_sk_v1_x" }),
+      await getView({ authorization: "Bearer cogni_ag_sk_v1_x" }),
+    ]) {
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "authz_denied" });
     }
     const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
     expect(rows).toHaveLength(0);
