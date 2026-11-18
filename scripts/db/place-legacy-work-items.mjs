@@ -115,7 +115,7 @@ const adapter = createDoltgresWorkItemStore(makeClient(), {
 });
 
 const items = await reader.unsafe(
-	"SELECT id, status FROM work_items WHERE status IN ('needs_closeout', 'blocked') ORDER BY id",
+	"SELECT id, status, pr FROM work_items WHERE status IN ('needs_closeout', 'blocked') ORDER BY id",
 );
 console.log(
 	`${items.length} item(s) in needs_closeout or blocked; mode: ${values.apply ? "APPLY" : "dry run (pass --apply to write)"}`,
@@ -124,11 +124,13 @@ console.log(
 const summary = { placed: 0, planned: 0, skipped: 0, failed: 0 };
 for (const item of items) {
 	const line = { id: item.id, from: item.status };
+	// Why an item is skipped: a PR outside the pin, an unreadable inbox or a missing PR all read the same ("no readable placement"), so name the pr.
+	const skippedLine = { ...line, pr: item.pr || null };
 	try {
 		const plan = await adapter.planPlacement(item.id);
 		if (!plan) {
 			summary.skipped += 1;
-			console.log(JSON.stringify({ ...line, result: "skipped: no readable placement" }));
+			console.log(JSON.stringify({ ...skippedLine, result: "skipped: no readable placement (a pr outside WORK_ITEMS_PR_REPO is never placed)" }));
 			continue;
 		}
 		if (!values.apply) {
@@ -145,6 +147,7 @@ for (const item of items) {
 			JSON.stringify({
 				...line,
 				result: `failed: ${error instanceof Error ? error.name : "error"}`,
+				...(typeof error?.missing === "string" ? { missing: error.missing } : {}),
 			}),
 		);
 	}

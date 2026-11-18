@@ -350,24 +350,22 @@ describe("recordWorkItemArtifact: the write contract", () => {
     expect(failed.status).toBe(503);
     expect(failed.body).toEqual({ error: "artifacts_unavailable", errorCode: "artifacts_unavailable" });
     expect(reads.stored).toEqual([]);
-    // Every non-success write logs as a refusal, with the database error code and a one-line message.
+    // Every non-success write logs as a refusal, with the database error code (SQLSTATE) and never the error's message.
     expect(failed.log).toMatchObject({
       event: "work.items.artifact_refused",
       status: 503,
       outcome: "error",
       errorCode: "artifacts_unavailable",
       errorName: "Error",
-      errorMessage: "write failed",
     });
+    expect(failed.log).not.toHaveProperty("errorMessage");
     const sqlFailure = world({ insertError: Object.assign(new Error("relation\n\"work_item_artifacts\" does not exist"), {
         code: "42P01",
       }),
     });
     const missingTable = await recordWorkItemArtifact(sqlFailure.deps, "task.0028", "r", designReview);
-    expect(missingTable.log).toMatchObject({
-      dbCode: "42P01",
-      errorMessage: 'relation "work_item_artifacts" does not exist',
-    });
+    expect(missingTable.log).toMatchObject({ dbCode: "42P01" });
+    expect(JSON.stringify(missingTable.log)).not.toContain("does not exist");
   });
 
   it("409: a write whose outcome is unknown is distinct and not retryable, never a plain 503", async () => {

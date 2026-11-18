@@ -166,7 +166,10 @@ describe("work-item revision HTTP boundary", () => {
       { id: "task.0001", reason: "r", cites, set: { summary: "updated" } },
       "principal-1"
     );
-    expect(info).toHaveBeenCalledWith({ workItemId: "task.0001", citeCount: 2 }, "work.items.patch_success");
+    expect(info).toHaveBeenCalledWith(
+      { event: "work.items.patch_success", routeId: "work.items.patch", outcome: "success", status: 200, workItemId: "task.0001", citeCount: 2 },
+      "work.items.patch_success"
+    );
   });
 
   it("maps a gate refusal to 409 gate_unmet and a failed gate read to 503, and logs each (task.0122)", async () => {

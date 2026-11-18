@@ -139,6 +139,7 @@ const retainedPools = new WeakSet();
 function terminateMigration(error) {
   const text = (value) => typeof value === "string" ? value : null;
   writeSync(2, `MIGRATION_OUTCOME ${JSON.stringify({
+    nodeId: NODE,
     code: text(error?.code) ?? (isDoltgresMigrationOutcomeUncertain(error) ? "migration_write_outcome_unknown" : "migration_failed"),
     retryable: error?.retryable === true,
     operationId: text(error?.operationId), branch: text(error?.branch),

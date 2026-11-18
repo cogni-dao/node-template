@@ -78,6 +78,7 @@ import {
 	type WorkItemArtifactDeps,
 	type WorkItemQueryPort,
 	withWorkItemLeases,
+	workItemWriteErrorResponse,
 } from "@cogni/work-items";
 import { createDoltgresWorkItemStore } from "@cogni/work-items/adapters/doltgres";
 import { PostgresWorkItemLeaseAdapter } from "@cogni/work-items/adapters/postgres";
@@ -178,6 +179,7 @@ import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
+import { getCurrentTraceId } from "@/bootstrap/otel";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
 	startGovernanceSyncOnBoot,
@@ -772,12 +774,69 @@ function createContainer(): Container {
 		backlogReader: { list: (query) => doltgresWorkItems.list(query) },
 		backlogWriter: {
 			store: {
-				patch: (input, principal) => doltgresWorkItems.patch(input, principal),
+				// ONE_TERMINAL_EVENT (task.0122): an agent's patch ends in the same registered event the route logs, so a refusal
+				// or a success of the tool is as findable as the route's. `via` and the run's trace id tell it from a route call.
+				patch: async (input, principal) => {
+					try {
+						const patched = await doltgresWorkItems.patch(input, principal);
+						log.info(
+							{
+								event: EVENT_NAMES.WORK_ITEMS_PATCH_SUCCESS,
+								routeId: "work.items.patch",
+								via: "tool",
+								traceId: getCurrentTraceId(),
+								outcome: "success",
+								workItemId: input.id,
+							},
+							EVENT_NAMES.WORK_ITEMS_PATCH_SUCCESS,
+						);
+						return patched;
+					} catch (error) {
+						const mapped = workItemWriteErrorResponse(error, "patch");
+						if (mapped) {
+							const { from, to, missing } = mapped.body as Record<
+								string,
+								unknown
+							>;
+							log.info(
+								{
+									event: EVENT_NAMES.WORK_ITEMS_PATCH_REFUSED,
+									routeId: "work.items.patch",
+									via: "tool",
+									traceId: getCurrentTraceId(),
+									outcome: "refused",
+									workItemId: input.id,
+									status: mapped.status,
+									errorCode: mapped.errorCode,
+									...(typeof from === "string" ? { from } : {}),
+									...(typeof to === "string" ? { to } : {}),
+									...(typeof missing === "string" ? { missing } : {}),
+								},
+								EVENT_NAMES.WORK_ITEMS_PATCH_REFUSED,
+							);
+						}
+						throw error;
+					}
+				},
 			},
 			principalId: runPrincipal,
 		},
-		// task.0122: an agent records the triage artifact through the same handler the route calls.
-		artifacts: { deps: () => workItemArtifacts, principalId: runPrincipal },
+		// task.0122: an agent records the triage artifact through the same handler the route calls, and logs the same terminal event.
+		artifacts: {
+			deps: () => workItemArtifacts,
+			principalId: runPrincipal,
+			log: ({ event, ...fields }) =>
+				log.info(
+					{
+						event: event,
+						routeId: "work.items.artifacts.create",
+						via: "tool",
+						traceId: getCurrentTraceId(),
+						...fields,
+					},
+					event,
+				),
+		},
 	});
 
 	// ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)

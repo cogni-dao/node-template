@@ -39,6 +39,15 @@ export const EVENT_NAMES = {
 	WORK_ITEMS_ENVELOPE_DEGRADED: "work.items.envelope_degraded",
 	WORK_ITEMS_CREATE_REFUSED: "work.items.create_refused",
 	WORK_ITEMS_PATCH_REFUSED: "work.items.patch_refused",
+	// The success twins: one terminal event per accepted create or patch (route or agent tool), ids and counts only.
+	WORK_ITEMS_CREATE_SUCCESS: "work.items.create_success",
+	WORK_ITEMS_PATCH_SUCCESS: "work.items.patch_success",
+	// The work-items store's own signals (task.0122): a stage that ran slow or failed (a stage that was fast is a debug line, never info), the status gate's PR read failing, a retired flag written.
+	ADAPTER_WORK_ITEMS_STAGE_START: "adapter.work_items.stage_start",
+	ADAPTER_WORK_ITEMS_STAGE_COMPLETE: "adapter.work_items.stage_complete",
+	ADAPTER_WORK_ITEMS_STAGE_ERROR: "adapter.work_items.stage_error",
+	ADAPTER_WORK_ITEMS_GATE_PR_READ_FAILED: "adapter.work_items.gate_pr_read_failed",
+	ADAPTER_WORK_ITEMS_DEPLOY_VERIFIED_WRITE: "adapter.work_items.deploy_verified_write",
 	// The same-door check refused a route call (a bearer without the grant, or the grant store unreachable): one terminal event with routeId and errorCode (policy_denied | authz_unavailable).
 	AGENT_ROUTE_DENIED: "agent.route_denied",
 	// Work-item PR repo pin at boot (task.0122): unset or malformed leaves it unpinned; entries that are not owner/repo are ignored. Once at boot, never per request.

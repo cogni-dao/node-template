@@ -43,6 +43,7 @@ import type {
 } from "@cogni/work-items";
 import type { EnvelopeDegradedEvent, ItemLinksPort, MoveReadingPort } from "@cogni/work-items";
 import {
+  type ArtifactLog,
   type WorkItemArtifactDeps,
   artifactsNotConfigured,
   recordWorkItemArtifact,
@@ -90,6 +91,8 @@ export interface WorkItemCapabilityDeps {
   readonly artifacts?: {
     readonly deps: () => WorkItemArtifactDeps | undefined;
     readonly principalId: () => string;
+    /** The one terminal record of the call, the same one the route logs (no body, no row, no url). */
+    readonly log?: (log: ArtifactLog) => void;
   };
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
@@ -194,6 +197,7 @@ export function createWorkItemCapability(
         const result = stores
           ? await recordWorkItemArtifact(stores, input.id, artifacts.principalId(), input.body)
           : artifactsNotConfigured(input.id, "write");
+        artifacts.log?.(result.log);
         return { status: result.status, body: result.body };
       },
     }),

@@ -171,8 +171,15 @@ export const PATCH = wrapRouteHandlerWithLogging<{
         walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info(
-        { workItemId: id, citeCount: parseResult.data.cites?.length ?? 0 },
-        "work.items.patch_success"
+        {
+          event: EVENT_NAMES.WORK_ITEMS_PATCH_SUCCESS,
+          routeId: "work.items.patch",
+          outcome: "success",
+          status: 200,
+          workItemId: id,
+          citeCount: parseResult.data.cites?.length ?? 0,
+        },
+        EVENT_NAMES.WORK_ITEMS_PATCH_SUCCESS
       );
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {

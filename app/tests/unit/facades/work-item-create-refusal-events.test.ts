@@ -77,6 +77,37 @@ describe("POST /api/v1/work/items refusals", () => {
     expect(refusals()).toEqual([expect.objectContaining({ status: 409, errorCode: "gate_unmet" })]);
   });
 
+  it("a success is one registered create_success event and no refusal", async () => {
+    create.mockResolvedValue({
+      id: "task.0001",
+      node: "shared",
+      type: "task",
+      title: "a title",
+      status: "needs_triage",
+      priority: 2,
+      rank: 0,
+      estimate: 1,
+      summary: "",
+      outcome: "",
+      assignees: [],
+      externalRefs: [],
+      labels: [],
+      specRefs: [],
+      revision: 1,
+      deployVerified: false,
+      createdAt: "2026-01-01",
+      updatedAt: "2026-01-02",
+    });
+    await post({ type: "task", title: "a title" });
+    const successes = info.mock.calls
+      .map(([fields]) => fields as Record<string, unknown>)
+      .filter((fields) => fields.event === "work.items.create_success");
+    expect(successes).toEqual([
+      { event: "work.items.create_success", routeId: "work.items.create", outcome: "success", status: 201, workItemId: "task.0001", node: "shared" },
+    ]);
+    expect(refusals()).toEqual([]);
+  });
+
   it("never carries the request body in the event", async () => {
     await post({ type: "task", title: "SECRET TITLE", summary: "SECRET SUMMARY", status: "done" });
     expect(JSON.stringify(info.mock.calls)).not.toContain("SECRET");

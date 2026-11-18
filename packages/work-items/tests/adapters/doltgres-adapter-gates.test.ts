@@ -358,6 +358,61 @@ describe("PR facts", () => {
   });
 });
 
+describe("the PR read is a dependency with its own failure signal", () => {
+  const failing = (read: PrFactsPort["read"]) => ({ read });
+  const warned = async (port: PrFactsPort | undefined) => {
+    const warn = vi.fn();
+    const { queries, make } = world("needs_implementation_review", { pr: PR });
+    await expect(
+      patchStatus(make({ prFacts: port, logger: { info: vi.fn(), warn, error: vi.fn() } }), "needs_validation")
+    ).rejects.toMatchObject({ name: "WorkItemGateFactsUnavailableError", missing: "pr" });
+    expect(wrote(queries)).toBe(false);
+    return warn.mock.calls.map(([fields]) => fields as Record<string, unknown>);
+  };
+
+  it.each([
+    ["a rejected read is upstream", failing(async () => { throw new Error("GitHub 502"); }), "upstream"],
+    ["an aborted read is a timeout", failing(async () => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); }), "timeout"],
+    ["a head that is not a sha is unreadable", failing(async () => ({ head: "zz", merged: false })), "unreadable"],
+    ["no port wired", undefined, "not_wired"],
+  ])("%s: one warn with dep, reasonCode and durationMs, and never the message", async (_name, port, reasonCode) => {
+    const calls = await warned(port);
+    expect(calls).toEqual([
+      {
+        event: "adapter.work_items.gate_pr_read_failed",
+        dep: "github_pr",
+        reasonCode,
+        workItemId: ID,
+        durationMs: expect.any(Number),
+      },
+    ]);
+    expect(JSON.stringify(calls)).not.toContain("GitHub 502");
+  });
+});
+
+describe("stage lines are not events", () => {
+  it("a fast write emits no stage line at info; the same lines go to debug when the logger has one", async () => {
+    const info = vi.fn();
+    const debug = vi.fn();
+    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "implement")] });
+    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn(), debug } }), "needs_implement");
+    const stage = (calls: unknown[][]) =>
+      calls.filter(([fields]) => String((fields as { event?: string }).event).startsWith("adapter.work_items.stage_"));
+    expect(stage(info.mock.calls)).toEqual([]);
+    expect(stage(debug.mock.calls).length).toBeGreaterThan(0);
+  });
+
+  it("a logger with no debug drops the fast lines and does not throw", async () => {
+    const info = vi.fn();
+    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "implement")] });
+    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn() } }), "needs_implement");
+    expect(info).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "adapter.work_items.stage_complete" }),
+      expect.anything()
+    );
+  });
+});
+
 describe("the repository pin (prRepos)", () => {
   const triage = artifactRow("triage", `work:${ID}`, "implement");
   const move = (adapter: DoltgresWorkItemAdapter) => patchStatus(adapter, "needs_implementation_review");

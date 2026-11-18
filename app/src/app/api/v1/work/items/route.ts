@@ -239,8 +239,15 @@ export const POST = wrapRouteHandlerWithLogging(
         walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info(
-        { workItemId: created.id, node: created.node },
-        "work.items.create_success",
+        {
+          event: EVENT_NAMES.WORK_ITEMS_CREATE_SUCCESS,
+          routeId: "work.items.create",
+          outcome: "success",
+          status: 201,
+          workItemId: created.id,
+          node: created.node,
+        },
+        EVENT_NAMES.WORK_ITEMS_CREATE_SUCCESS,
       );
       return NextResponse.json(workItemsCreateOperation.output.parse(created), {
         status: 201,

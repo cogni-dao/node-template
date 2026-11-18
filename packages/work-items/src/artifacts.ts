@@ -29,7 +29,6 @@
 import { z } from "zod";
 
 import { CITE_COMMIT_PATTERN, CITE_CONTRIBUTION_PATTERN } from "./cites.js";
-import { errorDetail } from "./history-read.js";
 import { toWorkItemId, type WorkItemId } from "./types.js";
 import { workItemWriteErrorResponse } from "./write-errors.js";
 
@@ -385,8 +384,6 @@ export interface ArtifactLog {
   readonly errorName?: string;
   /** Database error code (SQLSTATE) from the thrown error, when it carries one. */
   readonly dbCode?: string;
-  /** First 300 chars of the thrown error's message, CR/LF collapsed. */
-  readonly errorMessage?: string;
 }
 
 export interface ArtifactResult {
@@ -398,6 +395,12 @@ export interface ArtifactResult {
 const RECORDED = "work.items.artifact_recorded" as const;
 const REFUSED = "work.items.artifact_refused" as const;
 const READ = "work.items.artifacts_read" as const;
+
+/** The database's own error code (SQLSTATE), when the thrown error carries one. Never its message: that may name a value. */
+const dbCodeOf = (error: unknown): { dbCode?: string } => {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "string" ? { dbCode: code } : {};
+};
 
 /** A refused write logs under its own event so a refusal is as findable as a success. */
 const refusedEvent = (event: ArtifactLog["event"]): ArtifactLog["event"] =>
@@ -453,7 +456,7 @@ const unavailable = (
       workItemId: id,
       errorCode: "artifacts_unavailable",
       errorName: (error as Error | undefined)?.name ?? "Error",
-      ...errorDetail(error),
+      ...dbCodeOf(error),
       ...extra,
     },
   };

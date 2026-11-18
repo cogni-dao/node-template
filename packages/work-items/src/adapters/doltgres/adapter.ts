@@ -174,6 +174,8 @@ const BRANCH_TIMEOUT_MS = 30_000;
  * failed six consecutive times while a freshly created item patched fine,
  * because the pile only has to be big enough to cross the budget.
  */
+/** A stage that completes faster than this is a debug line; at or over it, an info line. */
+const SLOW_STAGE_MS = 1000;
 const BRANCH_HOUSEKEEPING_STAGES = new Set([
   "branch.create",
   "branch.delete",
@@ -214,6 +216,8 @@ const PLACEABLE_FROM: readonly string[] = ["needs_closeout", "blocked"];
 type BranchReconciliation = "required" | "skipped";
 
 export interface WorkItemLogger {
+  /** Optional: where a stage that started or finished quickly goes. A logger without it drops those lines. */
+  debug?(fields: Record<string, unknown>, message: string): void;
   info(fields: Record<string, unknown>, message: string): void;
   warn(fields: Record<string, unknown>, message: string): void;
   error(fields: Record<string, unknown>, message: string): void;
@@ -1372,6 +1376,14 @@ async function withDeadline<T>(
   }
 }
 
+/** The port answered with something that is not a PR head and a merge state. */
+class PrFactsUnreadableError extends Error {
+  constructor() {
+    super("unreadable PR facts");
+    this.name = "PrFactsUnreadableError";
+  }
+}
+
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -1530,17 +1542,28 @@ export class DoltgresWorkItemAdapter
     state: "start" | "complete" | "error",
     fields: Record<string, unknown> = {}
   ): void {
-    this.logger[level](
-      {
-        event: `adapter.work_items.stage_${state}`,
-        component: "doltgres-work-items",
-        operationId: context.operationId,
-        operation: context.operation,
-        stage,
-        ...fields,
-      },
-      `work_items ${stage} ${state}`
-    );
+    const payload = {
+      event: `adapter.work_items.stage_${state}`,
+      component: "doltgres-work-items",
+      operationId: context.operationId,
+      operation: context.operation,
+      stage,
+      ...fields,
+    };
+    const message = `work_items ${stage} ${state}`;
+    // A stage that started, or finished in under SLOW_STAGE_MS, is not an event: one write runs about 20 stages, and the lines
+    // buried the request's own terminal event under a burst of writes. A slow stage and every failure stay at their level.
+    const quiet =
+      level === "info" &&
+      (state === "start" ||
+        (state === "complete" &&
+          typeof fields.durationMs === "number" &&
+          fields.durationMs < SLOW_STAGE_MS));
+    if (quiet) {
+      this.logger.debug?.(payload, message);
+      return;
+    }
+    this.logger[level](payload, message);
   }
 
   private async terminateClient(
@@ -2168,6 +2191,7 @@ export class DoltgresWorkItemAdapter
       });
       const conn = this.instrumentConnection(operationPool, rawConn, context);
       connection = conn;
+      const lockStartedAt = Date.now();
       this.logStage("info", context, "lock.acquire", "start", {
         protocol: this.writerLockProtocol,
       });
@@ -2185,6 +2209,7 @@ export class DoltgresWorkItemAdapter
       this.logStage("info", context, "lock.acquire", "complete", {
         protocol: writerLock.protocol,
         baseDatabase: writerLock.baseDatabase,
+        durationMs: Date.now() - lockStartedAt,
       });
       const reconciliation = options.reconcile ?? "required";
       if (reconciliation !== "skipped") await this.reconcileUnderLock(conn);
@@ -4399,10 +4424,27 @@ export class DoltgresWorkItemAdapter
     const hit = this.prFactsCache.get(url);
     if (hit && Date.now() - hit.at < PR_FACTS_CACHE_MS) return hit.facts;
     const failedAt = this.prFactsFailures.get(url);
+    // A failure inside the 10 s cache is already on the log, and the refusal that follows carries `missing: "pr"`.
     if (failedAt !== undefined && Date.now() - failedAt < PR_FACTS_FAILURE_CACHE_MS)
       throw new WorkItemGateFactsUnavailableError(id, from, to, "pr");
     const port = this.prFacts;
-    if (!port) throw new WorkItemGateFactsUnavailableError(id, from, to, "pr");
+    const startedAt = Date.now();
+    const unavailable = (
+      reasonCode: "not_wired" | "timeout" | "unreadable" | "upstream"
+    ): WorkItemGateFactsUnavailableError => {
+      this.logger.warn(
+        {
+          event: "adapter.work_items.gate_pr_read_failed",
+          dep: "github_pr",
+          reasonCode,
+          workItemId: id,
+          durationMs: Date.now() - startedAt,
+        },
+        "work_items gate could not read PR facts; nothing written"
+      );
+      return new WorkItemGateFactsUnavailableError(id, from, to, "pr");
+    };
+    if (!port) throw unavailable("not_wired");
     try {
       const facts = await withDeadline(
         (signal) => port.read(url, signal),
@@ -4413,7 +4455,7 @@ export class DoltgresWorkItemAdapter
         typeof facts.merged !== "boolean" ||
         (facts.open !== undefined && typeof facts.open !== "boolean")
       )
-        throw new Error("unreadable PR facts");
+        throw new PrFactsUnreadableError();
       if (this.prFactsCache.size >= 500) {
         const now = Date.now();
         for (const [key, entry] of this.prFactsCache)
@@ -4426,15 +4468,16 @@ export class DoltgresWorkItemAdapter
       return facts;
     } catch (error) {
       this.prFactsFailures.set(url, Date.now());
-      this.logger.warn(
-        {
-          event: "adapter.work_items.gate_pr_read_failed",
-          workItemId: id,
-          errorName: error instanceof Error ? error.name : "Error",
-        },
-        "work_items gate could not read PR facts; nothing written"
+      throw unavailable(
+        error instanceof PrFactsUnreadableError
+          ? "unreadable"
+          : error instanceof Error &&
+              (error.message === "deadline exceeded" ||
+                error.name === "TimeoutError" ||
+                error.name === "AbortError")
+            ? "timeout"
+            : "upstream"
       );
-      throw new WorkItemGateFactsUnavailableError(id, from, to, "pr");
     }
   }
 

@@ -466,6 +466,27 @@ describe("recordArtifact (task.0122)", () => {
     expect(result?.body).toMatchObject({ artifact: { id: "wia-1", kind: "triage" } });
   });
 
+  it("hands the call's one terminal record to the log, success and refusal alike, without a body", async () => {
+    const log = vi.fn();
+    const cap = createWorkItemCapability({
+      ...ports,
+      artifacts: {
+        principalId: () => "agent-principal",
+        log,
+        deps: () => ({ items: { get: async () => null }, artifacts: {} }) as never,
+      },
+    });
+    await cap.recordArtifact?.({ id: "task.5001", body });
+    expect(log).toHaveBeenCalledOnce();
+    expect(log.mock.calls[0]?.[0]).toMatchObject({
+      event: "work.items.artifact_refused",
+      status: 404,
+      errorCode: "not_found",
+      workItemId: "task.5001",
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("no KPI measures");
+  });
+
   it("answers 503 and writes nothing when this node serves no artifacts", async () => {
     const cap = createWorkItemCapability({
       ...ports,
