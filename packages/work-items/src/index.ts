@@ -164,6 +164,12 @@ export {
   WorkItemPatchStatusSchema,
   WorkItemScoresInputSchema,
 } from "./patch-contract.js";
+export {
+  parseSpecRef,
+  SPEC_REF_MESSAGE,
+  SPEC_REF_PREFIX,
+  SpecRefsInputSchema,
+} from "./spec-refs.js";
 export type {
   HistoryReadLog,
   HistoryReadQuery,

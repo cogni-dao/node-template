@@ -12,6 +12,7 @@
  *   - REASON_REQUIRED: every patch carries a reason (one line, 1-240 chars, at most 25 words), stored in history, never in the item (task.0052, task.0086).
  *   - MOVES_SERVER_PINS_BASELINE (story.0033): `set.moves` is `[{ metricId, direction }]`, at most 3, or `[]`. Any other key on an entry (a read-only baseline, a reading) is dropped, never trusted; the store pins the baseline.
  *   - CITES_OPTIONAL: `cites` names at most 8 hub atoms the change used; the adapter pins each to a commit (task.0086).
+ *   - SPEC_REFS_TYPED (story.0069): `set.specRefs` entries are `knowledge:<atom-id>` design links (`SpecRefsInputSchema`).
  * Side-effects: none
  * @public
  */
@@ -21,6 +22,7 @@ import { z } from "zod";
 import { CITE_CONTRIBUTION_PATTERN, CITE_ID_PATTERN, CITE_MAX } from "./cites.js";
 import { ChangeReasonSchema } from "./history-contract.js";
 import { MOVE_METRIC_ID_MAX, MOVES_MAX } from "./moves.js";
+import { SpecRefsInputSchema } from "./spec-refs.js";
 
 /**
  * Evaluation scores: configurable axis id -> { v, ev? }. Writes replace the whole object.
@@ -138,7 +140,7 @@ export const WorkItemPatchInputSchema = z.object({
       // [] = this item moves no metric (the edit reason says why). The server pins each baseline.
       moves: WorkItemMovesInputSchema.optional(),
       labels: z.array(z.string()).optional(),
-      specRefs: z.array(z.string()).optional(),
+      specRefs: SpecRefsInputSchema.optional(),
       branch: z.string().optional(),
       pr: z.string().optional(),
       reviewer: z.string().optional(),

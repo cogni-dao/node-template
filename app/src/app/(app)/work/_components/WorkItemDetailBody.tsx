@@ -8,7 +8,8 @@
  *   selected artifact (the item read's `artifact`) opens inline under its row. History lists why the item changed. Page 1
  *   of each comes from the item read, an older page from the refs views (story.0058).
  * Invariants:
- *   - EXISTING_PARTS_ONLY: CitationRow and its list classes (as Moves), Field, Link, Markdown and RelativeTime; no new component.
+ *   - EXISTING_PARTS_ONLY: CitationRow and its list classes (as Moves), Field, Link, Markdown and RelativeTime; Design rows come from the
+ *     package's `WorkDesignLinks` (story.0069); no new component here.
  *   - SECTIONS_NEED_THEIR_PARTS: Artifacts and History render only when the item read carries them.
  *   - ITEM_SCOPED_URL: `artifact`, `artifactsCursor` and `historyCursor` belong to this item; links set them with scroll off.
  * Side-effects: IO (older ref pages, only when a cursor parameter is set)
@@ -28,6 +29,7 @@ import {
 	hasScores,
 	RelativeTime,
 	WorkItemScoresRadar,
+	WorkDesignLinks,
 	WorkExpectations,
 	type WorkMetric,
 } from "@cogni/knowledge-base-ui";
@@ -249,6 +251,8 @@ export function WorkItemDetailBody({
 							labels={item.labels}
 							LinkComponent={PeekLink}
 						/>
+						{/* Design, between Moves and Artifacts: the design atoms the item is built against (story.0069). */}
+						<WorkDesignLinks specRefs={item.specRefs} LinkComponent={PeekLink} />
 						{/* Artifacts, right below Moves and drawn like it: each review or validation that lets the item move (story.0058).
 						    The selected one opens inline under its row; selecting it again closes it. */}
 						{read?.artifactRefs !== undefined && (
@@ -448,19 +452,6 @@ export function WorkItemDetailBody({
 										>
 											{l}
 										</span>
-									))}
-								</div>
-							</Field>
-						)}
-
-						{/* Spec refs */}
-						{item.specRefs.length > 0 && (
-							<Field label="Spec Refs">
-								<div className="flex flex-col gap-1">
-									{item.specRefs.map((s) => (
-										<code key={s} className="text-xs">
-											{s}
-										</code>
 									))}
 								</div>
 							</Field>
