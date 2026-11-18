@@ -19,7 +19,7 @@
  *     once guarded the move into done (the PR merged at the approved head plus the latest PASS validation; a story's
  *     origin-pinned PASS) now guard the move into needs_closeout; the move to done needs the latest `closeout` artifact
  *     (verdict `done`, written since the item entered needs_closeout).
- *   - ONE_PATH: triage decides the route (research, design or implement); the item kind decides the rest: a story goes
+ *   - ONE_PATH: triage decides the route (research or design; a stored legacy `implement` still holds); the item kind decides the rest: a story goes
  *     implement -> validation -> closeout -> done, an inbox deliverable skips validation (review -> merge -> closeout ->
  *     done), everything else is review -> validation -> merge -> closeout -> done. A spike's research -> done is unchanged. A migrated item with no triage artifact takes its route from its stage.
  *   - APPROVED_HEAD: the approved head is the head of the latest implementation_review, which must be `approve`; a later
@@ -255,6 +255,7 @@ function routeOf(
   artifacts: readonly GateArtifact[]
 ): Route {
   const verdict = latestOf(artifacts, "triage", item.id)?.verdict;
+  // `implement` is no longer written (TRIAGE_VERDICTS); a stored one keeps its item on the path it was triaged to.
   if (verdict === "research" || verdict === "design" || verdict === "implement")
     return verdict;
   // A migrated item with no triage artifact takes its route from its stage.

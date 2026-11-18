@@ -40,17 +40,11 @@ import {
 } from "./tools";
 
 /** Where triage routes an item out of needs_triage. */
-const ROUTES = new Set([
-  "needs_research",
-  "needs_design",
-  "needs_implement",
-  "cancelled",
-]);
+const ROUTES = new Set(["needs_research", "needs_design", "cancelled"]);
 /** The triage artifact verdict each route needs recorded before the status moves. */
 const ROUTE_VERDICT: Readonly<Record<string, string>> = {
   needs_research: "research",
   needs_design: "design",
-  needs_implement: "implement",
 };
 const CLOSED = new Set(["done", "cancelled"]);
 /** The only fields a triage write may set. */
@@ -128,7 +122,7 @@ export function createTriageGuard(
         if (!ROUTES.has(set.status))
           return reject(
             "route_not_allowed",
-            "route to needs_research, needs_design, needs_implement or cancelled only",
+            "route to needs_research, needs_design or cancelled only: every change passes design review",
           );
         const verdict = ROUTE_VERDICT[set.status];
         if (verdict && receipts.triageRecorded.get(item.id) !== verdict)

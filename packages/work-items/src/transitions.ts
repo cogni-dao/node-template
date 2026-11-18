@@ -54,7 +54,7 @@ export function isLegacyStatus(status: WorkItemStatus): boolean {
 
 /**
  * The stages a forward move may reach from each stage on SOME path. The exact next stage depends on the item's path
- * (`evaluateMove`): triage routes to research, design or implement; implement goes to review or, for a story, validation;
+ * (`evaluateMove`): triage routes to research or design (a legacy implement triage still holds); implement goes to review or, for a story, validation;
  * a knowledge-only item skips validation; a story goes from validation to closeout; closeout is the last stage before done.
  */
 export const FORWARD_TARGETS: ReadonlyMap<WorkItemStatus, readonly WorkItemStatus[]> =

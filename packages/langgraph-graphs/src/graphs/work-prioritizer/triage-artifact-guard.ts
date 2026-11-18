@@ -6,7 +6,7 @@
  * Moving an item out of needs_triage needs a `triage` artifact (the route), so the program records it here and then patches the
  * status with the guarded `core__work_item_update`. The host ToolRunner still authorizes `work_item:transition`. The guard allows exactly one shape:
  *   - the triage guide and the active goals were read this run, and the item was read this run and is still in needs_triage;
- *   - `kind` is "triage", `subject` is `work:<this item>` and `verdict` is research, design or implement;
+ *   - `kind` is "triage", `subject` is `work:<this item>` and `verdict` is research or design (never implement: every change passes design review);
  *   - at most MAX_CHANGED_ITEMS_PER_RUN distinct items get a triage artifact per run (the same cap the writer has).
  * A success is remembered in the run's receipts: the update guard routes an item forward only for the verdict recorded here.
  * Recording never changes the item; the store stamps the author and the item revision.
@@ -27,7 +27,7 @@ import { z } from "zod";
 import type { RunReceipts } from "./receipts";
 import { MAX_CHANGED_ITEMS_PER_RUN, RECEIPT_ERROR_MAX_CHARS } from "./tools";
 
-const TRIAGE_VERDICTS = new Set(["research", "design", "implement"]);
+const TRIAGE_VERDICTS = new Set(["research", "design"]);
 
 const reject = (code: string, hint: string) =>
   `guard_rejected: ${code}: ${hint}`;
@@ -71,7 +71,7 @@ export function createTriageArtifactGuard(
     )
       return reject(
         "artifact_shape",
-        `record exactly { kind: "triage", subject: "work:${item.id}", verdict: "research" | "design" | "implement" }, plus a one-line note naming the measurement gap when the item declares no moves`,
+        `record exactly { kind: "triage", subject: "work:${item.id}", verdict: "research" | "design" }, plus a one-line note naming the measurement gap when the item declares no moves`,
       );
     if (pending.has(item.id))
       return reject("write_in_flight", "wait for the earlier write");

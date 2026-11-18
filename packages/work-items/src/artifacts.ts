@@ -44,7 +44,11 @@ export const ARTIFACT_KINDS = [
 ] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
-export const TRIAGE_VERDICTS = ["research", "design", "implement"] as const;
+/**
+ * Where triage may route new work: research or design, never straight to implement, so every change passes design review
+ * (CEO 2026-11-18). A stored `implement` triage from before still decides its item's path (gates `routeOf`).
+ */
+export const TRIAGE_VERDICTS = ["research", "design"] as const;
 export const REVIEW_VERDICTS = ["approve", "request_changes"] as const;
 export const VALIDATION_VERDICTS = ["pass", "notes", "fail"] as const;
 export const CLOSEOUT_VERDICTS = ["done"] as const;
@@ -794,7 +798,7 @@ export const workItemsArtifactsCreateOperation = {
   id: "work.items.artifacts.create.v1",
   summary: "Record a review, validation or closeout artifact on a work item",
   description:
-    "Writes one immutable artifact: a triage (routes research, design or implement), a design review, an implementation review, a validation (with the canonical scorecard rows) or a closeout (verdict `done`, subject `work:<id>`, a `note` with the KPI reading after one window or the measurement gap, and a `url` or `body` linking the knowledge refined and the cleanup). The author is the authenticated principal, recorded for audit; no server check compares it with the subject's author. The server stamps the item's revision and computes PASS-grade from the rows. A review, validation or closeout needs a `url` or a `body`. Recording never changes the item's status.",
+    "Writes one immutable artifact: a triage (routes research or design; never straight to implement), a design review, an implementation review, a validation (with the canonical scorecard rows) or a closeout (verdict `done`, subject `work:<id>`, a `note` with the KPI reading after one window or the measurement gap, and a `url` or `body` linking the knowledge refined and the cleanup). The author is the authenticated principal, recorded for audit; no server check compares it with the subject's author. The server stamps the item's revision and computes PASS-grade from the rows. A review, validation or closeout needs a `url` or a `body`. Recording never changes the item's status.",
   input: WorkItemArtifactInputSchema,
   output: z.object({ artifact: WorkItemArtifactSchema }),
 } as const;

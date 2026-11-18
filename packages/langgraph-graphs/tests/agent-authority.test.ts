@@ -102,7 +102,7 @@ describe("dev runner guard (N6)", () => {
 describe("core__work_item_artifact_record is guarded like the PATCH twin (task.0122)", () => {
   const ARTIFACT_ARGS = {
     id: "task.1",
-    artifact: { kind: "triage", subject: "work:task.1", verdict: "implement" },
+    artifact: { kind: "triage", subject: "work:task.1", verdict: "design" },
   };
 
   it("needs the same work_item:transition scope, no new scope", () => {

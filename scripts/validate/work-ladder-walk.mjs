@@ -205,10 +205,11 @@ async function walkCode(pr) {
 async function walkBack() {
 	const Y = await create("back-move", "Synthetic ladder walk: back is free, a stale triage is not enough.");
 	console.log(`item ${Y}`);
-	await artifact("triage artifact (implement)", Y, { kind: "triage", subject: `work:${Y}`, verdict: "implement", note: "ladder walk" });
-	await patch("triage -> needs_implement", Y, "needs_implement", OK, MUST);
-	await patch("back needs_implement -> needs_triage", Y, "needs_triage", OK, MUST);
-	await patch("triage -> implement on the stale triage", Y, "needs_implement", unmet("triage"));
+	await step("triage straight to implement is refused", "POST", `/work/items/${Y}/artifacts`, { kind: "triage", subject: `work:${Y}`, verdict: "implement", note: "ladder walk" }, { status: 400 });
+	await artifact("triage artifact (design)", Y, { kind: "triage", subject: `work:${Y}`, verdict: "design", note: "ladder walk" });
+	await patch("triage -> needs_design", Y, "needs_design", OK, MUST);
+	await patch("back needs_design -> needs_triage", Y, "needs_triage", OK, MUST);
+	await patch("triage -> design on the stale triage", Y, "needs_design", unmet("triage"));
 }
 
 /** Every synthetic item still live is cancelled, whatever happened above. */
