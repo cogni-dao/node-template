@@ -29,10 +29,12 @@ const ASK_ALLOWLIST: ReadonlyArray<{ path: string; reason: string }> = [
   { path: "bootstrap/node-admin-gate.ts", reason: "the node-admin check itself" }, // task.0115
   { path: "bootstrap/agent-authority.ts", reason: "tool-guard admin check" }, // task.0115
   { path: "app/(admin)/admin/payments/money-plane.server.ts", reason: "payments page gate" }, // task.0115
+  { path: "app/(admin)/layout.tsx", reason: "layout gate: the one adminCheck (ONE_ADMIN_CHECK)" },
+  { path: "app/api/v1/agent/me/route.ts", reason: "self-check reports the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "auth.ts", reason: "session isApprover flag" }, // task.0115
   { path: "shared/config/repoSpec.server.ts", reason: "isDaoAdmin and isLedgerApprover definitions" }, // task.0115
 ];
-const ASK = /\b(isDaoAdmin|isLedgerApprover|checkApprover|checkNodeAdmin)\(|\bnodeAdmin\.check\(/;
+const ASK = /\b(isDaoAdmin|isLedgerApprover|checkApprover|checkNodeAdmin|adminCheck)\(|\bnodeAdmin\.check\(/;
 // The container also hands the node-admin authority to the knowledge store and work-item capability as an object (not a call), so those files have no match to list.
 
 function sourceFiles(dir: string): string[] {

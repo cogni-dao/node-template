@@ -189,8 +189,9 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
 
   it("503: no configured admins gives authz_unavailable on GET and POST, never a plain deny", async () => {
     const real = holder.container as Record<string, unknown>;
-    const nodeAdmin = { check: async () => ({ ok: false, errorCode: "authz_unavailable", reason: "no_node_admins_configured" }) };
-    holder.container = { ...real, nodeAdmin };
+    // The one admin check reports an unconfigured node as unavailable; the mint must answer 503, never a plain deny.
+    const agentAuthority = { ...(real.agentAuthority as Record<string, unknown>), adminCheck: async () => "unavailable" as const };
+    holder.container = { ...real, agentAuthority };
     try {
       session.user = sessionUser(adminUser, "session");
       expect((await getView()).status).toBe(503);
@@ -215,10 +216,10 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     expect(await live()).toHaveLength(before.length);
   });
 
-  it("V8: a bearer identity is not a session: the mint refuses it, and nothing is written", async () => {
+  it("V8: a bearer with no admin wallet meets the one admin check: 403, and nothing is written", async () => {
     session.user = sessionUser(agentUser, "bearer");
-    expect((await call(POST, body)).status).toBe(401);
-    expect((await call(DELETE, body)).status).toBe(401);
+    expect((await call(POST, body)).status).toBe(403);
+    expect((await call(DELETE, body)).status).toBe(403);
     const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
     expect(rows).toHaveLength(0);
   });

@@ -151,7 +151,8 @@ export function createAdminCheck(
   return async (subjectUserId) => {
     const rows = (await sql`
       SELECT external_id FROM user_bindings
-      WHERE user_id = ${subjectUserId} AND provider = 'wallet'`) as ReadonlyArray<{
+      WHERE user_id = ${subjectUserId} AND provider = 'wallet'
+      ORDER BY external_id LIMIT 20`) as ReadonlyArray<{
       external_id: string;
     }>;
     if (rows.length === 0) {
@@ -398,7 +399,7 @@ export function createAgentToolAuthority(deps: {
       const rows = (await deps.sql`
         SELECT external_id FROM user_bindings
         WHERE user_id = ${userId} AND provider = 'wallet'
-        ORDER BY external_id LIMIT 10`) as ReadonlyArray<{ external_id: string }>;
+        ORDER BY external_id LIMIT 20`) as ReadonlyArray<{ external_id: string }>;
       return rows.map((row) => row.external_id);
     },
     async isAgent(userId) {
