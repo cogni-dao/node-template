@@ -45,11 +45,11 @@ export function WorkDesignLinks({
     <section aria-label="Design" data-work-design="links" className="flex flex-col gap-1.5">
       <h3 className={CITATION_HEADING_CLASS}>Design</h3>
       <div className={CITATION_LIST_CLASS}>
-        {specRefs.map((ref) => {
+        {specRefs.map((ref, index) => {
           const atomId = parseSpecRef(ref);
           return atomId ? (
             <CitationRow
-              key={ref}
+              key={`${index}:${ref}`}
               direction="out"
               relation="design"
               tone="neutral"
@@ -58,7 +58,7 @@ export function WorkDesignLinks({
               Link={LinkComponent}
             />
           ) : (
-            <code key={ref} className="flex min-h-8 min-w-0 items-center break-all text-muted-foreground text-xs">
+            <code key={`${index}:${ref}`} className="flex min-h-8 min-w-0 items-center break-all text-muted-foreground text-xs">
               {ref}
             </code>
           );
