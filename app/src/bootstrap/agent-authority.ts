@@ -404,7 +404,7 @@ export function createAgentToolAuthority(deps: {
     },
     async registerAgent({ userId, name }) {
       await deps.sql.begin(async (tx) => {
-        await tx`INSERT INTO users (id, name, wallet_address) VALUES (${userId}, ${name}, NULL)`;
+        await tx`INSERT INTO users (id, name) VALUES (${userId}, ${name})`;
         await writeExternalPrincipal(tx, userId);
       });
     },

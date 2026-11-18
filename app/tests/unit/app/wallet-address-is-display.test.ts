@@ -26,7 +26,6 @@ const ALLOWLIST: Readonly<Record<string, string>> = {
   "app/src/auth.ts": "login: legacy fallback when no wallet binding exists (compared with lower()) and the session's display wallet",
   "app/src/app/_facades/users/profile.server.ts": "profile display name and truncated address",
   "app/src/adapters/server/metrics/runs.source.ts": "run-count metric class (human vs agent); it grants and pays nothing",
-  "packages/agent-grants/src/credentials/postgres.ts": "deny-only: a SIWE human cannot upgrade into an agent key (refusal, never an allow)",
   "packages/db-client/src/adapters/drizzle-claimant-wallet-resolver.adapter.ts": "deny-only defense in depth: an agent's display wallet is never a payee",
 };
 
