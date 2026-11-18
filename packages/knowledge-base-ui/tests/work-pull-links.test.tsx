@@ -4,14 +4,18 @@
 /**
  * Module: `@cogni/knowledge-base-ui/tests/work-pull-links`
  * Purpose: Prove an item's PRs read as owner/repo#N only for a real GitHub pull URL, and that only https URLs become links (story.0069).
- * Scope: Pure helpers. No DOM, no network.
+ * Scope: Helpers and the component with no network.
  * Invariants: MANY_PRS, HTTPS_ONLY_LINKS.
  * Side-effects: none
  * @internal
  */
 
-import { describe, expect, it } from "vitest";
-import { pullLabel, pullUrls } from "../src/index.js";
+import "@testing-library/jest-dom/vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { pullLabel, pullUrls, WorkPullLinks } from "../src/index.js";
+
+afterEach(cleanup);
 
 describe("work pull links", () => {
   it("labels only a github.com pull URL, so another host cannot borrow a PR name", () => {
@@ -29,5 +33,11 @@ describe("work pull links", () => {
       ]),
     ).toEqual(["https://github.com/a/b/pull/1", "https://github.com/a/c/pull/2"]);
     expect(pullUrls(null, [])).toEqual([]);
+  });
+
+  it("keeps a pr that is not an https URL visible as text, not a link", () => {
+    render(<WorkPullLinks pr="branch-only-deliverable" externalRefs={[]} />);
+    expect(screen.getByText("branch-only-deliverable")).toBeInTheDocument();
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
 });

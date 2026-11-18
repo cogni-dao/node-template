@@ -9,6 +9,7 @@
  * Invariants:
  *   - ONE_ROW_RENDERER: PR rows are `CitationRow` in `CITATION_LIST_CLASS`, as Moves and Design draw.
  *   - MANY_PRS: `pr` first, then each other PR once; an item with none draws nothing.
+ *   - NO_PR_HIDDEN: a `pr` that is not an https URL stays as one text line.
  *   - HTTPS_ONLY_LINKS: only an https URL becomes an href; a label reads owner/repo#N only for a github.com pull URL.
  * Side-effects: none
  * Links: hub work-item-design-links, ./work-design-links.tsx, ./citation-links.tsx
@@ -57,14 +58,19 @@ export function WorkPullLinks({
   readonly LinkComponent?: CitationLinkComponent;
 }): ReactElement | null {
   const urls = pullUrls(pr, externalRefs);
-  if (urls.length === 0) return null;
+  // A `pr` that is not an https URL stays visible as text, never as a link.
+  const plainPr = pr && !urls.includes(pr) ? pr : null;
+  if (urls.length === 0 && !plainPr) return null;
   return (
     <section aria-label="Pull requests" data-work-pulls="links" className="flex flex-col gap-1.5">
-      <h3 className={CITATION_HEADING_CLASS}>{urls.length === 1 ? "PR" : "PRs"}</h3>
+      <h3 className={CITATION_HEADING_CLASS}>{urls.length + (plainPr ? 1 : 0) === 1 ? "PR" : "PRs"}</h3>
       <div className={CITATION_LIST_CLASS}>
         {urls.map((url) => (
           <CitationRow key={url} direction="out" relation="pr" tone="neutral" slug={pullLabel(url)} href={url} Link={LinkComponent} />
         ))}
+        {plainPr && (
+          <code className="flex min-h-8 min-w-0 items-center break-all text-muted-foreground text-xs">{plainPr}</code>
+        )}
       </div>
     </section>
   );
