@@ -205,12 +205,22 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** One call; a 503 `lock_contended` (writes serialize on the writer lock) or a transient `artifacts_unavailable` is retried with backoff. */
 async function call(method, path, body) {
 	for (let attempt = 0; ; attempt += 1) {
-		const res = await fetch(`${api}${path}`, {
-			method,
-			headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-			...(body === undefined ? {} : { body: JSON.stringify(body) }),
-			signal: AbortSignal.timeout(60_000),
-		});
+		let res;
+		try {
+			res = await fetch(`${api}${path}`, {
+				method,
+				headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+				...(body === undefined ? {} : { body: JSON.stringify(body) }),
+				signal: AbortSignal.timeout(60_000),
+			});
+		} catch (error) {
+			// A dropped connection (ECONNRESET, timeout) is retried. A lost response on an artifact POST can repeat it; a duplicate fixture is harmless (the latest wins).
+			if (attempt < 8) {
+				await sleep(Math.min(500 * 2 ** attempt, 8_000) + Math.random() * 250);
+				continue;
+			}
+			throw error;
+		}
 		const json = await res.json().catch(() => ({}));
 		if (res.status === 503 && /lock_contended|artifacts_unavailable/.test(JSON.stringify(json)) && attempt < 8) {
 			await sleep(Math.min(500 * 2 ** attempt, 8_000) + Math.random() * 250);
