@@ -21,7 +21,7 @@
  */
 
 /**
- * Entry types an agent designs, builds and reviews against. Findings,
+ * Entry types an agent designs, builds and reviews against; a `roadmap` is one goal's ordered bets (story.0069). Findings,
  * observations, hypotheses, scorecards and `html` are evidence or human views,
  * not instructions, so they never route.
  */
@@ -31,6 +31,7 @@ export const GOVERNING_ENTRY_TYPES = [
   "playbook",
   "rule",
   "design",
+  "roadmap",
   "decision",
   "reference",
 ] as const;

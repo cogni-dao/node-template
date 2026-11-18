@@ -794,6 +794,7 @@ const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   moves: "moves",
   labels: "labels",
   specRefs: "spec_refs",
+  externalRefs: "external_refs",
   branch: "branch",
   pr: "pr",
   reviewer: "reviewer",

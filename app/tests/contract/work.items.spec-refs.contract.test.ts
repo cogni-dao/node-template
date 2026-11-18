@@ -42,3 +42,14 @@ describe.each([
     expect(result.error.issues.map((issue) => issue.message)).toContain(SPEC_REF_MESSAGE);
   });
 });
+
+describe("patch externalRefs (story.0069)", () => {
+  const refs = (externalRefs: unknown) =>
+    workItemsPatchOperation.input.safeParse({ id: "task.1", reason: "r", set: { externalRefs } });
+
+  it("takes each extra PR as an https link and refuses anything else", () => {
+    expect(refs([{ system: "github", kind: "pr", url: "https://github.com/cogni-dao/red/pull/45" }]).success).toBe(true);
+    expect(refs([{ system: "github", kind: "pr", url: "javascript:alert(1)" }]).success).toBe(false);
+    expect(refs([{ system: "github", kind: "pr", url: "https://x.test", extra: 1 }]).success).toBe(false);
+  });
+});

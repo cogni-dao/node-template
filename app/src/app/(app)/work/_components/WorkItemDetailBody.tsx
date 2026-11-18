@@ -31,6 +31,7 @@ import {
 	WorkItemScoresRadar,
 	WorkDesignLinks,
 	WorkExpectations,
+	WorkPullLinks,
 	type WorkMetric,
 } from "@cogni/knowledge-base-ui";
 import { WorkMoveLinks } from "@cogni/knowledge-base-ui/goals";
@@ -100,16 +101,6 @@ const ScrollKeepingLink: CitationLinkComponent = ({ entityId: _entityId, href, .
 	<Link href={href} scroll={false} {...props} />
 );
 
-/** The item's PR opens where it lives, in a new tab (story.0069): humans follow the same link the item read gives agents. */
-const ExternalLink: CitationLinkComponent = ({ entityId: _entityId, ...props }) => (
-	<a target="_blank" rel="noreferrer" {...props} />
-);
-
-/** "owner/repo#N" for a GitHub pull URL, else the URL itself. */
-function pullLabel(url: string): string {
-	const match = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/i.exec(url);
-	return match ? `${match[1]}#${match[2]}` : url;
-}
 
 const ROW = "flex min-w-0 items-center justify-between gap-3";
 const ROW_TITLE = "min-w-0 truncate";
@@ -257,6 +248,8 @@ export function WorkItemDetailBody({
 					</SheetHeader>
 
 					<div className="mt-6 flex flex-col gap-5 px-1">
+						{/* PRs first: the code the item ships, `pr` then each other PR (story.0069). */}
+						<WorkPullLinks pr={item.pr} externalRefs={item.externalRefs} />
 						<WorkMoveLinks
 							moves={item.moves ?? NO_MOVES}
 							labels={item.labels}
@@ -427,26 +420,11 @@ export function WorkItemDetailBody({
 						{/* Project */}
 						{item.projectId && <Field label="Project">{item.projectId}</Field>}
 
-						{/* Branch / PR */}
-						{(item.branch || item.pr) && (
-							<div className="flex gap-6">
-								{item.branch && (
-									<Field label="Branch">
-										<code className="text-xs">{item.branch}</code>
-									</Field>
-								)}
-								{item.pr && (
-									<Field label="PR">
-										{/^https?:\/\//.test(item.pr) ? (
-											<div className={CITATION_LIST_CLASS}>
-												<CitationRow direction="out" relation="pr" tone="neutral" slug={pullLabel(item.pr)} href={item.pr} Link={ExternalLink} />
-											</div>
-										) : (
-											<code className="text-xs">{item.pr}</code>
-										)}
-									</Field>
-								)}
-							</div>
+						{/* Branch; the PRs lead the item */}
+						{item.branch && (
+							<Field label="Branch">
+								<code className="text-xs">{item.branch}</code>
+							</Field>
 						)}
 
 						{/* Blocked by */}

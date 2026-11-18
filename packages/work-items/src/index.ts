@@ -165,6 +165,7 @@ export {
   WorkItemScoresInputSchema,
 } from "./patch-contract.js";
 export {
+  ExternalRefsInputSchema,
   parseSpecRef,
   SPEC_REF_MESSAGE,
   SPEC_REF_PREFIX,

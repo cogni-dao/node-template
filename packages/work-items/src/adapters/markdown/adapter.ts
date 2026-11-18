@@ -483,8 +483,12 @@ export class MarkdownWorkItemAdapter
         | "reviewer"
         | "node"
       >
-    > & { scores?: WorkItemScores | null; moves?: readonly unknown[] };
+    > & { scores?: WorkItemScores | null; moves?: readonly unknown[]; externalRefs?: readonly unknown[] };
   }): Promise<WorkItem> {
+    // Doltgres-only (story.0069): a silent drop would be a false success.
+    if (input.set?.externalRefs !== undefined) {
+      throw new UnsupportedWorkItemFieldError("externalRefs");
+    }
     if (input.set?.scores !== undefined) {
       throw new UnsupportedWorkItemFieldError("scores");
     }

@@ -39,3 +39,21 @@ export const SpecRefsInputSchema = z
   .describe(
     "Design atoms this item is built against, each knowledge:<atom-id> in this node's hub: its own design, the subsystem design it changes, or its parent's. On a patch it replaces the whole list.",
   );
+
+/**
+ * The item's outside links, replaced whole on a patch (story.0069). An item may carry many PRs: `pr` is the one deliverable the
+ * ladder gates; each other PR is `{ system: "github", kind: "pr", url }` here, and the item page draws every PR as a row.
+ */
+export const ExternalRefsInputSchema = z
+  .array(
+    z.strictObject({
+      system: z.string().min(1).max(64),
+      kind: z.string().min(1).max(64),
+      url: z.url({ protocol: /^https$/ }).optional(),
+      externalId: z.string().max(256).optional(),
+      title: z.string().max(256).optional(),
+    }),
+  )
+  .describe(
+    "Outside links of this item, replacing the whole list: each PR beyond `pr` is { system: \"github\", kind: \"pr\", url }.",
+  );
