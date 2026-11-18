@@ -202,21 +202,30 @@ const MAX_REPO_SPEC_BYTES = 64 * 1024;
 
 /**
  * The repo-spec of `ref` at `path` on the repo's default branch, through the GitHub contents API (`Accept: application/vnd.github.raw`), never the raw CDN
- * (its five-minute cache would double the owners' staleness). github.com repos only; 10 s timeout; 64 KiB cap; a redirect is an error; an optional `token`
- * is sent as a bearer (it lifts the unauthenticated rate limit). A 403 or 429 (rate limit) and every other failure throw `OwnerSourceUnavailableError`.
- * Pass this as `fetchRepoSpec` of `createRepoSpecOwnerSource`.
+ * (its five-minute cache would double the owners' staleness). github.com repos only; 10 s timeout; 64 KiB cap; a redirect is an error. `token` is a PROVIDER
+ * function (a static token, a GitHub App installation token, none): when it yields a value that is sent as a bearer (it lifts the unauthenticated rate limit);
+ * the package reads no environment variable. A failing provider, a 403 or 429 (rate limit) and every other failure throw `OwnerSourceUnavailableError`.
+ * `createRepoSpecOwnerSource` takes `fetchRepoSpec` as an injected dependency; `createGithubRepoSpecFetcher` is the ready-made default.
  */
 export async function fetchRepoSpecFromGithub(
   ref: string,
   path: string = DEFAULT_REPO_SPEC_PATH,
-  opts: { fetch?: typeof fetch; token?: string | undefined } = {}
+  opts: { fetch?: typeof fetch; token?: () => Promise<string | undefined> } = {}
 ): Promise<string> {
   const canonical = canonicalRepoRef(ref, path);
   if (!canonical) throw new OwnerSourceUnavailableError("ref is not a github repo url or path is not a repo-spec path");
   const { pathname } = new URL(canonical.split("#")[0] as string);
   const url = `https://api.github.com/repos${pathname}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
   const headers: Record<string, string> = { accept: "application/vnd.github.raw", "x-github-api-version": "2022-11-28", "user-agent": "cogni-node" };
-  if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+  if (opts.token) {
+    let token: string | undefined;
+    try {
+      token = await opts.token();
+    } catch (error) {
+      throw new OwnerSourceUnavailableError("github token unavailable", error);
+    }
+    if (token) headers.authorization = `Bearer ${token}`;
+  }
   let res: Response;
   try {
     res = await (opts.fetch ?? fetch)(url, { headers, signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS), redirect: "error" });
@@ -246,6 +255,11 @@ export async function fetchRepoSpecFromGithub(
     throw new OwnerSourceUnavailableError("repo-spec read failed", error);
   }
   return new TextDecoder().decode(bytes.subarray(0, total));
+}
+
+/** A ready-made `fetchRepoSpec` for `createRepoSpecOwnerSource`: the GitHub contents API read above with an injected `fetch` and token provider. Reads no env var. */
+export function createGithubRepoSpecFetcher(opts: { fetch?: typeof fetch; token?: () => Promise<string | undefined> } = {}): (ref: string, path: string) => Promise<string> {
+  return (ref, path) => fetchRepoSpecFromGithub(ref, path, opts);
 }
 
 /** The slice of the owner sources the approval gate reads. */

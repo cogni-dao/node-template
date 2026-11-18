@@ -20,8 +20,8 @@
 
 import {
   createOwnerSources,
+  createGithubRepoSpecFetcher,
   createRepoSpecOwnerSource,
-  fetchRepoSpecFromGithub,
   type OrgOwners,
 } from "@cogni/agent-grants/orgs";
 import {
@@ -124,7 +124,8 @@ export function createServiceAuth(deps: {
   });
   const owners = createOwnerSources([
     createRepoSpecOwnerSource({
-      fetchRepoSpec: (ref, path) => fetchRepoSpecFromGithub(ref, path, { token: deps.env.GITHUB_READ_TOKEN }),
+      // The package reads no env var: this composition hands it a token provider over the one env value.
+      fetchRepoSpec: createGithubRepoSpecFetcher({ token: async () => deps.env.GITHUB_READ_TOKEN }),
       extractApprovers: (yaml) => extractLedgerApprovers(parseRepoSpec(yaml)),
       usersForWallets: (wallets) => usersForWallets(deps.sql, wallets),
     }),
