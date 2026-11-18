@@ -15,7 +15,7 @@
  *   - ACCOUNT_LIVE (R1, R14, durable): an account row is live when approved, unrevoked and (`expires_at` is null, i.e. until Off, or in the future); expired is read, and an expired live
  *     row is closed (`revoked_at = now()`) before an ask or a direct On on the same (AI, scope), so the old index frees.
  *   - The decision statements carry the owner join themselves (`billing_accounts.owner_user_id = approver`), so a caller cannot widen them.
- *   - ORG_DECISION_SQL (0.9.0): an org's owners are read from its owner source at decision time, so the `...OnOrg` statements cannot join them; `canApprove` with `owners` is the
+ *   - ORG_DECISION_SQL (story.0038 phase 2): an org's owners are read from its owner source at decision time, so the `...OnOrg` statements cannot join them; `canApprove` with `owners` is the
  *     gate and each statement pins the write to one account whose owner user is an `org` principal. The human-owned statements above are unchanged.
  *   - `agent_roles` has FORCE RLS and one narrow select policy (an account row naming the connection's own user): only a service-role
  *     connection writes it or reads the rest. `agent_principals` has a read-only select policy for every role; only a service-role

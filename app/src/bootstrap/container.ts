@@ -153,6 +153,7 @@ import {
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
+import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import {
@@ -303,6 +304,8 @@ export interface Container {
 	agentAuthority: AgentToolAuthority;
 	/** Service assertions (story.0038): the optional signer, the verifier over the trusted homes, and the org owner source. Thin wiring; the logic is in `@cogni/agent-grants`. */
 	serviceAuth: ServiceAuth;
+	/** Calling other nodes as this node's AI (story.0038 phase 2): the remote-knowledge capability and the outbound ask. Targets come only from SERVICE_LINK_TARGETS. */
+	serviceLinks: ServiceLinks;
 	/** ADMIN_ACTS_IN_ADMIN: the only door for node-admin writes; callable only with an `AdminSession` minted in `(admin)/`. */
 	nodeAdminPort: NodeAdminPort;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
@@ -1096,9 +1099,17 @@ function createContainer(): Container {
 		log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
 	}
 
+	// story.0038 phase 2: other nodes' knowledge through the stock tools. The signer is read lazily (it is built with `serviceAuth` below).
+	const serviceLinks = createServiceLinks({
+		env,
+		signer: () => serviceAuth.signer,
+		log,
+	});
+
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
 	const toolBindings = createToolBindings({
 		nodePublicOrigin: env.APP_BASE_URL,
+		remoteKnowledge: serviceLinks.remoteKnowledge,
 		knowledgeCapability,
 		edoCapability,
 		metricsCapability,
@@ -1305,6 +1316,7 @@ function createContainer(): Container {
 		nodeAdmin: createAdminCheckNodeAdminAuthority(() => agentAuthority.adminCheck),
 		agentAuthority,
 		serviceAuth,
+		serviceLinks,
 		nodeAdminPort: createNodeAdminPort(agentAuthority),
 		knowledgeStorePort,
 		goalMetrics,

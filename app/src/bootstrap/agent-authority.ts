@@ -31,7 +31,12 @@ import {
   type AuthzEvent,
   AgentRolesError,
   createPostgresAgentGrantsStore,
+  createPostgresPayerBindingStore,
   buildNodeAiView,
+  decidePayerBinding,
+  payerFor,
+  requestPayerBinding,
+  revokePayerBinding,
   type GuardDeps,
   type GrantResource,
   denyRequest,
@@ -113,11 +118,22 @@ export interface AgentToolAuthority {
   turnMineOn(
     me: ApprovalCaller,
     input:
-      | { token: string }
+      | { token: string; accountId?: string | undefined }
       | { principalUserId: string; scope: string }
   ): Promise<{ changed: boolean }>;
-  /** The person turns a live ACCOUNT row Off by id, or dismisses a waiting ask by its token. */
-  turnMineOff(me: ApprovalCaller, input: { rowId: string } | { token: string }): Promise<{ changed: boolean }>;
+  /** The person turns a live ACCOUNT row Off by id, or dismisses a waiting ask by its token (with `accountId`, for an org account the person co-owns). */
+  turnMineOff(me: ApprovalCaller, input: { rowId: string } | { token: string; accountId?: string | undefined }): Promise<{ changed: boolean }>;
+  /**
+   * PAYER_IS_AUTHORIZED: a subject (any principal) asks to be billed to `billingAccountId`. Grants nothing. Throws AgentRolesError (`principal_not_found`,
+   * `not_allowed` when a live binding must be turned Off first, `too_many_requests`).
+   */
+  requestPayerBinding(subjectUserId: string, billingAccountId: string): Promise<{ id: string; state: "pending" | "live"; created: boolean }>;
+  /** An owner of the account (an org's owners through the owner source) turns a pending binding On (`approve`) or dismisses it. */
+  decidePayerBinding(me: ApprovalCaller, id: string, approve: boolean): Promise<{ changed: boolean }>;
+  /** An owner of the account turns a binding Off. The subject's next run falls back to its own account. */
+  revokePayerBinding(me: ApprovalCaller, id: string): Promise<{ changed: boolean }>;
+  /** The account a live binding names for this subject, or null. Read on every call, never cached, so Off refuses the next run. */
+  payerFor(subjectUserId: string): Promise<string | null>;
   /**
    * True when `name` matches (case, spacing and look-alike forms ignored) any user's name or any of this node's AI slugs. Used at
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
@@ -383,7 +399,7 @@ export function createAgentToolAuthority(deps: {
     async turnMineOn(me, input) {
       // The orchestration (validate, then ensure the person's account, then decide) is the package's; this wrapper only wires the account hook and logs.
       const result = await withStore((store) =>
-        turnMineOn(store, { me, on: input, declaredScopes, scopeKinds, ensureAccount: deps.ensureBillingAccount })
+        turnMineOn(store, { me, on: input, declaredScopes, scopeKinds, ensureAccount: deps.ensureBillingAccount, owners: deps.owners })
       );
       if (result.changed)
         deps.log.info(
@@ -399,7 +415,7 @@ export function createAgentToolAuthority(deps: {
       return { changed: result.changed };
     },
     async turnMineOff(me, input) {
-      const result = await withStore((store) => turnMineOff(store, { me, off: input }));
+      const result = await withStore((store) => turnMineOff(store, { me, off: input, owners: deps.owners }));
       if (result.changed)
         deps.log.info(
           result.via === "row"
@@ -409,6 +425,54 @@ export function createAgentToolAuthority(deps: {
         );
       return { changed: result.changed };
     },
+    async requestPayerBinding(subjectUserId, billingAccountId) {
+      const outcome = await deps.sql.begin((tx) =>
+        requestPayerBinding(createPostgresPayerBindingStore(tx), { subjectUserId, billingAccountId })
+      );
+      return { id: outcome.id, state: outcome.state, created: outcome.created };
+    },
+    async decidePayerBinding(me, id, approve) {
+      const result = await deps.sql.begin((tx) =>
+        decidePayerBinding(createPostgresPayerBindingStore(tx), createPostgresAgentGrantsStore(tx), {
+          me,
+          id,
+          approve,
+          owners: deps.owners,
+        })
+      );
+      if (result.decided)
+        deps.log.info(
+          {
+            event: approve ? EVENT_NAMES.PAYER_BOUND : EVENT_NAMES.PAYER_REVOKED,
+            subject: result.subjectUserId,
+            billingAccountId: result.billingAccountId,
+            ...(approve ? { approvedBy: me.userId } : { revokedBy: me.userId }),
+          },
+          approve ? EVENT_NAMES.PAYER_BOUND : EVENT_NAMES.PAYER_REVOKED
+        );
+      return { changed: result.decided };
+    },
+    async revokePayerBinding(me, id) {
+      const result = await deps.sql.begin((tx) =>
+        revokePayerBinding(createPostgresPayerBindingStore(tx), createPostgresAgentGrantsStore(tx), {
+          me,
+          id,
+          owners: deps.owners,
+        })
+      );
+      if (result.revoked)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.PAYER_REVOKED,
+            subject: result.subjectUserId,
+            billingAccountId: result.billingAccountId,
+            revokedBy: me.userId,
+          },
+          EVENT_NAMES.PAYER_REVOKED
+        );
+      return { changed: result.revoked };
+    },
+    payerFor: (subjectUserId) => payerFor(createPostgresPayerBindingStore(deps.sql), subjectUserId),
     async nameTaken(name) {
       const key = agentNameKey(name);
       if (!key) return true;

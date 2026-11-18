@@ -80,6 +80,16 @@ export const EVENT_NAMES = {
 	SERVICE_AUTH_SIGNER_UNAVAILABLE: "service_auth.signer_unavailable",
 	/** An org was created or found for an owner source (story.0038): orgUserId, sourceRef. */
 	ORG_ENSURED: "org.ensured",
+	/** A payer binding was turned On by an owner of the account (story.0038): subject, billingAccountId, approvedBy. */
+	PAYER_BOUND: "payer.bound",
+	/** A payer binding ended, Off or dismissed (story.0038): subject, billingAccountId, revokedBy. */
+	PAYER_REVOKED: "payer.revoked",
+	/** A run was billed to a bound account instead of the caller's own (story.0038): subject, billingAccountId. */
+	PAYER_SELECTED: "payer.selected",
+	/** This node's AI asked a configured remote node for one permission (story.0038): alias, scope, httpStatus. Never a token. */
+	SERVICE_LINK_ASKED: "service_link.asked",
+	/** A remote knowledge read was signed and sent (story.0038): alias, op, outcome. Never a token or a body. */
+	REMOTE_KNOWLEDGE_READ: "remote_knowledge.read",
 	/** revocable agent keys (task.0070): upgraded / rotated (a pending key issued), confirmed, revoked, refused. Carry userId and credentialId, never a key or hash. */
 	AGENT_CREDENTIAL_UPGRADED: "agent.credential.upgraded",
 	AGENT_CREDENTIAL_ROTATED: "agent.credential.rotated",

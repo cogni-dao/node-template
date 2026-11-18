@@ -287,6 +287,8 @@ export const serverSchema = z.object({
   SERVICE_TRUSTED_HOMES: optionalString,
   // Optional GitHub token: sent as a bearer on the repo-spec read for org owners, to lift the unauthenticated rate limit.
   GITHUB_READ_TOKEN: optionalString,
+  // story.0038 phase 2: the other nodes this node's AI may read and ask (JSON array of { alias, nodeId, origin }). Unset = no remote targets.
+  SERVICE_LINK_TARGETS: optionalString,
 
   // PostHog product analytics — required
   // See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/posthog-setup.md for setup

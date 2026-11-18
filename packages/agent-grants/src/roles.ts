@@ -233,7 +233,7 @@ export async function previewAsk(
  * The account owner turns a pending ACCOUNT ask On, by its link token. The row takes an account the approver owns and has no end date: like a node
  * row it lasts until Off. A node-admin has no say here (R12). Returns false for a token that is not usable.
  *
- * ORG ACCOUNTS (0.9.0): with `accountId` and `owners`, the approver decides on that ONE account. A person's own account keeps the statement above; an org's
+ * ORG ACCOUNTS (story.0038 phase 2): with `accountId` and `owners`, the approver decides on that ONE account. A person's own account keeps the statement above; an org's
  * account needs `canApprove` through `owners(orgSource)` (read now, refused on a failed read) and then writes through `approveAccountByLinkOnOrg`.
  */
 export async function approveAccountAsk(
@@ -321,7 +321,7 @@ export async function grantInternalOnAccount(
 /**
  * The account owner turns a live ACCOUNT row Off, by id. A row on someone else's account is invisible: `revoked: false`.
  *
- * ORG ACCOUNTS (0.9.0): when the person's own statement finds nothing and `owners` is given, a live row on an org-owned account is revoked if `me` is one of the org's owners
+ * ORG ACCOUNTS (story.0038 phase 2): when the person's own statement finds nothing and `owners` is given, a live row on an org-owned account is revoked if `me` is one of the org's owners
  * (`canApprove` through `owners(orgSource)`, never the asking principal). A row on any other account stays invisible.
  */
 export async function revokeAccountRow(

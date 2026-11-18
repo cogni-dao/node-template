@@ -296,6 +296,41 @@ export function memoryStore(init?: {
       roles.push(mk({ principal: principalUserId, scope, approvedBy, resource: "account", accountId: account, grantedAt: clock.now, expiresAt: null }));
       return true;
     },
+    async accountRoleOf(rowId) {
+      guard();
+      const r = roles.find((x) => x.id === rowId);
+      return r && r.resource === "account" && r.accountId ? { accountId: r.accountId, principalUserId: r.principal } : null;
+    },
+    async approveAccountByLinkOnOrg({ linkHash, approvedBy, accountId }) {
+      guard();
+      const r = byLink(linkHash, "account");
+      if (!r || !init?.orgAccounts?.[accountId] || r.principal === approvedBy) return false;
+      r.approvedBy = approvedBy;
+      r.grantedAt = clock.now;
+      r.accountId = accountId;
+      r.expiresAt = null;
+      r.linkConsumed = true;
+      r.linkHash = null;
+      return true;
+    },
+    async denyAccountByLinkOnOrg({ linkHash, deniedBy, accountId }) {
+      guard();
+      const r = byLink(linkHash, "account");
+      if (!r || r.principal === deniedBy || !init?.orgAccounts?.[accountId]) return false;
+      r.revoked = true;
+      r.revokedAt = clock.now;
+      r.linkConsumed = true;
+      r.linkHash = null;
+      return true;
+    },
+    async revokeAccountRoleOnOrg({ rowId, accountId }) {
+      guard();
+      const r = roles.find((x) => x.id === rowId);
+      if (!r || r.resource !== "account" || !r.approvedBy || r.revoked || r.accountId !== accountId || !init?.orgAccounts?.[accountId]) return false;
+      r.revoked = true;
+      r.revokedAt = clock.now;
+      return true;
+    },
     async revokeAccountRole({ rowId, ownerUserId }) {
       guard();
       const r = roles.find((x) => x.id === rowId);

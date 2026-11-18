@@ -41,11 +41,13 @@ export const agentMineOnOperation = {
       token: tokenSchema.optional(),
       principalUserId: z.string().min(1).max(100).optional(),
       scope: z.string().min(1).max(100).optional(),
+      /** With `token` only: an org account the signed-in person co-owns (through the org's owner source) and decides for. Absent = the person's own account. */
+      accountId: z.string().min(1).max(100).optional(),
     })
     .refine(
       (v) =>
         (v.token !== undefined && v.principalUserId === undefined && v.scope === undefined) ||
-        (v.token === undefined && v.principalUserId !== undefined && v.scope !== undefined),
+        (v.token === undefined && v.principalUserId !== undefined && v.scope !== undefined && v.accountId === undefined),
       { message: "send a token, or principalUserId with scope" }
     ),
   output: z.object({ changed: z.boolean() }),
@@ -59,10 +61,12 @@ export const agentMineOffOperation = {
       rowId: z.string().uuid().optional(),
       token: tokenSchema.optional(),
       deny: z.literal(true).optional(),
+      /** With `token` and `deny`: an org account the signed-in person co-owns and dismisses the ask for. */
+      accountId: z.string().min(1).max(100).optional(),
     })
     .refine(
       (v) =>
-        (v.rowId !== undefined && v.token === undefined && v.deny === undefined) ||
+        (v.rowId !== undefined && v.token === undefined && v.deny === undefined && v.accountId === undefined) ||
         (v.rowId === undefined && v.token !== undefined && v.deny === true),
       { message: "send a rowId, or a token with deny" }
     ),

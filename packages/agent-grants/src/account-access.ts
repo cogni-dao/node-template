@@ -100,7 +100,7 @@ export async function listMine(
 export type MineOnInput =
   | {
       readonly token: string;
-      /** An org account the approver decides for (0.9.0); absent = the person's own account. */
+      /** An org account the approver decides for (story.0038 phase 2); absent = the person's own account. */
       readonly accountId?: string | undefined;
     }
   | { readonly principalUserId: string; readonly scope: string };
@@ -163,7 +163,7 @@ export type MineOffInput =
   | { readonly rowId: string }
   | {
       readonly token: string;
-      /** An org account the approver dismisses the ask for (0.9.0). */
+      /** An org account the approver dismisses the ask for (story.0038 phase 2). */
       readonly accountId?: string | undefined;
     };
 

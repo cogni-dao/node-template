@@ -19,7 +19,8 @@
 import { z } from "zod";
 import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
 
-import type { KnowledgeCapability } from "../capabilities/knowledge";
+import type { KnowledgeCapability, KnowledgeEntry } from "../capabilities/knowledge";
+import { REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 
@@ -46,6 +47,13 @@ export const KnowledgeSearchInputSchema = z.object({
     .max(20)
     .optional()
     .describe("Maximum results (1-20, default 10)"),
+  node: z
+    .string()
+    .regex(REMOTE_ALIAS_PATTERN)
+    .optional()
+    .describe(
+      "Alias of another node whose knowledge to read instead of this node's own. Only aliases the server lists work."
+    ),
 });
 export type KnowledgeSearchInput = z.infer<typeof KnowledgeSearchInputSchema>;
 
@@ -77,7 +85,8 @@ export const knowledgeSearchContract: ToolContract<
   description:
     "Search the node's knowledge store for domain-specific facts, claims, and curated assertions. " +
     "Returns entries with confidence scores and canonical sourceUrl provenance for the content read. Search BEFORE using web search — " +
-    "the knowledge store contains verified, curated information relevant to this node's domain.",
+    "the knowledge store contains verified, curated information relevant to this node's domain. " +
+    "Pass 'node' (a configured node alias) to search that node's knowledge instead.",
   effect: "read_only",
   inputSchema: KnowledgeSearchInputSchema,
   outputSchema: KnowledgeSearchOutputSchema,
@@ -98,6 +107,8 @@ export interface KnowledgeSearchDeps {
   knowledgeCapability: KnowledgeCapability;
   /** Trusted node public origin supplied by server composition, never tool input. */
   readonly nodePublicOrigin?: string | undefined;
+  /** Searches another node's knowledge when the call names an alias. Absent = the `node` argument is refused. */
+  readonly remoteKnowledge?: RemoteKnowledgeCapability | undefined;
 }
 
 export function createKnowledgeSearchImplementation(
@@ -105,18 +116,32 @@ export function createKnowledgeSearchImplementation(
 ): ToolImplementation<KnowledgeSearchInput, KnowledgeSearchOutput> {
   return {
     execute: async (input) => {
-      const results = await deps.knowledgeCapability.search({
-        domain: input.domain,
-        query: input.query,
-        limit: input.limit ?? 10,
-      });
+      let origin = deps.nodePublicOrigin;
+      let results: KnowledgeEntry[];
+      if (input.node !== undefined) {
+        const remote = deps.remoteKnowledge;
+        const remoteOrigin = remote?.originOf(input.node);
+        if (!remote || remoteOrigin === undefined) throw new RemoteKnowledgeError("unknown_alias", null);
+        origin = remoteOrigin;
+        results = await remote.search(input.node, {
+          domain: input.domain,
+          query: input.query,
+          limit: input.limit ?? 10,
+        });
+      } else {
+        results = await deps.knowledgeCapability.search({
+          domain: input.domain,
+          query: input.query,
+          limit: input.limit ?? 10,
+        });
+      }
       return {
         query: input.query,
         domain: input.domain,
         results: results.map((r) => ({
           ...withoutSourceProvenance(r),
           content: truncate(r.content, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS),
-          ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", r.id),
+          ...readSourceProvenance(origin, "knowledge", r.id),
         })),
         totalFound: results.length,
       };

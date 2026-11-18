@@ -161,6 +161,14 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       "knowledge.contributions.merge",
       // Registers an org for a public repo: idempotent per source, grants no authority, touches none of the caller's data (REGISTRATION_GRANTS_NOTHING, story.0038).
       "orgs.ensure",
+      // A subject asks to be billed to an account for itself: grants nothing, an owner decides (PAYER_IS_AUTHORIZED, story.0038 phase 2).
+      "payer-bindings.ask",
+      // An owner of the account (an org's owners through its owner source) turns a binding On or dismisses it: the one gate is canApprove, never a node-admin session.
+      "payer-bindings.decision",
+      // An owner of the account turns a binding Off; the next run falls back to the caller's own account.
+      "payer-bindings.revoke",
+      // Node-admin only through the one admin check, any credential: signs and posts one ask to a configured node, writes no grant on either side.
+      "service-links.ask",
     ]);
   });
 

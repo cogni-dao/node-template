@@ -210,7 +210,7 @@ export interface AgentGrantsStore {
   /** Revokes a live ACCOUNT row by id, only where its account is owned by `ownerUserId`. False otherwise (a foreign row is invisible). */
   revokeAccountRole(input: { rowId: string; ownerUserId: string }): Promise<boolean>;
   /**
-   * ORG DECISIONS (0.9.0, optional): an org's owners are read at decision time from its owner source and cannot be a SQL join, so the package's `canApprove` (with
+   * ORG DECISIONS (story.0038 phase 2, optional): an org's owners are read at decision time from its owner source and cannot be a SQL join, so the package's `canApprove` (with
    * `owners`) is the gate and these statements only pin the write to an account whose owner user is an org. A store without orgs omits them, and a decision on an
    * org-owned account is then refused.
    *

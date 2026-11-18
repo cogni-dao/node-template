@@ -74,6 +74,18 @@ export type {
   WorkItemQueryPage,
   WorkItemQueryParams,
 } from "./capabilities";
+export {
+  createRemoteKnowledgeTransport,
+  parseServiceLinkTargets,
+  REMOTE_ALIAS_PATTERN,
+  REMOTE_KNOWLEDGE_SCOPE,
+  REMOTE_KNOWLEDGE_SERVICE,
+  RemoteKnowledgeError,
+  readBodyCapped,
+  redactSecretShapes,
+  type RemoteKnowledgeCapability,
+  type RemoteKnowledgeTarget,
+} from "./remote-knowledge";
 // Capabilities
 export {
   CONFIDENCE,
