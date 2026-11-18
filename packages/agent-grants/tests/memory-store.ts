@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import type { AgentGrantsStore, GrantResource, PendingAskView, RoleRow, RoleState } from "../src";
+import type { OrgSource } from "../src/orgs";
 
 export interface MemoryRole {
   id: string;
@@ -44,6 +45,8 @@ export function memoryStore(init?: {
   names?: Record<string, string>;
   /** user id -> the billing account id that user owns. */
   accounts?: Record<string, string>;
+  /** billing account id -> the owner source of the org that owns it (the account's owner user is an org). */
+  orgAccounts?: Record<string, OrgSource>;
   failing?: boolean;
 }): AgentGrantsStore & { roles: MemoryRole[]; clock: MemoryClock } {
   const clock: MemoryClock = { now: Date.now() };
@@ -150,6 +153,10 @@ export function memoryStore(init?: {
     async ownsAccount(userId, accountId) {
       guard();
       return owns(userId, accountId);
+    },
+    async orgSourceOfAccount(accountId) {
+      guard();
+      return init?.orgAccounts?.[accountId] ?? null;
     },
     async accountOf(userId) {
       guard();
@@ -287,6 +294,41 @@ export function memoryStore(init?: {
       closeExpired(principalUserId, scope);
       if (openRow(principalUserId, scope)) return false;
       roles.push(mk({ principal: principalUserId, scope, approvedBy, resource: "account", accountId: account, grantedAt: clock.now, expiresAt: null }));
+      return true;
+    },
+    async accountRoleOf(rowId) {
+      guard();
+      const r = roles.find((x) => x.id === rowId);
+      return r && r.resource === "account" && r.accountId ? { accountId: r.accountId, principalUserId: r.principal } : null;
+    },
+    async approveAccountByLinkOnOrg({ linkHash, approvedBy, accountId }) {
+      guard();
+      const r = byLink(linkHash, "account");
+      if (!r || !init?.orgAccounts?.[accountId] || r.principal === approvedBy) return false;
+      r.approvedBy = approvedBy;
+      r.grantedAt = clock.now;
+      r.accountId = accountId;
+      r.expiresAt = null;
+      r.linkConsumed = true;
+      r.linkHash = null;
+      return true;
+    },
+    async denyAccountByLinkOnOrg({ linkHash, deniedBy, accountId }) {
+      guard();
+      const r = byLink(linkHash, "account");
+      if (!r || r.principal === deniedBy || !init?.orgAccounts?.[accountId]) return false;
+      r.revoked = true;
+      r.revokedAt = clock.now;
+      r.linkConsumed = true;
+      r.linkHash = null;
+      return true;
+    },
+    async revokeAccountRoleOnOrg({ rowId, accountId }) {
+      guard();
+      const r = roles.find((x) => x.id === rowId);
+      if (!r || r.resource !== "account" || !r.approvedBy || r.revoked || r.accountId !== accountId || !init?.orgAccounts?.[accountId]) return false;
+      r.revoked = true;
+      r.revokedAt = clock.now;
       return true;
     },
     async revokeAccountRole({ rowId, ownerUserId }) {

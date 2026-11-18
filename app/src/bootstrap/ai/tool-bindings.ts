@@ -19,6 +19,7 @@ import type {
   EdoCapability,
   KnowledgeCapability,
   MetricsCapability,
+  RemoteKnowledgeCapability,
   RepoCapability,
   ScheduleCapability,
   ToolImplementation,
@@ -91,6 +92,8 @@ export interface ToolBindingDeps {
   /** Trusted public node URL for canonical provenance on returned reader content. */
   readonly nodePublicOrigin?: string | undefined;
   readonly knowledgeCapability: KnowledgeCapability;
+  /** Other nodes' knowledge for the stock knowledge tools' `node` argument (story.0038). Absent = the argument is refused. */
+  readonly remoteKnowledge?: RemoteKnowledgeCapability | undefined;
   readonly edoCapability: EdoCapability;
   readonly metricsCapability: MetricsCapability;
   readonly webSearchCapability: WebSearchCapability;
@@ -146,10 +149,12 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     }) as AnyToolImplementation,
     [KNOWLEDGE_SEARCH_NAME]: createKnowledgeSearchImplementation({
       knowledgeCapability: deps.knowledgeCapability,
+      remoteKnowledge: deps.remoteKnowledge,
       nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
     [KNOWLEDGE_READ_NAME]: createKnowledgeReadImplementation({
       knowledgeCapability: deps.knowledgeCapability,
+      remoteKnowledge: deps.remoteKnowledge,
       nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
     [KNOWLEDGE_WRITE_NAME]: createKnowledgeWriteImplementation({

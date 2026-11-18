@@ -240,6 +240,18 @@ describe("proxy — API route protection", () => {
 		expect(v3.status).toBe(401);
 	});
 
+	it("lets a compact-JWT service assertion through the perimeter to the handler, and still rejects a one-segment unknown bearer (story.0038)", async () => {
+		mockGetToken.mockResolvedValue(null);
+		const jwt = "Bearer eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJodHRwczovL3guaW8ifQ.c2lnbmF0dXJl";
+
+		const assertion = await proxy(makeAgentRequest("/api/v1/knowledge/index", jwt));
+		expect(assertion.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+
+		const unknown = await proxy(makeAgentRequest("/api/v1/knowledge/index", "Bearer notajwt"));
+		expect(unknown.status).toBe(401);
+	});
+
 	it("rejects a revocable bearer with a bad shape or checksum at the perimeter, before any route handler (CHECKSUM_BEFORE_DB)", async () => {
 		mockGetToken.mockResolvedValue(null);
 		mockLoggerInfo.mockClear();

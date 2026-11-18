@@ -31,7 +31,13 @@ import {
   type AuthzEvent,
   AgentRolesError,
   createPostgresAgentGrantsStore,
+  createPostgresPayerBindingStore,
   buildNodeAiView,
+  decidePayerBinding,
+  ownersForBinding,
+  payerFor,
+  requestPayerBinding,
+  revokePayerBinding,
   type GuardDeps,
   type GrantResource,
   denyRequest,
@@ -40,6 +46,7 @@ import {
   listOwnAccess,
   type PrincipalRef,
   previewAsk,
+  type PrincipalKind,
   principalKindOf,
   requestAccess,
   type RoleState,
@@ -54,6 +61,12 @@ import {
   type WithStore,
   writeExternalPrincipal,
 } from "@cogni/agent-grants";
+import { canonicalRepoRef, ensureOrg, type OrgOwners, type OrgSource } from "@cogni/agent-grants/orgs";
+import {
+  findServicePrincipal,
+  requestServiceAccess,
+  type VerifiedServiceAssertion,
+} from "@cogni/agent-grants/service-auth";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
 import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import type { NodeAdminAuthority } from "@cogni/knowledge-store";
@@ -106,11 +119,22 @@ export interface AgentToolAuthority {
   turnMineOn(
     me: ApprovalCaller,
     input:
-      | { token: string }
+      | { token: string; accountId?: string | undefined }
       | { principalUserId: string; scope: string }
   ): Promise<{ changed: boolean }>;
-  /** The person turns a live ACCOUNT row Off by id, or dismisses a waiting ask by its token. */
-  turnMineOff(me: ApprovalCaller, input: { rowId: string } | { token: string }): Promise<{ changed: boolean }>;
+  /** The person turns a live ACCOUNT row Off by id, or dismisses a waiting ask by its token (with `accountId`, for an org account the person co-owns). */
+  turnMineOff(me: ApprovalCaller, input: { rowId: string } | { token: string; accountId?: string | undefined }): Promise<{ changed: boolean }>;
+  /**
+   * PAYER_IS_AUTHORIZED: a subject (any principal) asks to be billed to `billingAccountId`. Grants nothing. Throws AgentRolesError (`principal_not_found`,
+   * `not_allowed` when a live binding must be turned Off first, `too_many_requests`).
+   */
+  requestPayerBinding(subjectUserId: string, billingAccountId: string): Promise<{ id: string; state: "pending" | "live"; created: boolean }>;
+  /** An owner of the account (an org's owners through the owner source) turns a pending binding On (`approve`) or dismisses it. */
+  decidePayerBinding(me: ApprovalCaller, id: string, approve: boolean): Promise<{ changed: boolean }>;
+  /** An owner of the account turns a binding Off. The subject's next run falls back to its own account. */
+  revokePayerBinding(me: ApprovalCaller, id: string): Promise<{ changed: boolean }>;
+  /** The account a live binding names for this subject, or null. Read on every call, never cached, so Off refuses the next run. */
+  payerFor(subjectUserId: string): Promise<string | null>;
   /**
    * True when `name` matches (case, spacing and look-alike forms ignored) any user's name or any of this node's AI slugs. Used at
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
@@ -121,8 +145,20 @@ export interface AgentToolAuthority {
    * registered AI is never a user without a kind. No wallet, no grant (REGISTRATION_GRANTS_NOTHING).
    */
   registerAgent(input: { userId: string; name: string }): Promise<void>;
-  /** `agent` when the user has an `agent_principals` row, else `human` (KIND_IS_THE_ROW). */
-  principalKind(userId: string): Promise<"agent" | "human">;
+  /** `org` for an org's user, `agent` for any other `agent_principals` row, else `human` (KIND_IS_THE_ROW). */
+  principalKind(userId: string): Promise<PrincipalKind>;
+  /**
+   * The org for an owner source, created if absent (idempotent, one transaction): its users row, its `org` principal and one ordinary billing account. Grants
+   * nothing (REGISTRATION_GRANTS_NOTHING). Throws `InvalidOrgSourceError` for a source that is not a canonical repo.
+   */
+  ensureOrg(source: OrgSource): Promise<{ userId: string; billingAccountId: string }>;
+  /** The principal of a verified service assertion, or null until that service has asked (a call before the ask is a 401). */
+  servicePrincipalOf(assertion: Pick<VerifiedServiceAssertion, "issuer" | "service">): Promise<string | null>;
+  /**
+   * A verified service's ask: creates or reuses its ONE principal and writes ONE pending ask for `scope`. Nothing is granted; an admin turns it On.
+   * Throws AgentRolesError for a scope outside the assertion, an undeclared or unaskable scope, or too many open asks.
+   */
+  requestServiceAccess(assertion: VerifiedServiceAssertion, scope: string): Promise<AskOutcome>;
   /** The wallets bound to this user (`user_bindings`, provider `wallet`), for the self-check (`/api/v1/agent/me`). */
   boundWallets(userId: string): Promise<string[]>;
   /** The agent's own rows by state. */
@@ -191,6 +227,8 @@ export function createAgentToolAuthority(deps: {
   toolBundle: readonly CatalogBoundTool[];
   /** The id of the billing account this person owns, created on first use. A person who never opened credits has none until they decide a grant. */
   ensureBillingAccount?: (userId: string) => Promise<string>;
+  /** Owner sources (0.8.0): with them an account owned by an org is also owned by each of the org's owners at the route door. */
+  owners?: OrgOwners;
 }): AgentToolAuthority {
   const requiresById = buildRequiresById(deps.toolBundle);
   // Declared once, shown everywhere: one derivation feeds the role routes, the ask door and agent discovery.
@@ -250,7 +288,7 @@ export function createAgentToolAuthority(deps: {
       const decision: AuthzDecision = !requires
         ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
         : await withStore((store) =>
-            authorizeCaller(store, adminCheck, { userId, via, requires, accountId })
+            authorizeCaller(store, adminCheck, { userId, via, requires, accountId, owners: deps.owners })
           ).catch(
             (): AuthzDecision => ({
               decision: "deny",
@@ -362,7 +400,7 @@ export function createAgentToolAuthority(deps: {
     async turnMineOn(me, input) {
       // The orchestration (validate, then ensure the person's account, then decide) is the package's; this wrapper only wires the account hook and logs.
       const result = await withStore((store) =>
-        turnMineOn(store, { me, on: input, declaredScopes, scopeKinds, ensureAccount: deps.ensureBillingAccount })
+        turnMineOn(store, { me, on: input, declaredScopes, scopeKinds, ensureAccount: deps.ensureBillingAccount, owners: deps.owners })
       );
       if (result.changed)
         deps.log.info(
@@ -378,7 +416,7 @@ export function createAgentToolAuthority(deps: {
       return { changed: result.changed };
     },
     async turnMineOff(me, input) {
-      const result = await withStore((store) => turnMineOff(store, { me, off: input }));
+      const result = await withStore((store) => turnMineOff(store, { me, off: input, owners: deps.owners }));
       if (result.changed)
         deps.log.info(
           result.via === "row"
@@ -388,6 +426,67 @@ export function createAgentToolAuthority(deps: {
         );
       return { changed: result.changed };
     },
+    async requestPayerBinding(subjectUserId, billingAccountId) {
+      const outcome = await deps.sql.begin((tx) =>
+        requestPayerBinding(createPostgresPayerBindingStore(tx), { subjectUserId, billingAccountId })
+      );
+      return { id: outcome.id, state: outcome.state, created: outcome.created };
+    },
+    async decidePayerBinding(me, id, approve) {
+      // OWNERS_READ_BEFORE_THE_TRANSACTION: the org's owners (a GitHub read) are read before `begin`, so no database connection waits on it.
+      const owners = await ownersForBinding(
+        createPostgresPayerBindingStore(deps.sql),
+        createPostgresAgentGrantsStore(deps.sql),
+        deps.owners,
+        id
+      );
+      const result = await deps.sql.begin((tx) =>
+        decidePayerBinding(createPostgresPayerBindingStore(tx), createPostgresAgentGrantsStore(tx), {
+          me,
+          id,
+          approve,
+          owners,
+        })
+      );
+      if (result.decided)
+        deps.log.info(
+          {
+            event: approve ? EVENT_NAMES.PAYER_BOUND : EVENT_NAMES.PAYER_REVOKED,
+            subject: result.subjectUserId,
+            billingAccountId: result.billingAccountId,
+            ...(approve ? { approvedBy: me.userId } : { revokedBy: me.userId }),
+          },
+          approve ? EVENT_NAMES.PAYER_BOUND : EVENT_NAMES.PAYER_REVOKED
+        );
+      return { changed: result.decided };
+    },
+    async revokePayerBinding(me, id) {
+      const owners = await ownersForBinding(
+        createPostgresPayerBindingStore(deps.sql),
+        createPostgresAgentGrantsStore(deps.sql),
+        deps.owners,
+        id
+      );
+      const result = await deps.sql.begin((tx) =>
+        revokePayerBinding(createPostgresPayerBindingStore(tx), createPostgresAgentGrantsStore(tx), {
+          me,
+          id,
+          owners,
+        })
+      );
+      if (result.revoked)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.PAYER_REVOKED,
+            subject: result.subjectUserId,
+            billingAccountId: result.billingAccountId,
+            revokedBy: me.userId,
+          },
+          EVENT_NAMES.PAYER_REVOKED
+        );
+      return { changed: result.revoked };
+    },
+    payerFor: (subjectUserId) => payerFor(createPostgresPayerBindingStore(deps.sql), subjectUserId),
     async nameTaken(name) {
       const key = agentNameKey(name);
       if (!key) return true;
@@ -409,6 +508,39 @@ export function createAgentToolAuthority(deps: {
       });
     },
     principalKind: (userId) => principalKindOf(deps.sql, userId),
+    async ensureOrg(source) {
+      const org = await deps.sql.begin((tx) => ensureOrg(tx, source));
+      deps.log.info(
+        { event: EVENT_NAMES.ORG_ENSURED, orgUserId: org.userId, sourceRef: canonicalRepoRef(source.ref, source.path) ?? source.ref },
+        EVENT_NAMES.ORG_ENSURED
+      );
+      return org;
+    },
+    servicePrincipalOf: (assertion) => findServicePrincipal(deps.sql, assertion),
+    async requestServiceAccess(assertion, scope) {
+      const { userId, outcome } = await deps.sql.begin((tx) =>
+        requestServiceAccess({
+          tx,
+          store: createPostgresAgentGrantsStore(tx),
+          assertion,
+          scope,
+          declaredScopes,
+          askableScopes,
+          scopeKinds,
+        })
+      );
+      if (outcome.created)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ROLE_REQUESTED,
+            principalUserId: userId,
+            scope,
+            resource: scopeKinds[scope] === "account" ? "account" : "node",
+          },
+          EVENT_NAMES.AGENT_ROLE_REQUESTED
+        );
+      return outcome;
+    },
     async boundWallets(userId) {
       const rows = (await deps.sql`
         SELECT external_id FROM user_bindings

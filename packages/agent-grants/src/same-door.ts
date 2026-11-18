@@ -19,6 +19,7 @@
  */
 
 import { authorize, authorizeAccount } from "./authorize";
+import type { OrgOwners } from "./orgs";
 import type {
   AdminCheck,
   AgentGrantsStore,
@@ -170,6 +171,8 @@ export interface CallerInput {
   readonly requires: ToolRequires;
   /** The account the request names. Required for an `account` scope: no account is a deny. */
   readonly accountId?: string | undefined;
+  /** Owner sources (0.8.0): an account owned by an org is also `owner` to each of the org's owners. */
+  readonly owners?: OrgOwners | undefined;
 }
 
 /** The route door. Same `authorize()` for a bearer (its own principal); subject rules only for a human. */
@@ -187,6 +190,7 @@ export async function authorizeCaller(
       via,
       scope: requires.scope,
       accountId: input.accountId,
+      owners: input.owners,
     });
     return access
       ? { decision: "allow", basis: access }

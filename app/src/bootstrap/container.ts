@@ -20,7 +20,7 @@ import type {
 	RepoCapability,
 	WebSearchCapability,
 } from "@cogni/ai-tools";
-import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { CORE_TOOL_BUNDLE, withoutRemoteNodeArgument } from "@cogni/ai-tools";
 import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
 	createDefaultRegistries,
@@ -152,6 +152,9 @@ import {
 	NODE_LOCAL_TOOL_BUNDLE,
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
+import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
+import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
+import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import {
@@ -300,6 +303,10 @@ export interface Container {
 	nodeAdmin: NodeAdminAuthority;
 	/** Runtime tool authority: principal lookup, guard wiring and role grant/revoke (task.5456). */
 	agentAuthority: AgentToolAuthority;
+	/** Service assertions (story.0038): the optional signer, the verifier over the trusted homes, and the org owner source. Thin wiring; the logic is in `@cogni/agent-grants`. */
+	serviceAuth: ServiceAuth;
+	/** Calling other nodes as this node's AI (story.0038 phase 2): the remote-knowledge capability and the outbound ask. Targets come only from .cogni/service-links.yaml. */
+	serviceLinks: ServiceLinks;
 	/** ADMIN_ACTS_IN_ADMIN: the only door for node-admin writes; callable only with an `AdminSession` minted in `(admin)/`. */
 	nodeAdminPort: NodeAdminPort;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
@@ -1093,9 +1100,23 @@ function createContainer(): Container {
 		log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
 	}
 
+	// story.0038 phase 2: other nodes' knowledge through the stock tools. The signer is read lazily (it is built with `serviceAuth` below).
+	// The homes this node trusts and the nodes its AI calls are Git config for this deployment (.cogni/service-links.yaml); none when the file or the key is missing.
+	const serviceLinksConfig = loadServiceLinksConfig({
+		environment: env.DEPLOY_ENVIRONMENT,
+		repoRoot: env.COGNI_REPO_ROOT,
+		log,
+	});
+	const serviceLinks = createServiceLinks({
+		targets: serviceLinksConfig.targets,
+		signer: () => serviceAuth.getSigner(),
+		log,
+	});
+
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
 	const toolBindings = createToolBindings({
 		nodePublicOrigin: env.APP_BASE_URL,
+		remoteKnowledge: serviceLinks.remoteKnowledge,
 		knowledgeCapability,
 		edoCapability,
 		metricsCapability,
@@ -1122,8 +1143,14 @@ function createContainer(): Container {
 		metrics: () => goalMetrics,
 		goalProgress,
 	});
+	// The knowledge tools advertise their `node` argument only when this deployment lists a link target (.cogni/service-links.yaml).
 	const toolSource = createBoundToolSource(
-		[...CORE_TOOL_BUNDLE, ...NODE_LOCAL_TOOL_BUNDLE],
+		[
+			...(serviceLinks.targets.length > 0
+				? CORE_TOOL_BUNDLE
+				: withoutRemoteNodeArgument(CORE_TOOL_BUNDLE)),
+			...NODE_LOCAL_TOOL_BUNDLE,
+		],
 		{ ...toolBindings, ...metricTools.bindings, ...NODE_LOCAL_TOOL_BINDINGS },
 	);
 
@@ -1241,9 +1268,20 @@ function createContainer(): Container {
 		environment: env.DEPLOY_ENVIRONMENT ?? "local",
 	});
 
+	// story.0038: the signer (this node as a home), the verifier over the trusted homes (this node as a target) and the org owner source.
+	const agentSql = serviceDb.$client as unknown as AgentAuthoritySql;
+	const serviceAuth = createServiceAuth({
+		env,
+		trustedHomes: serviceLinksConfig.trustedHomes,
+		nodeId,
+		sql: agentSql,
+		log,
+	});
+
 	const agentAuthority = createAgentToolAuthority({
 		// Service role: agent_roles / agent_principals are deny-all for the app role.
-		sql: serviceDb.$client as unknown as AgentAuthoritySql,
+		sql: agentSql,
+		owners: serviceAuth.owners,
 		nodeAdmin: adminRoster,
 		log,
 		toolBundle: [...CORE_TOOL_BUNDLE],
@@ -1291,6 +1329,8 @@ function createContainer(): Container {
 		knowledgeContributionService,
 		nodeAdmin: createAdminCheckNodeAdminAuthority(() => agentAuthority.adminCheck),
 		agentAuthority,
+		serviceAuth,
+		serviceLinks,
 		nodeAdminPort: createNodeAdminPort(agentAuthority),
 		knowledgeStorePort,
 		goalMetrics,
