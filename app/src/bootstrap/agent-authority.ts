@@ -40,6 +40,7 @@ import {
   listOwnAccess,
   type PrincipalRef,
   previewAsk,
+  principalKindOf,
   requestAccess,
   type RoleState,
   type NodeAiPermissionView,
@@ -51,6 +52,7 @@ import {
   type SqlTag,
   type ToolRequires,
   type WithStore,
+  writeExternalPrincipal,
 } from "@cogni/agent-grants";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
 import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
@@ -114,6 +116,13 @@ export interface AgentToolAuthority {
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
    */
   nameTaken(name: string): Promise<boolean>;
+  /**
+   * Registration (REGISTRATION_WRITES_THE_PRINCIPAL): one transaction writes the user and its external `agent_principals` row, so a
+   * registered AI is never a user without a kind. No wallet, no grant (REGISTRATION_GRANTS_NOTHING).
+   */
+  registerAgent(input: { userId: string; name: string }): Promise<void>;
+  /** `agent` when the user has an `agent_principals` row, else `human` (KIND_IS_THE_ROW). */
+  principalKind(userId: string): Promise<"agent" | "human">;
   /** The wallets bound to this user (`user_bindings`, provider `wallet`), for the self-check (`/api/v1/agent/me`). */
   boundWallets(userId: string): Promise<string[]>;
   /** The agent's own rows by state. */
@@ -393,6 +402,13 @@ export function createAgentToolAuthority(deps: {
         LIMIT 1`;
       return rows.length > 0;
     },
+    async registerAgent({ userId, name }) {
+      await deps.sql.begin(async (tx) => {
+        await tx`INSERT INTO users (id, name, wallet_address) VALUES (${userId}, ${name}, NULL)`;
+        await writeExternalPrincipal(tx, userId);
+      });
+    },
+    principalKind: (userId) => principalKindOf(deps.sql, userId),
     async boundWallets(userId) {
       const rows = (await deps.sql`
         SELECT external_id FROM user_bindings

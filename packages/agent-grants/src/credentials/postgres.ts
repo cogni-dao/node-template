@@ -20,6 +20,7 @@
  */
 
 import type { SqlTag } from "../postgres";
+import { writeExternalPrincipal } from "../principals";
 import type {
   ConfirmResult,
   CredentialLookup,
@@ -130,7 +131,7 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
         if (f.upgraded) return { ok: false, reason: "already_upgraded" };
         // BINDING_BEFORE_UPGRADE: a principal with node roles and no proven GitHub binding could not recover its identity.
         if (roles && !f.bound) return { ok: false, reason: "binding_required" };
-        await tx`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${userId}) ON CONFLICT (user_id) DO NOTHING`;
+        await writeExternalPrincipal(tx, userId);
         await tx`
           UPDATE agent_credentials SET revoked_at = now(), revoked_reason = 'superseded'
           WHERE user_id = ${userId} AND created_from = 'key_upgrade' AND confirmed_at IS NULL AND revoked_at IS NULL`;

@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fake = vi.hoisted(() => ({
   nameTaken: vi.fn(),
-  insert: vi.fn(),
+  registerAgent: vi.fn(),
   billing: vi.fn(),
 }));
 
@@ -28,10 +28,9 @@ vi.mock("@/bootstrap/http", () => ({
 vi.mock("@/app/_lib/auth/request-identity", () => ({ issueAgentApiKey: () => "cogni_ag_sk_v1_fake" }));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
-    agentAuthority: { nameTaken: fake.nameTaken },
+    agentAuthority: { nameTaken: fake.nameTaken, registerAgent: fake.registerAgent },
     serviceAccountService: { getOrCreateBillingAccountForUser: fake.billing },
   }),
-  resolveServiceDb: () => ({ insert: () => ({ values: fake.insert }) }),
 }));
 
 import { POST } from "@/app/api/v1/agent/register/route";
@@ -57,7 +56,9 @@ describe("agent register: the name is what an admin reads", () => {
     const res = await register("  Helper   bot ");
     expect(res.status).toBe(201);
     expect(fake.nameTaken).toHaveBeenCalledWith("Helper bot");
-    expect(fake.insert).toHaveBeenCalledWith(expect.objectContaining({ name: "Helper bot", walletAddress: null }));
+    // The user and its agent_principals row are one registerAgent call (task.0144): a fresh AI is never a user without a kind.
+    expect(fake.registerAgent).toHaveBeenCalledWith({ userId: expect.any(String), name: "Helper bot" });
+    expect((await res.json()).userId).toBe(fake.registerAgent.mock.calls[0]?.[0].userId);
   });
 
   it("a name that matches an existing user or this node's AI is 409 name_taken and writes nothing", async () => {
@@ -65,7 +66,7 @@ describe("agent register: the name is what an admin reads", () => {
     const res = await register("node-ai");
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "name_taken" });
-    expect(fake.insert).not.toHaveBeenCalled();
+    expect(fake.registerAgent).not.toHaveBeenCalled();
     expect(fake.billing).not.toHaveBeenCalled();
   });
 
@@ -75,7 +76,7 @@ describe("agent register: the name is what an admin reads", () => {
       expect(res.status, JSON.stringify(bad)).toBe(400);
     }
     expect(fake.nameTaken).not.toHaveBeenCalled();
-    expect(fake.insert).not.toHaveBeenCalled();
+    expect(fake.registerAgent).not.toHaveBeenCalled();
   });
 
   it("an empty or over-long name is 400 as before", async () => {
