@@ -6,7 +6,7 @@
  * Purpose: Unit tests for UsageFact Zod schemas (strict + hints).
  * Scope: Validates schema accept/reject behavior for billing-authoritative vs external executors. Does not test billing commit logic or DB writes.
  * Invariants:
- *   - USAGE_FACT_VALIDATED: Strict schema enforces usageUnitId for inproc/sandbox
+ *   - USAGE_FACT_VALIDATED: Strict schema enforces usageUnitId for inproc
  *   - GRAPHID_REQUIRED: graphId must be namespaced (providerId:graphName)
  * Side-effects: none
  * Links: packages/ai-core/src/usage/usage.ts, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.graph-execution.md
@@ -17,7 +17,6 @@ import { UsageFactHintsSchema, UsageFactStrictSchema } from "@cogni/ai-core";
 import {
   buildExternalUsageFact,
   buildInprocUsageFact,
-  buildSandboxUsageFact,
 } from "@tests/_fakes";
 import { describe, expect, it } from "vitest";
 
@@ -28,11 +27,6 @@ import { describe, expect, it } from "vitest";
 describe("UsageFactStrictSchema", () => {
   it("accepts valid inproc fact with all required fields", () => {
     const result = UsageFactStrictSchema.safeParse(buildInprocUsageFact());
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts valid sandbox fact", () => {
-    const result = UsageFactStrictSchema.safeParse(buildSandboxUsageFact());
     expect(result.success).toBe(true);
   });
 
@@ -158,13 +152,6 @@ describe("UsageFactHintsSchema", () => {
   it("rejects billing-authoritative executor types (inproc)", () => {
     const result = UsageFactHintsSchema.safeParse(
       buildExternalUsageFact({ executorType: "inproc" })
-    );
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects billing-authoritative executor types (sandbox)", () => {
-    const result = UsageFactHintsSchema.safeParse(
-      buildExternalUsageFact({ executorType: "sandbox" })
     );
     expect(result.success).toBe(false);
   });

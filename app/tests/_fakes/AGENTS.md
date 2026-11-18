@@ -47,7 +47,7 @@ Deterministic test doubles for unit tests with no I/O dependencies.
   - Tool test helpers (createTestBoundToolRuntime, createTestToolSource, createEventCollector)
   - Graph executor fakes (createImmediateGraphExecutor, createDelayedReturnGraphExecutor)
   - Request builders (createCompletionRequest, createChatRequest)
-  - UsageFact builders (buildInprocUsageFact, buildSandboxUsageFact, buildExternalUsageFact)
+  - UsageFact builders (buildInprocUsageFact, buildExternalUsageFact)
   - TEST_GRAPH_NAME constant ("langgraph:cogni")
 - **Files considered API:** index.ts, ids.ts, payments/fakes.ts, payments/mock-services.ts, ai/fakes.ts, ai/tool-builders.ts, ai/graph-executor-fakes.ts, ai/request-builders.ts, ai/usage-fact-builders.ts, test-context.ts
 
@@ -82,4 +82,4 @@ import { createPaymentAttempt, createIntentAttempt } from "@tests/_fakes"
 - Payment builders provide 8 specialized functions for all PaymentAttempt states
 - FakeClock used in payment tests for time-based logic (expiration, timeouts)
 - Request builders include graphName by default (required since P0.75); use these instead of manual JSON.stringify
-- UsageFact builders produce schema-valid facts for strict (inproc/sandbox) and hints (external) schemas
+- UsageFact builders produce schema-valid facts for strict (inproc) and hints (external) schemas

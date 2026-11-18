@@ -157,18 +157,6 @@ export {
 	type PaymentErrorCode,
 	TxHashAlreadyBoundPortError,
 } from "./payment-attempt.port";
-export type {
-	ProxyBillingEntry,
-	SandboxErrorCode,
-	SandboxLlmProxyConfig,
-	SandboxMount,
-	SandboxNetworkMode,
-	SandboxProgramContract,
-	SandboxRunnerPort,
-	SandboxRunResult,
-	SandboxRunSpec,
-	SandboxVolumeMount,
-} from "./sandbox-runner.port";
 // Ingestion ports - re-exported from @cogni/ingestion-core package
 export type {
 	ActivityEvent,

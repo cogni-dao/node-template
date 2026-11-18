@@ -38,20 +38,6 @@ export function buildInprocUsageFact(
 }
 
 /**
- * Create a valid UsageFact for billing-authoritative sandbox executor.
- * Passes UsageFactStrictSchema by default.
- */
-export function buildSandboxUsageFact(
-  overrides: Partial<UsageFact> = {}
-): UsageFact {
-  return buildInprocUsageFact({
-    executorType: "sandbox",
-    graphId: "sandbox:agent",
-    ...overrides,
-  });
-}
-
-/**
  * Create a valid UsageFact for BYO (codex/ollama) inproc executor.
  * Passes UsageFactStrictSchema. Uses deterministic usageUnitId and costUsd: 0.
  */

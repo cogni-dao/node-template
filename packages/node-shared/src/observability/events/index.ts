@@ -161,8 +161,6 @@ export const EVENT_NAMES = {
 	ADAPTER_RIPGREP_ERROR: "adapter.ripgrep.error",
 	ADAPTER_RIPGREP_SEARCH: "adapter.ripgrep.search",
 	ADAPTER_RIPGREP_OPEN: "adapter.ripgrep.open",
-	// TODO: remove once all node openclaw-gateway-clients are deleted (per-node PRs)
-	ADAPTER_OPENCLAW_GATEWAY_ERROR: "adapter.openclaw_gateway.error",
 	ADAPTER_TIGERBEETLE_ERROR: "adapter.tigerbeetle.error",
 
 	// Ledger Domain
@@ -190,10 +188,6 @@ export const EVENT_NAMES = {
 
 	// Governance Domain
 	GOVERNANCE_SYNC_COMPLETE: "governance.sync.complete",
-
-	// Sandbox Execution Events
-	SANDBOX_EXECUTION_STARTED: "sandbox.execution.started",
-	SANDBOX_EXECUTION_COMPLETE: "sandbox.execution.complete",
 
 	// Treasury Domain
 	TREASURY_SNAPSHOT_COMPLETE: "feature.treasury_snapshot.complete",

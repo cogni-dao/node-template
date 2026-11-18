@@ -30,7 +30,7 @@ export interface GovernanceSchedule {
   cron: string;
   timezone: string;
   entrypoint: string;
-  /** Namespaced graph id to run; absent → the sandbox agent (back-compat). */
+  /** Namespaced graph id to run; absent → the sync skips a non-ledger charter with a warning. */
   graph?: string;
   /** Platform model id for the `graph` run (set iff `graph` is set). */
   model?: string;
@@ -314,7 +314,7 @@ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
   const ledger = extractLedgerConfig(spec);
 
   // Declared entries are copied field-by-field: an entry without `graph`/`model`
-  // keeps exactly the pre-task.5282 shape (sandbox agent, no new keys).
+  // keeps exactly the pre-task.5282 shape (no new keys).
   const schedules: GovernanceSchedule[] = declared.map((s) => ({
     charter: s.charter,
     cron: s.cron,

@@ -109,7 +109,7 @@ function resolveDisplayName(modelGroup: string): string {
 /**
  * Construct a UsageFact from a LiteLLM callback entry.
  *
- * Key design: when spend_logs_metadata.run_id is available (InProc, Sandbox),
+ * Key design: when spend_logs_metadata.run_id is available (InProc),
  * the computed source_reference matches the direct billing path → idempotent.
  * When run_id is missing (Gateway), litellm_call_id is used as fallback runId.
  * Per RECEIPT_WRITES_REQUIRE_CALL_ID_AND_COST: adapter path does not write receipts

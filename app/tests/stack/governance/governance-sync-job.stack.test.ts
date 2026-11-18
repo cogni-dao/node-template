@@ -11,18 +11,15 @@
  * @public
  */
 
-import { createHash } from "node:crypto";
 import { executionGrants } from "@cogni/db-schema";
 import {
   COGNI_SYSTEM_BILLING_ACCOUNT_ID,
   COGNI_SYSTEM_PRINCIPAL_USER_ID,
 } from "@cogni/node-shared";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
-import { getExecutionRequestsByPrefix } from "@tests/_fixtures/scheduling/db-helpers";
 import {
   getTestTemporalClient,
   getTestTemporalConfig,
-  triggerSchedule,
 } from "@tests/_fixtures/temporal/client";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -88,19 +85,19 @@ describe("Governance Schedule Sync Job (Stack)", () => {
 
     expect(grants).toHaveLength(1);
     expect(grants[0]?.billingAccountId).toBe(COGNI_SYSTEM_BILLING_ACCOUNT_ID);
-    expect(grants[0]?.scopes).toContain("graph:execute:sandbox:openclaw");
+    expect(grants[0]?.scopes).toContain("graph:execute:ledger:ingest");
     expect(grants[0]?.revokedAt).toBeNull();
 
     // Verify schedule was created in Temporal (use getHandle directly —
     // schedule.list() has eventual consistency and may lag after create)
     const client = await getTestTemporalClient();
-    const handle = client.schedule.getHandle("governance:heartbeat");
+    const handle = client.schedule.getHandle("governance:ledger_ingest");
     const rawDesc = await handle.describe();
     expect(rawDesc).toBeDefined();
-    createdScheduleIds.push("governance:heartbeat");
+    createdScheduleIds.push("governance:ledger_ingest");
 
     // Verify schedule details using adapter
-    const desc = await adapter.describeSchedule("governance:heartbeat");
+    const desc = await adapter.describeSchedule("governance:ledger_ingest");
     expect(desc).toBeDefined();
     expect(desc?.isPaused).toBe(false);
     expect(desc?.nextRunAtIso).toBeDefined();
@@ -145,7 +142,7 @@ describe("Governance Schedule Sync Job (Stack)", () => {
     expect(grantsAfterSecond).toHaveLength(1);
     expect(grantsAfterSecond[0]?.id).toBe(firstGrantId);
 
-    // Schedules should still be 2 (heartbeat + ledger_ingest, not duplicated)
+    // Schedules should still be 1 (the repo-spec-synthesized ledger_ingest, not duplicated)
     const schedulesAfterSecond: string[] = [];
     for await (const summary of client.schedule.list()) {
       if (summary.scheduleId.startsWith("governance:")) {
@@ -153,7 +150,7 @@ describe("Governance Schedule Sync Job (Stack)", () => {
       }
     }
 
-    expect(schedulesAfterSecond).toHaveLength(2);
+    expect(schedulesAfterSecond).toHaveLength(1);
   });
 
   it("pauses schedules removed from config", async () => {
@@ -184,70 +181,5 @@ describe("Governance Schedule Sync Job (Stack)", () => {
     const desc = await adapter.describeSchedule("governance:old-charter");
     expect(desc).toBeDefined();
     expect(desc?.isPaused).toBe(true);
-  });
-
-  it("executes a governance schedule end-to-end", async () => {
-    await runGovernanceSchedulesSyncJob();
-    const temporalScheduleId = "governance:heartbeat";
-    createdScheduleIds.push(temporalScheduleId);
-
-    const before = await getExecutionRequestsByPrefix(`${temporalScheduleId}:`);
-    await triggerSchedule(temporalScheduleId);
-
-    const client = await getTestTemporalClient();
-    const start = Date.now();
-    let created = before;
-    while (Date.now() - start < 8_000) {
-      created = await getExecutionRequestsByPrefix(`${temporalScheduleId}:`);
-      if (created.length > before.length) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-
-    if (created.length <= before.length) {
-      const desc = await client.schedule
-        .getHandle(temporalScheduleId)
-        .describe();
-      const recentActionCount = desc.info.recentActions.length;
-      const lastAction = desc.info.recentActions.at(-1);
-      const lastScheduledAt =
-        lastAction?.scheduledAt?.toISOString?.() ?? "unknown";
-      throw new Error(
-        `No execution_requests row observed for ${temporalScheduleId} after trigger. ` +
-          `recentActions=${recentActionCount}, lastScheduledAt=${lastScheduledAt}. ` +
-          "Likely worker backlog or stale scheduler-worker process."
-      );
-    }
-
-    const latest = created.sort((a, b) => {
-      return b.createdAt.getTime() - a.createdAt.getTime();
-    })[0];
-    expect(latest).toBeDefined();
-    if (!latest) {
-      throw new Error("Missing execution_request row for governance run");
-    }
-
-    expect(latest.idempotencyKey.startsWith(`${temporalScheduleId}:`)).toBe(
-      true
-    );
-    // Regression guard: before stateKey wiring, governance runs would finalize
-    // as internal errors almost immediately from gateway execution.
-    if (latest.ok === false && latest.errorCode === "internal") {
-      throw new Error(
-        "Governance run finalized with internal error (possible stateKey regression)"
-      );
-    }
-
-    const expectedRequestHash = createHash("sha256")
-      .update(
-        JSON.stringify({
-          graphId: "sandbox:openclaw",
-          input: { message: "HEARTBEAT", model: "kimi-k2.5" },
-        }),
-        "utf8"
-      )
-      .digest("hex");
-    expect(latest.requestHash).toBe(expectedRequestHash);
   });
 });

@@ -16,8 +16,9 @@
  *   - GRAPH_REAPPLY: existing graph charters receive their full desired action on every reconcile.
  *   - GRAPH_CHARTER (task.5282): a non-ledger charter that declares `graph` (+ `model`) runs that
  *     catalog graph via GraphRunWorkflow with `{ messages: [entrypoint], modelRef: platform/model }`
- *     on its own `graph:execute:{graph}` grant. A charter WITHOUT `graph` keeps the sandbox:openclaw
- *     input, graph id, and governance grant byte-for-byte; LEDGER_INGEST ignores `graph`.
+ *     on its own `graph:execute:{graph}` grant. A non-ledger charter WITHOUT `graph` has nothing to
+ *     run: it is skipped with a warning (never an error) and an existing copy is paused by the
+ *     prune step. LEDGER_INGEST ignores `graph`.
  * Side-effects: IO (Temporal RPC via ScheduleControlPort, grant creation via ensureGovernanceGrant / ensureGraphGrant)
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/scheduler.md, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/governance-council.md, .cogni/repo-spec.yaml
  * @public
@@ -34,13 +35,6 @@ import {
   type ScheduleControlPort,
   type ScheduleDescription,
 } from "../ports/schedule-control.port";
-
-/** Graph ID for OpenClaw sandbox execution */
-const GOVERNANCE_GRAPH_ID = "sandbox:openclaw";
-
-/** Default model for governance agent runs */
-// TODO(task.0068): Use default_flash from LiteLLM config metadata instead of hardcoded model
-const GOVERNANCE_MODEL = "kimi-k2.5";
 
 /**
  * Provider key for platform (LiteLLM) models in a graph-run `modelRef` — the same
@@ -63,8 +57,8 @@ export interface GovernanceScheduleEntry {
   /**
    * Optional namespaced catalog graph id (e.g. `langgraph:cogni-decide`). When set,
    * the charter runs THAT graph via GraphRunWorkflow with a graph-run input
-   * (`messages` + `modelRef`). Absent → `sandbox:openclaw`, byte-for-byte unchanged.
-   * Ignored for LEDGER_INGEST.
+   * (`messages` + `modelRef`). Absent → the charter is skipped with a warning
+   * (LEDGER_INGEST excepted, which ignores `graph`).
    */
   graph?: string;
   /** Platform model id for the `graph` run. Required when `graph` is set. */
@@ -114,7 +108,7 @@ export interface UpsertGovernanceScheduleRowParams {
   ownerUserId: string;
   /** Execution grant ID for authorization */
   executionGrantId: string;
-  /** Graph ID (e.g., "sandbox:openclaw") */
+  /** Graph ID (e.g., "langgraph:cogni-decide") */
   graphId: string;
   /** Graph input payload */
   input: JsonValue;
@@ -130,10 +124,9 @@ export interface GovernanceScheduleSyncDeps {
   ensureGovernanceGrant(): Promise<string>;
   /**
    * Idempotent: ensures a grant scoped `graph:execute:{graphId}` exists for the system
-   * principal, returns grantId. Used only for charters that declare `graph` — the
-   * sandbox governance grant (and therefore every pre-existing schedule, LEDGER_INGEST
-   * included) is untouched. Absent → graph charters are skipped with a warning (a run
-   * on the sandbox-scoped grant would 403 at the graph-run route's scope check).
+   * principal, returns grantId. Used only for charters that declare `graph`; the
+   * governance grant (LEDGER_INGEST's) is untouched. Absent → graph charters are
+   * skipped with a warning.
    */
   ensureGraphGrant?(graphId: string): Promise<string>;
   /** Upsert governance schedule row in DB, returns dbScheduleId (UUID) */
@@ -310,12 +303,16 @@ export async function syncGovernanceSchedules(
       graphId = schedule.graph;
       grantId = await deps.ensureGraphGrant(schedule.graph);
     } else {
-      desiredInput = {
-        message: schedule.entrypoint,
-        model: GOVERNANCE_MODEL,
-      };
-      graphId = GOVERNANCE_GRAPH_ID;
-      grantId = governanceGrantId;
+      // No `graph` declared on a non-ledger charter: there is no program to run.
+      // Warn and skip (repo-spec is shared across forks; missing config never blocks).
+      log.warn(
+        { scheduleId },
+        "Skipping governance schedule: charter declares no `graph`"
+      );
+      // Not added to the live set → an existing copy is paused by the prune step.
+      configScheduleIds.delete(scheduleId);
+      result.skipped.push(scheduleId);
+      continue;
     }
 
     // Upsert DB row first — governance schedules are first-class DB rows

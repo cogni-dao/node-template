@@ -16,9 +16,6 @@ const nextConfig: NextConfig = {
       ? ["@cogni/langgraph-graphs", "@opentelemetry/sdk-node"]
       : []),
     // Native addons / build-tool incompatible
-    "dockerode",
-    "ssh2",
-    "cpu-features",
     "tigerbeetle-node",
     "@cogni/financial-ledger",
     // Codex: subprocess spawns native binary — standalone tracing prunes platform optional deps

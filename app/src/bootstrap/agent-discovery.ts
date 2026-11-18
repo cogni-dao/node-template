@@ -45,9 +45,6 @@ export function createAgentCatalog(): {
     ? [new LangGraphDevAgentCatalogProvider()]
     : [new LangGraphInProcAgentCatalogProvider()];
 
-  // The sandbox runtime stays executable by graph id but is not advertised (story.0028):
-  // pickers and schedules list only the published core programs.
-
   return new AggregatingAgentCatalog(providers);
 }
 
