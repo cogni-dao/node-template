@@ -28,7 +28,6 @@ const ASK_ALLOWLIST: ReadonlyArray<{ path: string; reason: string }> = [
   { path: "app/_facades/work/items.server.ts", reason: "work-items facade: priority 0/1" }, // task.0115
   { path: "bootstrap/node-admin-gate.ts", reason: "the node-admin check itself" }, // task.0115
   { path: "bootstrap/agent-authority.ts", reason: "tool-guard admin check" }, // task.0115
-  { path: "app/(admin)/layout.tsx", reason: "layout gate" }, // task.0115
   { path: "app/(admin)/admin/payments/money-plane.server.ts", reason: "payments page gate" }, // task.0115
   { path: "auth.ts", reason: "session isApprover flag" }, // task.0115
   { path: "shared/config/repoSpec.server.ts", reason: "isDaoAdmin and isLedgerApprover definitions" }, // task.0115
