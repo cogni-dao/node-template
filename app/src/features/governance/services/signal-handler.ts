@@ -189,10 +189,16 @@ export async function handleSignal(
       const block = await deps.rpcClient.getBlock({
         blockHash: receipt.blockHash,
       });
+      const signalAtMs =
+        block?.timestamp == null ? Number.NaN : Number(block.timestamp) * 1000;
+      // A null, zero or NaN block time would fail the ordering comparisons open: refuse (execution_error) instead.
+      if (!Number.isFinite(signalAtMs) || signalAtMs <= 0) {
+        throw new Error("block timestamp unavailable");
+      }
       const result = await executeRoleSignal(
         signal,
         txHash,
-        Number(block.timestamp) * 1000,
+        signalAtMs,
         deps.roles,
         log
       );

@@ -6,8 +6,8 @@
  * Purpose: Apply a passed DAO `grant:role` / `revoke:role` signal to the node's grant rows, through the package's own `grantRole` / `revokeRole`.
  * Scope: Composition only. The package still validates the scope against the node's declarations, the kind, the principal and NO_SELF_APPROVAL.
  * Invariants:
- *   - DAO_IS_THE_APPROVER: the row's approver is the cogni_system principal, the identity the node's app acts as when it executes the DAO's vote.
- *     `agent_roles.approved_by` is a users FK, so the signal's transaction hash is not on the row; the caller logs it (`agent_role.granted`).
+ *   - DAO_IS_THE_APPROVER: the row's approver is the seeded DAO principal (users row `dao`, migration 0045), never cogni_system (the node's tenant, which
+ *     never approves). `agent_roles.approved_by` is a users FK, so the signal's transaction hash is not on the row; the caller logs it (`agent_role.granted`).
  *   - ORDER_BY_CHAIN_TIME: a grant is refused when a revoke is at or after the signal's block time; a revoke is a no-op when the live row was granted after it.
  *   - AI_NEVER_SELF_APPROVES: the approver is never the AI principal (a node AI has its own seeded user); the package refuses `self_approval` anyway.
  * Side-effects: IO (store writes)
@@ -23,11 +23,11 @@ import {
   resolveInternalPrincipal,
   type ScopeKinds,
 } from "@cogni/agent-grants";
-import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
+import { DAO_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 
 /** The node app executing a passed vote. The package's `admin` proof is an opaque object; here its presence says "the DAO decided". */
 const DAO_CALLER: ApprovalCaller = {
-  userId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
+  userId: DAO_PRINCIPAL_USER_ID,
   admin: Object.freeze({ via: "dao_signal" }),
 };
 
@@ -44,6 +44,7 @@ export async function applyDaoRole(
   }
 ): Promise<{ principalUserId: string | null; changed: boolean; stale: boolean }> {
   const { principalSlug, scope, declaredScopes, scopeKinds, signalAtMs } = input;
+  // Row times are the database's processing time; the signal's time is its block time (see ORDER_BY_CHAIN_TIME).
   // ORDER_BY_CHAIN_TIME: a signal older than a later decision on the same (principal, scope) is a no-op, so a redelivered grant (restart, another replica)
   // cannot undo a later revoke, and a redelivered revoke cannot undo a later grant. The row times are the database's, the signal's is the block's.
   const userId = await resolveInternalPrincipal(store, principalSlug);

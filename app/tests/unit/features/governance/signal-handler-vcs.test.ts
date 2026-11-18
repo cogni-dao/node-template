@@ -20,7 +20,7 @@ import { cogniActionAbi } from "@/features/governance/signal-parser";
 const DAO = "0x00000000000000000000000000000000000000d0" as Address;
 const SIGNAL = "0x00000000000000000000000000000000000000a1" as Address;
 
-function mergeLog(): { address: Address; topics: Hex[]; data: Hex } {
+function signalLog(action = "merge", target = "change", resource = "12", params = "{}"): { address: Address; topics: Hex[]; data: Hex } {
   const topics = encodeEventTopics({
     abi: cogniActionAbi,
     eventName: "CogniAction",
@@ -28,11 +28,11 @@ function mergeLog(): { address: Address; topics: Hex[]; data: Hex } {
   }) as Hex[];
   const extra = encodeAbiParameters(
     [{ type: "uint256" }, { type: "uint64" }, { type: "string" }],
-    [1n, 0n, "{}"]
+    [1n, 0n, params]
   );
   const data = encodeAbiParameters(
     [{ type: "string" }, { type: "string" }, { type: "string" }, { type: "string" }, { type: "string" }, { type: "bytes" }],
-    ["github", "https://github.com/cogni-dao/node-template", "merge", "change", "12", extra]
+    ["github", "https://github.com/cogni-dao/node-template", action, target, resource, extra]
   );
   return { address: SIGNAL, topics, data };
 }
@@ -43,7 +43,7 @@ describe("signal-handler without a GitHub App", () => {
   it("returns vcs_unavailable at warn and never reaches the RPC-error path", async () => {
     const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), child: () => log } as unknown as Logger;
     const rpcClient = {
-      getTransactionReceipt: async () => ({ status: "success", logs: [mergeLog()] }),
+      getTransactionReceipt: async () => ({ status: "success", logs: [signalLog()] }),
     } as unknown as PublicClient;
     const result = await handleSignal("0xtx", {
       rpcClient,
@@ -53,5 +53,26 @@ describe("signal-handler without a GitHub App", () => {
     expect(result).toMatchObject({ success: false, action: "vcs_unavailable" });
     expect(log.error).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalled();
+  });
+
+  it("refuses a role signal whose block time is missing instead of ordering it as time zero", async () => {
+    const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), child: () => log } as unknown as Logger;
+    const applyRole = vi.fn();
+    const rpcClient = {
+      getTransactionReceipt: async () => ({
+        status: "success",
+        blockHash: "0xb",
+        logs: [signalLog("grant", "role", "work_item:transition", '{"principal":"node-ai"}')],
+      }),
+      getBlock: async () => ({ timestamp: null }),
+    } as unknown as PublicClient;
+    const result = await handleSignal("0xtx2", {
+      rpcClient,
+      daoConfig: { signal_contract: SIGNAL, dao_contract: DAO, chain_id: "8453" },
+      roles: { applyRole },
+      log,
+    });
+    expect(result).toMatchObject({ success: false, action: "execution_error" });
+    expect(applyRole).not.toHaveBeenCalled();
   });
 });

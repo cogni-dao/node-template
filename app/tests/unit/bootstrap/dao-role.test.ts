@@ -10,7 +10,7 @@
  * @public
  */
 
-import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
+import { COGNI_SYSTEM_PRINCIPAL_USER_ID, DAO_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { describe, expect, it } from "vitest";
 
 import { AgentRolesError } from "@cogni/agent-grants";
@@ -28,12 +28,14 @@ const base = {
 const store = () => memoryStore({ principals: { "node-ai": AI } });
 
 describe("bootstrap/dao-role", () => {
-  it("grant writes exactly one live row whose approver is the DAO principal", async () => {
+  it("grant writes exactly one live row whose approver is the DAO principal, never cogni_system", async () => {
     const s = store();
     const r = await applyDaoRole(s, { ...base, action: "grant" });
     expect(r.changed).toBe(true);
     expect(s.roles).toHaveLength(1);
-    expect(s.roles[0]).toMatchObject({ principal: AI, scope: base.scope, approvedBy: COGNI_SYSTEM_PRINCIPAL_USER_ID, revoked: false });
+    expect(s.roles[0]).toMatchObject({ principal: AI, scope: base.scope, approvedBy: DAO_PRINCIPAL_USER_ID, revoked: false });
+    // The defect: the DAO vote was recorded as the node tenant, so an audit could not tell a DAO vote from a bug.
+    expect(s.roles[0]?.approvedBy).not.toBe(COGNI_SYSTEM_PRINCIPAL_USER_ID);
     expect(await s.hasLiveRole(AI, base.scope)).toBe(true);
   });
 

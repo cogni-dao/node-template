@@ -21,3 +21,11 @@ export const NODE_AI_PRINCIPAL_USER_ID =
 export const PRIORITIZER_PRINCIPAL_SLUG = "prioritizer" as const;
 export const PRIORITIZER_PRINCIPAL_USER_ID =
   "00000000-0000-4000-a000-0000000a0002" as const;
+
+/**
+ * `dao`: the approver of a role row a passed DAO vote wrote (migration 0045_seed_dao_principal.sql). A `users` row with no wallet and no
+ * credential, and deliberately no `agent_principals` row (it is not an AI). Never the node's tenant (`cogni_system`).
+ */
+export const DAO_PRINCIPAL_NAME = "dao" as const;
+export const DAO_PRINCIPAL_USER_ID =
+  "00000000-0000-4000-a000-0000000a00d0" as const;
