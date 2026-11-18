@@ -21,14 +21,16 @@
  *     -> needs_implementation_review happens only for a non-story whose `pr` names a deliverable. A missing goal label is never
  *     invented: the item stays and is listed.
  *   - LEDGER_TARGET_HOLDS: with `--from-ledger`, an item whose ledger target is needs_triage (it was blocked) is not advanced.
- *   - NEVER_FABRICATES_REVIEW: it never records an `implementation_review`, a `design_review` or a `validation`. Those need a real
- *     reviewer or validator, so the review queue it prints is the hand-off.
+ *   - FIXTURES_ARE_LABELLED: only with `--backfill`, an item in needs_implementation_review whose PR is MERGED gets the fixed
+ *     legacy fixtures (`LEGACY_FIXTURE`): an implementation_review approve and a validation `notes` with one UNPROVEN row at the
+ *     merge head, then a closeout `done` when the target has that stage, and walks to done. Every fixture says it is not a real
+ *     review or validation, and cites no scorecard, so the convergence KPI never counts it. An open PR gets nothing.
  *   - GATE_DECIDES: a refused move (409 `gate_unmet`) is printed with its verbatim `missing` and the item stays where it is.
  *   - CONCURRENCY_ONE: writes serialize on the node's writer lock anyway; a 503 `lock_contended` is retried with backoff.
  * Side-effects: IO (HTTP reads and, with --apply, writes to the target; stdout; exit code 1 when a write was refused).
  * Usage: COGNI_NODE_API_KEY=... node scripts/work-items/reconcile-legacy.mjs --target https://<node-origin>
  *   (--legacy | --ids task.0055,story.0044 | --from-ledger <file>) [--set-pr task.0055=<pr-url>,...] [--apply] [--key-env NAME]
- *   [--ledger-md]   (--ledger-md prints the plan as ledger-atom table rows, for the review before --apply)
+ *   [--cite <atom id the target hub holds; default work-status-ladder; "" sends none>] [--backfill] [--ledger-md]   (--ledger-md prints the plan as ledger-atom table rows, for the review before --apply)
  *   <file> is the ledger atom markdown (rows start `| [id](...)`), or JSON: an array of ids or `{ items: [{ id }] }`.
  * Links: hub work-legacy-reconcile, work-cutover-ledger, work-status-ladder, work-gate-enforcement
  */
@@ -45,6 +47,8 @@ const { values } = parseArgs({
 		apply: { type: "boolean", default: false },
 		legacy: { type: "boolean", default: false },
 		"ledger-md": { type: "boolean", default: false },
+		backfill: { type: "boolean", default: false },
+		cite: { type: "string", default: "work-status-ladder" },
 		"key-env": { type: "string", default: "COGNI_NODE_API_KEY" },
 	},
 });
@@ -130,6 +134,66 @@ function readSetPr() {
 		map.set(id, url);
 	}
 	return map;
+}
+
+/** The fixed legacy fixtures (CEO direction, 2026-11-18): tiny, labelled, never a real verdict. */
+const LEGACY_FIXTURE = {
+	note: "Legacy backfill fixture: merged before the artifact ladder (story.0047); not a real review or validation.",
+	body: "Legacy backfill fixture. This item's PR merged before work items required artifacts (story.0047). No review or validation was recorded under the ladder; this fixture only lets the item reach its real stage. It is not a review, a validation or a closeout.",
+	rows: [
+		{
+			tweak: "LEGACY BACKFILL",
+			human: "—",
+			ai: "—",
+			loki: "—",
+			trace: "—",
+			overall: "🟡 UNPROVEN",
+			reason: "Fixture: merged before the artifact ladder (story.0047); never validated under it.",
+		},
+	],
+};
+
+/** A pull request's merge state and head from the public GitHub API. */
+async function prFacts(url) {
+	const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/([0-9]+)$/.exec(url ?? "");
+	if (!m) return undefined;
+	const res = await fetch(`https://api.github.com/repos/${m[1]}/${m[2]}/pulls/${m[3]}`, {
+		headers: {
+			accept: "application/vnd.github+json",
+			"user-agent": "cogni-reconcile-legacy",
+			...(process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
+		},
+		signal: AbortSignal.timeout(30_000),
+	});
+	if (!res.ok) return undefined;
+	const pr = await res.json();
+	return { merged: Boolean(pr.merged_at), head: String(pr.head?.sha ?? "").toLowerCase() };
+}
+
+async function fixture(item, kind, extra) {
+	const res = await call("POST", `/work/items/${item.id}/artifacts`, { kind, note: LEGACY_FIXTURE.note, body: LEGACY_FIXTURE.body, ...extra });
+	if (res.status === 201) return true;
+	refusals.push({ id: item.id, to: `${kind} fixture`, status: res.status, errorCode: res.json.errorCode });
+	console.log(`  REFUSED ${item.id} ${kind} fixture: ${res.status} ${res.json.errorCode ?? ""} ${JSON.stringify(res.json.issues ?? res.json.message ?? "")}`);
+	return false;
+}
+
+/** `--backfill`: a merged legacy PR item walks review -> validation -> merge (-> closeout) -> done on labelled fixtures. */
+async function backfill(item) {
+	if (item.status !== "needs_implementation_review" || isStory(item)) return;
+	const facts = await prFacts(item.pr);
+	if (!facts?.merged || !/^[0-9a-f]{40}$/.test(facts.head)) return;
+	const subject = `${item.pr}@${facts.head}`;
+	const reason = "Legacy backfill fixture: merged before the artifact ladder (story.0047); walks to its real stage.";
+	if (!(await fixture(item, "implementation_review", { subject, verdict: "approve" }))) return;
+	if (!(await patch(item, { status: "needs_validation" }, reason))) return;
+	if (!(await fixture(item, "validation", { subject, verdict: "notes", rows: LEGACY_FIXTURE.rows }))) return;
+	if (!(await patch(item, { status: "needs_merge" }, reason))) return;
+	if (await patch(item, { status: "done" }, reason, "path")) return;
+	// A target with the closeout stage: merge -> needs_closeout -> done on a closeout fixture.
+	if (!(await patch(item, { status: "needs_closeout" }, reason))) return;
+	if (!(await fixture(item, "closeout", { subject: `work:${item.id}`, verdict: "done" }))) return;
+	await patch(item, { status: "done" }, reason);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -220,7 +284,7 @@ const refusals = [];
 /** PATCH one item; a 409 is recorded verbatim and returns false. `retryOn`: a 409 `missing` that the caller repairs, not recorded. */
 async function patch(item, set, reason, retryOn) {
 	if (words(reason) > 25) throw new Error(`reason over 25 words: ${reason}`);
-	const res = await call("PATCH", `/work/items/${item.id}`, { reason, cites: [{ id: "work-status-ladder" }], set });
+	const res = await call("PATCH", `/work/items/${item.id}`, { reason, ...(values.cite ? { cites: [{ id: values.cite }] } : {}), set });
 	if (res.status === 200) return true;
 	const missing = typeof res.json.missing === "string" ? res.json.missing : undefined;
 	if (retryOn && res.status === 409 && missing === retryOn) return false;
@@ -308,7 +372,13 @@ for (const id of ids) {
 	if (values["ledger-md"])
 		console.log(`| [${id}](${target}/work/items/${id}) | ${item.type} | ${item.status} r${item.revision} | ${p.pr || "-"} | ${nextAction} | ${p.missing.join("; ") || "-"} |`);
 	else console.log([id, item.status, targetStage, nextAction, p.missing.join("; ") || "-"].join("\t"));
-	if (values.apply) await walk(state, setPr, ledgerTargets.get(id));
+	if (values.apply) {
+		await walk(state, setPr, ledgerTargets.get(id));
+		if (values.backfill) {
+			const fresh = await read(id);
+			if (!fresh.error) await backfill(fresh.item);
+		}
+	}
 }
 
 // Final read: counts by resulting stage and the review queue.
@@ -334,7 +404,7 @@ for (const id of ids) {
 }
 console.log(`\nSUMMARY ${values.apply ? "after apply" : "now (dry run)"}`);
 for (const [stage, n] of Object.entries(counts).sort((a, b) => LADDER.indexOf(a[0]) - LADDER.indexOf(b[0]))) console.log(`  ${stage}\t${n}`);
-console.log(`\nREVIEW QUEUE (${queue.length}): needs a real implementation_review at the PR head; this script never records one`);
+console.log(`\nREVIEW QUEUE (${queue.length}): needs a real implementation_review at the PR head (an open PR, or a run without --backfill)`);
 for (const row of queue) console.log(`  ${row}`);
 console.log(`\nSTAYED IN TRIAGE (${stayed.length})`);
 for (const row of stayed) console.log(`  ${row}`);
