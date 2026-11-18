@@ -114,6 +114,8 @@ export interface AgentToolAuthority {
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
    */
   nameTaken(name: string): Promise<boolean>;
+  /** The wallets bound to this user (`user_bindings`, provider `wallet`), for the self-check (`/api/v1/agent/me`). */
+  boundWallets(userId: string): Promise<string[]>;
   /** The agent's own rows by state. */
   listOwnAccess(
     principalUserId: string
@@ -147,7 +149,8 @@ export function createAdminCheck(
   return async (subjectUserId) => {
     const rows = (await sql`
       SELECT external_id FROM user_bindings
-      WHERE user_id = ${subjectUserId} AND provider = 'wallet'`) as ReadonlyArray<{
+      WHERE user_id = ${subjectUserId} AND provider = 'wallet'
+      ORDER BY external_id LIMIT 20`) as ReadonlyArray<{
       external_id: string;
     }>;
     if (rows.length === 0) {
@@ -389,6 +392,13 @@ export function createAgentToolAuthority(deps: {
         WHERE lower(regexp_replace(btrim(slug), '[[:space:]]+', ' ', 'g')) = ${key}
         LIMIT 1`;
       return rows.length > 0;
+    },
+    async boundWallets(userId) {
+      const rows = (await deps.sql`
+        SELECT external_id FROM user_bindings
+        WHERE user_id = ${userId} AND provider = 'wallet'
+        ORDER BY external_id LIMIT 20`) as ReadonlyArray<{ external_id: string }>;
+      return rows.map((row) => row.external_id);
     },
     listOwnAccess: (principalUserId) =>
       withStore((store) => listOwnAccess(store, principalUserId)),

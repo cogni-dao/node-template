@@ -51,6 +51,12 @@ describe("authorize: subject lock only narrows", () => {
   it("no configured admins is authz_unavailable", async () => {
     expect(await authorize(store(), async () => "unavailable", { principalId: "p1", subjectUserId: "u1", requires: node("admin") })).toMatchObject({ decision: "deny", code: "authz_unavailable" });
   });
+  it("with no subject, an admin tool checks the principal's own wallet and never passes on the role row alone", async () => {
+    const seen: string[] = [];
+    expect(await authorize(store(), async (who) => { seen.push(who); return "denied"; }, { principalId: "p1", requires: node("admin") })).toMatchObject({ decision: "deny", reason: "subject_not_admin" });
+    expect(await authorize(store(), async () => "allow", { principalId: "p1", requires: node("admin") })).toMatchObject({ decision: "allow" });
+    expect(seen).toEqual(["p1"]);
+  });
   it("an admin-check throw is authz_unavailable", async () => {
     expect(await authorize(store(), async () => { throw new Error("x"); }, { principalId: "p1", subjectUserId: "u1", requires: node("admin") })).toMatchObject({ decision: "deny", code: "authz_unavailable" });
   });

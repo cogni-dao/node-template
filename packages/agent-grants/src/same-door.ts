@@ -195,13 +195,12 @@ export async function authorizeCaller(
       : { decision: "deny", code: "policy_denied", reason: "no_account_access" };
   }
   if (via === "bearer") {
-    // The bearer IS the principal. `own` data belongs to it, so it is also the subject there. `admin`-subject scopes
-    // pass on the role row alone: a DAO admin wrote that row, and an AI identity has no admin check yet (item I2).
+    // The bearer IS the principal. `own` data belongs to it, so it is also the subject there. An `admin`-subject scope
+    // runs the one admin check on the bearer's own bound wallet (ONE_ADMIN_CHECK), never a pass on the role row alone.
     return authorize(store, adminCheck, {
       principalId: userId,
       subjectUserId: requires.kind === "own" ? userId : undefined,
-      requires:
-        requires.subject === "admin" ? { ...requires, subject: "member" } : requires,
+      requires,
     });
   }
   if (requires.subject === "member") return { decision: "allow", basis: "signed_in" };

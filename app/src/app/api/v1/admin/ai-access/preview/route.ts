@@ -7,7 +7,7 @@
  *   back the waiting ask as a table row, so the page highlights it.
  * Scope: HTTP validation and the mint. Looks the ask up; decides nothing and writes nothing.
  * Invariants:
- *   - ADMIN_ACTS_IN_ADMIN / HUMAN_ROUTES_SESSION_ONLY: the mint (`requireAdminSession`) runs first; any `Authorization` header is 403.
+ *   - ADMIN_ACTS_IN_ADMIN / ONE_ADMIN_CHECK: the mint (`requireAdminSession`) runs first, for a session or a bearer.
  *   - NON_DISCLOSING: a wrong-kind (an account token), used, expired or unknown token is ONE answer: 404 `not_found`.
  *   - TOKEN_IN_BODY_ONLY: the token is POSTed, never put in a URL path or query; the response carries no token.
  * Side-effects: IO (service-role database read), logs `admin.action`

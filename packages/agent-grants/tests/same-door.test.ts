@@ -50,8 +50,12 @@ describe("authorizeCaller (the route door)", () => {
   it("a store outage on a bearer is authz_unavailable", async () => {
     expect(await authorizeCaller(memoryStore({ failing: true }), denyAdmin, { userId: "agent", via: "bearer", requires: node() })).toMatchObject({ code: "authz_unavailable" });
   });
-  it("a bearer passes an admin-subject scope on the role row alone (an AI admin check arrives with item I2)", async () => {
-    expect(await authorizeCaller(withRole(), denyAdmin, { userId: "agent", via: "bearer", requires: node("admin") })).toMatchObject({ decision: "allow" });
+  it("a bearer meets the one admin check on an admin-subject scope: its own wallet decides, never the role row alone", async () => {
+    const seen: string[] = [];
+    const check = (verdict: "allow" | "denied") => async (who: string) => { seen.push(who); return verdict; };
+    expect(await authorizeCaller(withRole(), check("denied"), { userId: "agent", via: "bearer", requires: node("admin") })).toMatchObject({ decision: "deny", reason: "subject_not_admin" });
+    expect(await authorizeCaller(withRole(), check("allow"), { userId: "agent", via: "bearer", requires: node("admin") })).toMatchObject({ decision: "allow" });
+    expect(seen).toEqual(["agent", "agent"]);
   });
   it("a bearer is the subject for own-data scopes", async () => {
     const store = memoryStore({ roles: [{ principal: "agent", scope: "schedule:manage" }] });
