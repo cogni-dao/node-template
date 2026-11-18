@@ -10,8 +10,8 @@
  * Invariants:
  *   - ADMIN_FROM_USER_BINDINGS: the human's wallet(s) come from `user_bindings` (provider = wallet), never from the
  *     request. Any bound admin wallet passes; no wallet is denied; no configured admins is unavailable.
- *   - AGENTS_HOLD_NO_WALLET (a payout guard, not an authority rule): an agent user has no wallet binding, so today it fails `adminCheck`.
- *     Admin is any principal the DAO approves (AUTHORITY_IS_NOT_KIND); an approved AI identity is item I2, so none passes yet.
+ *   - AGENT_WALLET_IS_NOT_A_PAYEE (a payout guard, not an authority rule): an agent may bind a wallet (`/api/v1/identity/wallet/bind`), so it can pass
+ *     `adminCheck` when the DAO lists that wallet (AUTHORITY_IS_NOT_KIND). Claimant resolution skips agent-owned wallets and the database refuses a payout leaf for one.
  *   - DECLARED_SCOPES_FROM_CONTRACTS: the scopes a role may name are exactly those the node's tool contracts declare.
  *   - NO_SECRETS_IN_LOGS: `agent_tool.authz` carries ids, tool, decision and code only.
  * Side-effects: IO (service-role database reads and writes)
@@ -40,6 +40,7 @@ import {
   listOwnAccess,
   type PrincipalRef,
   previewAsk,
+  principalKindOf,
   requestAccess,
   type RoleState,
   type NodeAiPermissionView,
@@ -51,6 +52,7 @@ import {
   type SqlTag,
   type ToolRequires,
   type WithStore,
+  writeExternalPrincipal,
 } from "@cogni/agent-grants";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
 import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
@@ -114,6 +116,13 @@ export interface AgentToolAuthority {
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
    */
   nameTaken(name: string): Promise<boolean>;
+  /**
+   * Registration (REGISTRATION_WRITES_THE_PRINCIPAL): one transaction writes the user and its external `agent_principals` row, so a
+   * registered AI is never a user without a kind. No wallet, no grant (REGISTRATION_GRANTS_NOTHING).
+   */
+  registerAgent(input: { userId: string; name: string }): Promise<void>;
+  /** `agent` when the user has an `agent_principals` row, else `human` (KIND_IS_THE_ROW). */
+  principalKind(userId: string): Promise<"agent" | "human">;
   /** The wallets bound to this user (`user_bindings`, provider `wallet`), for the self-check (`/api/v1/agent/me`). */
   boundWallets(userId: string): Promise<string[]>;
   /** The agent's own rows by state. */
@@ -393,6 +402,13 @@ export function createAgentToolAuthority(deps: {
         LIMIT 1`;
       return rows.length > 0;
     },
+    async registerAgent({ userId, name }) {
+      await deps.sql.begin(async (tx) => {
+        await tx`INSERT INTO users (id, name) VALUES (${userId}, ${name})`;
+        await writeExternalPrincipal(tx, userId);
+      });
+    },
+    principalKind: (userId) => principalKindOf(deps.sql, userId),
     async boundWallets(userId) {
       const rows = (await deps.sql`
         SELECT external_id FROM user_bindings

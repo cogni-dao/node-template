@@ -62,8 +62,8 @@ export const OPEN_STATUSES = [
   "needs_implement",
   "needs_implementation_review",
   "needs_validation",
-  "needs_closeout",
   "needs_merge",
+  "needs_closeout",
   "blocked",
 ] as const;
 

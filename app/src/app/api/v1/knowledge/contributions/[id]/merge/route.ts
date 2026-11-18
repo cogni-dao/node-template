@@ -4,8 +4,9 @@
 /**
  * Module: `@app/api/v1/knowledge/contributions/[id]/merge/route`
  * Purpose: POST to merge a contribution branch into main.
- * Scope: Auth-protected POST. Session users only (no bearer agents); merging requires node admin.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION, MERGE_IS_NODE_ADMIN (bug.0044).
+ * Scope: Auth-protected POST. Merging requires the one admin check (`agentAuthority.adminCheck`, ONE_ADMIN_CHECK), whatever the credential;
+ *   a pure admin door: no scope or role row, identical for a session and a bearer (the route declares `bearerWrite` so DENY_BY_DEFAULT lets the service decide).
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, ONE_ADMIN_CHECK (any credential), MERGE_IS_NODE_ADMIN (bug.0044).
  * Side-effects: IO (HTTP response, Doltgres dolt_merge + dolt_commit via container service)
  * @public
  */
@@ -22,6 +23,8 @@ export const POST = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "knowledge.contributions.merge",
+    bearerWrite:
+      "merging runs the one admin check (agentAuthority.adminCheck) on the caller's own user id in the service, identical for a session and a bearer; no scope or role row",
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, request, sessionUser, context) => {

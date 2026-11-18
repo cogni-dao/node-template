@@ -302,6 +302,20 @@
       "when": 1794687330422,
       "tag": "0042_agent_account_grants_durable",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794968014773,
+      "tag": "0043_agent_wallet_is_not_a_payee",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794968422913,
+      "tag": "0044_backfill_agent_principals",
+      "breakpoints": true
     }
   ]
 }

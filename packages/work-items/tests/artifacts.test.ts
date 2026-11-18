@@ -471,6 +471,33 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
     expect(other.body).toMatchObject({ issues: [{ path: ["subject"], message: "subject names a different work item" }] });
   });
 
+  it("closeout names THIS item, a done verdict, a note and a url or a body (story.0047)", async () => {
+    const closeout = {
+      kind: "closeout",
+      subject: "work:task.0028",
+      verdict: "done",
+      note: "KPI up 3 points after one window",
+      url: COMMENT,
+    };
+    const w = world();
+    const own = await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", closeout);
+    expect(own.status).toBe(201);
+    expect(w.stored[0]).toMatchObject({ kind: "closeout", verdict: "done", author: "closer-1" });
+    const bodyOnly = { ...closeout, body: "Refined atom k-1; removed the flag in PR 12" };
+    const { url: _url, ...noUrl } = bodyOnly;
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", noUrl)).status).toBe(201);
+    const { note: _note, ...noNote } = closeout;
+    const missingNote = await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", noNote);
+    expect(missingNote.status).toBe(400);
+    expect(missingNote.body).toMatchObject({ issues: [{ path: ["note"] }] });
+    const { url: _u, ...bare } = closeout;
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", bare)).status).toBe(400);
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", { ...closeout, verdict: "pass" })).status).toBe(400);
+    expect(
+      (await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", { ...closeout, subject: "work:task.0099" })).status
+    ).toBe(400);
+  });
+
   it("build subject: only this hub's own origin is accepted (case and a trailing slash in the config do not matter)", async () => {
     const live = (origin: string) => ({
       kind: "validation",

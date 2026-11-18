@@ -116,21 +116,20 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
         // One upgrade at a time per user: the checks below and the insert must see one snapshot.
         await tx`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
         const facts = await tx`
-          SELECT (u.wallet_address IS NOT NULL
-                  OR EXISTS (SELECT 1 FROM user_bindings b WHERE b.user_id = u.id AND b.provider = 'wallet')) AS wallet,
-                 (SELECT p.kind FROM agent_principals p WHERE p.user_id = u.id) AS kind,
+          SELECT (SELECT p.kind FROM agent_principals p WHERE p.user_id = u.id) AS kind,
                  EXISTS (SELECT 1 FROM user_bindings b WHERE b.user_id = u.id AND b.provider = 'github') AS bound,
                  EXISTS (SELECT 1 FROM agent_credentials c WHERE c.user_id = u.id
                            AND agent_credential_state(c) IN ('active', 'renew_only')) AS upgraded
           FROM users u WHERE u.id = ${userId}`;
         const f = facts[0];
         if (!f) return { ok: false, reason: "unknown_user" };
-        if (f.wallet) return { ok: false, reason: "wallet_user" };
+        // A human has no agent_principals row (registration writes one for every agent, 0044 backfills earlier ones), so it cannot obtain an agent key.
+        // An agent may hold a bound wallet. The reason code keeps its name (`wallet_user`, 403 `not_agent_key`) for existing callers.
+        if (!f.kind) return { ok: false, reason: "wallet_user" };
         if (f.kind === "internal") return { ok: false, reason: "internal_principal" };
         if (f.upgraded) return { ok: false, reason: "already_upgraded" };
         // BINDING_BEFORE_UPGRADE: a principal with node roles and no proven GitHub binding could not recover its identity.
         if (roles && !f.bound) return { ok: false, reason: "binding_required" };
-        await tx`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${userId}) ON CONFLICT (user_id) DO NOTHING`;
         await tx`
           UPDATE agent_credentials SET revoked_at = now(), revoked_reason = 'superseded'
           WHERE user_id = ${userId} AND created_from = 'key_upgrade' AND confirmed_at IS NULL AND revoked_at IS NULL`;

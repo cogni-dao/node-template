@@ -22,13 +22,12 @@ import {
 	isPendingIntent,
 	linkIntentStore,
 } from "@cogni/node-shared";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Discord from "next-auth/providers/discord";
 import Google from "next-auth/providers/google";
 import { getCsrfToken } from "next-auth/react";
-import { SiweMessage } from "siwe";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { createBinding } from "@/adapters/server/identity/create-binding";
 import {
@@ -36,6 +35,7 @@ import {
 	resolveAttestedGithubUser,
 } from "@/app/_facades/identity/operator-attested-binding.server";
 import { verifyOperatorAttestation } from "@/app/_lib/auth/operator-attestation";
+import { siweMessageAddress, verifySiwe } from "@/app/_lib/auth/siwe-verify";
 import { reconcileSettlementsAfterBinding } from "@/bootstrap/settlement-runtime";
 import { getNodeId, isLedgerApprover } from "@/shared/config";
 import {
@@ -161,7 +161,6 @@ export const authOptions: NextAuthOptions = {
 						return null;
 					}
 
-					const siwe = new SiweMessage(credentials.message as string);
 					const nextAuthUrl = new URL(
 						process.env.NEXTAUTH_URL ?? "http://localhost:3000",
 					);
@@ -192,19 +191,20 @@ export const authOptions: NextAuthOptions = {
 					getLog().info(
 						{
 							nonce,
-							address: new SiweMessage(credentials.message as string).address,
+							address: siweMessageAddress(credentials.message as string),
 							msgHash: messageHash,
 						},
 						"[SIWE] Authorize attempt",
 					);
 
-					const result = await siwe.verify({
+					const result = await verifySiwe({
+						message: credentials.message as string,
 						signature: credentials.signature as string,
 						domain: nextAuthUrl.host,
 						nonce,
 					});
 
-					if (!result.success) {
+					if (!result.ok) {
 						getLog().error(
 							{ error: result.error },
 							"[SIWE] Verification failed",
@@ -212,16 +212,28 @@ export const authOptions: NextAuthOptions = {
 						return null;
 					}
 
-					const { data: fields } = result;
+					const fields = result;
 					// Pre-auth wallet lookup must use serviceDb (BYPASSRLS) because
 					// the user ID is unknown before authentication completes.
 					// Per DATABASE_RLS_SPEC.md: SIWE auth callback uses app_service role.
 					const db = getServiceDb();
 
-					// Check for existing user
-					const existingUser = await db.query.users.findFirst({
-						where: eq(users.walletAddress, fields.address),
+					// ONE_WALLET_ONE_KEY: the wallet is the identity, so resolve through the normalized binding first. A wallet bound to
+					// any principal (an agent bound it first) signs in as that same user; no second user is created.
+					const bound = await db.query.userBindings.findFirst({
+						where: and(
+							eq(userBindings.provider, "wallet"),
+							sql`lower(${userBindings.externalId}) = ${fields.walletKey}`,
+						),
 					});
+					// Legacy rows with no binding: fall back to the display column, compared lowercase.
+					const existingUser = bound
+						? await db.query.users.findFirst({
+								where: eq(users.id, bound.userId),
+							})
+						: await db.query.users.findFirst({
+								where: sql`lower(${users.walletAddress}) = ${fields.walletKey}`,
+							});
 					let user = existingUser;
 
 					if (!user) {
@@ -260,7 +272,7 @@ export const authOptions: NextAuthOptions = {
 					// Record wallet binding (idempotent — skips if already bound).
 					// Failure must not block login — binding is supplementary, not auth-critical.
 					try {
-						await createBinding(db, user.id, "wallet", fields.address, {
+						await createBinding(db, user.id, "wallet", fields.walletKey, {
 							method: "siwe",
 							domain: nextAuthUrl.host,
 						});

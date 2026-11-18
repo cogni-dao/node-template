@@ -194,7 +194,10 @@ async function walkCode(pr) {
 	await patch("validation -> merge without a validation", X, "needs_merge", unmet("validation"));
 	await artifact("validation artifact (pass)", X, { kind: "validation", subject: `${pr.url}@${pr.head}`, verdict: "pass", url: pr.url, rows: PASS_ROWS });
 	await patch("needs_validation -> needs_merge", X, "needs_merge", OK, MUST);
-	await patch("needs_merge -> done (the pr is merged)", X, "done", OK, MUST);
+	await patch("needs_merge -> needs_closeout (the pr is merged)", X, "needs_closeout", OK, MUST);
+	await patch("closeout -> done without a closeout artifact", X, "done", unmet("closeout"));
+	await artifact("closeout artifact (done)", X, { kind: "closeout", subject: `work:${X}`, verdict: "done", note: "ladder walk: synthetic, no KPI reading", body: "ladder walk closeout" });
+	await patch("needs_closeout -> done", X, "done", OK, MUST);
 	live.delete(X); // terminal: it stays, labelled synthetic
 	await patch("done is terminal", X, "needs_triage", unmet("terminal"));
 }

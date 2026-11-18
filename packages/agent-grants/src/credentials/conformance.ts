@@ -27,6 +27,9 @@ import type { CredentialStore } from "./types";
 
 /** What a user needs to have before an upgrade. The harness creates it in its backing store. */
 export interface ConformanceFacts {
+  /** No `agent_principals` row: a person, never an agent. Every other user is an outside agent (an external principal row). */
+  human?: boolean;
+  /** A bound wallet. An agent may hold one; it never decides an upgrade. */
   wallet?: boolean;
   internal?: boolean;
   /** A live `agent_roles` row. */
@@ -249,11 +252,17 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
       expect(await store.everConfirmed(userId)).toBe(true); // revoking must not bring the signed key back
     });
 
-    it("refuses a wallet user, an internal principal and an unknown user", async () => {
-      const { store, ids } = await h.setup({ w: { wallet: true }, i: { internal: true } });
+    it("refuses a human (no principal row, with or without a wallet), an internal principal and an unknown user", async () => {
+      const { store, ids } = await h.setup({ w: { human: true, wallet: true }, h: { human: true }, i: { internal: true } });
       expect(await upgradeSignedKey(store, { userId: ids.w as string })).toEqual({ ok: false, reason: "wallet_user" });
+      expect(await upgradeSignedKey(store, { userId: ids.h as string })).toEqual({ ok: false, reason: "wallet_user" });
       expect(await upgradeSignedKey(store, { userId: ids.i as string })).toEqual({ ok: false, reason: "internal_principal" });
       expect(await upgradeSignedKey(store, { userId: crypto.randomUUID() })).toEqual({ ok: false, reason: "unknown_user" });
+    });
+
+    it("an agent that bound a wallet before upgrading still upgrades (a wallet binding is not what marks a human)", async () => {
+      const { store, ids } = await h.setup({ agentWithWallet: { wallet: true } });
+      expect(await upgradeSignedKey(store, { userId: ids.agentWithWallet as string })).toMatchObject({ ok: true });
     });
 
     it("BINDING_BEFORE_UPGRADE: a principal with roles and no GitHub binding is refused; with a binding it passes", async () => {

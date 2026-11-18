@@ -40,12 +40,14 @@ export const ARTIFACT_KINDS = [
   "design_review",
   "implementation_review",
   "validation",
+  "closeout",
 ] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
 export const TRIAGE_VERDICTS = ["research", "design", "implement"] as const;
 export const REVIEW_VERDICTS = ["approve", "request_changes"] as const;
 export const VALIDATION_VERDICTS = ["pass", "notes", "fail"] as const;
+export const CLOSEOUT_VERDICTS = ["done"] as const;
 
 /** The verdicts each kind accepts. */
 export const VERDICTS_BY_KIND: Readonly<
@@ -55,6 +57,7 @@ export const VERDICTS_BY_KIND: Readonly<
   design_review: REVIEW_VERDICTS,
   implementation_review: REVIEW_VERDICTS,
   validation: VALIDATION_VERDICTS,
+  closeout: CLOSEOUT_VERDICTS,
 };
 
 /** Most artifacts a list returns, and most scorecard rows one validation holds. */
@@ -151,10 +154,11 @@ export const SUBJECT_FORMS_BY_KIND: Readonly<
   design_review: ["knowledge"],
   implementation_review: ["pr", "knowledge"],
   validation: ["pr", "build"],
+  closeout: ["work"],
 };
 
 /**
- * `work:<itemId>` (triage), `knowledge:<contrib-id>@<head commit>`, `<PR URL>@<40-hex head>` or
+ * `work:<itemId>` (triage, closeout), `knowledge:<contrib-id>@<head commit>`, `<PR URL>@<40-hex head>` or
  * `<origin>@<40-hex buildSha>`; `undefined` for anything else.
  */
 export function parseArtifactSubject(subject: string): ArtifactSubject | undefined {
@@ -228,7 +232,7 @@ export const WorkItemArtifactInputSchema = z
         code: "custom",
         path: ["subject"],
         message:
-          "subject must be work:<itemId> (triage), knowledge:<contrib-id>@<head commit>, <PR URL>@<40-hex head> or <origin>@<40-hex buildSha>",
+          "subject must be work:<itemId> (triage or closeout), knowledge:<contrib-id>@<head commit>, <PR URL>@<40-hex head> or <origin>@<40-hex buildSha>",
       });
     } else if (!SUBJECT_FORMS_BY_KIND[value.kind].includes(subject.form)) {
       ctx.addIssue({
@@ -252,12 +256,20 @@ export const WorkItemArtifactInputSchema = z
         message: "rows belong to a validation only",
       });
     }
-    // A review or validation must point at its full text: a PR comment or scorecard (`url`), or `body` when none exists.
+    // A review, validation or closeout must point at its full text: a PR comment or scorecard (`url`), or `body` when none exists.
     if (value.kind !== "triage" && value.url === undefined && value.body === undefined) {
       ctx.addIssue({
         code: "custom",
         path: ["url"],
         message: `a ${value.kind} needs a url or a body`,
+      });
+    }
+    // A closeout states its KPI reading after one window, or the measurement gap, in `note`.
+    if (value.kind === "closeout" && value.note === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["note"],
+        message: "a closeout needs a note: the KPI reading after one window, or the measurement gap",
       });
     }
   });
@@ -295,6 +307,7 @@ export const WorkItemArtifactsLatestSchema = z.object({
   design_review: WorkItemArtifactSummarySchema.optional(),
   implementation_review: WorkItemArtifactSummarySchema.optional(),
   validation: WorkItemArtifactSummarySchema.optional(),
+  closeout: WorkItemArtifactSummarySchema.optional(),
   unavailable: z.literal(true).optional(),
 });
 export type WorkItemArtifactsLatest = z.infer<typeof WorkItemArtifactsLatestSchema>;
@@ -779,9 +792,9 @@ export async function readWorkItemArtifact(
 
 export const workItemsArtifactsCreateOperation = {
   id: "work.items.artifacts.create.v1",
-  summary: "Record a review or validation artifact on a work item",
+  summary: "Record a review, validation or closeout artifact on a work item",
   description:
-    "Writes one immutable artifact: a triage (routes research, design or implement), a design review, an implementation review or a validation (with the canonical scorecard rows). The author is the authenticated principal, recorded for audit; no server check compares it with the subject's author. The server stamps the item's revision and computes PASS-grade from the rows. A review or validation needs a `url` or a `body`. Recording never changes the item's status.",
+    "Writes one immutable artifact: a triage (routes research, design or implement), a design review, an implementation review, a validation (with the canonical scorecard rows) or a closeout (verdict `done`, subject `work:<id>`, a `note` with the KPI reading after one window or the measurement gap, and a `url` or `body` linking the knowledge refined and the cleanup). The author is the authenticated principal, recorded for audit; no server check compares it with the subject's author. The server stamps the item's revision and computes PASS-grade from the rows. A review, validation or closeout needs a `url` or a `body`. Recording never changes the item's status.",
   input: WorkItemArtifactInputSchema,
   output: z.object({ artifact: WorkItemArtifactSchema }),
 } as const;

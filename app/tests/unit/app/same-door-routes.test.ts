@@ -45,7 +45,7 @@ describe("same-door routes", () => {
     for (const tool of declared) expect(tool && tool in DECLARED, String(tool)).toBe(true);
   });
 
-  it("S4: no route-twin scope is admin-subject until an AI admin check exists (item I2); otherwise any bearer with a role row would pass it", () => {
+  it("S4: no route-twin scope is admin-subject: a bearer on a scoped door needs a role row, and admin routes take the pure admin check instead (task.0144)", () => {
     const contracts = new Map([...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map((t) => [t.contract.name, t.contract]));
     for (const tool of Object.keys(SAME_DOOR_ROUTES))
       expect(contracts.get(tool)?.requires?.subject, tool).not.toBe("admin");
@@ -65,7 +65,7 @@ describe("same-door routes", () => {
         for (let i = 1; i < parts.length; i += 2) {
           const chunk = (parts[i + 1] ?? "").slice(0, 600);
           const routeId = /routeId:\s*"([^"]+)"/.exec(chunk)?.[1] ?? `${file}#${parts[i]}`;
-          if (/sameDoor:/.test(chunk) || routeId in DEFERRED_WRITE_ROUTES || routeId in OPEN_BY_DESIGN_ROUTES) continue;
+          if (/sameDoor:|bearerWrite:/.test(chunk) || routeId in DEFERRED_WRITE_ROUTES || routeId in OPEN_BY_DESIGN_ROUTES) continue;
           unaccounted.push(routeId);
         }
       }

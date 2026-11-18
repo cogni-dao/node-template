@@ -8,9 +8,10 @@
  * Scope: Pure data constants and validators. Does not perform I/O.
  * Invariants:
  *   - ONE_ORDER: triage < research < design < design_review < implement < implementation_review < validation < merge <
- *     done. Each item uses the stages on its path; `evaluateMove` computes the path.
+ *     closeout < done. Each item uses the stages on its path; `evaluateMove` computes the path.
  *   - TRANSITION_TABLE_COMPLETE: every WorkItemStatus has an entry; the key order is the board column order. The legacy
- *     `blocked` and `needs_closeout` stay readable until every node has migrated; nothing enters them.
+ *     `blocked` stays readable until every node has migrated; nothing enters it. `needs_closeout` is a real stage after
+ *     merge (story.0047), exited by a `closeout` artifact.
  *   - BACK_IS_FREE_FORWARD_IS_ONE: a move to `needs_triage` or an earlier stage, or to `cancelled`, is structurally allowed;
  *     a forward move is allowed only to a stage that can follow its source on some path.
  *   - TERMINAL_STAYS_TERMINAL: `done` and `cancelled` have no exits.
@@ -32,16 +33,16 @@ export const STATUS_ORDER = [
   "needs_implementation_review",
   "needs_validation",
   "needs_merge",
+  "needs_closeout",
   "done",
 ] as const satisfies readonly WorkItemStatus[];
 
 /** Statuses the package still reads but never enters (until every fleet node has migrated). */
 export const LEGACY_STATUSES = [
-  "needs_closeout",
   "blocked",
 ] as const satisfies readonly WorkItemStatus[];
 
-/** Position in the ladder, or -1 for a status outside it (`blocked`, `needs_closeout`, `cancelled`). */
+/** Position in the ladder, or -1 for a status outside it (`blocked`, `cancelled`). */
 export function statusRank(status: WorkItemStatus): number {
   return (STATUS_ORDER as readonly WorkItemStatus[]).indexOf(status);
 }
@@ -54,7 +55,7 @@ export function isLegacyStatus(status: WorkItemStatus): boolean {
 /**
  * The stages a forward move may reach from each stage on SOME path. The exact next stage depends on the item's path
  * (`evaluateMove`): triage routes to research, design or implement; implement goes to review or, for a story, validation;
- * a knowledge-only item skips validation.
+ * a knowledge-only item skips validation; a story goes from validation to closeout; closeout is the last stage before done.
  */
 export const FORWARD_TARGETS: ReadonlyMap<WorkItemStatus, readonly WorkItemStatus[]> =
   new Map<WorkItemStatus, readonly WorkItemStatus[]>([
@@ -64,8 +65,9 @@ export const FORWARD_TARGETS: ReadonlyMap<WorkItemStatus, readonly WorkItemStatu
     ["needs_design_review", ["needs_implement"]],
     ["needs_implement", ["needs_implementation_review", "needs_validation"]],
     ["needs_implementation_review", ["needs_validation", "needs_merge"]],
-    ["needs_validation", ["needs_merge", "done"]],
-    ["needs_merge", ["done"]],
+    ["needs_validation", ["needs_merge", "needs_closeout"]],
+    ["needs_merge", ["needs_closeout"]],
+    ["needs_closeout", ["done"]],
   ]);
 
 const BACK_OR_CANCEL = (from: WorkItemStatus): WorkItemStatus[] => {
@@ -91,13 +93,12 @@ export const VALID_TRANSITIONS: ReadonlyMap<
     ]
   ),
   ["done", []],
-  // Legacy: only a move back to triage or a cancel.
+  // Legacy (`blocked`): only a move back to triage or a cancel.
   ["blocked", ["needs_triage", "cancelled"]],
-  ["needs_closeout", ["needs_triage", "cancelled"]],
   ["cancelled", []],
 ]);
 
-/** Whether the move may exist at all. Terminal states have no exits; nothing enters a legacy status. */
+/** Whether the move may exist at all. Terminal states have no exits; nothing enters `blocked`. */
 export function isValidTransition(
   from: WorkItemStatus,
   to: WorkItemStatus

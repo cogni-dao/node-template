@@ -119,8 +119,6 @@ export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
  */
 export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
   "work.items.delete": "retired (HTTP 410); no capability to gate",
-  "knowledge.contributions.close": "contribution lifecycle; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
-  "knowledge.contributions.merge": "already admin-session gated in the service; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
   "knowledge.domains.update": "domain registry writes; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
   "knowledge.domains.delete": "domain registry writes; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
 };

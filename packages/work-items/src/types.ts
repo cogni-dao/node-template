@@ -41,7 +41,7 @@ export type ActorKind = "human" | "ai" | "either";
 
 // ── Status ────────────────────────────────────────────
 // The status ladder (task.0122, hub work-cicd-gates-design): each needs_* status is one queue.
-// `needs_closeout` is legacy: no write enters it (migration only); items leave by a gated move up or a free move down.
+// `needs_closeout` is the stage after merge (story.0047), exited by a `closeout` artifact. `blocked` is legacy: no write enters it; items leave by a free move down or a cancel.
 
 export type WorkItemStatus =
   | "needs_triage"
@@ -51,8 +51,8 @@ export type WorkItemStatus =
   | "needs_implement"
   | "needs_implementation_review"
   | "needs_validation"
-  | "needs_closeout"
   | "needs_merge"
+  | "needs_closeout"
   | "done"
   | "blocked"
   | "cancelled";

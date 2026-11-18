@@ -102,7 +102,6 @@ import {
 } from "@cogni/db-schema/attribution";
 import { userBindings } from "@cogni/db-schema/identity";
 import { userProfiles } from "@cogni/db-schema/profile";
-import { users } from "@cogni/db-schema/refs";
 import {
   and,
   desc,
@@ -1990,16 +1989,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
             )
           )
           .for("share");
-        const [userRow] = await tx
-          .select({ walletAddress: users.walletAddress })
-          .from(users)
-          .where(eq(users.id, resolution.resolvedUserId))
-          .limit(1)
-          .for("share");
-        const ownsAccount =
-          walletBindings.some(
-            (binding) => binding.externalId.toLowerCase() === normalizedAccount
-          ) || userRow?.walletAddress?.toLowerCase() === normalizedAccount;
+        // Only the user's wallet bindings decide ownership; `users.wallet_address` is display (never an allow).
+        const ownsAccount = walletBindings.some(
+          (binding) => binding.externalId.toLowerCase() === normalizedAccount
+        );
         if (!ownsAccount) return { status: "conflict" } as const;
 
         liabilityTotal += liability.amountAtomic;

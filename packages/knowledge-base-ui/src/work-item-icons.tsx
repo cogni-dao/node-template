@@ -113,15 +113,15 @@ const STATUS_ICON_MAP: Record<
     colorClass: "text-info",
     label: "Needs validation",
   },
-  needs_closeout: {
-    icon: ClipboardCheck,
-    colorClass: "text-info",
-    label: "Needs closeout",
-  },
   needs_merge: {
     icon: GitMerge,
     colorClass: "text-success",
     label: "Needs merge",
+  },
+  needs_closeout: {
+    icon: ClipboardCheck,
+    colorClass: "text-info",
+    label: "Needs closeout",
   },
   done: { icon: CheckCircle, colorClass: "text-success", label: "Done" },
   blocked: { icon: Ban, colorClass: "text-danger", label: "Blocked" },

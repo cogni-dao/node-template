@@ -1148,10 +1148,10 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     // The item read never pays for the review body: every branch lists the columns but `body`.
     expect(latest).not.toMatch(/\bbody\b/);
     expect(latest).not.toContain("(SELECT *");
-    for (const kind of ["triage", "design_review", "implementation_review", "validation"]) {
+    for (const kind of ["triage", "design_review", "implementation_review", "validation", "closeout"]) {
       expect(latest).toContain(`kind = '${kind}' ORDER BY seq DESC LIMIT 1)`);
     }
-    expect(latest.match(/UNION ALL/g)).toHaveLength(3);
+    expect(latest.match(/UNION ALL/g)).toHaveLength(4);
     // Order is the per-item sequence, never the clock: timestamps tie.
     expect(latest).toContain("SELECT * FROM latest ORDER BY seq DESC");
     expect(latest).not.toContain("created_at DESC");
