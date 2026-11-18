@@ -34,26 +34,10 @@ CREATE POLICY "agent_principals_read" ON "agent_principals" AS PERMISSIVE FOR SE
 -- writes it (the guard, the role routes). agent_principals is readable by all roles, writable only by the service role.
 ALTER TABLE "agent_principals" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "agent_roles" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
--- AGENTS_HOLD_NO_WALLET (a payout guard: no user-centric payout reaches an AI), enforced in the database on every binding path (SIWE, import, operator-attested): a user that has
--- an agent_principals row can never bind a wallet. This is a kind-based payout guard, not an admin rule: an AI admin needs no wallet.
-CREATE OR REPLACE FUNCTION agent_principals_refuse_wallet_binding()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  IF NEW.provider = 'wallet'
-     AND EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = NEW.user_id) THEN
-    RAISE EXCEPTION 'agent principal % cannot bind a wallet', NEW.user_id
-      USING ERRCODE = 'check_violation', CONSTRAINT = 'agent_principals_no_wallet_binding';
-  END IF;
-  RETURN NEW;
-END
-$$;--> statement-breakpoint
-CREATE TRIGGER "agent_principals_no_wallet_binding"
-  BEFORE INSERT OR UPDATE OF user_id, provider ON "user_bindings"
-  FOR EACH ROW EXECUTE FUNCTION agent_principals_refuse_wallet_binding();
-
---> statement-breakpoint
+-- AUTH_IS_NOT_PAYMENT: this template carries NO wallet guard. An agent principal may bind a wallet (that is how an AI becomes an admin the DAO lists), so
+-- the old kind-based refusal on `user_bindings` is gone (node-template dropped it in 0043). A sign-in wallet never decides a payout: the payout guard
+-- ("no payout leaf resolves to an agent-owned wallet") belongs to the host's payout tables, which this template does not own, so a host that has them adds
+-- its own trigger there. Wallet bindings are keyed by their LOWERCASE address (the host's unique index on lower(external_id)).
 ALTER TABLE "agent_roles" ALTER COLUMN "approved_by" DROP NOT NULL;--> statement-breakpoint
 ALTER TABLE "agent_roles" ADD COLUMN "granted_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "agent_roles" ADD COLUMN "requested_by" text;--> statement-breakpoint

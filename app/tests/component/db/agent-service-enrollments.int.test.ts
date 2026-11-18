@@ -712,15 +712,14 @@ describe("published-template credentials-only adopter", () => {
       const ids: Record<string, string> = {};
       for (const [name, f] of Object.entries(facts)) {
         const id = await user(); ids[name] = id;
-        // The published authority template still refuses a wallet binding for a user that already has a principal row, so the binding goes first.
+        // An outside agent holds its external principal row (registration writes it); a person (`human`) has none and can hold no key.
+        if (f.internal) await adopter.service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`fixture-${id}`}, ${id})`;
+        else if (f.human !== true) await adopter.service`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${id})`;
         if (f.wallet) {
           const wallet = `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`;
           await adopter.service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${id}, 'wallet', ${wallet})`;
           if (f.human) await adopter.service`UPDATE users SET wallet_address = ${wallet} WHERE id = ${id}`;
         }
-        // An outside agent holds its external principal row (registration writes it); a person (`human`) has none and can hold no key.
-        if (f.internal) await adopter.service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`fixture-${id}`}, ${id})`;
-        else if (f.human !== true) await adopter.service`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${id})`;
         if (f.roles) await adopter.service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${id}, 'probe:scope', ${await user()}, clock_timestamp())`;
         if (f.github) await adopter.service`INSERT INTO user_bindings (user_id, provider, external_id) VALUES (${id}, 'github', ${`gh-${randomUUID()}`})`;
       }
