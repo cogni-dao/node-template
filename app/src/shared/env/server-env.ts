@@ -219,7 +219,10 @@ export const serverSchema = z.object({
     emptyToUndefined,
     z.string().min(32).optional()
   ),
-  SANDBOX_BASE_URL: optionalUrl,
+  SANDBOX_BASE_URL: optionalUrl.refine(
+    (url) => !url || url.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(url),
+    { message: "SANDBOX_BASE_URL must be https (http only for localhost)" }
+  ),
 
   // Tavily Web Search - Optional
   // Required for research graph web search capability

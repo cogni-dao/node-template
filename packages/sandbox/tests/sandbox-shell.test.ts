@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SandboxCommandRequest, SandboxCommandResult } from "../src/execd-client";
-import { SandboxShell } from "../src/sandbox-shell";
+import { SandboxShell, scrubSecrets } from "../src/sandbox-shell";
 
 const RUN_A = "11111111-1111-4111-8111-111111111111";
 const RUN_B = "22222222-2222-4222-8222-222222222222";
@@ -144,7 +144,19 @@ describe("SandboxShell", () => {
       workspaces: 3,
       diskUsedPct: 11,
       memCurrent: "100",
-      memMax: "max",
+      memMax: "unknown",
     });
+  });
+
+  it("never returns a GitHub token that a command printed", async () => {
+    const pat = `github_pat_${"A".repeat(30)}`;
+    const classic = `ghp_${"b".repeat(36)}`;
+    const shell = new SandboxShell({
+      runCommand: async () => done({ output: `token=${pat} other=${classic}` }),
+    });
+    const result = await shell.run({ runId: RUN_A, command: "env", timeoutMs: 5000 });
+    expect(result.output).not.toContain(pat);
+    expect(result.output).not.toContain(classic);
+    expect(scrubSecrets("plain text")).toBe("plain text");
   });
 });

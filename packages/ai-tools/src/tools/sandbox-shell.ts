@@ -32,7 +32,9 @@ export const SandboxShellInputSchema = z.object({
   command: z
     .string()
     .min(1)
-    .max(16384)
+    .refine((text) => new TextEncoder().encode(text).length <= 16384, {
+      message: "command is over 16 KiB",
+    })
     .describe(
       "Shell text to run in this run's sandbox folder. May be a multi-line script."
     ),
@@ -87,11 +89,11 @@ export const sandboxShellContract: ToolContract<
   name: SANDBOX_SHELL_NAME,
   description:
     "Run shell commands in this run's folder of the node's sandbox, a Linux box with git, python and build tools. " +
-    "The command may be a multi-line script: put dependent steps in one call. " +
+    "The command may be a multi-line script: put dependent steps in one call, and make separate calls only for independent work. " +
     "Calls of one run run one after another, in order. Files persist in the run's folder for 60 idle minutes; " +
     "`cd` and `export` last only one call, and background jobs end when the call ends. " +
     "Raise timeoutMs for installs and builds. The network is open. " +
-    "GH_TOKEN is set for git push and the GitHub API. " +
+    "Git push and the GitHub API work through the configured credentials; never print tokens. " +
     "Returns merged output, the exit code, and status `unavailable` when no sandbox is configured.",
   effect: "external_side_effect",
   requires: {

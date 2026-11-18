@@ -59,7 +59,7 @@
   },
   "peerDependencies": {
     "@cogni/ai-tools": ">=0.15.0",
-    "@cogni/agent-grants": ">=0.6.0"
+    "@cogni/agent-grants": ">=0.7.1"
   },
   "devDependencies": {
     "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*",

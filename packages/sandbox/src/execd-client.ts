@@ -20,6 +20,8 @@ export const EXECD_ACCESS_TOKEN_HEADER = "X-EXECD-ACCESS-TOKEN";
 
 /** Output budget in characters: the first and last half are kept, the middle is dropped. */
 export const OUTPUT_BUDGET_CHARS = 32 * 1024;
+/** execd splits lines over 16 MiB; one event line past this is a broken stream. */
+const MAX_EVENT_LINE_CHARS = 20 * 1024 * 1024;
 
 export interface ExecdSandboxClientConfig {
   /** Sandbox origin, e.g. `https://node-template-sandbox-test.cognidao.org`. */
@@ -196,18 +198,25 @@ export class ExecdSandboxClient {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let pending = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      pending += done
-        ? decoder.decode()
-        : decoder.decode(value, { stream: true });
-      const lines = pending.split("\n");
-      pending = done ? "" : (lines.pop() ?? "");
-      for (const raw of lines) {
-        const event = parseEventLine(raw);
-        if (event) handle(event);
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        pending += done
+          ? decoder.decode()
+          : decoder.decode(value, { stream: true });
+        const lines = pending.split("\n");
+        pending = done ? "" : (lines.pop() ?? "");
+        if (pending.length > MAX_EVENT_LINE_CHARS) {
+          throw new SandboxRequestError("sandbox event line is too long", null);
+        }
+        for (const raw of lines) {
+          const event = parseEventLine(raw);
+          if (event) handle(event);
+        }
+        if (done) break;
       }
-      if (done) break;
+    } finally {
+      reader.cancel().catch(() => {});
     }
 
     if (!completed) {

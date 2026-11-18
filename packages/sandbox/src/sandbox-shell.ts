@@ -44,6 +44,14 @@ printf 'reaped=%s workspaces=%s disk_used_pct=%s mem_current=%s mem_max=%s\\n' \
   "$(df -P /workspace | awk 'NR==2{print $5+0}')" \\
   "$(cat /sys/fs/cgroup/memory.current)" "$(cat /sys/fs/cgroup/memory.max)"`;
 
+/** GitHub token shapes; scrubbed from every output so a token never reaches the model, logs or traces. */
+const GITHUB_TOKEN = /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,})\b/g;
+
+/** Replaces GitHub token shapes with a marker. */
+export function scrubSecrets(text: string): string {
+  return text.replace(GITHUB_TOKEN, "[REDACTED_GITHUB_TOKEN]");
+}
+
 /** bash's own job line when the wrapper kills a call: `bash: line 1: 12 Killed ...` or `[1]+ Killed ...`. */
 const KILLED_JOB_LINE = /^(?:(?:\S+: )?line \d+: +\d+|\[\d+\][+-]?) +Killed\b.*(?:\n|$)/gm;
 
@@ -81,12 +89,13 @@ export type SandboxTickReport =
       readonly memCurrent: string;
       readonly memMax: string;
     }
-  | { readonly errorCode: "transport_error" };
+  | { readonly errorCode: "transport_error" | "unreadable" };
 
 export class SandboxShell {
   /** The last call of each run that has calls waiting or running; the next call of that run chains onto it. */
   private readonly tails = new Map<string, Promise<void>>();
   private lastTickAt = 0;
+  private tickInFlight: Promise<void> | null = null;
 
   constructor(
     private readonly client: Pick<ExecdSandboxClient, "runCommand">,
@@ -149,7 +158,7 @@ export class SandboxShell {
     const ranToLimit = this.now() - startedAt >= seconds * 1000;
     return {
       exitCode: result.exitCode,
-      output: result.output.replace(KILLED_JOB_LINE, ""),
+      output: scrubSecrets(result.output.replace(KILLED_JOB_LINE, "")),
       truncated: result.truncated,
       errorCode:
         result.exitCode === 0
@@ -163,31 +172,51 @@ export class SandboxShell {
   /** At most one tick every 5 minutes, started by a call; it never delays that call. */
   private maybeTick(): void {
     const at = this.now();
-    if (at - this.lastTickAt < TICK_INTERVAL_MS) return;
+    if (this.tickInFlight || at - this.lastTickAt < TICK_INTERVAL_MS) return;
     this.lastTickAt = at;
-    void this.tick();
+    this.tickInFlight = this.tick().finally(() => {
+      this.tickInFlight = null;
+    });
+  }
+
+  private report(reading: SandboxTickReport): void {
+    try {
+      this.onTick(reading);
+    } catch {
+      // A failing reporter must never break a call.
+    }
   }
 
   private async tick(): Promise<void> {
+    let output: string;
     try {
-      const result = await this.client.runCommand({
+      ({ output } = await this.client.runCommand({
         command: MAINTENANCE_COMMAND,
         timeoutMs: TICK_TIMEOUT_MS,
-      });
-      const reading =
-        /reaped=(\d+) workspaces=(\d+) disk_used_pct=(\d+) mem_current=(\S*) mem_max=(\S*)/.exec(
-          result.output
-        );
-      if (!reading) throw new Error("no reading line");
-      this.onTick({
-        reaped: Number(reading[1]),
-        workspaces: Number(reading[2]),
-        diskUsedPct: Number(reading[3]),
-        memCurrent: reading[4] || "unknown",
-        memMax: reading[5] || "unknown",
-      });
+      }));
     } catch {
-      this.onTick({ errorCode: "transport_error" });
+      this.report({ errorCode: "transport_error" });
+      return;
     }
+    const reading =
+      /reaped=(\d+) workspaces=(\d+) disk_used_pct=(\d+) mem_current=(\S*) mem_max=(\S*)/.exec(
+        output
+      );
+    if (!reading) {
+      this.report({ errorCode: "unreadable" });
+      return;
+    }
+    this.report({
+      reaped: Number(reading[1]),
+      workspaces: Number(reading[2]),
+      diskUsedPct: Number(reading[3]),
+      memCurrent: memValue(reading[4]),
+      memMax: memValue(reading[5]),
+    });
   }
+}
+
+/** A cgroup memory value in bytes, or `unknown` when missing or unlimited (`max`). */
+function memValue(raw: string | undefined): string {
+  return raw && /^\d+$/.test(raw) ? raw : "unknown";
 }
