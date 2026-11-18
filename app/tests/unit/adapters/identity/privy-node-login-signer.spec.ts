@@ -10,28 +10,35 @@ import {
 	PrivyNodeLoginSigner,
 	privyLoginClient,
 } from "@/adapters/server/identity/privy-node-login-signer.adapter";
-import {
-	bindNodeAiWallet,
-	NodeLoginRefusedError,
-} from "@/ports/node-login-signer.port";
 
 const NODE_DOMAIN = "node.example.com";
-const AI = privyAddress();
-const OPERATOR = privyAddress();
+const CHAIN = 8453;
+const AI = newAddress();
+const OPERATOR = newAddress();
 
-function privyAddress(): string {
+function newAddress(): string {
 	return privateKeyToAccount(generatePrivateKey()).address;
 }
 
-function siwe(domain: string, address = AI): string {
+function siwe(
+	over: {
+		domain?: string;
+		uri?: string;
+		address?: string;
+		chainId?: number;
+		resources?: string[];
+	} = {},
+): string {
+	const domain = over.domain ?? NODE_DOMAIN;
 	return new SiweMessage({
 		domain,
-		address,
+		address: over.address ?? AI,
 		statement: "Sign in",
-		uri: `https://${domain}`,
+		uri: over.uri ?? `https://${domain}`,
 		version: "1",
-		chainId: 1,
+		chainId: over.chainId ?? CHAIN,
 		nonce: "abcdefgh12345678",
+		...(over.resources ? { resources: over.resources } : {}),
 	}).prepareMessage();
 }
 
@@ -46,7 +53,7 @@ function fakeClient(wallets: Array<{ id: string; address: string }>) {
 	return { client, signMessage };
 }
 
-function signer(forbidden: string[] = [OPERATOR]) {
+function signer() {
 	const fake = fakeClient([
 		{ id: "op-wallet", address: OPERATOR },
 		{ id: "ai-wallet", address: AI },
@@ -57,7 +64,8 @@ function signer(forbidden: string[] = [OPERATOR]) {
 			client: fake.client,
 			walletAddress: AI,
 			domain: NODE_DOMAIN,
-			forbiddenAddresses: forbidden,
+			chainId: CHAIN,
+			forbiddenAddresses: [OPERATOR],
 		}),
 	};
 }
@@ -65,28 +73,49 @@ function signer(forbidden: string[] = [OPERATOR]) {
 describe("node AI login signer", () => {
 	it("refuses a SIWE message for another domain, so a phishing site cannot get a login signature (and Privy is never asked)", async () => {
 		const { signer: s, signMessage } = signer();
-		await expect(s.signLogin(siwe("evil.example.org"))).rejects.toMatchObject({
-			name: NodeLoginRefusedError.name,
-			reason: "foreign_domain",
+		await expect(
+			s.signLogin(siwe({ domain: "evil.example.org" })),
+		).rejects.toMatchObject({ reason: "foreign_domain" });
+		expect(signMessage).not.toHaveBeenCalled();
+	});
+
+	it("refuses a message for another chain, so a signature for one chain cannot be replayed as this node's login", async () => {
+		const { signer: s, signMessage } = signer();
+		await expect(s.signLogin(siwe({ chainId: 1 }))).rejects.toMatchObject({
+			reason: "foreign_chain",
 		});
 		expect(signMessage).not.toHaveBeenCalled();
 	});
 
-	it("signs a message for this node's own domain with the dedicated wallet", async () => {
+	it("refuses a message whose uri points at another host even when the domain line is ours", async () => {
+		const { signer: s } = signer();
+		await expect(
+			s.signLogin(siwe({ uri: "https://evil.example.org/login" })),
+		).rejects.toMatchObject({ reason: "foreign_uri" });
+	});
+
+	it("refuses a message that carries resources, which could smuggle extra grants into a login signature", async () => {
+		const { signer: s } = signer();
+		await expect(
+			s.signLogin(siwe({ resources: ["https://evil.example.org/grant"] })),
+		).rejects.toMatchObject({ reason: "unexpected_resources" });
+	});
+
+	it("signs a message for this node's own domain and chain with the dedicated wallet", async () => {
 		const { signer: s, signMessage } = signer();
-		const out = await s.signLogin(siwe(NODE_DOMAIN));
+		const out = await s.signLogin(siwe());
 		expect(out).toEqual({ address: AI, signature: "0xsig" });
 		expect(signMessage).toHaveBeenCalledWith("ai-wallet", expect.any(String));
 	});
 
 	it("refuses a message that names a different address than the AI wallet, so it cannot sign as someone else", async () => {
 		const { signer: s } = signer();
-		await expect(
-			s.signLogin(siwe(NODE_DOMAIN, OPERATOR)),
-		).rejects.toMatchObject({ reason: "address_mismatch" });
+		await expect(s.signLogin(siwe({ address: OPERATOR }))).rejects.toMatchObject(
+			{ reason: "address_mismatch" },
+		);
 	});
 
-	it("refuses to be built on the operator wallet address, so the payout wallet can never become a login wallet", () => {
+	it("refuses to be built on the operator wallet address in any casing or padding, so the payout wallet can never become a login wallet", () => {
 		const { client } = fakeClient([{ id: "op-wallet", address: OPERATOR }]);
 		expect(
 			() =>
@@ -94,32 +123,23 @@ describe("node AI login signer", () => {
 					client,
 					walletAddress: OPERATOR.toLowerCase(),
 					domain: NODE_DOMAIN,
-					forbiddenAddresses: [OPERATOR],
+					chainId: CHAIN,
+					forbiddenAddresses: [` ${OPERATOR.toUpperCase().replace("0X", "0x")} `],
 				}),
 		).toThrow(/NOT_THE_OPERATOR_WALLET/);
 	});
 
-	it("refuses to use the operator's Privy authorization key", () => {
+	it("refuses the operator's Privy authorization key even with stray whitespace, and an empty key", () => {
+		const base = { appId: "app", appSecret: "secret" };
 		expect(() =>
 			privyLoginClient({
-				appId: "app",
-				appSecret: "secret",
-				signingKey: "wallet-auth:operator",
+				...base,
+				signingKey: "wallet-auth:operator\n",
 				forbiddenSigningKeys: ["wallet-auth:operator"],
 			}),
 		).toThrow(/NOT_THE_OPERATOR_WALLET/);
-	});
-
-	it("binds through the shared verify with a signature only for the node's own challenge", async () => {
-		const { signer: s } = signer();
-		const verifyAndBind = vi.fn(async () => ({ bound: true }));
-		const binder = {
-			challenge: async () => siwe("evil.example.org"),
-			verifyAndBind,
-		};
-		await expect(bindNodeAiWallet(s, binder, "user-1")).rejects.toBeInstanceOf(
-			NodeLoginRefusedError,
-		);
-		expect(verifyAndBind).not.toHaveBeenCalled();
+		expect(() =>
+			privyLoginClient({ ...base, signingKey: "  ", forbiddenSigningKeys: [] }),
+		).toThrow(/NOT_THE_OPERATOR_WALLET/);
 	});
 });

@@ -35,9 +35,13 @@ export function privyLoginClient(cfg: {
 	/** Authorization keys it must never use: the operator wallet's (PRIVY_SIGNING_KEY). */
 	forbiddenSigningKeys: readonly (string | undefined)[];
 }): PrivyLoginClient {
-	if (cfg.forbiddenSigningKeys.includes(cfg.signingKey)) {
+	const key = cfg.signingKey.trim();
+	if (
+		!key ||
+		cfg.forbiddenSigningKeys.some((f) => f !== undefined && f.trim() === key)
+	) {
 		throw new Error(
-			"[NodeLoginSigner] NOT_THE_OPERATOR_WALLET: the node AI wallet must use its own authorization key, not the operator's",
+			"[NodeLoginSigner] NOT_THE_OPERATOR_WALLET: the node AI wallet must use its own non-empty authorization key, not the operator's",
 		);
 	}
 	const client = new PrivyClient({
@@ -54,7 +58,7 @@ export function privyLoginClient(cfg: {
 					.signMessage(walletId, {
 						message,
 						authorization_context: {
-							authorization_private_keys: [cfg.signingKey],
+							authorization_private_keys: [key],
 						},
 					})
 			).signature,
@@ -69,8 +73,8 @@ export interface PrivyNodeLoginSignerConfig {
 	domain: string;
 	/** Addresses it must never sign with: the operator wallet. */
 	forbiddenAddresses: readonly string[];
-	/** When set, the SIWE chain id must match. */
-	chainId?: number;
+	/** The SIWE chain id this node signs in on (always enforced). */
+	chainId: number;
 }
 
 export class PrivyNodeLoginSigner implements NodeLoginSignerPort {
@@ -80,7 +84,10 @@ export class PrivyNodeLoginSigner implements NodeLoginSignerPort {
 
 	constructor(private readonly cfg: PrivyNodeLoginSignerConfig) {
 		this.address = getAddress(cfg.walletAddress);
-		this.domain = cfg.domain.toLowerCase();
+		this.domain = cfg.domain.trim().toLowerCase();
+		if (!this.domain) {
+			throw new Error("[NodeLoginSigner] the node domain is required");
+		}
 		if (this.isForbidden(this.address)) {
 			throw new Error(
 				"[NodeLoginSigner] NOT_THE_OPERATOR_WALLET: the node AI login wallet must not be the operator wallet",
@@ -88,9 +95,17 @@ export class PrivyNodeLoginSigner implements NodeLoginSignerPort {
 		}
 	}
 
+	private uriHost(uri: string): string | null {
+		try {
+			return new URL(uri).host.toLowerCase();
+		} catch {
+			return null;
+		}
+	}
+
 	private isForbidden(address: string): boolean {
 		return this.cfg.forbiddenAddresses.some(
-			(f) => f.toLowerCase() === address.toLowerCase(),
+			(f) => getAddress(f.trim()) === getAddress(address),
 		);
 	}
 
@@ -109,7 +124,11 @@ export class PrivyNodeLoginSigner implements NodeLoginSignerPort {
 		}
 		if (parsed.domain.toLowerCase() !== this.domain)
 			throw new NodeLoginRefusedError("foreign_domain");
-		if (this.cfg.chainId !== undefined && parsed.chainId !== this.cfg.chainId)
+		if (this.uriHost(parsed.uri) !== this.domain)
+			throw new NodeLoginRefusedError("foreign_uri");
+		if (parsed.resources?.length)
+			throw new NodeLoginRefusedError("unexpected_resources");
+		if (parsed.chainId !== this.cfg.chainId)
 			throw new NodeLoginRefusedError("foreign_chain");
 		if (getAddress(parsed.address) !== this.address)
 			throw new NodeLoginRefusedError("address_mismatch");

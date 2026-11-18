@@ -18,6 +18,8 @@ export type NodeLoginRefusal =
 	| "malformed_message"
 	| "foreign_domain"
 	| "foreign_chain"
+	| "foreign_uri"
+	| "unexpected_resources"
 	| "address_mismatch";
 
 export class NodeLoginRefusedError extends Error {
@@ -34,37 +36,4 @@ export interface NodeLoginSignerPort {
 	signLogin(
 		siweMessage: string,
 	): Promise<{ address: string; signature: string }>;
-}
-
-/**
- * The shape of lane B1's shared SIWE challenge and verify-and-bind (POST /api/v1/identity/wallet/challenge and /bind).
- * B1's implementation satisfies this; this lane only consumes it. Evidence and createBinding stay inside B1.
- */
-export interface NodeAiWalletBinder {
-	challenge(input: {
-		principalUserId: string;
-		address: string;
-	}): Promise<string>;
-	verifyAndBind(input: {
-		principalUserId: string;
-		message: string;
-		signature: string;
-	}): Promise<{ bound: boolean }>;
-}
-
-/** Bind the node AI's wallet to its internal principal: challenge, sign (own domain only), verify and bind. */
-export async function bindNodeAiWallet(
-	signer: NodeLoginSignerPort,
-	binder: NodeAiWalletBinder,
-	principalUserId: string,
-): Promise<{ bound: boolean; address: string }> {
-	const address = await signer.getAddress();
-	const message = await binder.challenge({ principalUserId, address });
-	const signed = await signer.signLogin(message);
-	const { bound } = await binder.verifyAndBind({
-		principalUserId,
-		message,
-		signature: signed.signature,
-	});
-	return { bound, address: signed.address };
 }
