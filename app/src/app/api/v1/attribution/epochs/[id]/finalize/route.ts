@@ -42,16 +42,16 @@ export const POST = wrapRouteHandlerWithLogging<{
       return NextResponse.json({ error: "Invalid epoch ID" }, { status: 400 });
     }
 
+    // WRITE_ROUTES_APPROVER_GATED: the one admin check (caller's bound wallets), BEFORE any epoch read so a non-admin cannot probe which epochs exist. The epoch's pinned
+    // approver set (APPROVERS_PINNED_AT_REVIEW) is enforced on the SIGNER inside finalizeEpochInProcess (422).
+    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
+    if (denied) return denied;
+
     const store = getContainer().attributionStore;
     const epoch = await store.getEpoch(epochId);
     if (!epoch) {
       return NextResponse.json({ error: "Epoch not found" }, { status: 404 });
     }
-
-    // WRITE_ROUTES_APPROVER_GATED: the one admin check (caller's bound wallets). The epoch's pinned
-    // approver set (APPROVERS_PINNED_AT_REVIEW) is enforced on the SIGNER inside finalizeEpochInProcess (422).
-    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
-    if (denied) return denied;
 
     // Parse and validate request body
     const body = await request.json();

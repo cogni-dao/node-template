@@ -51,15 +51,15 @@ export const GET = wrapRouteHandlerWithLogging<{
       return NextResponse.json({ error: "Invalid epoch ID" }, { status: 400 });
     }
 
+    // WRITE_ROUTES_APPROVER_GATED: the one admin check (caller's bound wallets), BEFORE any epoch read so a non-admin cannot probe which epochs exist.
+    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
+    if (denied) return denied;
+
     const store = getContainer().attributionStore;
     const epoch = await store.getEpoch(epochId);
     if (!epoch) {
       return NextResponse.json({ error: "Epoch not found" }, { status: 404 });
     }
-
-    // WRITE_ROUTES_APPROVER_GATED: the one admin check (caller's bound wallets)
-    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
-    if (denied) return denied;
 
     if (epoch.status !== "review") {
       return NextResponse.json(

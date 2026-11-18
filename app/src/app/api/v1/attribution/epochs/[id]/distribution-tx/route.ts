@@ -74,6 +74,10 @@ export const GET = wrapRouteHandlerWithLogging<{
       return NextResponse.json({ error: "invalid epoch id" }, { status: 400 });
     }
 
+    // APPROVER_GATED: a node admin (the one admin check on the caller's bound wallets) may read, BEFORE any epoch read so a non-admin cannot probe which epochs exist.
+    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
+    if (denied) return denied;
+
     const store = getContainer().attributionStore;
 
     // FINALIZED_AND_RECORDED: the epoch must be finalized before a distribution exists.
@@ -81,10 +85,6 @@ export const GET = wrapRouteHandlerWithLogging<{
     if (!epoch) {
       return NextResponse.json({ error: "epoch_not_found" }, { status: 404 });
     }
-
-    // APPROVER_GATED: a node admin (the one admin check on the caller's bound wallets) may read.
-    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
-    if (denied) return denied;
 
     if (epoch.status !== "finalized") {
       return NextResponse.json(
