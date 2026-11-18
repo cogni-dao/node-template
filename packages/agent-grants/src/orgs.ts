@@ -37,7 +37,7 @@ export interface OwnerSource {
   owners(source: OrgSource): Promise<readonly string[]>;
 }
 
-/** An owner read failed or the source does not apply. Callers refuse (fail closed). `reason` is the message: `no_approvers` for a repo-spec that lists none. */
+/** An owner read failed or the source does not apply. Callers refuse (fail closed). `reason` is the message: `no_approvers` for a repo-spec that lists none, `malformed_spec` when its approver list is not valid wallets. */
 export class OwnerSourceUnavailableError extends Error {
   readonly cause?: unknown;
   readonly reason: string;
@@ -145,6 +145,8 @@ export function createRepoSpecOwnerSource(deps: RepoSpecOwnerSourceDeps): OwnerS
       return [...new Set(await deps.usersForWallets(wallets))];
     } catch (error) {
       if (error instanceof OwnerSourceUnavailableError) throw error;
+      // A repo-spec whose approver list itself is bad has its own reason, so an operator can tell it from an outage.
+      if (error instanceof Error && error.message === "malformed_spec") throw new OwnerSourceUnavailableError("malformed_spec", error);
       throw new OwnerSourceUnavailableError("owner read failed", error);
     }
   };

@@ -33,7 +33,7 @@ import {
   type ServiceAssertionVerifier,
   type TrustedHome,
 } from "@cogni/agent-grants/service-auth";
-import { extractLedgerApprovers, parseRepoSpec } from "@cogni/repo-spec";
+import { readLedgerApproversFromYaml } from "@cogni/repo-spec";
 import type { Logger } from "pino";
 import { EVENT_NAMES } from "@/shared/observability";
 import type { AgentAuthoritySql } from "./agent-authority";
@@ -109,7 +109,8 @@ export function createServiceAuth(deps: {
     createRepoSpecOwnerSource({
       // The package reads no env var: this composition hands it a token provider over the one env value.
       fetchRepoSpec: createGithubRepoSpecFetcher({ token: async () => deps.env.GITHUB_READ_TOKEN }),
-      extractApprovers: (yaml) => extractLedgerApprovers(parseRepoSpec(yaml)),
+      // Another node's repo-spec may carry fields this schema retired or never had: read only its approver list.
+      extractApprovers: readLedgerApproversFromYaml,
       usersForWallets: (wallets) => usersForWallets(deps.sql, wallets),
     }),
   ]);

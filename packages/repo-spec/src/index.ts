@@ -75,6 +75,7 @@ export {
 } from "./artifact-bundle.js";
 export { parseRepoSpec } from "./parse.js";
 export { parseRule } from "./rules.js";
+export { readLedgerApproversFromYaml } from "./ledger-approvers.js";
 export { parseServiceLinksFile, type ServiceLinksSection } from "./service-links.js";
 export {
   type ActivityLedgerSpec,

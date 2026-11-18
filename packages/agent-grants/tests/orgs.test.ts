@@ -154,6 +154,17 @@ describe("repo-spec owner source", () => {
   });
 });
 
+describe("repo-spec owner source: malformed approver list", () => {
+  it("refuses with reason malformed_spec when the extractor reports a bad approver list", async () => {
+    const s = source({
+      extractApprovers: () => {
+        throw new Error("malformed_spec");
+      },
+    });
+    await expect(s.owners.owners(SRC)).rejects.toMatchObject({ reason: "malformed_spec" });
+  });
+});
+
 describe("canonicalRepoRef", () => {
   it("accepts github https repo urls and lowercases them; refuses everything else", () => {
     expect(canonicalRepoRef("https://github.com/Cogni-DAO/Poly")).toBe(REF);
