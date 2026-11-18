@@ -4,7 +4,7 @@
 -- loses pay. A missed agent is only a missing label, so the rule is deliberately narrow: it picks a user only when NO trace of a human path exists.
 -- The v1 key is a signed token that is not stored, so the only durable trace of an agent registration is the user it created: no wallet, no
 -- binding, no profile, no identity event. Every human creation path (SIWE: auth.ts:231; OAuth first login: auth.ts:548; operator-attested
--- GitHub sign-in: operator-attested-binding.server.ts:130) sets users.wallet_address or writes a `user_bindings` row with the user (SIWE also
+-- GitHub sign-in: operator-attested-binding.server.ts:131) sets users.wallet_address or writes a `user_bindings` row with the user (SIWE also
 -- writes one), and also writes a `user_profiles` row; the two non-SIWE paths write an `identity_events` row too. The seeded system tenant is
 -- excluded by id; the internal principals (0037) already have rows. A user that already has a row (internal or external) keeps it.
 -- users, user_bindings, user_profiles and identity_events have FORCE RLS keyed to a session user, and agent_principals is select-only for every
