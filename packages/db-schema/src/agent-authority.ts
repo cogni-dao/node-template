@@ -39,13 +39,16 @@ import {
 
 import { billingAccounts, users } from "./refs";
 
-/** A marked agent. `internal` rows are seeded for a graph to act as; `external` rows come from redeemed spawn grants (later). */
+/** A marked principal. `internal` rows are seeded for a graph to act as; `external` rows are outside agents and services; `org` rows are orgs (story.0038) whose owners an owner source decides. */
 export const agentPrincipals = pgTable(
   "agent_principals",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     kind: text("kind").notNull(),
     slug: text("slug"),
+    /** Only an `org` row: where its owners are read from (`repo-spec`) and the source's own key (the repo's canonical https URL). */
+    ownerSourceKind: text("owner_source_kind"),
+    ownerSourceRef: text("owner_source_ref"),
     userId: text("user_id")
       .notNull()
       .references(() => users.id),
@@ -56,7 +59,11 @@ export const agentPrincipals = pgTable(
   (table) => [
     check(
       "agent_principals_kind_canonical",
-      sql`${table.kind} IN ('internal','external')`
+      sql`${table.kind} IN ('internal','external','org')`
+    ),
+    check(
+      "agent_principals_org_has_owner_source",
+      sql`${table.kind} <> 'org' OR (${table.ownerSourceKind} IS NOT NULL AND ${table.ownerSourceRef} IS NOT NULL)`
     ),
     check(
       "agent_principals_internal_has_slug",
@@ -64,6 +71,10 @@ export const agentPrincipals = pgTable(
     ),
     uniqueIndex("agent_principals_slug_unique").on(table.slug),
     uniqueIndex("agent_principals_user_id_unique").on(table.userId),
+    // One org per owner source (one org per repo).
+    uniqueIndex("agent_principals_org_source_unique")
+      .on(table.ownerSourceKind, table.ownerSourceRef)
+      .where(sql`${table.kind} = 'org'`),
     // Read-only for every role: slug and seeded user id are not secret, and the wallet-binding trigger must see
     // them whichever role binds. Writes stay deny-all for the app role (no write policy; FORCE RLS).
     pgPolicy("agent_principals_read", { for: "select", using: sql`true` }),
