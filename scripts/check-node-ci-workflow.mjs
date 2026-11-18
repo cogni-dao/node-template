@@ -13,14 +13,16 @@ const MAIN_CACHE_EXPORT =
   "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope=node-template-{0}', matrix.target.artifact) || '' }}";
 
 // node-template carries the action file; a fleet node pins the action by SHA and has no such file. The
-// publish lane and the node-template-shaped pr-build checks run only in the template tree, because a
-// fleet node owns neither (one signal, the same one the self-test uses).
+// node-template-shaped pr-build checks run only in the template tree (one signal, the same one the
+// self-test uses). The publish-lane checks run wherever publish-packages.yml exists, so they cannot be
+// switched off by removing the action directory and repointing the caller to a remote SHA.
 const IS_TEMPLATE = existsSync(CI_ACTION_PATH);
+const HAS_PUBLISH_WORKFLOW = IS_TEMPLATE || existsSync(PUBLISH_WORKFLOW_PATH);
 
 const ciWorkflow = readWorkflow(CI_WORKFLOW_PATH);
 const prBuildWorkflow = readWorkflow(PR_BUILD_WORKFLOW_PATH);
 const prLintWorkflow = readWorkflow(PR_LINT_WORKFLOW_PATH);
-const publishWorkflow = IS_TEMPLATE ? readWorkflow(PUBLISH_WORKFLOW_PATH) : undefined;
+const publishWorkflow = HAS_PUBLISH_WORKFLOW ? readWorkflow(PUBLISH_WORKFLOW_PATH) : undefined;
 const repoPolicy = JSON.parse(readFileSync(REPO_POLICY_PATH, "utf8"));
 
 function readWorkflow(path) {
@@ -721,7 +723,7 @@ expectEqual(PR_LINT_WORKFLOW_PATH, prLintWorkflow?.name, "Lint PR", "workflow na
 expectTrigger(PR_LINT_WORKFLOW_PATH, prLintWorkflow, "pull_request");
 expectNoWorkflowDispatch(PR_LINT_WORKFLOW_PATH, prLintWorkflow);
 
-if (IS_TEMPLATE) {
+if (HAS_PUBLISH_WORKFLOW) {
   // The publish lane distributes bytes that every node repo then pins. The checks
   // below are the invariants that make a published version trustworthy; each one is
   // here because its absence was a live defect in the first version of this

@@ -10,7 +10,7 @@
 // Each case mutates a throwaway copy of the real workflow/policy files and asserts the
 // checker exits non-zero with a recognisable message.
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,12 +21,14 @@ const ACTION = ".github/actions/node-ci/action.yml";
 // node-template carries the action; a fleet node pins it by SHA and has no such file, so the cases that
 // mutate the action are template-only and every other case must still run unchanged in a fleet repo.
 const HAS_ACTION = existsSync(join(REPO_ROOT, ACTION));
+const PUBLISH = ".github/workflows/publish-packages.yml";
+const HAS_PUBLISH = existsSync(join(REPO_ROOT, PUBLISH));
 const FILES = [
   ".github/workflows/ci.yaml",
   ...(HAS_ACTION ? [ACTION] : []),
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
-  ...(HAS_ACTION ? [".github/workflows/publish-packages.yml"] : []),
+  ...(HAS_PUBLISH ? [PUBLISH] : []),
   ".cogni/repo-policy.json",
 ];
 
@@ -38,6 +40,7 @@ function runCheckerOn(mutate) {
   mutate({
     read: (file) => readFileSync(join(dir, file), "utf8"),
     write: (file, text) => writeFileSync(join(dir, file), text),
+    remove: (file) => rmSync(join(dir, file), { recursive: true, force: true }),
   });
   // The checker resolves its inputs relative to CWD, so running it from the fixture
   // dir points it at the mutated copies while `yaml` still resolves from the repo.
@@ -184,6 +187,29 @@ const CASES = [
     ),
     expectExit: 1,
     expectMatch: /scores a skipped required check as SUCCESS/,
+  },
+  {
+    // Defect: dropping the action file (and pointing the caller at a remote SHA) would otherwise read as a
+    // fleet tree and switch the publish-lane checks off while the publish workflow is still present.
+    name: "the publish checks still run when the action directory is removed",
+    mutate: Object.assign(
+      ({ read, write, remove }) => {
+        remove(".github/actions");
+        const ci = read(".github/workflows/ci.yaml");
+        write(
+          ".github/workflows/ci.yaml",
+          ci.replaceAll(
+            "uses: ./.github/actions/node-ci",
+            "uses: cogni-dao/node-template/.github/actions/node-ci@e75f53a164aebbd3ec1cbdb2bd2294711cf5455e"
+          )
+        );
+        const publish = read(PUBLISH);
+        write(PUBLISH, publish.replace("  attestations: write", "  attestations: write\n  packages: write"));
+      },
+      { needsPublish: true }
+    ),
+    expectExit: 1,
+    expectMatch: /permissions\.packages must not be granted/,
   },
   {
     name: "a policy context with no emitting job at all is rejected",
@@ -470,6 +496,11 @@ const CASES = [
 let failed = 0;
 let skipped = 0;
 for (const testCase of CASES) {
+  if (testCase.mutate.needsPublish && !HAS_PUBLISH) {
+    skipped += 1;
+    console.log(`skip ${testCase.name} (template-only: no ${PUBLISH} in this repo)`);
+    continue;
+  }
   if ((testCase.mutate.needsAction || testCase.templateOnly) && !HAS_ACTION) {
     skipped += 1;
     console.log(`skip ${testCase.name} (template-only: no ${ACTION} in this repo)`);
