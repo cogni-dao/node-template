@@ -30,6 +30,7 @@ const ASK_ALLOWLIST: ReadonlyArray<{ path: string; reason: string }> = [
   { path: "bootstrap/node-admin-gate.ts", reason: "the roster beneath adminCheck, and the adminCheck-backed NodeAdminAuthority" },
   { path: "bootstrap/agent-authority.ts", reason: "defines the one adminCheck over bound wallets, and the tool guard" },
   { path: "app/(admin)/admin/payments/money-plane.server.ts", reason: "payments page gate: the one adminCheck (ONE_ADMIN_CHECK)" },
+  { path: "app/(app)/layout.tsx", reason: "shows the Admin nav hint: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/(admin)/layout.tsx", reason: "layout gate: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/api/v1/agent/me/route.ts", reason: "self-check reports the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "shared/config/repoSpec.server.ts", reason: "isDaoAdmin definition: the roster lookup, called only beneath adminCheck" },
@@ -92,5 +93,19 @@ describe("ADMIN_ACTS_IN_ADMIN", () => {
     const callers = files.filter((f) => /\b(isDaoAdmin|isLedgerApprover|checkApprover)\(/.test(code(f.text))).map((f) => f.rel);
     expect(callers.sort()).toEqual([...ROSTER_ONLY].sort());
     expect(files.filter((f) => /\b(isLedgerApprover|checkApprover)\b/.test(code(f.text))).map((f) => f.rel)).toEqual([]);
+  });
+
+  it("reads the approver list (getLedgerApprovers) or builds the roster authority only where listed, so `getLedgerApprovers().includes(wallet)` cannot re-derive admin", () => {
+    // Defect: re-deriving admin from the roster with a login wallet bypasses the one admin check and the lock above.
+    const ROSTER_READERS: Record<string, string> = {
+      "app/api/v1/attribution/epochs/[id]/review/route.ts": "pins the approver set on the epoch (data, not authority)",
+      "app/api/internal/attribution/collect/route.ts": "passes the approver set to the collect workflow as data",
+      "bootstrap/node-admin-gate.ts": "the roster authority beneath adminCheck",
+      "shared/config/repoSpec.server.ts": "definition, and the isDaoAdmin roster lookup",
+      "bootstrap/container.ts": "builds the roster once and hands it to the agent authority",
+    };
+    const callers = files.filter((f) => /\b(getLedgerApprovers|createApproversNodeAdminAuthority)\(/.test(code(f.text))).map((f) => f.rel);
+    expect(callers.filter((rel) => !(rel in ROSTER_READERS))).toEqual([]);
+    expect(Object.keys(ROSTER_READERS).filter((rel) => !callers.includes(rel))).toEqual([]);
   });
 });

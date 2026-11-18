@@ -251,7 +251,7 @@ export function ReviewView({
                 <EpochReviewAction
                   status="open"
                   reviewReady
-                  isApprover
+                  isNodeAdmin
                   isPending={openReview.isPending}
                   error={openReview.error}
                   onOpen={() => openReview.mutate(selection.epoch.id)}

@@ -19,7 +19,7 @@ import { EpochReviewAction } from "@/features/governance/components/EpochReviewA
 const baseProps = {
   status: "open" as const,
   reviewReady: true,
-  isApprover: true,
+  isNodeAdmin: true,
   isPending: false,
   error: null,
   onOpen: vi.fn(),
@@ -35,7 +35,7 @@ describe("EpochReviewAction", () => {
   });
 
   it("shows a waiting state without exposing an unauthorized action", () => {
-    render(<EpochReviewAction {...baseProps} isApprover={false} />);
+    render(<EpochReviewAction {...baseProps} isNodeAdmin={false} />);
     expect(
       screen.getByText("Waiting for an authorized ledger approver to continue.")
     ).toBeInTheDocument();

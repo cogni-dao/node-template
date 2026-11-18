@@ -75,7 +75,7 @@ export const POST = wrapRouteHandlerWithLogging(
 				"steward_withdrawal_not_authorized",
 			);
 			return NextResponse.json(
-				{ error: "Not authorized as steward" },
+				{ error: "Steward withdrawal requires node admin" },
 				{ status: 403 },
 			);
 		}

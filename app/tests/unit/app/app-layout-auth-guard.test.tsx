@@ -44,12 +44,15 @@ describe("AppLayout Shell", () => {
   });
 
   it("renders children within sidebar layout shell", async () => {
-    const { default: APP_LAYOUT } = await import("@/app/(app)/layout");
+    // The layout is a server component (it runs the one admin check); the shell it renders is the client part.
+    const { AppLayoutShell } = await import(
+      "@/app/(app)/_components/AppLayoutShell"
+    );
 
     render(
-      <APP_LAYOUT>
+      <AppLayoutShell isNodeAdmin={false}>
         <div data-testid="children">Protected Content</div>
-      </APP_LAYOUT>
+      </AppLayoutShell>
     );
 
     // Should render the full layout structure

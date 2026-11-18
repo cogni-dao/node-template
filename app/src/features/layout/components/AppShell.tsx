@@ -19,10 +19,16 @@ import { SidebarInset, SidebarProvider } from "@/components/startup";
 import { AppSidebar } from "./AppSidebar";
 import { AppTopBar } from "./AppTopBar";
 
-export function AppShell({ children }: { readonly children: ReactNode }) {
+export function AppShell({
+  children,
+  isNodeAdmin = false,
+}: {
+  readonly children: ReactNode;
+  readonly isNodeAdmin?: boolean;
+}) {
   return (
     <SidebarProvider>
-      <AppSidebar />
+      <AppSidebar isNodeAdmin={isNodeAdmin} />
       <SidebarInset className="min-w-0">
         <AppTopBar />
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">{children}</div>
