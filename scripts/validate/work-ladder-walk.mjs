@@ -140,7 +140,12 @@ async function walkCode(pr) {
 	await artifact("triage artifact (design)", X, { kind: "triage", subject: `work:${X}`, verdict: "design", note: "ladder walk" });
 	await patch("triage -> needs_design", X, "needs_design", OK, MUST);
 
-	const inbox = await call("POST", "/knowledge/contributions", {
+	// An agent cannot close an inbox and each principal may hold 10 open, so a walk reuses an open synthetic design inbox.
+	const open = await call("GET", "/knowledge/contributions?state=open&limit=50");
+	const reused = (open.json?.contributions ?? open.json?.items ?? []).find(
+		(c) => c.message === "synthetic ladder walk design" && c.headCommit,
+	);
+	const inbox = reused ? { status: 200, json: reused } : await call("POST", "/knowledge/contributions", {
 		message: "synthetic ladder walk design",
 		idempotencyKey: `ladder-walk-${stamp}`,
 		edits: [

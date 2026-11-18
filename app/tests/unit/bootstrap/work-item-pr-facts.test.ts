@@ -77,16 +77,7 @@ describe("createPrFactsPort", () => {
 			prNumber: 377,
 			signal: SIGNAL,
 		});
-		expect(facts).toEqual({ head: HEAD.toLowerCase(), merged: true, open: false });
-	});
-
-	it("maps the PR state to the open flag: open is open, closed without merging is not", async () => {
-		const read = (state: "open" | "closed", merged: boolean) =>
-			createPrFactsPort({
-				getPr: async () => ({ headSha: HEAD, merged, state }),
-			} as never).read("https://github.com/cogni-dao/node-template/pull/1", SIGNAL);
-		expect(await read("open", false)).toMatchObject({ merged: false, open: true });
-		expect(await read("closed", false)).toMatchObject({ merged: false, open: false });
+		expect(facts).toEqual({ head: HEAD.toLowerCase(), merged: true });
 	});
 
 	it.each([

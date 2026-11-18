@@ -220,12 +220,6 @@ export {
   WORK_ITEM_SCORES_MAX_AXES,
   WORK_ITEM_SCORES_MAX_BYTES,
 } from "./scores.js";
-export type {
-  DeliverableState,
-  Placement,
-  PlacementInput,
-} from "./placement.js";
-export { PLACEMENT_REASONS, placementFor } from "./placement.js";
 export {
   FORWARD_TARGETS,
   isLegacyStatus,

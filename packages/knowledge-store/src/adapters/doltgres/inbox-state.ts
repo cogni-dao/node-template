@@ -26,13 +26,13 @@ export interface InboxStateSql {
 /** Structurally the work-items `InboxStatePort`; this package does not import work-items. */
 export interface InboxStates {
   /**
-   * The inbox's current head commit and whether it merged or is still open. `null`: no such inbox. A throw is a failed read.
+   * The inbox's current head commit and whether it merged. `null`: no such inbox. A throw is a failed read.
    * `head` is the contribution's `head_commit`, the commit a review pins.
    */
   stateOf(
     contributionId: string,
     signal: AbortSignal
-  ): Promise<{ head: string | null; merged: boolean; open: boolean } | null>;
+  ): Promise<{ head: string | null; merged: boolean } | null>;
 }
 
 /** Rejects when `signal` aborts, so a hung read cannot hold the caller past its deadline. */
@@ -70,7 +70,6 @@ export function createDoltgresInboxStates(sql: InboxStateSql): InboxStates {
         return {
           head: typeof head === "string" && head.length > 0 ? head : null,
           merged: row.state === "merged",
-          open: row.state === "open",
         };
       } finally {
         aborted.stop();

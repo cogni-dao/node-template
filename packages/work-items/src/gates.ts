@@ -67,11 +67,6 @@ export interface PrFacts {
   /** The PR's current head commit (40 hex). */
   readonly head: string;
   readonly merged: boolean;
-  /**
-   * Whether the PR is still open. `false` with `merged: false` is a PR closed without merging. Absent reads as open (a port
-   * that cannot tell); the cutover places a closed unmerged PR in needs_implement, an open one in implementation review.
-   */
-  readonly open?: boolean | undefined;
 }
 
 /** The facts a gate reads about an inbox (a knowledge contribution) of this node's hub. */
@@ -79,8 +74,6 @@ export interface InboxFacts {
   /** The inbox's current head commit. `null` while it has none. */
   readonly head: string | null;
   readonly merged: boolean;
-  /** Whether the inbox is still open. `false` with `merged: false` is an inbox closed without merging. Absent reads as open. */
-  readonly open?: boolean | undefined;
 }
 
 /**
@@ -113,8 +106,7 @@ export const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
  * `WORK_ITEMS_PR_REPO` as the gate takes it: one or more comma-separated `owner/repo`. The well-formed entries pin the
  * repositories whose pull requests are code deliverables; a malformed entry is ignored and reported, never pinned. No
  * well-formed entry leaves it unpinned (the gate accepts a PR of any github.com repo) with the reason, so the caller can
- * warn once; it never fails boot and never becomes a default repository. The one reader of the pin, for the app and the
- * placement script alike.
+ * warn once; it never fails boot and never becomes a default repository. The one reader of the pin.
  */
 export function resolvePrRepoPin(value: string | undefined): {
   readonly repos: readonly string[];

@@ -92,7 +92,6 @@ import {
   type PrFactsPort,
 } from "../../gates.js";
 import { statusRank } from "../../transitions.js";
-import { type Placement, placementFor, type DeliverableState } from "../../placement.js";
 import { parseWorkItemScores } from "../../scores.js";
 import {
   formatCitesTrailer,
@@ -206,12 +205,6 @@ const PR_FACTS_TIMEOUT_MS = 5_000;
 const PR_FACTS_CACHE_MS = 60_000;
 /** A failed PR read is remembered this long, so a down or rate-limited GitHub is not hammered (60 reads an hour). */
 const PR_FACTS_FAILURE_CACHE_MS = 10_000;
-/**
- * The statuses the placement job moves an item out of (hub work-status-ladder, Cutover). needs_merge is never a source: the
- * migration moves every needs_merge item to needs_closeout first, so no write can place an item out of a ladder stage.
- */
-const PLACEABLE_FROM: readonly string[] = ["needs_closeout", "blocked"];
-
 /** Only content commands own a branch session and reconcile interrupted writes. */
 type BranchReconciliation = "required" | "skipped";
 
@@ -4126,102 +4119,6 @@ export class DoltgresWorkItemAdapter
     input: WorkItemsPatchInput,
     principalId: string
   ): Promise<WorkItem> {
-    return this.patchWith(input, principalId, false);
-  }
-
-  /**
-   * The cutover's plan for one item (hub work-status-ladder, Cutover): where `place` would put it, from facts THIS store reads, or
-   * `undefined` when the item is not in needs_closeout or blocked, or its PR or inbox state cannot be read as merged or open. A PR
-   * is read through the PR-facts port and an inbox through the inbox port: merged, or closed without merging (`open: false`), or
-   * open (the default when a port does not say). Read-only.
-   */
-  async planPlacement(
-    id: WorkItemId
-  ): Promise<(Placement & { readonly from: WorkItemStatus; readonly pr: string }) | undefined> {
-    const current = await this.readOnCleanMain((conn) => this.getWith(conn, id));
-    if (!current) return undefined;
-    const from = String(current.status) as WorkItemStatus;
-    if (!PLACEABLE_FROM.includes(from)) return undefined;
-    const pr = optionalString(current.pr)?.trim() ?? "";
-    let state: DeliverableState | undefined;
-    if (pr && from === "needs_closeout") {
-      // The pinned repositories decide what a pull request is: one outside the pin is not a deliverable, so it is never read
-      // and never places the item ("unknown").
-      const deliverable = classifyDeliverable(pr, this.prRepos);
-      if (deliverable?.kind === "pr") {
-        const facts = await this.readPrFacts(
-          String(id),
-          from,
-          "placement",
-          deliverable.url
-        );
-        state = facts.merged ? "merged" : facts.open === false ? "closed" : "open";
-      } else if (deliverable?.kind === "inbox" && this.inboxes) {
-        const inboxPort = this.inboxes;
-        const contribution = deliverable.contribution;
-        let inbox: InboxFacts | null;
-        try {
-          inbox = await withDeadline(
-            (signal) => inboxPort.stateOf(contribution, signal),
-            this.queryTimeoutMs
-          );
-        } catch {
-          throw new WorkItemGateFactsUnavailableError(String(id), from, "placement", "inbox");
-        }
-        state = !inbox
-          ? "unknown"
-          : inbox.merged
-            ? "merged"
-            : inbox.open === false
-              ? "closed"
-              : "open";
-      } else {
-        state = "unknown";
-      }
-    }
-    const placement = placementFor({
-      type: String(current.type) as WorkItemType,
-      status: from,
-      pr,
-      state,
-    });
-    return placement ? { ...placement, from, pr } : undefined;
-  }
-
-  /**
-   * One-shot cutover (hub work-status-ladder, Cutover): moves an item out of needs_closeout or blocked to the stage the facts THIS
-   * store reads name (`planPlacement`), through the same writer path as any patch but WITHOUT the exit-artifact gate. The caller's
-   * `to` is a claim, not an instruction: it must equal the plan or the move is refused, so `done` is reached only when this store
-   * itself read the PR (or inbox) merged, `needs_research` only for a spike, and `blocked` goes to `needs_triage` only. Any other
-   * source (needs_merge included: the migration moves it to needs_closeout) or destination is refused. The fixed reason comes from
-   * the plan. It stamps `status_revision` like every status change; the lock re-checks that the item is still in the planned
-   * status with the planned `pr`. The predicate (`evaluateMove`) has no legacy case.
-   */
-  async place(
-    input: { readonly id: WorkItemId; readonly to: WorkItemStatus },
-    principalId: string
-  ): Promise<WorkItem> {
-    const plan = await this.planPlacement(input.id);
-    if (!plan || plan.to !== input.to) {
-      throw new WorkItemGateUnmetError(
-        String(input.id),
-        plan?.from ?? "legacy",
-        input.to,
-        "path"
-      );
-    }
-    return this.patchWith(
-      { id: input.id, reason: plan.reason, set: { status: plan.to } } as WorkItemsPatchInput,
-      principalId,
-      { from: plan.from, pr: plan.pr }
-    );
-  }
-
-  private async patchWith(
-    input: WorkItemsPatchInput,
-    principalId: string,
-    placement: false | { readonly from: string; readonly pr: string }
-  ): Promise<WorkItem> {
     const principal = requirePrincipal(principalId);
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
@@ -4288,7 +4185,7 @@ export class DoltgresWorkItemAdapter
       );
     }
     // PR facts are read BEFORE the writer lock (5 s timeout, 60 s cache per PR URL). A failed read is a 503 and nothing is written.
-    const prefetched = placement ? undefined : await this.prefetchPrFacts(id, set);
+    const prefetched = await this.prefetchPrFacts(id, set);
     // Stamped inside the lock, once the row being replaced is read: a status change restamps `status_revision`.
     let statusRevisionClause: string | undefined;
 
@@ -4335,8 +4232,7 @@ export class DoltgresWorkItemAdapter
           if (conflict) throw conflict;
           proof.beforeRow = current;
           // GATE_IS_ONE_PREDICATE: the move this patch makes must be allowed (task.0122).
-          if (placement) this.assertPlaceable(current, set, placement);
-          else await this.enforceGate(conn, current, set, prefetched);
+          await this.enforceGate(conn, current, set, prefetched);
           if (this.gateMove(current, set)) {
             // STATUS_REVISION: the revision at which the item entered its stage; the new revision is this one plus one.
             statusRevisionClause = "status_revision = revision + 1";
@@ -4460,8 +4356,7 @@ export class DoltgresWorkItemAdapter
       );
       if (
         !/^[0-9a-f]{40}$/.test(facts.head) ||
-        typeof facts.merged !== "boolean" ||
-        (facts.open !== undefined && typeof facts.open !== "boolean")
+        typeof facts.merged !== "boolean"
       )
         throw new PrFactsUnreadableError();
       if (this.prFactsCache.size >= 500) {
@@ -4581,22 +4476,6 @@ export class DoltgresWorkItemAdapter
       throw result.code === "gate_unmet"
         ? new WorkItemGateUnmetError(item.id, from, to, result.missing)
         : new WorkItemGateFactsUnavailableError(item.id, from, to, result.missing);
-    }
-  }
-
-  /** Inside the lock: the item is still in the planned legacy status with the planned `pr`; anything else is refused. */
-  private assertPlaceable(
-    current: Record<string, unknown>,
-    set: WorkItemsPatchSet,
-    placement: { readonly from: string; readonly pr: string }
-  ): void {
-    const from = String(current.status);
-    if (
-      !PLACEABLE_FROM.includes(from) ||
-      from !== placement.from ||
-      (optionalString(current.pr)?.trim() ?? "") !== placement.pr
-    ) {
-      throw new WorkItemGateUnmetError(String(current.id), from, String(set.status ?? ""), "path");
     }
   }
 

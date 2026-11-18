@@ -38,7 +38,7 @@ export function createPrFactsPort(
 			});
 			const head = pr.headSha.toLowerCase();
 			if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("unreadable PR head");
-			return { head, merged: pr.merged, open: pr.state === "open" };
+			return { head, merged: pr.merged };
 		},
 	};
 }
