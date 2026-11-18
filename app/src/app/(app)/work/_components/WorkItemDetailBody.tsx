@@ -151,6 +151,21 @@ export function WorkItemDetailBody({
 	const artifactsUnavailable = artifactPage?.unavailable === true || (artifactsCursor !== null && olderArtifacts.isError);
 	const historyUnavailable = historyPage?.unavailable === true || (historyCursor !== null && olderHistory.isError);
 	const selected = read?.artifact;
+	const selectedArtifact = selected !== undefined && "id" in selected ? selected : undefined;
+	const selectedBody = selectedArtifact && (
+		<div className="flex flex-col gap-2 py-2 pl-6 text-sm">
+			{selectedArtifact.note && <span className="text-muted-foreground">{selectedArtifact.note}</span>}
+			{selectedArtifact.body ? (
+				<Markdown content={selectedArtifact.body} />
+			) : selectedArtifact.rows?.length ? (
+				<Markdown content={scorecardMarkdown(selectedArtifact.rows)} />
+			) : selectedArtifact.url ? (
+				<Link href={selectedArtifact.url} className="underline" target="_blank" rel="noreferrer">
+					{selectedArtifact.url}
+				</Link>
+			) : null}
+		</div>
+	);
 
 	return (
 		<>
@@ -233,23 +248,25 @@ export function WorkItemDetailBody({
 														hoverTitle={[ref.note, formatRelativeTime(ref.createdAt)].filter(Boolean).join(" · ")}
 														Link={ScrollKeepingLink}
 													/>
-													{open && (
-														<div className="flex flex-col gap-2 py-2 pl-6 text-sm">
-															{selected.note && <span className="text-muted-foreground">{selected.note}</span>}
-															{selected.body ? (
-																<Markdown content={selected.body} />
-															) : selected.rows?.length ? (
-																<Markdown content={scorecardMarkdown(selected.rows)} />
-															) : selected.url ? (
-																<Link href={selected.url} className="underline" target="_blank" rel="noreferrer">
-																	{selected.url}
-																</Link>
-															) : null}
-														</div>
-													)}
+													{open && selectedBody}
 												</div>
 											);
 										})}
+									</div>
+								)}
+								{/* A selected artifact that is not on this page (a deep link, or after Older) opens below the list. */}
+								{selectedArtifact && !artifactPage?.refs.some((ref) => ref.id === selectedArtifact.id) && (
+									<div className={CITATION_LIST_CLASS}>
+										<CitationRow
+											direction="out"
+											relation={selectedArtifact.verdict.replace(/_/g, " ")}
+											tone={verdictTone(selectedArtifact.verdict)}
+											slug={KIND_TITLES[selectedArtifact.kind]}
+											href={itemScopedHref(item.id, searchParams, "artifact", null)}
+											hoverTitle={[selectedArtifact.note, formatRelativeTime(selectedArtifact.createdAt)].filter(Boolean).join(" · ")}
+											Link={ScrollKeepingLink}
+										/>
+										{selectedBody}
 									</div>
 								)}
 								{selected !== undefined && !("id" in selected) && (

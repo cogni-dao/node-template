@@ -187,6 +187,25 @@ describe("WorkItemDetail accessibility", () => {
     expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
   });
 
+  it("opens a selected artifact that is not on the shown page below the list", () => {
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          artifactRefs: { refs: [], nextCursor: null },
+          artifact: {
+            id: "wia-9", itemId: item.id, seq: 9, itemRevision: 3, kind: "design_review", subject: "s", verdict: "approve",
+            author: "u", createdAt: "2026-10-03T00:00:00.000Z", body: "Older review text",
+          },
+        }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Older review text")).toBeInTheDocument();
+  });
+
   it("renders no Artifacts or History section for a read without those parts", () => {
     render(<WorkItemDetail item={item} itemId={item.id} open onOpenChange={vi.fn()} />);
     expect(screen.queryByText("Artifacts")).not.toBeInTheDocument();
