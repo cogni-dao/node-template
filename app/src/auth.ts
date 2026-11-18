@@ -35,7 +35,7 @@ import {
 	resolveAttestedGithubUser,
 } from "@/app/_facades/identity/operator-attested-binding.server";
 import { verifyOperatorAttestation } from "@/app/_lib/auth/operator-attestation";
-import { verifySiwe } from "@/app/_lib/auth/siwe-verify";
+import { siweMessageAddress, verifySiwe } from "@/app/_lib/auth/siwe-verify";
 import { reconcileSettlementsAfterBinding } from "@/bootstrap/settlement-runtime";
 import { getNodeId, isLedgerApprover } from "@/shared/config";
 import {
@@ -189,7 +189,11 @@ export const authOptions: NextAuthOptions = {
 						.digest("hex")
 						.slice(0, 8);
 					getLog().info(
-						{ nonce, msgHash: messageHash },
+						{
+							nonce,
+							address: siweMessageAddress(credentials.message as string),
+							msgHash: messageHash,
+						},
 						"[SIWE] Authorize attempt",
 					);
 
@@ -256,7 +260,7 @@ export const authOptions: NextAuthOptions = {
 					// Record wallet binding (idempotent — skips if already bound).
 					// Failure must not block login — binding is supplementary, not auth-critical.
 					try {
-						await createBinding(db, user.id, "wallet", fields.address, {
+						await createBinding(db, user.id, "wallet", fields.walletKey, {
 							method: "siwe",
 							domain: nextAuthUrl.host,
 						});

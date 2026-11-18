@@ -12,8 +12,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createAndSignSiweMessage, generateTestWallet } from "@tests/_fixtures/auth/siwe-helpers";
+import { generateTestWallet } from "@tests/_fixtures/auth/siwe-helpers";
 import { NextRequest, type NextResponse } from "next/server";
+import { SiweMessage } from "siwe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAdminCheck } from "@/bootstrap/agent-authority";
@@ -54,6 +55,9 @@ vi.mock("@/bootstrap/identity", () => {
   };
   const repository: IdentityBindingRepositoryPort = {
     async insertNonce({ nonce, userId, expiresAt, provider }) {
+      // One open wallet challenge per principal: a new one retires the last.
+      if (provider === "wallet")
+        for (const row of ledger.nonces.values()) if (row.userId === userId && row.provider === "wallet") row.consumed = true;
       ledger.nonces.set(nonce, { userId, provider: provider ?? "github", expiresAt, consumed: false });
     },
     transaction: (run) => run(tx),
@@ -73,13 +77,17 @@ const post = (url: string, body?: unknown) =>
   new NextRequest(`http://localhost${url}`, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
 const wallet = generateTestWallet("wallet-bind-test");
+type Fields = { domain: string; uri: string; nonce: string; chainId: number; version: string; statement: string; issuedAt: string };
 const challenge = async () => {
   const res = await challengeRoute(post("/api/v1/identity/wallet/challenge"), undefined as never);
   expect(res.status).toBe(200);
-  return (await res.json()).message as { domain: string; nonce: string; chainId: number };
+  return (await res.json()).message as Fields;
 };
-const signedBy = async (signer: typeof wallet, fields: { domain: string; nonce: string; chainId: number }) =>
-  createAndSignSiweMessage({ domain: fields.domain, address: signer.account.address, nonce: fields.nonce, chainId: fields.chainId }, signer);
+/** Sign the challenge exactly as issued, or with one field tampered (what a hostile or confused signer might send). */
+const signedBy = async (signer: typeof wallet, fields: Fields, tamper: Partial<ConstructorParameters<typeof SiweMessage>[0]> = {}) => {
+  const message = new SiweMessage({ ...fields, address: signer.account.address, ...tamper }).prepareMessage();
+  return { message, signature: await signer.account.signMessage({ message }) };
+};
 const bind = (signed: { message: string; signature: string }) => bindRoute(post("/api/v1/identity/wallet/bind", signed), undefined as never);
 
 /** The admin check's wallet read, answered from the ledger exactly as `user_bindings` would. */
@@ -145,5 +153,30 @@ describe("POST /api/v1/identity/wallet/{challenge,bind}", () => {
     const res = await bind({ message: signed.message, signature: `0x${"00".repeat(65)}` });
     expect(res.status).toBe(401);
     expect(ledger.nonces.get(fields.nonce)?.consumed).toBe(false);
+  });
+
+  it("a message for another domain, chain, uri or carrying resources is refused and spends no nonce (defect: a signature obtained for another site binds here)", async () => {
+    as("agent-1", "bearer");
+    const fields = await challenge();
+    const tampers = [
+      { domain: "evil.example" },
+      { chainId: fields.chainId + 1 },
+      { uri: "https://evil.example" },
+      { resources: ["https://evil.example/anything"] },
+    ];
+    for (const tamper of tampers) {
+      const res = await bind(await signedBy(wallet, fields, tamper));
+      expect(res.status, JSON.stringify(tamper)).toBe(401);
+    }
+    expect(ledger.nonces.get(fields.nonce)?.consumed).toBe(false);
+    expect(ledger.bindings).toEqual([]);
+  });
+
+  it("a new challenge retires the previous one, so open nonces cannot pile up (defect: unbounded nonce rows per principal)", async () => {
+    as("agent-1", "bearer");
+    const first = await challenge();
+    const second = await challenge();
+    expect((await bind(await signedBy(wallet, first))).status).toBe(400);
+    expect((await bind(await signedBy(wallet, second))).status).toBe(200);
   });
 });

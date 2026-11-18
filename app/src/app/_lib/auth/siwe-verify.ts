@@ -14,13 +14,16 @@
  * @public
  */
 
+import { CHAIN_ID, normalizeWalletAddress } from "@cogni/node-shared";
 import { SiweMessage } from "siwe";
 
 export type SiweVerifyResult =
 	| {
 			readonly ok: true;
-			/** EIP-55 checksummed address the signature proves control of. */
+			/** The address as signed (EIP-55, an input checksum). Display only: users.wallet_address keeps this form. */
 			readonly address: string;
+			/** The canonical wallet key: lowercase. Every binding write and comparison uses this. */
+			readonly walletKey: string;
 			/** The nonce inside the signed message. */
 			readonly nonce: string;
 	  }
@@ -41,30 +44,72 @@ export function siweOrigin(): string {
 }
 
 /**
+ * ISSUED_VALUES_ARE_PINNED: the only domain, uri and chain a wallet-bind message may carry, and no `resources`. The challenge route issues
+ * these and the bind route verifies them (`pinned`), from this one helper; a signer (the node AI's) refuses anything else.
+ */
+export function siweIssued(): {
+	readonly domain: string;
+	readonly uri: string;
+	readonly chainId: number;
+} {
+	return { domain: siweDomain(), uri: siweOrigin(), chainId: CHAIN_ID };
+}
+
+/** The address a message claims, for logs before verification; null when the message does not parse. */
+export function siweMessageAddress(message: string): string | null {
+	try {
+		return new SiweMessage(message).address;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Verify a SIWE message and signature. Pass `nonce` to require an exact match (login: the CSRF token); omit it when the
- * caller redeems the nonce from its own store afterwards (wallet bind).
+ * caller redeems the nonce from its own store afterwards (wallet bind). `pinned` ties the message to what this node issued
+ * (`siweIssued()`: chain, uri origin, no resources); login does not pass it, so it verifies exactly as before.
  */
 export async function verifySiwe(input: {
 	message: string;
 	signature: string;
 	domain: string;
 	nonce?: string;
+	pinned?: { readonly chainId: number; readonly uri: string };
 }): Promise<SiweVerifyResult> {
 	try {
 		const siwe = new SiweMessage(input.message);
-		const result = await siwe.verify({
-			signature: input.signature,
-			domain: input.domain,
-			...(input.nonce !== undefined ? { nonce: input.nonce } : {}),
-		});
+		const result = await siwe.verify(
+			{
+				signature: input.signature,
+				domain: input.domain,
+				...(input.nonce !== undefined ? { nonce: input.nonce } : {}),
+			},
+			{ suppressExceptions: true },
+		);
 		if (!result.success) {
 			return {
 				ok: false,
 				error: String(result.error?.type ?? "verification_failed"),
 			};
 		}
+		if (input.pinned) {
+			if (siwe.chainId !== input.pinned.chainId) {
+				return { ok: false, error: "chain_id_mismatch" };
+			}
+			if (new URL(siwe.uri).origin !== new URL(input.pinned.uri).origin) {
+				return { ok: false, error: "uri_mismatch" };
+			}
+			if ((siwe.resources?.length ?? 0) > 0) {
+				return { ok: false, error: "resources_not_allowed" };
+			}
+		}
 		const { address, nonce } = result.data;
-		return { ok: true, address, nonce };
+		return {
+			ok: true,
+			address,
+			walletKey: normalizeWalletAddress(address),
+			nonce,
+		};
 	} catch (error) {
 		return {
 			ok: false,

@@ -50,7 +50,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/identity/bindings/import/start` [POST] - mint a session-owned nonce and return the pinned operator broker URL
   - `/api/v1/identity/bindings/import` [POST] - verify and consume an operator identity attestation into this node's binding ledger
   - `/api/v1/identity/wallet/challenge` [POST] - any principal (session or agent bearer): mint a single-use SIWE nonce and the message fields for this node's domain
-  - `/api/v1/identity/wallet/bind` [POST] - any principal: verify the signed challenge (shared `verifySiwe`), consume the nonce, bind the wallet to the caller; an agent may bind but is never a payee (AGENT_WALLET_IS_NOT_A_PAYEE)
+  - `/api/v1/identity/wallet/bind` [POST] - any principal: verify the signed challenge (shared `verifySiwe`), consume the nonce, bind the wallet to the caller, keyed by its lowercase address (EIP-55 is only the input checksum; the message is pinned to this node's domain, uri and chain, no resources); an agent may bind but is never a payee (AGENT_WALLET_IS_NOT_A_PAYEE)
   - `/api/v1/public/attribution/epochs` [GET] - closed epochs list (public, no auth)
   - `/api/v1/public/attribution/epochs/[id]/user-projections` [GET] - closed epoch user projections (public)
   - `/api/v1/public/attribution/epochs/[id]/claimants` [GET] - closed epoch claimant attribution (public)
