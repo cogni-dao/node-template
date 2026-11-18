@@ -19,8 +19,8 @@ import { getContainer } from "@/bootstrap/container";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export function GET(): NextResponse {
-  const signer = getContainer().serviceAuth.signer;
+export async function GET(): Promise<NextResponse> {
+  const signer = await getContainer().serviceAuth.getSigner();
   if (!signer) return NextResponse.json({ error: "not_found" }, { status: 404, headers: { "cache-control": "no-store" } });
   return NextResponse.json(signer.jwks(), { headers: { "cache-control": "public, max-age=60" } });
 }

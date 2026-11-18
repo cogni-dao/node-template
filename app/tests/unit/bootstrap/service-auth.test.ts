@@ -3,74 +3,86 @@
 
 /**
  * Module: `@tests/unit/bootstrap/service-auth`
- * Purpose: The node's thin wiring of service assertions and orgs (story.0038): trusted-homes parsing fails closed, the signer is absent until fully configured,
- *   the repo-spec is read through the GitHub contents API (never the raw CDN) with the raw Accept header, a 10 s timeout and a 64 KiB cap, a 403 or 429 is an owner
- *   outage, and the wallet mapping reads lowercase wallet bindings.
+ * Purpose: The node's composition of service assertions and orgs (story.0038). The GitHub read and the trusted-homes parser are package code with package tests;
+ *   here: the signer is absent when not configured, loud (one warning naming the reason, never the key) when partly configured or unusable, a valid key signs and
+ *   publishes; refusals log at debug for routine noise and warn otherwise; the wallet mapping reads lowercase wallet bindings.
  * Scope: No network, no database.
  * Side-effects: none
  */
 
-import { OwnerSourceUnavailableError } from "@cogni/agent-grants/orgs";
+import { createServiceAssertionSigner } from "@cogni/agent-grants/service-auth";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentAuthoritySql } from "@/bootstrap/agent-authority";
-import { buildSigner, fetchRepoSpecFromGithub, parseTrustedHomes, usersForWallets } from "@/bootstrap/service-auth";
+import { buildSigner, createServiceAuth, usersForWallets } from "@/bootstrap/service-auth";
 
-const REF = "https://github.com/cogni-dao/poly";
+const logger = () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() });
 
-describe("parseTrustedHomes", () => {
-  it("keeps well-formed homes and drops everything else; unset or unparseable is none", () => {
-    const good = { issuer: "https://cognidao.org", jwksUri: "https://cognidao.org/.well-known/jwks.json", services: ["git-review"] };
-    expect(parseTrustedHomes(JSON.stringify([good, { ...good, issuer: "http://x.io" }, { ...good, jwksUri: "http://x.io/j" }, { ...good, services: [1] }, null]))).toEqual([good]);
-    expect(parseTrustedHomes(undefined)).toEqual([]);
-    expect(parseTrustedHomes("not json")).toEqual([]);
-    expect(parseTrustedHomes('{"issuer":"x"}')).toEqual([]);
-  });
-});
+async function jwk() {
+  const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair;
+  const k = (await crypto.subtle.exportKey("jwk", pair.privateKey)) as { kty: string; crv: string; d: string; x: string };
+  return { kty: k.kty, crv: k.crv, d: k.d, x: k.x };
+}
 
 describe("buildSigner", () => {
-  it("is absent until the key, the kid and this node's origin are all set, and absent for an unusable key", () => {
-    expect(buildSigner({})).toBeNull();
-    expect(buildSigner({ SERVICE_ASSERTION_SIGNING_KID: "k", APP_BASE_URL: "https://node.example" })).toBeNull();
-    expect(buildSigner({ SERVICE_ASSERTION_SIGNING_JWK: "{bad", SERVICE_ASSERTION_SIGNING_KID: "k", APP_BASE_URL: "https://node.example" })).toBeNull();
+  const base = { SERVICE_ASSERTION_SIGNING_KID: "k1", APP_BASE_URL: "https://node.example" };
+
+  it("is absent and silent when this node is not configured as a home", async () => {
+    const log = logger();
+    expect(await buildSigner({}, log)).toBeNull();
+    expect(await buildSigner({ APP_BASE_URL: "https://node.example" }, log)).toBeNull();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("a valid key gives a signer whose jwks carries only public members", async () => {
+    const key = await jwk();
+    const signer = await buildSigner({ ...base, SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify(key) }, logger());
+    expect(signer?.jwks().keys[0]).toMatchObject({ kid: "k1", x: key.x });
+    expect(JSON.stringify(signer?.jwks())).not.toContain(key.d);
+  });
+
+  it("a partly configured or unusable key is null with ONE warning naming the reason, never the key", async () => {
+    const good = await jwk();
+    const other = await jwk();
+    const cases: Array<[Record<string, string | undefined>, string]> = [
+      [{ SERVICE_ASSERTION_SIGNING_KID: "k1", APP_BASE_URL: "https://node.example" }, "signing_jwk_missing"],
+      [{ SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify(good), APP_BASE_URL: "https://node.example" }, "signing_kid_missing"],
+      [{ ...base, SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify(good), APP_BASE_URL: undefined }, "app_base_url_unusable"],
+      [{ ...base, SERVICE_ASSERTION_SIGNING_JWK: "{bad" }, "signing_jwk_not_json"],
+      [{ ...base, SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify({ kty: "RSA" }) }, "signer_config_invalid"],
+      [{ ...base, SERVICE_ASSERTION_SIGNING_JWK: JSON.stringify({ ...good, x: other.x }) }, "signing_key_mismatch"],
+    ];
+    for (const [env, reason] of cases) {
+      const log = logger();
+      expect(await buildSigner(env, log), reason).toBeNull();
+      expect(log.warn, reason).toHaveBeenCalledTimes(1);
+      const [fields] = log.warn.mock.calls[0] as [Record<string, unknown>];
+      expect(fields.reason).toBe(reason);
+      expect(JSON.stringify(log.warn.mock.calls)).not.toContain(good.d);
+    }
   });
 });
 
-const ok = (body: string, init: ResponseInit = {}) => Promise.resolve(new Response(body, { status: 200, ...init }));
+describe("createServiceAuth: refusal log levels", () => {
+  const rig = async (code: "untrusted_issuer" | "malformed" | "bad_signature" | "replayed") => {
+    const log = logger();
+    const auth = createServiceAuth({ env: {}, nodeId: "node-x", sql: (() => Promise.resolve([])) as unknown as AgentAuthoritySql, log: log as never });
+    // No trusted home is configured, so any well-formed token is `untrusted_issuer` and junk is `malformed`.
+    const key = await jwk();
+    const signer = createServiceAssertionSigner({ issuer: "https://home.example", kid: "k", privateJwk: key as never });
+    const token = code === "malformed" ? "junk" : await signer.sign({ service: "git-review", audienceNodeId: "node-x", scope: "knowledge:read" });
+    await auth.verify(token);
+    return log;
+  };
 
-describe("fetchRepoSpecFromGithub", () => {
-  it("reads the default branch through the contents API with the raw Accept header, never the raw CDN", async () => {
-    const fetchImpl = vi.fn((_url: unknown, _init?: RequestInit) => ok("version: 1\n"));
-    expect(await fetchRepoSpecFromGithub("https://github.com/Cogni-DAO/Poly", undefined, fetchImpl as unknown as typeof fetch)).toBe("version: 1\n");
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://api.github.com/repos/cogni-dao/poly/contents/.cogni/repo-spec.yaml");
-    expect(url).not.toContain("raw.githubusercontent.com");
-    expect((init.headers as Record<string, string>).accept).toBe("application/vnd.github.raw");
-    expect(init.signal).toBeDefined();
-  });
-
-  it("a monorepo path is read from that path in the same repo; a traversal or absolute path is refused before any request", async () => {
-    const fetchImpl = vi.fn((_url: unknown, _init?: RequestInit) => ok("version: 1\n"));
-    await fetchRepoSpecFromGithub(REF, "nodes/operator/.cogni/repo-spec.yaml", fetchImpl as unknown as typeof fetch);
-    expect((fetchImpl.mock.calls[0] as [string])[0]).toBe("https://api.github.com/repos/cogni-dao/poly/contents/nodes/operator/.cogni/repo-spec.yaml");
-    for (const path of ["../.cogni/repo-spec.yaml", "/x/.cogni/repo-spec.yaml"])
-      await expect(fetchRepoSpecFromGithub(REF, path, fetchImpl as unknown as typeof fetch), path).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("a 403 or 429 (rate limit), any other failure, a network error and an oversize body are OwnerSourceUnavailableError", async () => {
-    for (const status of [403, 429, 404, 500]) {
-      const fetchImpl = vi.fn(() => Promise.resolve(new Response("x", { status })));
-      await expect(fetchRepoSpecFromGithub(REF, undefined, fetchImpl as unknown as typeof fetch), String(status)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
-    }
-    await expect(fetchRepoSpecFromGithub(REF, undefined, (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
-    const big = vi.fn(() => ok("x".repeat(64 * 1024 + 1)));
-    await expect(fetchRepoSpecFromGithub(REF, undefined, big as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
-  });
-
-  it("refuses a ref that is not a github.com repo before any request", async () => {
-    const fetchImpl = vi.fn();
-    await expect(fetchRepoSpecFromGithub("https://evil.example/a/b", undefined, fetchImpl as unknown as typeof fetch)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it("untrusted_issuer and malformed are debug; the issuer and service of a parsed claim set are logged, never the token", async () => {
+    const untrusted = await rig("untrusted_issuer");
+    expect(untrusted.debug).toHaveBeenCalledTimes(1);
+    expect(untrusted.warn).not.toHaveBeenCalled();
+    expect(untrusted.debug.mock.calls[0]?.[0]).toMatchObject({ code: "untrusted_issuer", issuer: "https://home.example", service: "git-review" });
+    const malformed = await rig("malformed");
+    expect(malformed.debug).toHaveBeenCalledTimes(1);
+    expect(malformed.warn).not.toHaveBeenCalled();
+    expect(JSON.stringify(malformed.debug.mock.calls)).not.toContain("junk");
   });
 });
 

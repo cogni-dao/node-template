@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SqlTag } from "../src";
 import {
+  assertSigningKeyMatches,
   createMemoryReplayStore,
   createServiceAssertionSigner,
   createServiceAssertionVerifier,
@@ -12,6 +13,7 @@ import {
   JWKS_MAX_AGE_MS,
   JWKS_REFETCH_MIN_INTERVAL_MS,
   nodeAudience,
+  parseTrustedHomes,
   requestServiceAccess,
   servicePrincipalId,
   type TrustedHome,
@@ -262,5 +264,30 @@ describe("service principal", () => {
     expect(store.roles.filter((r) => r.principal === first.userId)).toHaveLength(1);
     expect(await store.hasLiveRole(first.userId, "knowledge:read")).toBe(false);
     await expect(requestServiceAccess({ ...base, scope: "knowledge:contribute" })).rejects.toMatchObject({ code: "invalid_scope" });
+  });
+});
+
+describe("parseTrustedHomes", () => {
+  const good = { issuer: "https://cognidao.org", jwksUri: "https://cognidao.org/.well-known/jwks.json", services: ["git-review"] };
+
+  it("keeps well-formed homes and drops everything else; unset or unparseable is none", () => {
+    expect(parseTrustedHomes(JSON.stringify([good, { ...good, issuer: "http://x.io" }, { ...good, jwksUri: "http://x.io/j" }, { ...good, jwksUri: "not a url" }, { ...good, services: "x" }, null]))).toEqual([good]);
+    expect(parseTrustedHomes(undefined)).toEqual([]);
+    expect(parseTrustedHomes("not json")).toEqual([]);
+    expect(parseTrustedHomes('{"issuer":"x"}')).toEqual([]);
+  });
+
+  it("keeps only the services that match the slug pattern", () => {
+    const [home] = parseTrustedHomes(JSON.stringify([{ ...good, services: ["git-review", "Node AI", "node-ai", 7, "", "a".repeat(65), "UPPER"] }]));
+    expect(home?.services).toEqual(["git-review", "node-ai"]);
+  });
+});
+
+describe("assertSigningKeyMatches", () => {
+  it("passes for a matching pair and throws when x belongs to another key", async () => {
+    const a = await keyPair();
+    const b = await keyPair();
+    await expect(assertSigningKeyMatches(a)).resolves.toBeUndefined();
+    await expect(assertSigningKeyMatches({ ...a, x: b.x })).rejects.toThrow();
   });
 });

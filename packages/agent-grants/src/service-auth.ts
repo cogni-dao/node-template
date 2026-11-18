@@ -39,7 +39,8 @@ const MAX_TOKEN_CHARS = 4096;
 const JWKS_FETCH_TIMEOUT_MS = 5_000;
 const JWKS_MAX_BYTES = 64 * 1024;
 
-const SERVICE_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** A service slug: lowercase, starts with a letter or digit, at most 64 characters. */
+export const SERVICE_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SCOPE_CLAIM = /^[A-Za-z0-9:._-]+(?: [A-Za-z0-9:._-]+)*$/;
 const B64URL = /^[A-Za-z0-9_-]+$/;
 
@@ -261,6 +262,43 @@ export type ServiceAssertionResult = VerifiedServiceAssertion | ServiceAssertion
 
 export interface ServiceAssertionVerifier {
   verify(token: string): Promise<ServiceAssertionResult>;
+}
+
+/**
+ * The trusted-homes JSON (`[{ issuer, jwksUri, services }]`), or `[]` when unset or unusable (every assertion is then `untrusted_issuer`: fail closed). An
+ * entry needs a canonical https `issuer` and a `jwksUri` that parses as an https URL; only the services that match `SERVICE_SLUG` are kept.
+ */
+export function parseTrustedHomes(raw: string | undefined): TrustedHome[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry): TrustedHome[] => {
+      const e = entry as { issuer?: unknown; jwksUri?: unknown; services?: unknown } | null;
+      if (!e || typeof e.issuer !== "string" || !isCanonicalHttpsOrigin(e.issuer) || typeof e.jwksUri !== "string" || !Array.isArray(e.services)) return [];
+      try {
+        if (new URL(e.jwksUri).protocol !== "https:") return [];
+      } catch {
+        return [];
+      }
+      const services = e.services.filter((s): s is string => typeof s === "string" && SERVICE_SLUG.test(s));
+      return [{ issuer: e.issuer, jwksUri: e.jwksUri, services }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Proves the public `x` of a private JWK belongs to its `d`: signs a probe with the private key and verifies it with `x` alone. Throws when it does not, so a
+ * node never publishes a key set that no assertion it signs can satisfy.
+ */
+export async function assertSigningKeyMatches(privateJwk: Ed25519PrivateJwk): Promise<void> {
+  const probe = enc.encode("cogni-signing-key-self-check");
+  const priv = await crypto.subtle.importKey("jwk", { kty: "OKP", crv: "Ed25519", d: privateJwk.d, x: privateJwk.x }, { name: "Ed25519" }, false, ["sign"]);
+  const pub = await crypto.subtle.importKey("jwk", { kty: "OKP", crv: "Ed25519", x: privateJwk.x }, { name: "Ed25519" }, false, ["verify"]);
+  const signature = await crypto.subtle.sign({ name: "Ed25519" }, priv, probe);
+  if (!(await crypto.subtle.verify({ name: "Ed25519" }, pub, signature, probe))) throw new Error("signing key: public x does not match private d");
 }
 
 /** Default JWKS fetch: https only, 5 s timeout, 64 KiB cap. */

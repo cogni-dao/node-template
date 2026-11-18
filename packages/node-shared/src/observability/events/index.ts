@@ -76,6 +76,8 @@ export const EVENT_NAMES = {
 	SERVICE_AUTH_VERIFIED: "service_auth.verified",
 	/** A service assertion was refused (story.0038): code, and issuer and service when the claims named them. Never the token. */
 	SERVICE_AUTH_REJECTED: "service_auth.rejected",
+	/** The signing key could not be used (partly configured, unusable, or a public key that is not the private key's): reason only, never the key. */
+	SERVICE_AUTH_SIGNER_UNAVAILABLE: "service_auth.signer_unavailable",
 	/** An org was created or found for an owner source (story.0038): orgUserId, sourceRef. */
 	ORG_ENSURED: "org.ensured",
 	/** revocable agent keys (task.0070): upgraded / rotated (a pending key issued), confirmed, revoked, refused. Carry userId and credentialId, never a key or hash. */

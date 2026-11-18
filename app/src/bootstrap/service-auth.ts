@@ -3,14 +3,14 @@
 
 /**
  * Module: `@bootstrap/service-auth`
- * Purpose: This node's thin wiring of `@cogni-dao/agent-grants` service assertions and orgs: the optional signer (this node as a home), the verifier over the
+ * Purpose: This node's composition of `@cogni-dao/agent-grants` service assertions and orgs: the optional signer (this node as a home), the verifier over the
  *   trusted homes (this node as a target), and the org owner source over the node's repo-spec parser and wallet bindings.
- * Scope: Composition only. Reads three optional env values and one GitHub contents URL; every decision lives in the package. Never logs a token or a key.
+ * Scope: Env reading and composition only. The GitHub read, the trusted-homes parser, the signer, the verifier and every decision live in the package (the operator
+ *   plugs in the same code). Never logs a token or a key.
  * Invariants:
  *   - ALL_OPTIONAL: no signing key = no signer (an outbound need is 503) and no jwks route; no trusted homes = every assertion is `untrusted_issuer`.
- *   - OWNER_READ_VIA_CONTENTS_API: the repo-spec is read from `api.github.com/.../contents/<path>` (default `.cogni/repo-spec.yaml`) (`Accept: application/vnd.github.raw`), never from
- *     the raw.githubusercontent.com CDN, whose five-minute cache would double the owners' staleness. 10 s timeout, 64 KiB cap, github.com repos only. A 403 or 429
- *     (rate limit) or any other failure is `OwnerSourceUnavailableError`.
+ *   - SIGNER_FAILS_LOUD: a partly configured or unusable signing key (bad JSON, bad shape, a public `x` that is not the private `d`'s) is no signer plus one
+ *     `service_auth.signer_unavailable` warning naming the reason, never a silent null and never the key.
  *   - APPROVERS_ONLY: owners are `activity_ledger.approvers` mapped to the users that bound those wallets (`user_bindings`, provider `wallet`, lowercase).
  *   - SINGLE_REPLICA_REPLAY: the replay store is in memory; a target with several replicas needs a shared store behind the same interface.
  * Side-effects: IO (HTTPS to GitHub, service-role reads)
@@ -19,35 +19,30 @@
  */
 
 import {
-  canonicalRepoRef,
   createOwnerSources,
-  DEFAULT_REPO_SPEC_PATH,
   createRepoSpecOwnerSource,
-  OwnerSourceUnavailableError,
+  fetchRepoSpecFromGithub,
+  type OrgOwners,
 } from "@cogni/agent-grants/orgs";
 import {
+  assertSigningKeyMatches,
   createMemoryReplayStore,
   createServiceAssertionSigner,
   createServiceAssertionVerifier,
   type Ed25519PrivateJwk,
-  isCanonicalHttpsOrigin,
+  parseTrustedHomes,
   type ServiceAssertionResult,
   type ServiceAssertionSigner,
   type ServiceAssertionVerifier,
-  type TrustedHome,
 } from "@cogni/agent-grants/service-auth";
-import type { OrgOwners } from "@cogni/agent-grants/orgs";
 import { extractLedgerApprovers, parseRepoSpec } from "@cogni/repo-spec";
 import type { Logger } from "pino";
 import { EVENT_NAMES } from "@/shared/observability";
 import type { AgentAuthoritySql } from "./agent-authority";
 
-const FETCH_TIMEOUT_MS = 10_000;
-const MAX_REPO_SPEC_BYTES = 64 * 1024;
-
 export interface ServiceAuth {
-  /** This node as a home: null until the signing key and kid are configured. */
-  readonly signer: ServiceAssertionSigner | null;
+  /** This node as a home: the signer, or null until the signing key and kid are configured and valid. Resolved once. */
+  getSigner(): Promise<ServiceAssertionSigner | null>;
   /** This node as a target: refuses every assertion until a trusted home is configured. */
   readonly verifier: ServiceAssertionVerifier;
   /** Owner reads for org decisions (cached inside the source). */
@@ -56,88 +51,48 @@ export interface ServiceAuth {
   verify(token: string): Promise<ServiceAssertionResult>;
 }
 
-/** The trusted-homes JSON, or `[]` when unset or unusable (every assertion is then `untrusted_issuer`: fail closed). */
-export function parseTrustedHomes(raw: string | undefined): TrustedHome[] {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((entry): TrustedHome[] => {
-      const e = entry as { issuer?: unknown; jwksUri?: unknown; services?: unknown } | null;
-      if (
-        !e ||
-        typeof e.issuer !== "string" ||
-        !isCanonicalHttpsOrigin(e.issuer) ||
-        typeof e.jwksUri !== "string" ||
-        !e.jwksUri.startsWith("https://") ||
-        !Array.isArray(e.services) ||
-        !e.services.every((s) => typeof s === "string")
-      )
-        return [];
-      return [{ issuer: e.issuer, jwksUri: e.jwksUri, services: e.services as string[] }];
-    });
-  } catch {
-    return [];
-  }
-}
-
-/** The signer from the two env values and this node's own origin; null when any is missing or unusable. */
-export function buildSigner(env: {
+interface SignerEnv {
   readonly SERVICE_ASSERTION_SIGNING_JWK?: string | undefined;
   readonly SERVICE_ASSERTION_SIGNING_KID?: string | undefined;
   readonly APP_BASE_URL?: string | undefined;
-}): ServiceAssertionSigner | null {
-  if (!env.SERVICE_ASSERTION_SIGNING_JWK || !env.SERVICE_ASSERTION_SIGNING_KID || !env.APP_BASE_URL) return null;
-  try {
-    return createServiceAssertionSigner({
-      issuer: new URL(env.APP_BASE_URL).origin,
-      kid: env.SERVICE_ASSERTION_SIGNING_KID,
-      privateJwk: JSON.parse(env.SERVICE_ASSERTION_SIGNING_JWK) as Ed25519PrivateJwk,
-    });
-  } catch {
-    return null;
-  }
 }
 
-/** The repo-spec of `ref` at `path` on its default branch, through the GitHub contents API. Throws `OwnerSourceUnavailableError` on any failure. */
-export async function fetchRepoSpecFromGithub(
-  ref: string,
-  path: string = DEFAULT_REPO_SPEC_PATH,
-  fetchImpl: typeof fetch = fetch
-): Promise<string> {
-  const canonical = canonicalRepoRef(ref, path);
-  if (!canonical) throw new OwnerSourceUnavailableError("ref is not a github repo url or path is not a repo-spec path");
-  const { pathname } = new URL(canonical.split("#")[0] as string);
-  const url = `https://api.github.com/repos${pathname}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
-  let res: Response;
+/**
+ * The signer from the two env values and this node's own origin. Null and silent when neither signing value is set (this node is not a home); null with ONE
+ * warning naming the reason when it is partly configured or the key is unusable. Never logs the key.
+ */
+export async function buildSigner(env: SignerEnv, log: Pick<Logger, "warn">): Promise<ServiceAssertionSigner | null> {
+  if (!env.SERVICE_ASSERTION_SIGNING_JWK && !env.SERVICE_ASSERTION_SIGNING_KID) return null;
+  const fail = (reason: string): null => {
+    log.warn({ event: EVENT_NAMES.SERVICE_AUTH_SIGNER_UNAVAILABLE, reason }, EVENT_NAMES.SERVICE_AUTH_SIGNER_UNAVAILABLE);
+    return null;
+  };
+  if (!env.SERVICE_ASSERTION_SIGNING_JWK) return fail("signing_jwk_missing");
+  if (!env.SERVICE_ASSERTION_SIGNING_KID) return fail("signing_kid_missing");
+  let origin: string;
   try {
-    res = await fetchImpl(url, {
-      headers: { accept: "application/vnd.github.raw", "x-github-api-version": "2022-11-28", "user-agent": "cogni-node" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      redirect: "error",
-    });
-  } catch (error) {
-    throw new OwnerSourceUnavailableError("repo-spec fetch failed", error);
+    origin = new URL(env.APP_BASE_URL ?? "").origin;
+  } catch {
+    return fail("app_base_url_unusable");
   }
-  if (res.status === 403 || res.status === 429) throw new OwnerSourceUnavailableError("github rate limited");
-  if (!res.ok) throw new OwnerSourceUnavailableError(`repo-spec fetch status ${res.status}`);
-  const declared = Number(res.headers.get("content-length") ?? 0);
-  if (declared > MAX_REPO_SPEC_BYTES) throw new OwnerSourceUnavailableError("repo-spec too large");
-  const reader = res.body?.getReader();
-  if (!reader) throw new OwnerSourceUnavailableError("repo-spec has no body");
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_REPO_SPEC_BYTES) {
-      await reader.cancel();
-      throw new OwnerSourceUnavailableError("repo-spec too large");
-    }
-    chunks.push(value);
+  let privateJwk: Ed25519PrivateJwk;
+  try {
+    privateJwk = JSON.parse(env.SERVICE_ASSERTION_SIGNING_JWK) as Ed25519PrivateJwk;
+  } catch {
+    return fail("signing_jwk_not_json");
   }
-  return new TextDecoder().decode(Buffer.concat(chunks));
+  let signer: ServiceAssertionSigner;
+  try {
+    signer = createServiceAssertionSigner({ issuer: origin, kid: env.SERVICE_ASSERTION_SIGNING_KID, privateJwk });
+  } catch {
+    return fail("signer_config_invalid");
+  }
+  try {
+    await assertSigningKeyMatches(privateJwk);
+  } catch {
+    return fail("signing_key_mismatch");
+  }
+  return signer;
 }
 
 /** The users that bound each of these lowercased wallets (`user_bindings`, provider `wallet`). */
@@ -150,12 +105,13 @@ export async function usersForWallets(sql: AgentAuthoritySql, wallets: string[])
   return rows.map((row) => row.user_id);
 }
 
+/** Refusals that are routine noise (an unknown caller, junk input) log at debug; every other refusal is a warning. */
+const QUIET_REFUSALS: ReadonlySet<string> = new Set(["untrusted_issuer", "malformed"]);
+
 export function createServiceAuth(deps: {
-  env: {
-    readonly SERVICE_ASSERTION_SIGNING_JWK?: string | undefined;
-    readonly SERVICE_ASSERTION_SIGNING_KID?: string | undefined;
+  env: SignerEnv & {
     readonly SERVICE_TRUSTED_HOMES?: string | undefined;
-    readonly APP_BASE_URL?: string | undefined;
+    readonly GITHUB_READ_TOKEN?: string | undefined;
   };
   nodeId: string;
   sql: AgentAuthoritySql;
@@ -168,13 +124,14 @@ export function createServiceAuth(deps: {
   });
   const owners = createOwnerSources([
     createRepoSpecOwnerSource({
-      fetchRepoSpec: (ref, path) => fetchRepoSpecFromGithub(ref, path),
+      fetchRepoSpec: (ref, path) => fetchRepoSpecFromGithub(ref, path, { token: deps.env.GITHUB_READ_TOKEN }),
       extractApprovers: (yaml) => extractLedgerApprovers(parseRepoSpec(yaml)),
       usersForWallets: (wallets) => usersForWallets(deps.sql, wallets),
     }),
   ]);
+  let signer: Promise<ServiceAssertionSigner | null> | undefined;
   return {
-    signer: buildSigner(deps.env),
+    getSigner: () => (signer ??= buildSigner(deps.env, deps.log)),
     verifier,
     owners,
     async verify(token) {
@@ -185,7 +142,8 @@ export function createServiceAuth(deps: {
           { event: EVENT_NAMES.SERVICE_AUTH_VERIFIED, issuer: result.issuer, service: result.service },
           EVENT_NAMES.SERVICE_AUTH_VERIFIED
         );
-      else deps.log.warn(
+      else
+        deps.log[QUIET_REFUSALS.has(result.code) ? "debug" : "warn"](
           { event: EVENT_NAMES.SERVICE_AUTH_REJECTED, code: result.code, issuer: result.issuer, service: result.service },
           EVENT_NAMES.SERVICE_AUTH_REJECTED
         );

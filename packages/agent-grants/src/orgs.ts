@@ -197,6 +197,57 @@ export function createOwnerSources(sources: readonly OwnerSource[]): { owners(so
   };
 }
 
+const GITHUB_FETCH_TIMEOUT_MS = 10_000;
+const MAX_REPO_SPEC_BYTES = 64 * 1024;
+
+/**
+ * The repo-spec of `ref` at `path` on the repo's default branch, through the GitHub contents API (`Accept: application/vnd.github.raw`), never the raw CDN
+ * (its five-minute cache would double the owners' staleness). github.com repos only; 10 s timeout; 64 KiB cap; a redirect is an error; an optional `token`
+ * is sent as a bearer (it lifts the unauthenticated rate limit). A 403 or 429 (rate limit) and every other failure throw `OwnerSourceUnavailableError`.
+ * Pass this as `fetchRepoSpec` of `createRepoSpecOwnerSource`.
+ */
+export async function fetchRepoSpecFromGithub(
+  ref: string,
+  path: string = DEFAULT_REPO_SPEC_PATH,
+  opts: { fetch?: typeof fetch; token?: string | undefined } = {}
+): Promise<string> {
+  const canonical = canonicalRepoRef(ref, path);
+  if (!canonical) throw new OwnerSourceUnavailableError("ref is not a github repo url or path is not a repo-spec path");
+  const { pathname } = new URL(canonical.split("#")[0] as string);
+  const url = `https://api.github.com/repos${pathname}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
+  const headers: Record<string, string> = { accept: "application/vnd.github.raw", "x-github-api-version": "2022-11-28", "user-agent": "cogni-node" };
+  if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+  let res: Response;
+  try {
+    res = await (opts.fetch ?? fetch)(url, { headers, signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS), redirect: "error" });
+  } catch (error) {
+    throw new OwnerSourceUnavailableError("repo-spec fetch failed", error);
+  }
+  if (res.status === 403 || res.status === 429) throw new OwnerSourceUnavailableError("github rate limited");
+  if (!res.ok) throw new OwnerSourceUnavailableError(`repo-spec fetch status ${res.status}`);
+  if (Number(res.headers.get("content-length") ?? 0) > MAX_REPO_SPEC_BYTES) throw new OwnerSourceUnavailableError("repo-spec too large");
+  const reader = res.body?.getReader();
+  if (!reader) throw new OwnerSourceUnavailableError("repo-spec has no body");
+  const bytes = new Uint8Array(MAX_REPO_SPEC_BYTES);
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (total + value.byteLength > MAX_REPO_SPEC_BYTES) {
+        await reader.cancel();
+        throw new OwnerSourceUnavailableError("repo-spec too large");
+      }
+      bytes.set(value, total);
+      total += value.byteLength;
+    }
+  } catch (error) {
+    if (error instanceof OwnerSourceUnavailableError) throw error;
+    throw new OwnerSourceUnavailableError("repo-spec read failed", error);
+  }
+  return new TextDecoder().decode(bytes.subarray(0, total));
+}
+
 /** The slice of the owner sources the approval gate reads. */
 export interface OrgOwners {
   owners(source: OrgSource): Promise<readonly string[]>;
