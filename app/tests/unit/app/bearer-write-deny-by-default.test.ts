@@ -158,8 +158,11 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       "chat.completions",
       "identity.beneficiary.propose",
       "identity.beneficiary.withdraw",
+      // An AI binds its own GitHub account: its own nonce (start, whose id is the operation contract's `identity.attestation.start.v1`), then the operator's attestation for it (task.0091).
+      "identity.bindings.import",
       "identity.wallet.bind",
       "identity.wallet.challenge",
+      "identityAttestationStartOperation.id",
       // The service runs the one admin check on the caller itself, for a session and a bearer alike; close lets an owner close their own inbox without it (task.0144).
       "knowledge.contributions.close",
       "knowledge.contributions.merge",

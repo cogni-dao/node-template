@@ -104,6 +104,8 @@ type AuthRequiredOptions = {
 
 type AuthOptionalOptions = {
   routeId: string;
+  /** DENY_BY_DEFAULT: as on a required route. The gate runs whenever a caller resolves, so an optional route a bearer may write through declares its own-data reason too. */
+  bearerWrite?: string;
   auth: {
     mode: "optional";
     getSessionUser: () => Promise<SessionUser | null>;

@@ -11,8 +11,9 @@
  *   row for the local user who owns the one-time nonce.
  *   Does not issue attestations (operator's job) or run identity resolution.
  * Invariants:
- *   - LOCAL_SESSION_REQUIRED: token alone is useless — a live local session
- *     must own and consume the one-time nonce.
+ *   - OWN_NONCE_REQUIRED: token alone is useless — the calling principal (a live session, or an AI bearer key) must own and
+ *     consume the one-time nonce. An AI binds its own GitHub account this way, so receipts the bound login authors resolve to the AI
+ *     as earner (`user_bindings` github -> the AI's `users.id`), never to a human.
  *   - FAIL_CLOSED: JWKS unreachable → 503 jwks_unavailable, never a silent bind.
  *   - NO_AUTO_MERGE: github id owned by a different user → 409 already_linked.
  *   - NODE_WRITES_OWN_LEDGER: binding + evidence rows are written locally with
@@ -29,8 +30,8 @@ import { z } from "zod";
 
 import { redeemAttestedGithubBinding } from "@/app/_facades/identity/operator-attested-binding.server";
 import { verifyOperatorAttestation } from "@/app/_lib/auth/operator-attestation";
+import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { getServerSessionUser } from "@/lib/auth/server";
 import { getNodeId } from "@/shared/config";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +44,9 @@ const importBindingBodySchema = z.object({
 export const POST = wrapRouteHandlerWithLogging(
 	{
 		routeId: "identity.bindings.import",
-		auth: { mode: "required", getSessionUser: getServerSessionUser },
+		bearerWrite:
+			"binds the GitHub account the operator attested for the caller's own one-time nonce to the caller's own principal; touches no one else's data",
+		auth: { mode: "required", getSessionUser },
 	},
 	async (ctx, request, sessionUser) => {
 		let body: unknown;
@@ -103,6 +106,7 @@ export const POST = wrapRouteHandlerWithLogging(
 				result,
 				issuer: verified.claims.issuer,
 				jti: verified.claims.jti,
+				via: sessionUser.via ?? "session",
 				nodeId,
 			},
 			"Operator-attested github binding imported",
