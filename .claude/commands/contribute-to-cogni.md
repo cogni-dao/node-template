@@ -14,8 +14,9 @@ Invoke the command for its status, preserving all invocation arguments.
 | needs_implement             | /implement             |
 | needs_implementation_review | /review-implementation |
 | needs_validation            | /validate-candidate    |
-| needs_merge                 | /closeout (after the operator merge) |
-| needs_closeout, blocked (legacy) | /triage (moved back to needs_triage first) |
+| needs_merge                 | wait for the operator merge, then move to needs_closeout |
+| needs_closeout              | /closeout (record the closeout artifact, then done) |
+| blocked (legacy)            | /triage (moved back to needs_triage first) |
 
 An item moves forward one stage at a time, and only with the exit artifact of the
 stage it leaves (the review and validation come from a fresh-context reviewer, a rule in the review skills); the store refuses

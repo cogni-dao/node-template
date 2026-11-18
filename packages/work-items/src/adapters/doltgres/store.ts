@@ -31,7 +31,7 @@ export interface DoltgresWorkItemStoreOptions
   > {
   /**
    * PR head and merge state for the code gates (task.0122), read before the writer lock. `null`: this node reads no
-   * PRs; a move into needs_validation, needs_merge or done of a code item is 503 `gate_facts_unavailable`.
+   * PRs; a move into needs_validation, needs_merge or needs_closeout of a code item is 503 `gate_facts_unavailable`.
    */
   readonly prFacts: PrFactsPort | null;
   /**

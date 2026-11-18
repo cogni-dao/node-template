@@ -195,9 +195,9 @@ export const NODE_LANGGRAPH_CATALOG = {
     duty: {
       purpose: "node-work-closeout",
       serves: "goal-ai-work-converges: shipped work is counted as validated",
-      neededWhen: "items in needs_closeout or needs_merge have a merged pull request",
+      neededWhen: "items in needs_merge have a merged pull request live in this build",
       instruction:
-        "Close out shipped work: close only items whose merged pull request is live in this build, and no-op when none qualifies.",
+        "Move shipped work into closeout: advance only needs_merge items whose merged pull request is live in this build, and no-op when none qualifies.",
     },
     report: { event: "ai.work_closeout.cycle" },
   },

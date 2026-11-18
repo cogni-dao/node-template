@@ -30,7 +30,7 @@ const close = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
   expectedRevision: 3,
   reason: `PR #297 merged as ${SHA.slice(0, 8)} and live in this build`,
-  set: { status: "done", pr: PR },
+  set: { status: "needs_closeout", pr: PR },
   ...overrides,
 });
 
@@ -44,7 +44,7 @@ function setup() {
     schema: z.object({}).passthrough(),
     func: async (value) => {
       writes.push(value);
-      return JSON.stringify({ id: value.id, status: "done", revision: 4 });
+      return JSON.stringify({ id: value.id, status: "needs_closeout", revision: 4 });
     },
   });
   const guard = createCloseoutGuard(receipts, writer);
@@ -128,10 +128,13 @@ describe("closeout guard", () => {
     t.pr(true);
     t.live(true);
     expect(
-      await t.call(close("bug.0019", { set: { status: "done", pr: PR, priority: 0 } })),
+      await t.call(close("bug.0019", { set: { status: "needs_closeout", pr: PR, priority: 0 } })),
     ).toContain("write_shape");
     expect(
       await t.call(close("bug.0019", { set: { status: "cancelled", pr: PR } })),
+    ).toContain("write_shape");
+    expect(
+      await t.call(close("bug.0019", { set: { status: "done", pr: PR } })),
     ).toContain("write_shape");
     expect(await t.call(close("bug.0019", { expectedRevision: 2 }))).toContain("expected_revision");
     t.read(item("bug.0020", { status: "needs_triage" }));
@@ -139,17 +142,17 @@ describe("closeout guard", () => {
     expect(await t.call(close("bug.0021"))).toContain("item_not_read");
     // task.0122: deployVerified is never written, and closeout never closes from needs_implement or a review queue.
     expect(
-      await t.call(close("bug.0019", { set: { status: "done", deployVerified: true, pr: PR } })),
+      await t.call(close("bug.0019", { set: { status: "needs_closeout", deployVerified: true, pr: PR } })),
     ).toContain("write_shape");
     for (const status of ["needs_implement", "needs_implementation_review", "needs_validation", "blocked"]) {
       t.read(item("bug.0022", { status }));
       expect(await t.call(close("bug.0022"))).toContain("status_source");
     }
     expect(t.writes).toHaveLength(0);
-    expect(t.receipts.refused).toBe(10);
+    expect(t.receipts.refused).toBe(11);
   });
 
-  it("does not close a legacy needs_closeout item: it goes back to triage first", async () => {
+  it("does not move an item already in needs_closeout: its exit is a closeout artifact", async () => {
     const t = setup();
     t.read(item("bug.0023", { status: "needs_closeout" }));
     t.pr(true);

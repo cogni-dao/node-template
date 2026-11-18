@@ -14,10 +14,14 @@
  *   - BACK_IS_FREE: a move to needs_triage, to an earlier stage on the path, or to cancelled is allowed (the patch carries a
  *     reason like every patch). To change path an item goes back to triage.
  *   - TERMINAL_STAYS_TERMINAL: `done` and `cancelled` have no exits.
- *   - LEGACY_IS_NEVER_ENTERED: `blocked` and `needs_closeout` are read, never entered; from them only back to triage or cancel.
+ *   - LEGACY_IS_NEVER_ENTERED: `blocked` is read, never entered; from it only back to triage or cancel.
+ *   - CLOSEOUT_IS_A_STAGE: `needs_closeout` follows the merge (a story: the validation) and precedes done. The checks that
+ *     once guarded the move into done (the PR merged at the approved head plus the latest PASS validation; a story's
+ *     origin-pinned PASS) now guard the move into needs_closeout; the move to done needs the latest `closeout` artifact
+ *     (verdict `done`, written since the item entered needs_closeout).
  *   - ONE_PATH: triage decides the route (research, design or implement); the item kind decides the rest: a story goes
- *     implement -> validation -> done, an inbox deliverable skips validation, everything else is review -> validation ->
- *     merge -> done. A migrated item with no triage artifact takes its route from its stage.
+ *     implement -> validation -> closeout -> done, an inbox deliverable skips validation (review -> merge -> closeout ->
+ *     done), everything else is review -> validation -> merge -> closeout -> done. A spike's research -> done is unchanged. A migrated item with no triage artifact takes its route from its stage.
  *   - APPROVED_HEAD: the approved head is the head of the latest implementation_review, which must be `approve`; a later
  *     request_changes voids it. Validation and merge must be at that head, and a code item's merge also needs the latest
  *     validation, PASS-grade, at that head and written after the approval.
@@ -183,6 +187,7 @@ export interface GateFacts {
 /** What the move found missing: an artifact kind or the fact that was not true. */
 export type GateMissing =
   | GateArtifactKind
+  | "closeout"
   | "scores"
   | "goal_label"
   | "moves_or_gap"
@@ -272,14 +277,22 @@ function pathOf(
     route === "design"
       ? ["needs_triage", "needs_design", "needs_design_review", "needs_implement"]
       : ["needs_triage", "needs_implement"];
-  if (item.type === "story") return [...head, "needs_validation", "done"];
+  if (item.type === "story")
+    return [...head, "needs_validation", "needs_closeout", "done"];
   if (deliverable?.kind === "inbox")
-    return [...head, "needs_implementation_review", "needs_merge", "done"];
+    return [
+      ...head,
+      "needs_implementation_review",
+      "needs_merge",
+      "needs_closeout",
+      "done",
+    ];
   return [
     ...head,
     "needs_implementation_review",
     "needs_validation",
     "needs_merge",
+    "needs_closeout",
     "done",
   ];
 }
@@ -408,7 +421,7 @@ export function evaluateMove(
 ): MoveResult {
   if (to === from) return OK;
   if (from === "done" || from === "cancelled") return unmet("terminal");
-  if (to === "blocked" || to === "needs_closeout") return unmet("path");
+  if (to === "blocked") return unmet("path");
   // BACK_IS_FREE: to triage or cancelled from any live status, including a legacy one.
   if (to === "cancelled" || to === "needs_triage") return OK;
   if (isLegacyStatus(from)) return unmet("path");
@@ -519,7 +532,7 @@ export function evaluateMove(
       if (!approved) return unmet("implementation_review");
       const head = approved.head;
       if (deliverable?.kind === "pr") {
-        // A code item is done only on a validation that still stands: the latest, PASS-grade, of this PR at the approved
+        // A code item leaves merge only on a validation that still stands: the latest, PASS-grade, of this PR at the approved
         // head, written after the approval (a later approve restarts validation). `itemRevision` cannot order it: the
         // validation was written before the item entered needs_merge.
         const validation = latestOf(artifacts, "validation", item.id);
@@ -544,6 +557,11 @@ export function evaluateMove(
         return state.merged ? OK : unmet("inbox_merged");
       }
       return unmet("pr");
+    }
+    case "needs_closeout": {
+      // The exit of closeout: the latest closeout artifact, written since the item entered it, says done.
+      const closeout = freshOf(artifacts, "closeout", item);
+      return closeout?.verdict === "done" ? OK : unmet("closeout");
     }
     default:
       return unmet("path");

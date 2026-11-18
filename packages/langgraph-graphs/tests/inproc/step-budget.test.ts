@@ -201,8 +201,8 @@ describe("program completion verification", () => {
           "needs_implement",
           "needs_implementation_review",
           "needs_validation",
-          "needs_closeout",
           "needs_merge",
+          "needs_closeout",
           "blocked",
         ]);
         return {

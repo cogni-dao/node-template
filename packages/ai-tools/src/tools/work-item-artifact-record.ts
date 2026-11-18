@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/ai-tools/tools/work-item-artifact-record`
  * Purpose: AI tool that mirrors `POST /api/v1/work/items/{id}/artifacts` one to one: the same body, the same backend handler, the same scope.
- *   It lets an agent record the artifact a status move needs (a triage route, a review, a validation) before it patches the status.
+ *   It lets an agent record the artifact a status move needs (a triage route, a review, a validation, a closeout) before it patches the status.
  * Scope: One artifact insert via WorkItemCapability. Does not import LangChain. Recording never moves the item.
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__work_item_artifact_record`
@@ -64,6 +64,7 @@ export const workItemArtifactRecordContract: ToolContract<
     "Record one immutable artifact on a work item: the same operation as POST /api/v1/work/items/{id}/artifacts. " +
     "Input { id, artifact: { kind, subject, verdict, note?, url?, body?, rows? } }. A triage artifact has kind 'triage', subject 'work:<itemId>', " +
     "verdict research, design or implement (the route you chose) and, when the item declares no `moves`, a one-line `note` naming the measurement gap. " +
+    "A closeout artifact has kind 'closeout', subject 'work:<itemId>', verdict 'done', a one-line `note` (the KPI reading after one window, or the measurement gap) and a `url` or `body` linking the knowledge refined and the cleanup. " +
     "Recording never moves the item: record the artifact, then patch the status with core__work_item_update. " +
     "The author recorded is you. A refusal returns success=false with a code and nothing was written.",
   effect: "state_change",

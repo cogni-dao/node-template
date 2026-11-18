@@ -210,12 +210,12 @@ describe("back, cancel and terminal", () => {
     { name: "done -> cancelled is refused", from: "done", to: "cancelled", unmet: "terminal" },
     { name: "cancelled -> needs_triage is refused", from: "cancelled", to: "needs_triage", unmet: "terminal" },
     { name: "no write enters blocked", from: "needs_implement", to: "blocked", unmet: "path" },
-    { name: "no write enters needs_closeout", from: "needs_merge", to: "needs_closeout", unmet: "path" },
     { name: "a legacy blocked item goes back to triage", from: "blocked", to: "needs_triage", ok: true },
     { name: "a legacy blocked item can be cancelled", from: "blocked", to: "cancelled", ok: true },
     { name: "a legacy blocked item cannot move forward", from: "blocked", to: "needs_implement", artifacts: [triage("implement")], unmet: "path" },
-    { name: "a legacy needs_closeout item goes back to triage", from: "needs_closeout", to: "needs_triage", ok: true },
-    { name: "a legacy needs_closeout item cannot jump to done", from: "needs_closeout", to: "done", unmet: "path" },
+    { name: "needs_closeout goes back to needs_merge", from: "needs_closeout", to: "needs_merge", ok: true },
+    { name: "needs_closeout goes back to triage", from: "needs_closeout", to: "needs_triage", ok: true },
+    { name: "a story goes back from closeout to validation", type: "story", pr: null, from: "needs_closeout", to: "needs_validation", ok: true },
     { name: "a move that keeps the status is not a move", from: "done", to: "done", ok: true },
   ];
   it.each(cases)("$name", expectCase);
@@ -322,41 +322,58 @@ describe("exit of needs_validation: PASS-grade at the approved head", () => {
     { name: "a validation recorded on another item never counts", ...code, artifacts: [prReview(HEAD, "approve", { itemRevision: 2 }), prValidation(HEAD, PASS, "pass", { itemId: "task.0002" })], unmet: "validation" },
     { name: "the PR facts not read is facts_unavailable", ...code, artifacts: [prReview(HEAD, "approve", { itemRevision: 2 }), prValidation()], prFacts: null, unavailable: "pr" },
     { name: "a code item cannot jump from validation to done", from: "needs_validation", to: "done", artifacts: [prReview(HEAD, "approve", { itemRevision: 2 }), prValidation()], prFacts: MERGED_PR, unmet: "path" },
-    { name: "a story's validation names this hub's origin", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation()], ok: true },
-    { name: "a story's validation origin is compared as the write side does: case and a trailing slash aside", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation()], hubOrigin: "https://Node-Template.cognidao.org/", ok: true },
-    { name: "a story validation of another origin is refused", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation(PASS, `https://other.example@${HEAD}`)], unmet: "validation" },
-    { name: "with no hub origin configured a story validation is refused (fail closed)", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation()], hubOrigin: null, unmet: "validation" },
-    { name: "a story needs a PASS-grade validation", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [buildValidation(FAILED)], unmet: "validation" },
-    { name: "a story without a validation is refused", type: "story", pr: null, from: "needs_validation", to: "done", unmet: "validation" },
-    { name: "a PR-subject validation does not count on the story path", type: "story", pr: null, from: "needs_validation", to: "done", artifacts: [prValidation()], unmet: "validation" },
+    { name: "a story's validation names this hub's origin", type: "story", pr: null, from: "needs_validation", to: "needs_closeout", artifacts: [buildValidation()], ok: true },
+    { name: "a story's validation origin is compared as the write side does: case and a trailing slash aside", type: "story", pr: null, from: "needs_validation", to: "needs_closeout", artifacts: [buildValidation()], hubOrigin: "https://Node-Template.cognidao.org/", ok: true },
+    { name: "a story validation of another origin is refused", type: "story", pr: null, from: "needs_validation", to: "needs_closeout", artifacts: [buildValidation(PASS, `https://other.example@${HEAD}`)], unmet: "validation" },
+    { name: "with no hub origin configured a story validation is refused (fail closed)", type: "story", pr: null, from: "needs_validation", to: "needs_closeout", artifacts: [buildValidation()], hubOrigin: null, unmet: "validation" },
+    { name: "a story needs a PASS-grade validation", type: "story", pr: null, from: "needs_validation", to: "needs_closeout", artifacts: [buildValidation(FAILED)], unmet: "validation" },
+    { name: "a story without a validation is refused", type: "story", pr: null, from: "needs_validation", to: "needs_closeout", unmet: "validation" },
+    { name: "a PR-subject validation does not count on the story path", type: "story", pr: null, from: "needs_validation", to: "needs_closeout", artifacts: [prValidation()], unmet: "validation" },
     { name: "a story never enters needs_merge", type: "story", pr: null, from: "needs_validation", to: "needs_merge", artifacts: [buildValidation()], unmet: "path" },
   ];
   it.each(cases)("$name", expectCase);
 });
 
-describe("exit of needs_merge: the deliverable merged at the approved head, a code item also validated there", () => {
+describe("exit of needs_merge (into needs_closeout): the deliverable merged at the approved head, a code item also validated there", () => {
   const review = prReview(HEAD, "approve", { itemRevision: 2 });
   const validated = prValidation(HEAD);
   const cases: Case[] = [
-    { name: "a PR merged at the approved head passes", from: "needs_merge", to: "done", artifacts: [review, validated], prFacts: MERGED_PR, ok: true },
-    { name: "an unmerged PR is refused", from: "needs_merge", to: "done", artifacts: [review, validated], prFacts: OPEN_PR, unmet: "pr_merged" },
-    { name: "a PR merged at another head than the approved one is refused", from: "needs_merge", to: "done", artifacts: [review, validated], prFacts: { head: NEW_HEAD, merged: true }, unmet: "implementation_review" },
-    { name: "no validation at all is refused", from: "needs_merge", to: "done", artifacts: [review], prFacts: MERGED_PR, unmet: "validation" },
-    { name: "a validation of another head than the approved one is refused, however late", from: "needs_merge", to: "done", artifacts: [review, prValidation(NEW_HEAD, PASS, "pass", { itemRevision: 5 })], prFacts: MERGED_PR, unmet: "validation" },
-    { name: "validated at H, then approved again at H2, merged at H2, is refused", from: "needs_merge", to: "done", artifacts: [review, validated, prReview(NEW_HEAD, "approve", { itemRevision: 5 })], prFacts: { head: NEW_HEAD, merged: true }, unmet: "validation" },
-    { name: "validated at H2 after the new approval at H2, merged at H2, passes", from: "needs_merge", to: "done", artifacts: [review, validated, prReview(NEW_HEAD, "approve", { itemRevision: 5 }), prValidation(NEW_HEAD, PASS, "pass", { itemRevision: 6 })], prFacts: { head: NEW_HEAD, merged: true }, ok: true },
-    { name: "a validation older than the approval at the same head is refused", from: "needs_merge", to: "done", artifacts: [validated, prReview(HEAD, "approve", { itemRevision: 6 })], prFacts: MERGED_PR, unmet: "validation" },
-    { name: "a failing validation is refused", from: "needs_merge", to: "done", artifacts: [review, prValidation(HEAD, FAILED, "fail")], prFacts: MERGED_PR, unmet: "validation" },
-    { name: "a later fail overrides an earlier pass", from: "needs_merge", to: "done", artifacts: [review, validated, prValidation(HEAD, FAILED, "fail", { itemRevision: 5 })], prFacts: MERGED_PR, unmet: "validation" },
-    { name: "a validation of another PR is refused", from: "needs_merge", to: "done", artifacts: [review, art("validation", `https://github.com/cogni-dao/node-template/pull/10@${HEAD}`, "pass", { rows: PASS })], prFacts: MERGED_PR, unmet: "validation" },
-    { name: "a validation recorded on another item never counts", from: "needs_merge", to: "done", artifacts: [review, prValidation(HEAD, PASS, "pass", { itemId: "task.0002" })], prFacts: MERGED_PR, unmet: "validation" },
-    { name: "a knowledge item that switched pr to a PR and got a review is a code item: refused without a validation", from: "needs_merge", to: "done", pr: PR, artifacts: [inboxReview(COMMIT, INBOX, "approve", { itemRevision: 2 }), prReview(HEAD, "approve", { itemRevision: 3 })], prFacts: MERGED_PR, unmet: "validation" },
-    { name: "no approving review is refused", from: "needs_merge", to: "done", prFacts: MERGED_PR, unmet: "implementation_review" },
-    { name: "a later request_changes voids the approval", from: "needs_merge", to: "done", artifacts: [review, prReview(HEAD, "request_changes", { itemRevision: 3 })], prFacts: MERGED_PR, unmet: "implementation_review" },
-    { name: "the PR facts not read is facts_unavailable", from: "needs_merge", to: "done", artifacts: [review, validated], prFacts: null, unavailable: "pr" },
-    { name: "a knowledge item: the inbox merged at the approved head passes", pr: INBOX_URL, from: "needs_merge", to: "done", artifacts: [inboxReview(COMMIT, INBOX, "approve", { itemRevision: 2 })], inboxes: { [INBOX]: MERGED_INBOX }, ok: true },
-    { name: "a knowledge item: an open inbox is refused", pr: INBOX_URL, from: "needs_merge", to: "done", artifacts: [inboxReview(COMMIT, INBOX, "approve", { itemRevision: 2 })], unmet: "inbox_merged" },
-    { name: "a knowledge item: an inbox merged at another head is refused", pr: INBOX_URL, from: "needs_merge", to: "done", artifacts: [inboxReview(NEW_COMMIT, INBOX, "approve", { itemRevision: 2 })], inboxes: { [INBOX]: MERGED_INBOX }, unmet: "implementation_review" },
+    { name: "a PR merged at the approved head passes", from: "needs_merge", to: "needs_closeout", artifacts: [review, validated], prFacts: MERGED_PR, ok: true },
+    { name: "an unmerged PR is refused", from: "needs_merge", to: "needs_closeout", artifacts: [review, validated], prFacts: OPEN_PR, unmet: "pr_merged" },
+    { name: "a PR merged at another head than the approved one is refused", from: "needs_merge", to: "needs_closeout", artifacts: [review, validated], prFacts: { head: NEW_HEAD, merged: true }, unmet: "implementation_review" },
+    { name: "no validation at all is refused", from: "needs_merge", to: "needs_closeout", artifacts: [review], prFacts: MERGED_PR, unmet: "validation" },
+    { name: "a validation of another head than the approved one is refused, however late", from: "needs_merge", to: "needs_closeout", artifacts: [review, prValidation(NEW_HEAD, PASS, "pass", { itemRevision: 5 })], prFacts: MERGED_PR, unmet: "validation" },
+    { name: "validated at H, then approved again at H2, merged at H2, is refused", from: "needs_merge", to: "needs_closeout", artifacts: [review, validated, prReview(NEW_HEAD, "approve", { itemRevision: 5 })], prFacts: { head: NEW_HEAD, merged: true }, unmet: "validation" },
+    { name: "validated at H2 after the new approval at H2, merged at H2, passes", from: "needs_merge", to: "needs_closeout", artifacts: [review, validated, prReview(NEW_HEAD, "approve", { itemRevision: 5 }), prValidation(NEW_HEAD, PASS, "pass", { itemRevision: 6 })], prFacts: { head: NEW_HEAD, merged: true }, ok: true },
+    { name: "a validation older than the approval at the same head is refused", from: "needs_merge", to: "needs_closeout", artifacts: [validated, prReview(HEAD, "approve", { itemRevision: 6 })], prFacts: MERGED_PR, unmet: "validation" },
+    { name: "a failing validation is refused", from: "needs_merge", to: "needs_closeout", artifacts: [review, prValidation(HEAD, FAILED, "fail")], prFacts: MERGED_PR, unmet: "validation" },
+    { name: "a later fail overrides an earlier pass", from: "needs_merge", to: "needs_closeout", artifacts: [review, validated, prValidation(HEAD, FAILED, "fail", { itemRevision: 5 })], prFacts: MERGED_PR, unmet: "validation" },
+    { name: "a validation of another PR is refused", from: "needs_merge", to: "needs_closeout", artifacts: [review, art("validation", `https://github.com/cogni-dao/node-template/pull/10@${HEAD}`, "pass", { rows: PASS })], prFacts: MERGED_PR, unmet: "validation" },
+    { name: "a validation recorded on another item never counts", from: "needs_merge", to: "needs_closeout", artifacts: [review, prValidation(HEAD, PASS, "pass", { itemId: "task.0002" })], prFacts: MERGED_PR, unmet: "validation" },
+    { name: "a knowledge item that switched pr to a PR and got a review is a code item: refused without a validation", from: "needs_merge", to: "needs_closeout", pr: PR, artifacts: [inboxReview(COMMIT, INBOX, "approve", { itemRevision: 2 }), prReview(HEAD, "approve", { itemRevision: 3 })], prFacts: MERGED_PR, unmet: "validation" },
+    { name: "no approving review is refused", from: "needs_merge", to: "needs_closeout", prFacts: MERGED_PR, unmet: "implementation_review" },
+    { name: "a later request_changes voids the approval", from: "needs_merge", to: "needs_closeout", artifacts: [review, prReview(HEAD, "request_changes", { itemRevision: 3 })], prFacts: MERGED_PR, unmet: "implementation_review" },
+    { name: "the PR facts not read is facts_unavailable", from: "needs_merge", to: "needs_closeout", artifacts: [review, validated], prFacts: null, unavailable: "pr" },
+    { name: "a knowledge item: the inbox merged at the approved head passes", pr: INBOX_URL, from: "needs_merge", to: "needs_closeout", artifacts: [inboxReview(COMMIT, INBOX, "approve", { itemRevision: 2 })], inboxes: { [INBOX]: MERGED_INBOX }, ok: true },
+    { name: "a knowledge item: an open inbox is refused", pr: INBOX_URL, from: "needs_merge", to: "needs_closeout", artifacts: [inboxReview(COMMIT, INBOX, "approve", { itemRevision: 2 })], unmet: "inbox_merged" },
+    { name: "a knowledge item: an inbox merged at another head is refused", pr: INBOX_URL, from: "needs_merge", to: "needs_closeout", artifacts: [inboxReview(NEW_COMMIT, INBOX, "approve", { itemRevision: 2 })], inboxes: { [INBOX]: MERGED_INBOX }, unmet: "implementation_review" },
+  ];
+  it.each(cases)("$name", expectCase);
+});
+
+describe("exit of needs_closeout: the latest closeout artifact says done", () => {
+  const closeout = (verdict = "done", extra: Partial<GateArtifact> = {}) =>
+    art("closeout", `work:${ID}`, verdict, { note: "KPI up 3 points after one window", ...extra });
+  const base = { from: "needs_closeout", to: "done" } as const;
+  const cases: Case[] = [
+    { name: "a closeout written since the item entered the stage passes", ...base, artifacts: [closeout()], ok: true },
+    { name: "a story closes out the same way", type: "story", pr: null, ...base, artifacts: [closeout()], ok: true },
+    { name: "an inbox deliverable closes out the same way", pr: INBOX_URL, ...base, artifacts: [closeout()], ok: true },
+    { name: "no closeout is refused", ...base, unmet: "closeout" },
+    { name: "a closeout written before the item entered the stage is refused", ...base, artifacts: [closeout("done", { itemRevision: SREV - 1 })], unmet: "closeout" },
+    { name: "a closeout recorded on another item never counts", ...base, artifacts: [closeout("done", { itemId: "task.0002" })], unmet: "closeout" },
+    { name: "another kind of artifact never stands in", ...base, artifacts: [triage("implement")], unmet: "closeout" },
+    { name: "a spike has no closeout stage", type: "spike", pr: INBOX_URL, from: "needs_research", to: "needs_closeout", unmet: "path" },
   ];
   it.each(cases)("$name", expectCase);
 });
@@ -365,7 +382,7 @@ describe("a migrated item with no triage artifact takes its path from its stage"
   const review = prReview(HEAD, "approve", { itemRevision: 2 });
   const cases: Case[] = [
     { name: "needs_implementation_review moves forward", from: "needs_implementation_review", to: "needs_validation", artifacts: [prReview()], ok: true },
-    { name: "needs_merge closes on a merged PR", from: "needs_merge", to: "done", artifacts: [review, prValidation(HEAD)], prFacts: MERGED_PR, ok: true },
+    { name: "needs_merge moves to closeout on a merged PR", from: "needs_merge", to: "needs_closeout", artifacts: [review, prValidation(HEAD)], prFacts: MERGED_PR, ok: true },
     { name: "needs_design_review keeps the design route", from: "needs_design_review", to: "needs_implement", artifacts: [designReview()], ok: true },
     { name: "needs_implement can go back to triage", from: "needs_implement", to: "needs_triage", ok: true },
   ];
@@ -382,7 +399,8 @@ describe("one full walk and the re-walk after a move back", () => {
       { name: "implement", from: "needs_implement", to: "needs_implementation_review", artifacts: [triaged], item: { statusRevision: 2 }, ok: true },
       { name: "review", from: "needs_implementation_review", to: "needs_validation", artifacts: [triaged, review], item: { statusRevision: 4 }, ok: true },
       { name: "validation", from: "needs_validation", to: "needs_merge", artifacts: [triaged, review, prValidation(HEAD, PASS, "pass", rev(7))], item: { statusRevision: 6 }, ok: true },
-      { name: "merge", from: "needs_merge", to: "done", artifacts: [triaged, review, prValidation(HEAD, PASS, "pass", rev(7))], item: { statusRevision: 8 }, prFacts: MERGED_PR, ok: true },
+      { name: "merge", from: "needs_merge", to: "needs_closeout", artifacts: [triaged, review, prValidation(HEAD, PASS, "pass", rev(7))], item: { statusRevision: 8 }, prFacts: MERGED_PR, ok: true },
+      { name: "closeout", from: "needs_closeout", to: "done", artifacts: [triaged, review, art("closeout", `work:${ID}`, "done", { itemRevision: 10, note: "no KPI measures this yet" })], item: { statusRevision: 9 }, ok: true },
     ];
     for (const step of walk) expectCase(step);
   });
@@ -447,7 +465,8 @@ describe("gateNeeds: the facts a move reads, known before the lock", () => {
     ["needs_implement", "needs_implementation_review", false],
     ["needs_implementation_review", "needs_validation", true],
     ["needs_validation", "needs_merge", true],
-    ["needs_merge", "done", true],
+    ["needs_merge", "needs_closeout", true],
+    ["needs_closeout", "done", false],
   ])("a code item moving %s -> %s reads the PR: %s", (from, to, reads) => {
     expect(needs(from, to).pr).toBe(reads);
   });
@@ -468,7 +487,7 @@ describe("gateNeeds: the facts a move reads, known before the lock", () => {
   it("a forward move reads the artifacts; a story reads its children, never a PR; a knowledge item never reads a PR", () => {
     expect(needs("needs_triage", "needs_implement").artifacts).toBe(true);
     expect(needs("needs_implement", "needs_validation", "story", null).children).toBe(true);
-    expect(needs("needs_validation", "done", "story", null).pr).toBe(false);
+    expect(needs("needs_validation", "needs_closeout", "story", null).pr).toBe(false);
     expect(needs("needs_implementation_review", "needs_merge", "task", INBOX_URL).pr).toBe(false);
   });
 });
@@ -519,21 +538,22 @@ describe("the stage order", () => {
     expect([...VALID_TRANSITIONS.keys()]).toEqual([
       ...STATUS_ORDER,
       "blocked",
-      "needs_closeout",
       "cancelled",
     ]);
     expect(VALID_TRANSITIONS.get("done")).toEqual([]);
     expect(VALID_TRANSITIONS.get("cancelled")).toEqual([]);
   });
 
-  it("allows no move into a legacy status; legacy items go back to triage or are cancelled", () => {
+  it("allows no move into the legacy blocked status; a blocked item goes back to triage or is cancelled", () => {
     for (const [from, to] of VALID_TRANSITIONS) {
       expect(to).not.toContain("blocked");
-      expect(to).not.toContain("needs_closeout");
       expect(to).not.toContain(from);
     }
     expect(VALID_TRANSITIONS.get("blocked")).toEqual(["needs_triage", "cancelled"]);
-    expect(VALID_TRANSITIONS.get("needs_closeout")).toEqual(["needs_triage", "cancelled"]);
+    // needs_closeout is a real stage: the only forward move is to done.
+    expect(VALID_TRANSITIONS.get("needs_closeout")).toContain("done");
+    expect(VALID_TRANSITIONS.get("needs_merge")).toContain("needs_closeout");
+    expect(VALID_TRANSITIONS.get("needs_merge")).not.toContain("done");
   });
 
   it("structurally allows any move back and only the forward targets of a stage", () => {
