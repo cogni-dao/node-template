@@ -60,12 +60,33 @@ const KIND_TITLES: Readonly<Record<ArtifactKind, string>> = {
 	closeout: "Closeout",
 };
 
-/** A verdict's tone in the shared row pill: green lets the item move, red sends it back, a triage route is neutral. */
+/** The pill's color is the verdict alone: green lets the item move, yellow asks for changes, red fails, a triage route is neutral. */
 function verdictTone(verdict: string): CitationTone {
 	if (verdict === "approve" || verdict === "pass" || verdict === "done") return "positive";
-	if (verdict === "request_changes" || verdict === "fail") return "negative";
-	if (verdict === "notes") return "warning";
+	if (verdict === "request_changes" || verdict === "notes") return "warning";
+	if (verdict === "fail") return "negative";
 	return "neutral";
+}
+
+/** What an artifact judged, short: "PR #409 @ 2dea498", "inbox cef83e76", "build 2dea498", or the item. */
+function subjectLabel(subject: string): string {
+	const pr = /\/pull\/(\d+)@([0-9a-f]{7})/.exec(subject);
+	if (pr) return `PR #${pr[1]} @ ${pr[2]}`;
+	const inbox = /^knowledge:contrib-.*?([0-9a-z]{8})@/.exec(subject);
+	if (inbox) return `inbox ${inbox[1]}`;
+	const build = /@([0-9a-f]{7})[0-9a-f]*$/.exec(subject);
+	if (build) return `build ${build[1]}`;
+	return "this item";
+}
+
+/** The row text: kind, its iteration number and what it judged, e.g. "Design review 3 · inbox cef83e76". */
+function artifactRowLabel(
+	ref: { readonly kind: ArtifactKind; readonly verdict: string; readonly subject: string; readonly seq: number },
+	refs: readonly { readonly kind: ArtifactKind; readonly seq: number }[],
+): string {
+	if (ref.kind === "triage") return `Triage → route to ${ref.verdict}`;
+	const iteration = refs.filter((other) => other.kind === ref.kind && other.seq <= ref.seq).length;
+	return `${KIND_TITLES[ref.kind]} ${iteration} · ${subjectLabel(ref.subject)}`;
 }
 
 /** The shared row's link: stays on the page, keeps scroll, never peeks (an artifact is not a knowledge entry). */
@@ -239,15 +260,13 @@ export function WorkItemDetailBody({
 									<div className={CITATION_LIST_CLASS}>
 										{artifactPage.refs.map((ref) => {
 											const open = selected !== undefined && "id" in selected && selected.id === ref.id;
-											// Only the latest artifact of a kind decides; an earlier iteration reads muted.
-											const superseded = artifactPage.refs.some((other) => other.kind === ref.kind && other.seq > ref.seq);
 											return (
 												<div key={ref.id} className="flex flex-col">
 													<CitationRow
 														direction="out"
-														relation={ref.verdict.replace(/_/g, " ")}
-														tone={superseded ? "muted" : verdictTone(ref.verdict)}
-														slug={KIND_TITLES[ref.kind]}
+														relation={ref.kind === "triage" ? "routed" : ref.verdict.replace(/_/g, " ")}
+														tone={verdictTone(ref.verdict)}
+														slug={artifactRowLabel(ref, artifactPage.refs)}
 														href={itemScopedHref(item.id, searchParams, "artifact", open ? null : ref.id)}
 														hoverTitle={[ref.note, formatRelativeTime(ref.createdAt)].filter(Boolean).join(" · ")}
 														Link={ScrollKeepingLink}
@@ -265,7 +284,7 @@ export function WorkItemDetailBody({
 											direction="out"
 											relation={selectedArtifact.verdict.replace(/_/g, " ")}
 											tone={verdictTone(selectedArtifact.verdict)}
-											slug={KIND_TITLES[selectedArtifact.kind]}
+											slug={`${KIND_TITLES[selectedArtifact.kind]} · ${subjectLabel(selectedArtifact.subject)}`}
 											href={itemScopedHref(item.id, searchParams, "artifact", null)}
 											hoverTitle={[selectedArtifact.note, formatRelativeTime(selectedArtifact.createdAt)].filter(Boolean).join(" · ")}
 											Link={ScrollKeepingLink}

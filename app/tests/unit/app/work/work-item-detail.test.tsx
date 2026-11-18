@@ -162,11 +162,11 @@ describe("WorkItemDetail accessibility", () => {
       />
     );
     // Drawn like Moves: one bordered list of CitationRows, below Moves; the selected one opens inline and its link closes it.
-    expect(screen.getByRole("link", { name: /request changes Design review/ })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /request changes Design review 1 · this item/ })).toHaveAttribute(
       "href",
       "/work/items/task.5174?artifact=wia-1",
     );
-    expect(screen.getByRole("link", { name: /pass Validation/ })).toHaveAttribute("href", "/work/items/task.5174");
+    expect(screen.getByRole("link", { name: /pass Validation 1 · this item/ })).toHaveAttribute("href", "/work/items/task.5174");
     expect(screen.getAllByText(/^Artifacts?$/)).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Older" })).toHaveAttribute("href", "/work/items/task.5174?artifactsCursor=1");
     expect(screen.getByText("Created")).toBeInTheDocument();
