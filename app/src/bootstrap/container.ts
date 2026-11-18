@@ -164,6 +164,7 @@ import {
 } from "@/bootstrap/capabilities/metrics";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createAccountCreditsCapability } from "@/bootstrap/capabilities/account-credits";
+import { createSandboxShellCapability } from "@/bootstrap/capabilities/sandbox-workspace";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createGithubReadVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
@@ -1103,6 +1104,7 @@ function createContainer(): Container {
 		repoCapability,
 		scheduleCapability,
 		vcsCapability: githubReadVcs,
+		sandboxShellCapability: createSandboxShellCapability(env),
 		runningBuildSha: env.APP_BUILD_SHA,
 		workItemCapability,
 		accountCreditsCapability: createAccountCreditsCapability({

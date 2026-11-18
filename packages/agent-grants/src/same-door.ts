@@ -106,6 +106,7 @@ export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
   // exist: the node route an outside agent uses is the contribution proposal (`knowledge.contribute`). Whether the tool
   // should write contributions instead of main is a design question (C2, task.5465).
   core__knowledge_write: "no direct-to-main write route exists on purpose; outside agents use knowledge.contribute",
+  core__sandbox_shell: "runs a command in the node's own sandbox lease; no node route twins a shell",
   core__vcs_create_branch: "calls the operator VCS API, not a node route",
   core__vcs_merge_pr: "calls the operator VCS API, not a node route",
   core__vcs_flight_candidate: "calls the operator VCS API, not a node route",
