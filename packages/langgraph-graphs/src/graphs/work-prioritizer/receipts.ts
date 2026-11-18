@@ -58,6 +58,8 @@ export interface ReadReceipt {
 export class RunReceipts {
   readonly goals = new Map<string, z.infer<typeof Goal>>();
   readonly items = new Map<string, ObservedItem>();
+  /** item id -> the verdict (research, design or implement) of the triage artifact this run recorded for it (task.0122). */
+  readonly triageRecorded = new Map<string, string>();
   readonly sources = new Map<string, ReadReceipt>();
   readonly guidance = new Set<string>();
   readonly metricIds = new Set<string>();

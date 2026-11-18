@@ -135,11 +135,15 @@ export interface VcsCapability {
     prNumber: number;
   }): Promise<CiStatusResult>;
 
-  /** Read the facts of one pull request (state, merge commit, head SHA). */
+  /**
+   * Read the facts of one pull request (state, merge commit, head SHA). `signal` (optional) cancels the read; an
+   * implementation applies its own timeout when none is given.
+   */
   getPr(params: {
     owner: string;
     repo: string;
     prNumber: number;
+    signal?: AbortSignal;
   }): Promise<PrFacts>;
 
   /**

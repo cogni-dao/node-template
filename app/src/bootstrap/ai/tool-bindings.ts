@@ -52,7 +52,7 @@ import {
   createWebSearchImplementation,
   createWorkItemQueryImplementation,
   createWorkItemReadImplementation,
-  createWorkItemTransitionImplementation,
+  createWorkItemArtifactRecordImplementation,
   createWorkItemUpdateImplementation,
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
@@ -79,7 +79,7 @@ import {
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_ARTIFACT_RECORD_NAME,
   WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 
@@ -235,10 +235,10 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
 
-    [WORK_ITEM_TRANSITION_NAME]: createWorkItemTransitionImplementation({
+    [WORK_ITEM_UPDATE_NAME]: createWorkItemUpdateImplementation({
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
-    [WORK_ITEM_UPDATE_NAME]: createWorkItemUpdateImplementation({
+    [WORK_ITEM_ARTIFACT_RECORD_NAME]: createWorkItemArtifactRecordImplementation({
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
   };

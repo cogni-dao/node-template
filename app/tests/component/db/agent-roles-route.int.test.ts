@@ -94,7 +94,7 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
 
   // The guard as the provider builds it, around a tool that reports whether it ran.
   const callTool = async (principalId: string | undefined, subjectUserId?: string) => {
-    const tool = CORE_TOOL_BUNDLE.find((t) => t.contract.name === "core__work_item_transition")!;
+    const tool = CORE_TOOL_BUNDLE.find((t) => t.contract.name === "core__work_item_update")!;
     const guarded = guardTools(
       { [tool.contract.name]: { id: tool.contract.name, effect: tool.contract.effect, exec: async () => "ran" } } as never,
       { [tool.contract.name]: tool.contract.requires! },
@@ -251,7 +251,7 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     // V9: the log lines (real pino JSON from the real code path).
     const authz = logLines.filter((l) => l.event === "agent_tool.authz");
     expect(authz.map((l) => `${l.decision}/${l.code}`)).toEqual(["deny/policy_denied", "allow/allowed", "deny/policy_denied"]);
-    expect(authz[1]).toMatchObject({ principal: PRIORITIZER_PRINCIPAL_USER_ID, subject: null, payer: "payer-route-test", tool: "core__work_item_transition" });
+    expect(authz[1]).toMatchObject({ principal: PRIORITIZER_PRINCIPAL_USER_ID, subject: null, payer: "payer-route-test", tool: "core__work_item_update" });
     expect(logLines.filter((l) => String(l.event).startsWith("agent_role.")).map((l) => l.event)).toEqual(["agent_role.granted", "agent_role.revoked"]);
     const serialized = JSON.stringify(logLines);
     expect(serialized).not.toMatch(/cogni_ag_sk|Bearer |AUTH_SECRET|0x[0-9a-fA-F]{40}/);

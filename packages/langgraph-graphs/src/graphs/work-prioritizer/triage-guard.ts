@@ -10,7 +10,10 @@
  *   - a score of 4-5 cites a source read this run, never the item's own page;
  *   - at most MAX_CHANGED_ITEMS_PER_RUN distinct items change per run;
  *   - labels keep every existing label and add only a listed goal;
- *   - status routes from needs_triage/research/design/implement to research, design, implement or cancelled;
+ *   - status routes only from needs_triage, to needs_research, needs_design, needs_implement or cancelled (task.0122), and only
+ *     after this run recorded the matching triage artifact (core__work_item_artifact_record, guarded beside this tool); the
+ *     store checks the rest of the exit (six scores, a goal label, moves or a gap). Triage may also move a
+ *     later item back to needs_triage, or cancel it; every other move out of a later stage is its own review's;
  *   - a write with no `reason` is refused (`reason_required`); the guard never writes a reason for the model (task.0086);
  *   - a write that changes nothing writes nothing (a repeat run is quiet).
  * A failed read records nothing; it never blocks a write to a different item.
@@ -36,20 +39,20 @@ import {
   RECEIPT_ERROR_MAX_CHARS,
 } from "./tools";
 
+/** Where triage routes an item out of needs_triage. */
 const ROUTES = new Set([
   "needs_research",
   "needs_design",
   "needs_implement",
   "cancelled",
 ]);
+/** The triage artifact verdict each route needs recorded before the status moves. */
+const ROUTE_VERDICT: Readonly<Record<string, string>> = {
+  needs_research: "research",
+  needs_design: "design",
+  needs_implement: "implement",
+};
 const CLOSED = new Set(["done", "cancelled"]);
-/** Triage routes only work that has not started delivery. */
-const ROUTABLE_FROM = new Set([
-  "needs_triage",
-  "needs_research",
-  "needs_design",
-  "needs_implement",
-]);
 /** The only fields a triage write may set. */
 const TRIAGE_FIELDS = new Set(["status", "scores", "labels", "moves"]);
 const EVIDENCE_FROM = 4;
@@ -121,15 +124,22 @@ export function createTriageGuard(
         `send expectedRevision ${item.revision}, the revision you read`,
       );
     if (set.status !== undefined && set.status !== item.status) {
-      if (!ROUTABLE_FROM.has(item.status))
+      if (item.status === "needs_triage") {
+        if (!ROUTES.has(set.status))
+          return reject(
+            "route_not_allowed",
+            "route to needs_research, needs_design, needs_implement or cancelled only",
+          );
+        const verdict = ROUTE_VERDICT[set.status];
+        if (verdict && receipts.triageRecorded.get(item.id) !== verdict)
+          return reject(
+            "triage_artifact",
+            `record the triage artifact first: core__work_item_artifact_record with { id: "${item.id}", artifact: { kind: "triage", subject: "work:${item.id}", verdict: "${verdict}" } } (add a one-line note naming the measurement gap when the item declares no moves), then patch the status`,
+          );
+      } else if (set.status !== "needs_triage" && set.status !== "cancelled")
         return reject(
           "route_source",
-          `${item.id} is ${item.status}; triage routes only from needs_triage, needs_research, needs_design or needs_implement`,
-        );
-      if (!ROUTES.has(set.status))
-        return reject(
-          "route_not_allowed",
-          "route to needs_research, needs_design, needs_implement or cancelled only",
+          `${item.id} is ${item.status}; triage routes only from needs_triage (a later status moves on its own review artifact); it may send the item back to needs_triage or cancel it`,
         );
     }
     if (set.labels !== undefined) {

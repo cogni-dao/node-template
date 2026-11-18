@@ -12,6 +12,7 @@ import {
   offeredToolIds,
   ROUTE_ONLY_CAPABILITIES,
   SAFE_METHODS,
+  SAME_DOOR_ROUTES,
   type TerminalDenial,
   type ToolRequires,
 } from "../src";
@@ -237,5 +238,18 @@ describe("bearerWriteRefusal (DENY_BY_DEFAULT)", () => {
   });
   it("an open-by-design route passes", () => {
     for (const routeId of Object.keys(OPEN_BY_DESIGN_ROUTES)) expect(bearerWriteRefusal({ ...base, routeId })).toBeNull();
+  });
+});
+
+describe("work item artifacts (task.0028)", () => {
+  it("the artifact write rides the work_item:transition door as its own tool twin; no review scope exists", () => {
+    expect(SAME_DOOR_ROUTES.core__work_item_artifact_record).toEqual({
+      scope: "work_item:transition",
+      routes: ["work.items.artifacts.create"],
+    });
+    expect(SAME_DOOR_ROUTES.core__work_item_update?.scope).toBe("work_item:transition");
+    const scopes = Object.values(ROUTE_ONLY_CAPABILITIES).map((c) => c.requires.scope);
+    expect(scopes).not.toContain("work_item:review");
+    expect(Object.values(ROUTE_ONLY_CAPABILITIES).flatMap((c) => c.routes)).not.toContain("work.items.artifacts.create");
   });
 });

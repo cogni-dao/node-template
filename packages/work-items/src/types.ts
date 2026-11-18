@@ -40,13 +40,17 @@ export type WorkItemType = "task" | "bug" | "story" | "spike" | "subtask";
 export type ActorKind = "human" | "ai" | "either";
 
 // ── Status ────────────────────────────────────────────
-// From https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md — 9 statuses, each needs_* maps to one /command.
+// The status ladder (task.0122, hub work-cicd-gates-design): each needs_* status is one queue.
+// `needs_closeout` is legacy: no write enters it (migration only); items leave by a gated move up or a free move down.
 
 export type WorkItemStatus =
   | "needs_triage"
   | "needs_research"
   | "needs_design"
+  | "needs_design_review"
   | "needs_implement"
+  | "needs_implementation_review"
+  | "needs_validation"
   | "needs_closeout"
   | "needs_merge"
   | "done"

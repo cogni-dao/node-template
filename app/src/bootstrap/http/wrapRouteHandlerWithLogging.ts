@@ -338,6 +338,19 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
               const unavailable = decision.code === "authz_unavailable";
               // An account door answers every non-outage deny with the same 404.
               responseStatus = unavailable ? 503 : accountParam ? 404 : 403;
+              // ROUTE_DENIAL_IS_ONE_TERMINAL_LINE: every route's door denial ends here with routeId and the decision code
+              // (policy_denied | authz_unavailable | ...), never the grant or role (task.0122). The route handler never runs.
+              ctx.log.warn(
+                {
+                  event: EVENT_NAMES.AGENT_ROUTE_DENIED,
+                  routeId: options.routeId,
+                  outcome: "refused",
+                  errorCode: decision.code,
+                  tool: sameDoor,
+                  status: responseStatus,
+                },
+                EVENT_NAMES.AGENT_ROUTE_DENIED
+              );
               return NextResponse.json(
                 accountParam && !unavailable ? { error: "not_found" } : { error: decision.code, code: decision.code },
                 { status: responseStatus, headers: { "cache-control": "no-store" } }

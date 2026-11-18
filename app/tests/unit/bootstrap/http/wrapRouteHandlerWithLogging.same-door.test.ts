@@ -64,18 +64,23 @@ const handler = vi.fn(async () => NextResponse.json({ ran: true }));
 const AGENT = "agent-user-1";
 const state = { roles: new Set<string>(), down: false, queries: 0, grants: new Set<string>(), owners: new Set<string>() };
 
-function route(sameDoor: string, user: SessionUser | null) {
+function route(sameDoor: string, user: SessionUser | null, routeId = "work.items.patch") {
   return wrapRouteHandlerWithLogging(
     {
-      routeId: "work.items.patch",
+      routeId,
       sameDoor,
       auth: { mode: "required", getSessionUser: async () => user },
     },
     handler
   );
 }
-const call = (sameDoor: string, user: SessionUser | null) =>
-  route(sameDoor, user)(new NextRequest("https://node.example/api/v1/x", { method: "PATCH" }));
+const call = (sameDoor: string, user: SessionUser | null, routeId?: string) =>
+  route(sameDoor, user, routeId)(new NextRequest("https://node.example/api/v1/x", { method: "PATCH" }));
+/** The route-door denial lines: one per denied call, carrying routeId and errorCode (task.0122). */
+const denialLines = () =>
+  log.warn.mock.calls
+    .map(([fields]) => fields as Record<string, unknown>)
+    .filter((f) => f.event === "agent.route_denied");
 const user = (via: SessionUser["via"], id = AGENT): SessionUser => ({
   id, walletAddress: null, displayName: null, avatarColor: null, ...(via ? { via } : {}),
 });
@@ -107,6 +112,31 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "policy_denied", code: "policy_denied" });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["work.items.patch", "core__work_item_update"],
+    ["work.items.artifacts.create", "core__work_item_artifact_record"],
+  ])("a grant-denied call to %s ends in one agent.route_denied line with routeId and errorCode policy_denied", async (routeId, tool) => {
+    const res = await call(tool, user("bearer"), routeId);
+    expect(res.status).toBe(403);
+    expect(denialLines()).toEqual([
+      { event: "agent.route_denied", routeId, outcome: "refused", errorCode: "policy_denied", tool, status: 403 },
+    ]);
+    expect(handler).not.toHaveBeenCalled();
+    // The grant opens the door and the line is gone: an allowed call logs no denial.
+    log.warn.mockClear();
+    state.roles.add(`${AGENT}|work_item:transition`);
+    expect((await call(tool, user("bearer"), routeId)).status).toBe(200);
+    expect(denialLines()).toEqual([]);
+  });
+
+  it("a grant store outage ends in one agent.route_denied line with errorCode authz_unavailable", async () => {
+    state.down = true;
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(503);
+    expect(denialLines()).toEqual([
+      expect.objectContaining({ routeId: "work.items.patch", errorCode: "authz_unavailable", status: 503 }),
+    ]);
   });
 
   it("a bearer with a live role row for the scope reaches the handler", async () => {

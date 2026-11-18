@@ -5,13 +5,18 @@
  * The prioritizer binds core__work_item_update (the PATCH route's twin) behind a thin guard (task.0065).
  * Deterministic: a fake host writer records what reaches the ToolRunner; no model runs.
  */
-import { WORK_ITEM_UPDATE_NAME, workItemUpdateContract } from "@cogni/ai-tools";
+import {
+  WORK_ITEM_ARTIFACT_RECORD_NAME,
+  WORK_ITEM_UPDATE_NAME,
+  workItemUpdateContract,
+} from "@cogni/ai-tools";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createPrioritizerRunHooks } from "../../../src/graphs/work-prioritizer/graph";
 import { TRIAGE_GUIDANCE_ID } from "../../../src/graphs/work-prioritizer/prompts";
 import type { RunReceipts } from "../../../src/graphs/work-prioritizer/receipts";
+import { createTriageArtifactGuard } from "../../../src/graphs/work-prioritizer/triage-artifact-guard";
 import { createTriageGuard } from "../../../src/graphs/work-prioritizer/triage-guard";
 
 const origin = "https://node.example";
@@ -109,8 +114,40 @@ function setup(opts: { guidance?: boolean; goals?: boolean } = {}) {
         value: { item: value },
       },
     );
-  const call = (input: Record<string, unknown>) => guard.invoke(input as never);
-  return { hooks, receipts, writes, writer, guard, read, call };
+  /** The call without a recorded triage artifact: what a model that skips the artifact tool does. */
+  const callRaw = (input: Record<string, unknown>) => guard.invoke(input as never);
+  // Most cases are about the other rules, so `call` records the triage artifact the way the model must (task.0122); the
+  // cases about the artifact itself use `callRaw` and the artifact guard.
+  const ROUTE_VERDICT: Record<string, string> = {
+    needs_research: "research",
+    needs_design: "design",
+    needs_implement: "implement",
+  };
+  const call = (input: Record<string, unknown>) => {
+    const id = input.id as string;
+    const status = (input.set as { status?: string } | undefined)?.status;
+    const stored = receipts.items.get(id);
+    if (status && ROUTE_VERDICT[status] && stored?.status === "needs_triage")
+      receipts.triageRecorded.set(id, ROUTE_VERDICT[status] as string);
+    return callRaw(input);
+  };
+
+  // The artifact tool's host writer: records what reaches the ToolRunner and answers like the route (201 { artifact }).
+  const artifactWrites: Record<string, unknown>[] = [];
+  const artifactWriter = new DynamicStructuredTool({
+    name: WORK_ITEM_ARTIFACT_RECORD_NAME,
+    description: "Host artifact writer",
+    schema: z.object({}).passthrough(),
+    func: async (value) => {
+      artifactWrites.push(value);
+      const artifact = (value.artifact ?? {}) as Record<string, unknown>;
+      return JSON.stringify({ artifact: { ...artifact, id: "wia-1", itemId: value.id, seq: 1, itemRevision: 7, author: "p", createdAt: "x" } });
+    },
+  });
+  const artifactGuard = createTriageArtifactGuard(receipts, artifactWriter, [TRIAGE_GUIDANCE_ID]);
+  const record = (id: string, artifact: Record<string, unknown>) =>
+    artifactGuard.invoke({ id, artifact } as never);
+  return { hooks, receipts, writes, writer, guard, read, call, callRaw, artifactWrites, record };
 }
 
 const scores = (v: number, ev?: string) => ({
@@ -566,6 +603,7 @@ describe("audit reason, route source and uncertain writes", () => {
   it("refuses a write with no reason, and never writes one for the model (task.0086)", async () => {
     const a = setup();
     a.read(item("task.1"));
+    a.receipts.triageRecorded.set("task.1", "design");
     // The tool schema stops a missing reason first; the guard's own check covers a direct call.
     const direct = (input: Record<string, unknown>) =>
       (a.guard as unknown as { func: (i: unknown) => Promise<string> }).func(
@@ -630,6 +668,24 @@ describe("audit reason, route source and uncertain writes", () => {
     expect(a.writes).toHaveLength(3);
   });
 
+  it("routes only from needs_triage, and sends a later item back to needs_triage or cancels it (task.0122)", async () => {
+    const a = setup();
+    a.read(item("task.designing", { status: "needs_design" }));
+    // A later status moves on its own review artifact, not on triage.
+    expect(await a.call(update("task.designing", { status: "needs_implement" }))).toContain("route_source");
+    expect(await a.call(update("task.designing", { status: "needs_research" }))).toContain("route_source");
+    expect(a.writes).toHaveLength(0);
+    // Triage may send it back to needs_triage.
+    expect(
+      await a.call(update("task.designing", { status: "needs_triage" }, { reason: "the route was wrong" })),
+    ).toContain('"revision"');
+    // From needs_triage only the routes.
+    a.read(item("task.fresh", { status: "needs_triage" }));
+    expect(await a.call(update("task.fresh", { status: "needs_merge" }))).toContain("route_not_allowed");
+    expect(await a.call(update("task.fresh", { status: "done" }))).toContain("route_not_allowed");
+    expect(a.writes).toHaveLength(1);
+  });
+
   it("counts an uncertain write toward the five-item budget", async () => {
     const a = setup();
     const failing = new DynamicStructuredTool({
@@ -643,6 +699,7 @@ describe("audit reason, route source and uncertain writes", () => {
     const guard = createTriageGuard(a.receipts, failing, [TRIAGE_GUIDANCE_ID]);
     for (let n = 1; n <= 5; n++) {
       a.read(item(`task.${n}`));
+      a.receipts.triageRecorded.set(`task.${n}`, "design");
       expect(
         await guard.invoke(
           update(`task.${n}`, { status: "needs_design" }) as never,
@@ -650,6 +707,7 @@ describe("audit reason, route source and uncertain writes", () => {
       ).toContain("write_result_uncertain");
     }
     a.read(item("task.6"));
+    a.receipts.triageRecorded.set("task.6", "design");
     expect(
       await guard.invoke(update("task.6", { status: "needs_design" }) as never),
     ).toContain("write_budget");
@@ -711,6 +769,7 @@ describe("partial scores, DTO receipts and conflicts", () => {
     const guard = createTriageGuard(a.receipts, conflict, [TRIAGE_GUIDANCE_ID]);
     for (let n = 1; n <= 6; n++) {
       a.read(item(`task.${n}`));
+      a.receipts.triageRecorded.set(`task.${n}`, "design");
       expect(
         await guard.invoke(
           update(`task.${n}`, { status: "needs_design" }) as never,
@@ -732,7 +791,7 @@ describe("a landed update counts as changed in the cycle report", () => {
   it("counts a successful update of an item whose scores were null", async () => {
     const a = setup();
     // The item had no scores (null on the store); the update sets all six axes, a label and a route.
-    a.read(item("task.5", { status: "needs_design", scores: undefined }));
+    a.read(item("task.5", { status: "needs_triage", scores: undefined }));
     const out = await a.call(
       update(
         "task.5",
@@ -773,5 +832,119 @@ describe("a landed update counts as changed in the cycle report", () => {
       changeCount: 1,
       toolErrorCount: 0,
     });
+  });
+});
+
+describe("the triage artifact comes first (task.0122)", () => {
+  const triage = (id: string, verdict: string, extra: Record<string, unknown> = {}) => ({
+    kind: "triage",
+    subject: `work:${id}`,
+    verdict,
+    ...extra,
+  });
+  const route = (id: string, status: string) =>
+    ({ id, expectedRevision: 7, reason: "route it", set: { status } });
+
+  it("refuses to route an item forward before its triage artifact is recorded", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    const out = await a.callRaw(route("task.1", "needs_implement"));
+    expect(out).toContain("triage_artifact");
+    expect(out).toContain(WORK_ITEM_ARTIFACT_RECORD_NAME);
+    expect(a.writes).toHaveLength(0);
+  });
+
+  it("routes the item forward after the triage artifact for that route is recorded", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    const recorded = await a.record("task.1", triage("task.1", "implement"));
+    expect(recorded).toContain('"artifact"');
+    expect(a.artifactWrites).toEqual([
+      { id: "task.1", artifact: triage("task.1", "implement") },
+    ]);
+    expect(await a.callRaw(route("task.1", "needs_implement"))).toContain('"revision"');
+    expect(a.writes).toHaveLength(1);
+  });
+
+  it("a triage artifact for another route does not open the route the model asks for", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    await a.record("task.1", triage("task.1", "design"));
+    expect(await a.callRaw(route("task.1", "needs_implement"))).toContain("triage_artifact");
+    expect(await a.callRaw(route("task.1", "needs_design"))).toContain('"revision"');
+  });
+
+  it("a triage artifact of one item does not open another item", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    a.read(item("task.2"));
+    await a.record("task.1", triage("task.1", "implement"));
+    expect(await a.callRaw(route("task.2", "needs_implement"))).toContain("triage_artifact");
+  });
+
+  it("cancelling and moving back to triage need no artifact", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    expect(
+      await a.callRaw({ id: "task.1", expectedRevision: 7, reason: "no fit", set: { status: "cancelled" } }),
+    ).toContain('"revision"');
+  });
+
+  it("records only a triage artifact of this item, for an item in needs_triage, after the guide and goals", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    a.read(item("task.2", { status: "needs_design" }));
+    for (const [id, artifact, code] of [
+      [
+        "task.1",
+        {
+          kind: "design_review",
+          subject: "knowledge:contrib-design-0001@0123456789abcdefghijklmnopqrstuv",
+          verdict: "approve",
+          url: "https://example.test/review",
+        },
+        "artifact_shape",
+      ],
+      ["task.1", triage("task.2", "implement"), "artifact_shape"],
+      ["task.2", triage("task.2", "implement"), "artifact_source"],
+      ["task.9", triage("task.9", "implement"), "item_not_read"],
+    ] as const) {
+      expect(await a.record(id, artifact as never), `${id} ${code}`).toContain(code);
+    }
+    expect(a.artifactWrites).toHaveLength(0);
+    const cold = setup({ guidance: false });
+    cold.read(item("task.1"));
+    expect(await cold.record("task.1", triage("task.1", "implement"))).toContain("guidance");
+    const noGoals = setup({ goals: false });
+    noGoals.read(item("task.1"));
+    expect(await noGoals.record("task.1", triage("task.1", "implement"))).toContain("goals");
+  });
+
+  it("records at most five items per run", async () => {
+    const a = setup();
+    for (let n = 1; n <= 6; n++) a.read(item(`task.${n}`));
+    for (let n = 1; n <= 5; n++)
+      expect(await a.record(`task.${n}`, triage(`task.${n}`, "implement"))).toContain('"artifact"');
+    expect(await a.record("task.6", triage("task.6", "implement"))).toContain("write_budget");
+    // The same item may be re-recorded: the latest artifact decides.
+    expect(await a.record("task.1", triage("task.1", "design"))).toContain('"artifact"');
+    expect(a.artifactWrites).toHaveLength(6);
+  });
+
+  it("a refused artifact write does not open the route", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    const refusing = createTriageArtifactGuard(
+      a.receipts,
+      new DynamicStructuredTool({
+        name: WORK_ITEM_ARTIFACT_RECORD_NAME,
+        description: "Host artifact writer",
+        schema: z.object({}).passthrough(),
+        func: async () => JSON.stringify({ success: false, id: "task.1", status: 503, code: "artifacts_unavailable", message: "m" }),
+      }),
+      [TRIAGE_GUIDANCE_ID],
+    );
+    await refusing.invoke({ id: "task.1", artifact: triage("task.1", "implement") } as never);
+    expect(await a.callRaw(route("task.1", "needs_implement"))).toContain("triage_artifact");
   });
 });
