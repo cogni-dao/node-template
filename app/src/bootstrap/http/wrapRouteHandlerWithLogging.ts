@@ -80,7 +80,7 @@ type AuthRequiredOptions = {
   sameDoor?: string;
   /**
    * DENY_BY_DEFAULT (bug.0045): the reason a bearer agent may write here with no grant. Only a route that touches nothing but the caller's own data
-   * (its own chat turn, its own threads, its own credential) declares one. A write route that declares none of `sameDoor`, `bearerWrite` or an
+   * (its own chat turn, its own threads, its own credential), or whose service runs the one admin check on the caller itself (knowledge merge and close), declares one. A write route that declares none of `sameDoor`, `bearerWrite` or an
    * `OPEN_BY_DESIGN_ROUTES` entry answers a bearer 403 `bearer_write_undeclared`; a human session is never affected.
    */
   bearerWrite?: string;
