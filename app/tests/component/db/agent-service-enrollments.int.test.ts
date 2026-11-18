@@ -607,7 +607,7 @@ describe("agent service enrollments (real Postgres)", () => {
 });
 
 
-// CI only: the real runner migrates a disposable database from immutable0042, with pre-existing historical confirmations.
+// CI only: the real runner migrates a disposable database from immutable 0044, with pre-existing historical confirmations.
 describe("service authority forward migration", () => {
   it("is expand-only: no backfill of legacy rows, legacy confirmations still read through their credentials, purge stays disabled; lock timeout rolls back before retry", async () => {
     const container = await new PostgreSqlContainer("postgres:15-alpine").start();
@@ -630,7 +630,7 @@ describe("service authority forward migration", () => {
       await cp(migrations, previous, { recursive: true });
       const journalPath = join(previous, "meta", "_journal.json");
       const journal = JSON.parse(await readFile(journalPath, "utf8"));
-      journal.entries = journal.entries.filter((e: { idx: number }) => e.idx <= 42);
+      journal.entries = journal.entries.filter((e: { idx: number }) => e.idx <= 44);
       await writeFile(journalPath, JSON.stringify(journal));
       expect((await run(previous)).stdout).toContain("migrations applied");
       const ids = { active: randomUUID(), revoked: randomUUID(), expired: randomUUID(), multiple: randomUUID(), never: randomUUID() };
@@ -653,7 +653,7 @@ describe("service authority forward migration", () => {
         await expect(run(migrations)).rejects.toThrow();
         expect((await tx`SELECT to_regclass('public.agent_authority_maintenance') AS relation`)[0]?.relation).toBeNull();
       });
-      expect((await run(migrations)).stdout).toContain("0043_service_enrollment");
+      expect((await run(migrations)).stdout).toContain("0045_service_enrollment");
       const store = createPostgresCredentialStore(db as unknown as CredentialSql, { hasRoles: async () => false });
       for (const [kind, user] of Object.entries(ids)) {
         // No backfill UPDATE of existing rows: the audit summary stays unset for legacy principals (conservative for the disabled purge), while the

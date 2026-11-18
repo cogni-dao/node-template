@@ -1,7 +1,7 @@
 -- Provider maintenance indexes (@cogni-dao/agent-grants 0.8.0, task.0105).
 -- Apply after agent_service_enrollments.sql and BEFORE serving the corrected provider.
 -- Add these indexes to the node's OWN schema TS and generate its OWN SQL/journal/snapshot.
--- This reference is the generated DDL of the stage; node-template applies every stage in its one migration 0043_service_enrollment.
+-- This reference is the generated DDL of the stage; node-template applies every stage in its one migration 0045_service_enrollment.
 CREATE INDEX "agent_principals_service_created_idx" ON "agent_principals" USING btree ("created_at","user_id") WHERE "agent_principals"."service_key" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "agent_roles_principal_scope_latest_idx" ON "agent_roles" USING btree ("principal_user_id","scope","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "agent_roles_unrevoked_principal_idx" ON "agent_roles" USING btree ("principal_user_id","id") WHERE "agent_roles"."revoked_at" IS NULL;--> statement-breakpoint

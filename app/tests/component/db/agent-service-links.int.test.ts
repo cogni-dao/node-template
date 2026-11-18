@@ -61,10 +61,10 @@ import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 /**
- * node-template folds every package migration stage into ONE migration (0043_service_enrollment), with a function defined in several stages kept once, in its final body.
+ * node-template folds every package migration stage into ONE migration (0045_service_enrollment), with a function defined in several stages kept once, in its final body.
  * The package templates stay the reference for an adopter: each function a template ships (optionally only `names`) must appear, whitespace aside, in that migration.
  */
-const migrationFile = resolve("src/adapters/server/db/migrations/0043_service_enrollment.sql");
+const migrationFile = resolve("src/adapters/server/db/migrations/0045_service_enrollment.sql");
 const squash = (sql: string) => sql.replace(/\s+/g, " ").replace(/CREATE FUNCTION/g, "CREATE OR REPLACE FUNCTION").trim();
 async function templateFunctionsAreShipped(template: string, names?: string[]): Promise<void> {
   const shipped = squash(await readFile(migrationFile, "utf8"));
