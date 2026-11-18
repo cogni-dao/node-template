@@ -13,7 +13,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { CHAIN_ID } from "@cogni/node-shared";
+import { CHAIN_ID, normalizeWalletAddress } from "@cogni/node-shared";
 import {
 	type DaoConfig,
 	extractChainId,
@@ -347,7 +347,7 @@ export function getLedgerApprovers(): string[] {
  */
 export function isLedgerApprover(wallet: string | null | undefined): boolean {
 	if (!wallet) return false;
-	return getLedgerApprovers().includes(wallet.toLowerCase());
+	return getLedgerApprovers().includes(normalizeWalletAddress(wallet));
 }
 
 /**
@@ -361,7 +361,10 @@ export function isDaoAdmin(wallet: string | null | undefined): boolean {
 	if (!wallet) return false;
 	if (isLedgerApprover(wallet)) return true;
 	const steward = getStewardWalletConfig();
-	return !!steward && steward.address.toLowerCase() === wallet.toLowerCase();
+	return (
+		!!steward &&
+		normalizeWalletAddress(steward.address) === normalizeWalletAddress(wallet)
+	);
 }
 
 let cachedOperatorWalletConfig: OperatorWalletSpec | undefined | null = null;

@@ -32,7 +32,7 @@ export interface IdentityBindingService {
 		userId: string,
 	): Promise<{ nonce: string; expiresAt: Date }>;
 	/**
-	 * Bind a wallet whose signature the caller already verified. The nonce is consumed first, in the same transaction,
+	 * Bind a wallet whose signature the caller already verified (`address` is its lowercase wallet key). The nonce is consumed first, in the same transaction,
 	 * so a replayed signed message binds nothing. A wallet another principal holds is never re-pointed (NO_AUTO_MERGE).
 	 */
 	bindWallet(params: {
@@ -102,7 +102,7 @@ export function createIdentityBindingService(deps: {
 				}
 				const created = await tx.createWalletBinding({
 					userId: params.userId,
-					address: params.address.toLowerCase(),
+					address: params.address,
 					evidence: params.evidence,
 				});
 				return created ? "created" : "already_linked";

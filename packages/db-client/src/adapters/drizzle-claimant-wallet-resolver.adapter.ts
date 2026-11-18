@@ -8,7 +8,7 @@
  * Invariants:
  * - RESOLVER_READ_ONLY: only SELECT statements; never inserts/updates a binding (no binding-write flow).
  * - RESOLVER_NULL_IS_UNRESOLVED: a claimant with no wallet resolves to `wallet: null` — never a synthesized address.
- * - AGENT_WALLET_IS_NOT_A_PAYEE: a user with an `agent_principals` row resolves to `wallet: null` even when a wallet is bound; an AI can prove a wallet (so it can be an admin) but is never paid to it.
+ * - AGENT_WALLET_IS_NOT_A_PAYEE: a wallet an `agent_principals` user owns (a `wallet` binding or `users.wallet_address`, matched by lowercase address) never resolves, for the agent or for any other user who presents the same address; the claimant stays `wallet: null`. An AI can prove a wallet (so it can be an admin) but is never paid to it.
  * - RESOLVER_CONTRIBUTOR_WALLET: resolves the person's OWN wallet (users.wallet_address / user_bindings provider='wallet'); never an operator/treasury wallet.
  * - RESOLVER_GITHUB_VIA_BINDING: `identity:github:<externalId>` → user_id via user_bindings(provider='github', external_id), mirroring AttributionStore.resolveIdentities.
  * Side-effects: IO (database reads)
@@ -24,7 +24,7 @@ import type {
 import { agentPrincipals } from "@cogni/db-schema/agent-authority";
 import { userBindings } from "@cogni/db-schema/identity";
 import { users } from "@cogni/db-schema/refs";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 
 import type { Database } from "../client";
 
@@ -178,18 +178,9 @@ export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
 
   /** Resolve user_id → EVM wallet (user_bindings 'wallet' binding, then users.wallet_address). */
   private async resolveWalletsByUserId(
-    candidateUserIds: readonly string[]
+    userIds: readonly string[]
   ): Promise<Map<string, HexAddress>> {
     const result = new Map<string, HexAddress>();
-    if (candidateUserIds.length === 0) return result;
-
-    // AGENT_WALLET_IS_NOT_A_PAYEE: an agent principal never resolves to a wallet.
-    const agentRows = await this.db
-      .select({ userId: agentPrincipals.userId })
-      .from(agentPrincipals)
-      .where(inArray(agentPrincipals.userId, [...candidateUserIds]));
-    const agentUserIds = new Set(agentRows.map((row) => row.userId));
-    const userIds = candidateUserIds.filter((id) => !agentUserIds.has(id));
     if (userIds.length === 0) return result;
 
     // Primary: explicit wallet bindings.
@@ -231,7 +222,42 @@ export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
       }
     }
 
-    return result;
+    return this.withoutAgentWallets(result);
+  }
+
+  /**
+   * AGENT_WALLET_IS_NOT_A_PAYEE: drop every resolved wallet an agent principal owns, matched by lowercase address. Matching the address (not just the
+   * user) also covers a human whose login row carries the same address as an agent's binding.
+   */
+  private async withoutAgentWallets(
+    resolved: Map<string, HexAddress>
+  ): Promise<Map<string, HexAddress>> {
+    const addresses = [
+      ...new Set([...resolved.values()].map((a) => a.toLowerCase())),
+    ];
+    if (addresses.length === 0) return resolved;
+
+    const bound = await this.db
+      .select({ address: sql<string>`lower(${userBindings.externalId})` })
+      .from(userBindings)
+      .innerJoin(agentPrincipals, eq(agentPrincipals.userId, userBindings.userId))
+      .where(
+        and(
+          eq(userBindings.provider, "wallet"),
+          inArray(sql`lower(${userBindings.externalId})`, addresses)
+        )
+      );
+    const primary = await this.db
+      .select({ address: sql<string>`lower(${users.walletAddress})` })
+      .from(users)
+      .innerJoin(agentPrincipals, eq(agentPrincipals.userId, users.id))
+      .where(inArray(sql`lower(${users.walletAddress})`, addresses));
+    const agentOwned = new Set([...bound, ...primary].map((row) => row.address));
+
+    for (const [userId, addr] of resolved) {
+      if (agentOwned.has(addr.toLowerCase())) resolved.delete(userId);
+    }
+    return resolved;
   }
 }
 

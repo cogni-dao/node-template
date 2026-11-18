@@ -148,27 +148,63 @@ describe("agent authority (real Postgres)", () => {
       expect(await check(agent)).toBe("allow");
     });
 
-    it("guards both payout tables", async () => {
-      const rows = await service`
-        SELECT c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
-        WHERE t.tgname LIKE '%agent_wallet_is_not_a_payee' AND NOT t.tgisinternal ORDER BY c.relname`;
-      expect(rows.map((r) => r.relname)).toEqual(["distribution_settlement_leaves", "epoch_distribution_leaves"]);
+    it("holds one owner per wallet whatever the casing (database unique index)", async () => {
+      const wallet = addr();
+      await makeAgent(wallet);
+      const other = await makeUser();
+      await expect(
+        service`INSERT INTO user_bindings (id, user_id, provider, external_id)
+          VALUES (${randomUUID()}, ${other}, 'wallet', ${`0x${wallet.slice(2).toUpperCase()}`})`
+      ).rejects.toThrow(/user_bindings_wallet_lower_unique/);
     });
 
-    it("refuses a payout row for an agent-owned wallet in any casing, and allows a human's wallet", async () => {
-      const agentWallet = addr();
-      await makeAgent(`0x${agentWallet.slice(2).toUpperCase()}`); // stored checksummed-style, matched lowercased
-      const humanWallet = addr();
-      await makeUser(humanWallet);
-      // The same trigger function the leaf tables carry, on a probe table with the leaf's `account_lower` column.
-      const probe = (wallet: string) =>
-        service.begin(async (tx) => {
-          await tx`CREATE TEMP TABLE payee_probe (account_lower text) ON COMMIT DROP`;
-          await tx`CREATE TRIGGER probe BEFORE INSERT ON payee_probe FOR EACH ROW EXECUTE FUNCTION agent_wallet_is_not_a_payee()`;
-          await tx`INSERT INTO payee_probe VALUES (${wallet})`;
-        });
-      await probe(humanWallet.toLowerCase());
-      await expect(probe(agentWallet.toLowerCase())).rejects.toThrow(/cannot be a payee/);
+    // The guard runs as the invoker. The leaf tables are written by the BYPASSRLS service role (`service` here, a real non-superuser role,
+    // exactly as in production), which sees users and user_bindings in full. These inserts hit the REAL tables: a guard that never fires fails here.
+    describe("the real payout tables refuse an agent wallet", () => {
+      const nodeId = randomUUID();
+      const scopeId = randomUUID();
+      let leafIndex = 0;
+      let epochId = "";
+      let manifestId = "";
+      let revisionId = "";
+
+      beforeAll(async () => {
+        const [epoch] = await service`INSERT INTO epochs (node_id, scope_id, period_start, period_end, weight_config)
+          VALUES (${nodeId}, ${scopeId}, now() - interval '2 days', now() - interval '1 day', '{}'::jsonb) RETURNING id`;
+        epochId = String(epoch?.id);
+        const [manifest] = await service`INSERT INTO epoch_distribution_manifests
+          (node_id, scope_id, epoch_id, distribution_id, statement_hash, merkle_root, chain_id, token_address, distribution_amount, total_allocated)
+          VALUES (${nodeId}, ${scopeId}, ${epochId}, 'd', 'h', 'r', 1, '0x00', 0, 0) RETURNING id`;
+        manifestId = String(manifest?.id);
+        const [revision] = await service`INSERT INTO distribution_settlement_revisions
+          (node_id, scope_id, sequence, distribution_id, statement_hash, merkle_root, chain_id, token_address, mint_delta, cumulative_total, trigger_kind, trigger_ref)
+          VALUES (${nodeId}, ${scopeId}, 1, 'd', 'h', 'r', 1, '0x00', 0, 0, 'probe', 'probe') RETURNING id`;
+        revisionId = String(revision?.id);
+      });
+
+      const epochLeaf = (wallet: string) =>
+        service`INSERT INTO epoch_distribution_leaves
+          (node_id, manifest_id, epoch_id, leaf_index, claimant_key, account, account_lower, amount, leaf_hash, proof_json)
+          VALUES (${nodeId}, ${manifestId}, ${epochId}, ${leafIndex++}, 'user:x', ${wallet}, ${wallet.toLowerCase()}, 1, 'h', '[]'::jsonb)`;
+      const settlementLeaf = (wallet: string) =>
+        service`INSERT INTO distribution_settlement_leaves
+          (revision_id, leaf_index, claimant_key, account, account_lower, cumulative_amount, delta_amount, receipt_ids_json, leaf_hash, proof_json)
+          VALUES (${revisionId}, ${leafIndex++}, 'user:x', ${wallet}, ${wallet.toLowerCase()}, 1, 1, '[]'::jsonb, 'h', '[]'::jsonb)`;
+
+      it("accepts a human's wallet on both tables (the positive control: the fixtures are valid)", async () => {
+        const human = addr();
+        await makeUser(human);
+        await epochLeaf(human);
+        await settlementLeaf(human);
+      });
+
+      it("refuses an agent's wallet on both tables, in any casing", async () => {
+        const wallet = addr();
+        await makeAgent(wallet);
+        await expect(epochLeaf(wallet)).rejects.toThrow(/cannot be a payee/);
+        await expect(settlementLeaf(wallet)).rejects.toThrow(/cannot be a payee/);
+        await expect(epochLeaf(`0x${wallet.slice(2).toUpperCase()}`)).rejects.toThrow(/cannot be a payee/);
+      });
     });
   });
 

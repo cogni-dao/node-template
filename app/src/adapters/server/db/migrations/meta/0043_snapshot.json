@@ -1,5 +1,5 @@
 {
-  "id": "414e432d-9a27-4c73-b2a0-fe3a0b2e8e78",
+  "id": "f22938f8-3e93-402b-a1c0-1cb8fb84e4f1",
   "prevId": "b64dd207-1e23-49e6-b449-c5fcb4b2a37e",
   "version": "7",
   "dialect": "postgresql",
@@ -5008,6 +5008,28 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_bindings_wallet_lower_unique": {
+          "name": "user_bindings_wallet_lower_unique",
+          "columns": [
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(\"external_id\")",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"user_bindings\".\"provider\" = 'wallet'",
           "concurrently": false,
           "method": "btree",
           "with": {}

@@ -4,6 +4,7 @@
 /** Drizzle adapter for atomic identity nonce redemption and binding writes. */
 
 import type { Database } from "@cogni/db-client";
+import { normalizeWalletAddress } from "@cogni/node-shared";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 
 import { createBindingInTransaction } from "@/adapters/server/identity/create-binding";
@@ -50,7 +51,7 @@ class DrizzleIdentityBindingTransaction
 			.where(
 				and(
 					eq(userBindings.provider, "wallet"),
-					sql`lower(${userBindings.externalId}) = ${address.toLowerCase()}`,
+					sql`lower(${userBindings.externalId}) = ${normalizeWalletAddress(address)}`,
 				),
 			)
 			.limit(1);
@@ -66,7 +67,7 @@ class DrizzleIdentityBindingTransaction
 			this.tx,
 			params.userId,
 			"wallet",
-			params.address.toLowerCase(),
+			normalizeWalletAddress(params.address),
 			{ method: "siwe_bind", ...params.evidence },
 		);
 		return result.created;
@@ -123,11 +124,30 @@ export class DrizzleIdentityBindingRepository
 		expiresAt: Date;
 		provider?: "github" | "wallet";
 	}): Promise<void> {
-		await this.db.insert(linkTransactions).values({
+		const provider = params.provider ?? "github";
+		const row = {
 			id: params.nonce,
 			userId: params.userId,
-			provider: params.provider ?? "github",
+			provider,
 			expiresAt: params.expiresAt,
+		};
+		if (provider !== "wallet") {
+			await this.db.insert(linkTransactions).values(row);
+			return;
+		}
+		// One open wallet challenge per principal: a new one retires the last, so nonces cannot pile up.
+		await this.db.transaction(async (tx) => {
+			await tx
+				.update(linkTransactions)
+				.set({ consumedAt: new Date() })
+				.where(
+					and(
+						eq(linkTransactions.userId, params.userId),
+						eq(linkTransactions.provider, "wallet"),
+						isNull(linkTransactions.consumedAt),
+					),
+				);
+			await tx.insert(linkTransactions).values(row);
 		});
 	}
 

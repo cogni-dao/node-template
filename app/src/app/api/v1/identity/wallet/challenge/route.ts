@@ -14,12 +14,11 @@
  * @public
  */
 
-import { CHAIN_ID } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 
 import { createWalletChallenge } from "@/app/_facades/identity/operator-attested-binding.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { siweDomain, siweOrigin } from "@/app/_lib/auth/siwe-verify";
+import { siweIssued } from "@/app/_lib/auth/siwe-verify";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
 export const dynamic = "force-dynamic";
@@ -40,10 +39,8 @@ export const POST = wrapRouteHandlerWithLogging(
 				expiresAt: expiresAt.toISOString(),
 				// The fields of the EIP-4361 message to sign; the caller adds its own `address`.
 				message: {
-					domain: siweDomain(),
-					uri: siweOrigin(),
+					...siweIssued(),
 					version: "1",
-					chainId: CHAIN_ID,
 					nonce,
 					statement: "Bind this wallet to my account on this node.",
 					issuedAt: new Date().toISOString(),
