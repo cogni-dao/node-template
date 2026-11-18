@@ -40,7 +40,7 @@ Governance feature slice — schedule sync, governance status dashboard, claiman
 - **Exports (components):** `ContributorCard`, `ContributionRow`, `EpochCard`, `EpochCountdown`, `EpochDetail`, `EpochLifecycleProgress`, `EpochReviewAction`, `HoldingCard`, `SourceBadge`, `YourPositionPanel`, `NodeTokenomicsPanel`, `DistributionModelFlow`, `ContributionCreditsPanel`
 - **Exports (lib):** `composeEpochView()`, `composeEpochViewFromClaimants()`, `applyOverridesToEpochView()`, `composeHoldings()`, `deriveEpochLifecycle()`
 - **Exports (types):** `EpochView`, `EpochContributor`, `IngestionReceipt`, `HoldingView`, `CurrentEpochData`, `EpochHistoryData`, `HoldingsData`, `SignEpochState`, `SignEpochPhase`, `ReviewSubjectOverrideView`, `EpochDetailProps`, `Signal`, `ActionResult`, `RepoRef`
-- **Exports (signal):** `parseCogniAction()`, `parseRepoRef()`, `COGNI_TOPIC0`, `resolveAction()`, `mergeChange()`, `grantCollaborator()`, `revokeCollaborator()`
+- **Exports (signal):** `parseCogniAction()`, `parseRepoRef()`, `COGNI_TOPIC0`, `resolveAction()`, `mergeChange()`, `grantCollaborator()`, `revokeCollaborator()`, `parseRoleTarget()`, `executeRoleSignal()`, `RoleSignalPort`
 - **Routes (app pages):** `/gov` (overview), `/gov/epoch` (current + historical lifecycle and contribution sync), `/gov/holdings` (aggregated), `/gov/review` (Finish Epoch admin workspace — open review, sign/finalize, publish)
 - **Routes (API — in `src/app/api/v1/attribution/`):** `GET /epochs`, `POST /epochs/:id/review`, `GET /epochs/:id/user-projections`, `GET /epochs/:id/statement`, `GET /epochs/:id/claimants`, `GET /epochs/:id/activity`, `GET /epochs/:id/sign-data`, `GET|PATCH|DELETE /epochs/:id/review-subject-overrides`
 - **CLI:** `pnpm governance:schedules:sync`, `pnpm db:seed`, `pnpm dev:setup`
@@ -53,7 +53,7 @@ Governance feature slice — schedule sync, governance status dashboard, claiman
 
 ## Responsibilities
 
-- This directory **does**: Sync governance schedules; provide epoch UI hooks, view-model composition, and presentational components; pause removed schedules (PRUNE_IS_PAUSE); decode and execute on-chain CogniAction signals (merge PR, grant/revoke collaborator)
+- This directory **does**: Sync governance schedules; provide epoch UI hooks, view-model composition, and presentational components; pause removed schedules (PRUNE_IS_PAUSE); decode and execute on-chain CogniAction signals (merge PR, grant/revoke collaborator, grant/revoke a node AI role: `grant:role` / `revoke:role` with `resource` = scope and `paramsJson` = `{"principal":"<agent_principals.slug>"}`; needs no GitHub App)
 - This directory **does not**: Execute workflows, manage tenant-facing schedule CRUD, access DB directly, perform credit math (ALL_MATH_BIGINT stays server-side), verify webhooks (that's the adapter's job)
 
 ## Usage

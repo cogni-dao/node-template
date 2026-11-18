@@ -22,6 +22,8 @@ import {
 import {
   ACTION_VALUES,
   type RepoRef,
+  type RoleTarget,
+  roleParamsSchema,
   type Signal,
   signalSchema,
   TARGET_VALUES,
@@ -120,6 +122,35 @@ export function parseCogniAction(log: {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Role target parser
+// ---------------------------------------------------------------------------
+
+const ROLE_SCOPE_RE = /^[a-z][a-z0-9_]*:[a-z0-9_.-]+$/;
+
+/**
+ * Parse the grant:role / revoke:role payload of a signal. Returns null for any other target, any action but grant or revoke, a malformed
+ * scope, or params that are not exactly `{"principal": "<slug>"}`. Whether this node declares the scope is the authority's call.
+ */
+export function parseRoleTarget(signal: Signal): RoleTarget | null {
+  if (signal.target !== "role") return null;
+  if (signal.action !== "grant" && signal.action !== "revoke") return null;
+  if (!ROLE_SCOPE_RE.test(signal.resource)) return null;
+  let params: unknown;
+  try {
+    params = JSON.parse(signal.paramsJson);
+  } catch {
+    return null;
+  }
+  const parsed = roleParamsSchema.safeParse(params);
+  if (!parsed.success) return null;
+  return {
+    action: signal.action,
+    principalSlug: parsed.data.principal,
+    scope: signal.resource,
+  };
 }
 
 // ---------------------------------------------------------------------------

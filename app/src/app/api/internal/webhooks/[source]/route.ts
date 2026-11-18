@@ -53,6 +53,16 @@ function resolveWebhookSecret(
   }
 }
 
+/** The node's agent authority applies grant:role / revoke:role; a container that cannot build just refuses role signals. */
+function roleSignalPort() {
+  try {
+    return getContainer().agentAuthority;
+  } catch (error) {
+    log.error({ error: String(error) }, "agent authority unavailable for role signals");
+    return undefined;
+  }
+}
+
 interface RouteParams {
   params: Promise<{ source: string }>;
 }
@@ -122,7 +132,7 @@ export async function POST(
     // Runs async — errors logged, never block webhook response.
     if (source === "alchemy") {
       const payload = JSON.parse(bodyBuffer.toString("utf-8"));
-      dispatchSignalExecution(payload, env, log);
+      dispatchSignalExecution(payload, env, log, roleSignalPort());
     }
 
     return NextResponse.json(
@@ -153,6 +163,7 @@ export async function POST(
 
     if (source === "alchemy") {
       const payload = JSON.parse(bodyBuffer.toString("utf-8"));
+      // No role signals here: this path can run before the signature is verified.
       dispatchSignalExecution(payload, env, log);
     }
 

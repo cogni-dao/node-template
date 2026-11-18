@@ -302,6 +302,13 @@
       "when": 1794687330422,
       "tag": "0042_agent_account_grants_durable",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794967836976,
+      "tag": "0045_seed_dao_principal",
+      "breakpoints": true
     }
   ]
 }

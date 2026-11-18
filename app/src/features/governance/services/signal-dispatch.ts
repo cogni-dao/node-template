@@ -20,6 +20,7 @@ import { createPublicClient, http } from "viem";
 import { base, mainnet, sepolia } from "viem/chains";
 import { getDaoConfig } from "@/shared/config";
 
+import type { RoleSignalPort } from "../role-action";
 import { handleSignal } from "./signal-handler";
 
 // Map chain IDs to viem chain definitions
@@ -43,20 +44,13 @@ export function dispatchSignalExecution(
     GH_REVIEW_APP_PRIVATE_KEY_BASE64?: string | undefined;
     EVM_RPC_URL?: string | undefined;
   },
-  log: Logger
+  log: Logger,
+  roles?: RoleSignalPort
 ): void {
   // Check credentials
   const appId = env.GH_REVIEW_APP_ID;
   const privateKeyBase64 = env.GH_REVIEW_APP_PRIVATE_KEY_BASE64;
   const rpcUrl = env.EVM_RPC_URL;
-
-  if (!appId || !privateKeyBase64) {
-    log.debug(
-      { event: EVENT_NAMES.SIGNAL_DISPATCH_SKIPPED, reason: "no_github_app" },
-      "signal dispatch skipped — GH_REVIEW_APP_ID/PRIVATE_KEY not configured"
-    );
-    return;
-  }
 
   if (!rpcUrl) {
     log.debug(
@@ -105,24 +99,30 @@ export function dispatchSignalExecution(
   });
 
   // Pre-decode private key once for all tx hashes
-  const privateKey = Buffer.from(privateKeyBase64, "base64").toString("utf-8");
+  const privateKey = privateKeyBase64
+    ? Buffer.from(privateKeyBase64, "base64").toString("utf-8")
+    : undefined;
 
-  // Octokit factory: looks up installation ID for the target repo, returns authenticated client
-  async function resolveOctokit(owner: string, repo: string): Promise<Octokit> {
-    const appOctokit = new Octokit({
-      authStrategy: createAppAuth,
-      auth: { appId, privateKey },
-    });
-    const response = await appOctokit.request(
-      "GET /repos/{owner}/{repo}/installation",
-      { owner, repo }
-    );
-    const installationId = (response.data as { id: number }).id;
-    return new Octokit({
-      authStrategy: createAppAuth,
-      auth: { appId, privateKey, installationId },
-    });
-  }
+  // Octokit factory: looks up installation ID for the target repo, returns authenticated client.
+  // A role signal needs no GitHub App; without one a VCS signal answers `vcs_unavailable`.
+  const resolveOctokit =
+    appId && privateKey
+      ? async (owner: string, repo: string): Promise<Octokit> => {
+          const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: { appId, privateKey },
+          });
+          const response = await appOctokit.request(
+            "GET /repos/{owner}/{repo}/installation",
+            { owner, repo }
+          );
+          const installationId = (response.data as { id: number }).id;
+          return new Octokit({
+            authStrategy: createAppAuth,
+            auth: { appId, privateKey, installationId },
+          });
+        }
+      : undefined;
 
   // Dispatch each tx hash
   for (const txHash of txHashes) {
@@ -130,8 +130,9 @@ export function dispatchSignalExecution(
       try {
         await handleSignal(txHash, {
           rpcClient,
-          resolveOctokit,
+          ...(resolveOctokit ? { resolveOctokit } : {}),
           daoConfig,
+          ...(roles ? { roles } : {}),
           log,
         });
       } catch (error) {

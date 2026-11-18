@@ -135,6 +135,15 @@ export function memoryStore(init?: {
       guard();
       return roles.some((r) => r.principal === principalId && r.scope === scope && liveNode(r));
     },
+    async nodeRoleTimes(principalId, scope) {
+      guard();
+      const rows = roles.filter((r) => r.principal === principalId && r.scope === scope && r.resource === "node" && r.approvedBy);
+      const max = (xs: Array<number | null>) => xs.reduce<number | null>((a, x) => (x === null ? a : a === null || x > a ? x : a), null);
+      return {
+        liveGrantedAt: max(rows.filter((r) => !r.revoked).map((r) => r.grantedAt)),
+        lastRevokedAt: max(rows.map((r) => r.revokedAt)),
+      };
+    },
     async liveScopes(principalId, scopes) {
       guard();
       return [...new Set(roles.filter((r) => r.principal === principalId && liveNode(r) && scopes.includes(r.scope)).map((r) => r.scope))];

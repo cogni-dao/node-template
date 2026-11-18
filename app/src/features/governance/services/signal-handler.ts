@@ -20,6 +20,7 @@ import type { Logger } from "pino";
 import type { Address, Hex, PublicClient } from "viem";
 
 import { resolveAction } from "../actions";
+import { executeRoleSignal, type RoleSignalPort } from "../role-action";
 import { COGNI_TOPIC0, parseCogniAction, parseRepoRef } from "../signal-parser";
 import type { ActionResult } from "../signal-types";
 
@@ -52,13 +53,15 @@ export interface SignalHandlerDeps {
   /** viem public client for RPC calls */
   readonly rpcClient: PublicClient;
   /** Resolve an authenticated Octokit for the target repo (handles installation lookup internally) */
-  readonly resolveOctokit: (owner: string, repo: string) => Promise<Octokit>;
+  readonly resolveOctokit?: (owner: string, repo: string) => Promise<Octokit>;
   /** DAO config from repo-spec */
   readonly daoConfig: {
     readonly signal_contract: string;
     readonly dao_contract: string;
     readonly chain_id: string;
   };
+  /** Applies grant:role / revoke:role (the node's agent authority). Absent: a role signal is refused. */
+  readonly roles?: RoleSignalPort;
   readonly log: Logger;
 }
 
@@ -180,6 +183,39 @@ export async function handleSignal(
       };
     }
 
+    // 6b. Role signals write a grant row: no VCS, no Octokit
+    if (signal.target === "role") {
+      // Chain time orders this signal against later decisions (a redelivered older signal must not override them).
+      const block = await deps.rpcClient.getBlock({
+        blockHash: receipt.blockHash,
+      });
+      const signalAtMs =
+        block?.timestamp == null ? Number.NaN : Number(block.timestamp) * 1000;
+      // A null, zero or NaN block time would fail the ordering comparisons open: refuse (execution_error) instead.
+      if (!Number.isFinite(signalAtMs) || signalAtMs <= 0) {
+        throw new Error("block timestamp unavailable");
+      }
+      const result = await executeRoleSignal(
+        signal,
+        txHash,
+        signalAtMs,
+        deps.roles,
+        log
+      );
+      if (result.success) markTxExecuted(txHash);
+      log.info(
+        {
+          event: EVENT_NAMES.SIGNAL_EXECUTION_COMPLETE,
+          action: signal.action,
+          target: signal.target,
+          outcome: result.success ? "success" : "error",
+          errorCode: result.success ? undefined : result.action,
+        },
+        EVENT_NAMES.SIGNAL_EXECUTION_COMPLETE
+      );
+      return result;
+    }
+
     // 7. Resolve action handler
     const handler = resolveAction(signal.action, signal.target);
     if (!handler) {
@@ -204,6 +240,17 @@ export async function handleSignal(
     }
 
     // 8. Resolve Octokit for target repo
+    if (!deps.resolveOctokit) {
+      log.warn(
+        { action: signal.action, target: signal.target },
+        "vcs signal skipped — GitHub App not configured"
+      );
+      return {
+        success: false,
+        action: "vcs_unavailable",
+        error: "GitHub App not configured",
+      };
+    }
     const repoRef = parseRepoRef(signal.repoUrl);
     const octokit = await deps.resolveOctokit(repoRef.owner, repoRef.repo);
 
