@@ -142,6 +142,7 @@ function run(c: Case): MoveResult {
     labels: ["goal:goal-ai-work-converges"],
     scores: SIX,
     moves: [{ metricId: "m", direction: "up" }],
+    specRefs: ["knowledge:work-item-design-links"],
     statusRevision: SREV,
     ...c.item,
   };
@@ -253,6 +254,8 @@ describe("exit of needs_design_review: an approve of the design inbox at its cur
     { name: "an inbox that is not in this hub is refused", ...base, artifacts: [...designRoute, designReview()], inboxes: { [DESIGN_INBOX]: null }, unmet: "design_review" },
     { name: "an inbox not read is facts_unavailable", ...base, artifacts: [...designRoute, designReview()], inboxes: {}, unavailable: "design_review" },
     { name: "a review whose subject is not an inbox is refused", ...base, artifacts: [...designRoute, art("design_review", `${PR}@${HEAD}`, "approve")], unmet: "design_review" },
+    { name: "an approved design the item does not link is refused (story.0069)", ...base, artifacts: [...designRoute, designReview()], item: { specRefs: [] }, unmet: "design_link" },
+    { name: "an untyped spec ref is not a design link", ...base, artifacts: [...designRoute, designReview()], item: { specRefs: ["work-item-design-links"] }, unmet: "design_link" },
   ];
   it.each(cases)("$name", expectCase);
 });

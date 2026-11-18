@@ -35,6 +35,11 @@ describe("work pull links", () => {
     expect(pullUrls(null, [])).toEqual([]);
   });
 
+  it("shows the one empty state when the item has no PR", () => {
+    render(<WorkPullLinks pr={null} externalRefs={[]} />);
+    expect(screen.getByRole("region", { name: "Pull requests" })).toHaveTextContent("No PRs yet");
+  });
+
   it("keeps a pr that is not an https URL visible as text, not a link", () => {
     render(<WorkPullLinks pr="branch-only-deliverable" externalRefs={[]} />);
     expect(screen.getByText("branch-only-deliverable")).toBeInTheDocument();

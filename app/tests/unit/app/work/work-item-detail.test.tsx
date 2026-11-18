@@ -153,7 +153,7 @@ describe("WorkItemDetail accessibility", () => {
       />
     );
 
-    const prs = screen.getAllByRole("link", { name: /^outgoing pr / });
+    const prs = screen.getAllByRole("link", { name: /^pr / });
     expect(prs.map((link) => link.getAttribute("href"))).toEqual([
       "https://github.com/cogni-dao/node-template/pull/425",
       "https://github.com/cogni-dao/red/pull/45",
@@ -161,7 +161,7 @@ describe("WorkItemDetail accessibility", () => {
     expect(prs[0]).toHaveAttribute("target", "_blank");
     const links = screen.getAllByRole("link");
     expect(links.indexOf(prs[0] as HTMLElement)).toBe(0);
-    expect(screen.getByRole("link", { name: "outgoing design work-item-design-links" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "design work-item-design-links" })).toHaveAttribute(
       "href",
       "/knowledge/work-item-design-links"
     );

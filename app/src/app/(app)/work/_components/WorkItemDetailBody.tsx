@@ -102,6 +102,13 @@ const ScrollKeepingLink: CitationLinkComponent = ({ entityId: _entityId, href, .
 );
 
 
+/** The roadmaps that track this item: the sources of its incoming `tracks` edges on the read's first links page (story.0069). */
+function roadmapIds(read: WorkItemsGetOutput | null): string[] {
+	return (read?.links?.items ?? [])
+		.filter((link) => link.direction === "in" && link.citationType === "tracks" && link.source.kind === "knowledge")
+		.map((link) => link.source.id);
+}
+
 const ROW = "flex min-w-0 items-center justify-between gap-3";
 const ROW_TITLE = "min-w-0 truncate";
 const ROW_TIME = "shrink-0 text-muted-foreground text-xs";
@@ -256,7 +263,7 @@ export function WorkItemDetailBody({
 							LinkComponent={PeekLink}
 						/>
 						{/* Design, between Moves and Artifacts: the design atoms the item is built against (story.0069). */}
-						<WorkDesignLinks specRefs={item.specRefs} LinkComponent={PeekLink} />
+						<WorkDesignLinks specRefs={item.specRefs} roadmapIds={roadmapIds(read)} LinkComponent={PeekLink} />
 						{/* Artifacts, right below Moves and drawn like it: each review or validation that lets the item move (story.0058).
 						    The selected one opens inline under its row; selecting it again closes it. */}
 						{read?.artifactRefs !== undefined && (

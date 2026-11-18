@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-base-ui/tests/work-design-links`
  * Purpose: Prove a work item's typed design links draw as `→ design <id>` rows that open the atom, and an old untyped entry stays visible as text (story.0069).
  * Scope: Shared React component with an injected href. No network.
- * Invariants: ONE_ROW_RENDERER, EMPTY_DRAWS_NOTHING.
+ * Invariants: ONE_ROW_RENDERER, ONE_EMPTY_STATE, ROADMAP_FIRST.
  * Side-effects: global (React test DOM)
  * @internal
  */
@@ -26,14 +26,23 @@ describe("WorkDesignLinks", () => {
       />,
     );
     expect(screen.getByRole("region", { name: "Design" })).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: "outgoing design node-sandbox-design" });
+    const link = screen.getByRole("link", { name: "design node-sandbox-design" });
     expect(link).toHaveAttribute("href", "/hub/node-sandbox-design");
     expect(screen.getAllByRole("link")).toHaveLength(1);
     expect(screen.getByText("https://github.com/cogni-dao/node-template/pull/255")).toBeInTheDocument();
   });
 
-  it("draws nothing for an item with no refs", () => {
-    const { container } = render(<WorkDesignLinks specRefs={[]} />);
-    expect(container).toBeEmptyDOMElement();
+  it("puts the roadmap first, then the design, each its own row", () => {
+    render(<WorkDesignLinks specRefs={["knowledge:node-sandbox-design"]} roadmapIds={["roadmap-ai-work-converges"]} />);
+    const links = screen.getAllByRole("link");
+    expect(links.map((l) => l.getAttribute("aria-label"))).toEqual([
+      "roadmap roadmap-ai-work-converges",
+      "design node-sandbox-design",
+    ]);
+  });
+
+  it("says nothing is linked yet, in the one empty state every section uses", () => {
+    render(<WorkDesignLinks specRefs={[]} />);
+    expect(screen.getByRole("region", { name: "Design" })).toHaveTextContent("No design linked yet");
   });
 });

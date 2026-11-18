@@ -4363,6 +4363,7 @@ export class DoltgresWorkItemAdapter
       labels: set.labels ?? stored.labels,
       scores: set.scores !== undefined ? set.scores : (stored.scores ?? null),
       moves: set.moves !== undefined ? set.moves : (stored.moves ?? []),
+      specRefs: set.specRefs ?? stored.specRefs,
       statusRevision: Number(current.status_revision ?? 0),
     };
   }

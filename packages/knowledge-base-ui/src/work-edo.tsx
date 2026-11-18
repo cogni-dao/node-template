@@ -10,7 +10,9 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactElement, useEffect, useState } from "react";
+import { CITATION_HEADING_CLASS } from "./citation-links.js";
 import type { WorkMetric } from "./work-metrics.js";
+import { WORK_SECTION_EMPTY_CLASS } from "./work-pull-links.js";
 
 export interface WorkExpectation {
   id: string;
@@ -103,16 +105,22 @@ export function WorkExpectations({
     });
   }, [client]);
   const page = query.data;
-  if (query.isError) return <p role="status">Expectations unavailable.</p>;
-  if (!page || query.isFetching)
-    return <p role="status">Loading expectations…</p>;
-  if (!page.items.length && !page.truncated)
-    return (
-      <p className="text-muted-foreground text-xs">No expectation recorded.</p>
-    );
+  // One section shape for every state, as the other work-item sections draw (story.0069).
+  const heading = <h3 className={CITATION_HEADING_CLASS}>Expectations</h3>;
+  const status = (text: string) => (
+    <section aria-label="Expectations" className="flex flex-col gap-1.5">
+      {heading}
+      <span role="status" className={WORK_SECTION_EMPTY_CLASS}>
+        {text}
+      </span>
+    </section>
+  );
+  if (query.isError) return status("Expectations are unavailable");
+  if (!page || query.isFetching) return status("Loading expectations");
+  if (!page.items.length && !page.truncated) return status("No expectations yet");
   return (
     <section aria-label="Expectations" className="flex flex-col gap-3">
-      <h3 className="font-medium text-sm">Expectations</h3>
+      {heading}
       {page.items.map((item) => (
         <article
           key={item.id}
