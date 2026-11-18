@@ -9,6 +9,7 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__knowledge_read`
  *   - EFFECT_TYPED: effect is `read_only`
  *   - HARD_BOUNDS: max 50 results for list mode
+ *   - SPEC_REF_READS_ITS_ATOM: an id written `knowledge:<id>` (a work item's specRefs entry) reads atom `<id>` (story.0069)
  * Side-effects: IO (database read via capability)
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md
  * @public
@@ -16,6 +17,7 @@
 
 import { z } from "zod";
 import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
+import { parseSpecRef } from "@cogni-dao/work-items";
 
 import type { KnowledgeCapability } from "../capabilities/knowledge";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
@@ -28,7 +30,9 @@ export const KnowledgeReadInputSchema = z
     id: z
       .string()
       .optional()
-      .describe("Get a specific entry by ID (mutually exclusive with domain)"),
+      .describe(
+        "Get a specific entry by ID, or by a work item's design ref `knowledge:<id>` as specRefs lists it (mutually exclusive with domain)",
+      ),
     domain: z
       .string()
       .optional()
@@ -98,7 +102,8 @@ export function createKnowledgeReadImplementation(
   return {
     execute: async (input) => {
       if (input.id) {
-        const entry = await deps.knowledgeCapability.get(input.id);
+        // A work item's typed design ref (story.0069) reads as the atom it names.
+        const entry = await deps.knowledgeCapability.get(parseSpecRef(input.id) ?? input.id);
         return {
           mode: "get" as const,
           entries: entry ? [{

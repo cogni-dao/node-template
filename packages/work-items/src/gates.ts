@@ -27,6 +27,8 @@
  *     validation, PASS-grade, at that head and written after the approval.
  *   - PATH_CHANGES_ONLY_VIA_TRIAGE: changing the deliverable kind of `pr` at needs_implementation_review or later is refused
  *     (`refusesPathChange`) unless the patch moves the item back to needs_implement or earlier.
+ *   - DESIGN_IS_LINKED (story.0069): leaving needs_design_review also needs one `knowledge:<id>` entry in `specRefs`, the design
+ *     the item is built against. A roadmap is never gated: it belongs to a goal, not an item.
  *   - ORIGIN_FAILS_CLOSED: a story validation must name this hub's own origin; with no origin configured it is refused.
  *   - FACTS_ARE_NOT_GUESSED: a fact the adapter could not supply is `facts_unavailable`, never a pass.
  *   - NEVER_THROWS: every outcome is a result.
@@ -43,6 +45,7 @@ import {
   type TRIAGE_VERDICTS,
   type WorkItemArtifact,
 } from "./artifacts.js";
+import { parseSpecRef } from "./spec-refs.js";
 import { isLegacyStatus, statusRank } from "./transitions.js";
 import type { WorkItemStatus, WorkItemType } from "./types.js";
 
@@ -169,6 +172,8 @@ export interface GateItem {
   readonly scores?: Readonly<Record<string, { readonly v: number }>> | null | undefined;
   /** Declared moves (only the count matters here). */
   readonly moves?: readonly unknown[] | undefined;
+  /** The item's design links (story.0069); leaving design review needs one `knowledge:<id>` entry. */
+  readonly specRefs?: readonly string[] | undefined;
   readonly statusRevision: number;
 }
 
@@ -195,6 +200,7 @@ export type GateMissing =
   | "pr"
   | "pr_merged"
   | "inbox_merged"
+  | "design_link"
   | "children"
   | "path"
   | "terminal";
@@ -463,9 +469,9 @@ export function evaluateMove(
       if (subject?.form !== "knowledge") return unmet("design_review");
       const state = inbox(subject.contribution);
       if (state === undefined) return unavailable("design_review");
-      return state && state.head && state.head === subject.head
-        ? OK
-        : unmet("design_review");
+      if (!(state && state.head && state.head === subject.head)) return unmet("design_review");
+      // DESIGN_IS_LINKED (story.0069): the item names the design it will be built against.
+      return item.specRefs?.some((ref) => parseSpecRef(ref) !== null) ? OK : unmet("design_link");
     }
     case "needs_implement": {
       if (item.type === "story") {

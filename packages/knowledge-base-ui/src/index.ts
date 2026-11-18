@@ -24,6 +24,8 @@ export {
   type ContributionEntryChange,
   groupContributionChanges,
 } from "./citation-links.js";
+export { defaultDesignHref, WorkDesignLinks } from "./work-design-links.js";
+export { ExternalCitationLink, pullLabel, pullUrls, WORK_SECTION_EMPTY_CLASS, WorkPullLinks } from "./work-pull-links.js";
 export {
   DirectRelationLinks,
   type DirectRelationLinksProps,

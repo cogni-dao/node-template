@@ -291,7 +291,7 @@ describe("work expectation join", () => {
     );
     try {
       expect(
-        await screen.findByText("No expectation recorded."),
+        await screen.findByText("No expectations yet"),
       ).toBeInTheDocument();
       page = {
         items: [
@@ -408,7 +408,7 @@ describe("work expectation join", () => {
       });
       expect(screen.getByText("Current expectation")).toBeInTheDocument();
       expect(
-        screen.queryByText("No expectation recorded."),
+        screen.queryByText("No expectations yet"),
       ).not.toBeInTheDocument();
       expect(load).toHaveBeenCalledTimes(2);
     } finally {

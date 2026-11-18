@@ -79,6 +79,7 @@ export interface WorkItemCommandPort {
         | "rank"
         | "status"
         | "specRefs"
+        | "externalRefs"
         | "labels"
         | "branch"
         | "pr"
