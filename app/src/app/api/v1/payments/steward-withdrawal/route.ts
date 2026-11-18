@@ -7,11 +7,11 @@
  *   POST that funds the human-custodied steward wallet from the operator wallet via a
  *   single pinned USDC transfer, so a human can then settle vendor invoices (OpenRouter)
  *   through the vendor's hosted crypto checkout. See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/node-steward-wallet.md.
- * Scope: Session + steward-self-authorized. Delegates to OperatorWalletPort.withdrawToSteward
+ * Scope: Session + node-admin-authorized. Delegates to OperatorWalletPort.withdrawToSteward
  *   (destination is repo-spec-pinned, caller picks amount only). Does NOT complete the vendor
  *   checkout (human step) or read provider balances (separate surface).
  * Invariants:
- *   - STEWARD_SELF_AUTHORIZED — only the configured steward wallet may trigger a withdrawal to itself.
+ *   - ONE_ADMIN_CHECK — only a node admin (`agentAuthority.adminCheck`, the caller's bound wallets against the repo-spec roster) may trigger a withdrawal; the login wallet never decides.
  *   - STEWARD_PINNED_DESTINATION — destination is payments_out.steward_wallet, never caller-supplied.
  *   - FAIL_CLOSED — 503 when the operator/steward wallet is unconfigured in this environment.
  *   - NO_BLIND_RETRY — only pre-broadcast failures are refusals (400/403/503/422); once the wallet accepted the
@@ -50,8 +50,7 @@ export const POST = wrapRouteHandlerWithLogging(
 		auth: { mode: "required", getSessionUser },
 	},
 	async (ctx, request, sessionUser) => {
-		// STEWARD_SELF_AUTHORIZED — only the configured steward wallet may trigger this.
-		// (At MVP the steward wallet IS the governance approver/admin wallet.)
+		// FAIL_CLOSED while the steward wallet is unconfigured (the pinned destination).
 		const stewardConfig = getStewardWalletConfig();
 		if (!stewardConfig) {
 			return NextResponse.json(
@@ -62,13 +61,17 @@ export const POST = wrapRouteHandlerWithLogging(
 				{ status: 503 },
 			);
 		}
-		const callerWallet = sessionUser?.walletAddress;
-		if (
-			!callerWallet ||
-			callerWallet.toLowerCase() !== stewardConfig.address.toLowerCase()
-		) {
+		// ONE_ADMIN_CHECK: authority is the caller's bound wallets against the repo-spec admin roster (approvers + steward),
+		// never the session's login wallet. The destination stays pinned, so who triggers it never chooses where funds go.
+		const admin = await getContainer()
+			.agentAuthority.adminCheck(sessionUser.id)
+			.catch(() => "unavailable" as const);
+		if (admin === "unavailable") {
+			return NextResponse.json({ error: "authz_unavailable" }, { status: 503 });
+		}
+		if (admin !== "allow") {
 			ctx.log.warn(
-				{ caller: callerWallet ? `${callerWallet.slice(0, 10)}...` : null },
+				{ userId: sessionUser.id },
 				"steward_withdrawal_not_authorized",
 			);
 			return NextResponse.json(

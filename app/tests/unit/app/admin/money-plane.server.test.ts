@@ -57,8 +57,10 @@ vi.mock("@/components", async () => {
 	};
 });
 vi.mock("@/lib/auth/server", () => ({ getServerSessionUser: mocks.session }));
+vi.mock("@/bootstrap/container", () => ({
+	getContainer: () => ({ agentAuthority: { adminCheck: mocks.approver } }),
+}));
 vi.mock("@/shared/config", () => ({
-	isLedgerApprover: mocks.approver,
 	getDaoTreasuryAddress: mocks.treasury,
 	getOperatorWalletConfig: mocks.operator,
 	getStewardWalletConfig: mocks.steward,
@@ -131,7 +133,7 @@ function stubReader(plane: string, row: Partial<MoneyPlaneRow> = {}): PlaneReade
 function admit() {
 	vi.resetAllMocks();
 	mocks.session.mockResolvedValue({ id: "admin", walletAddress: "approved-wallet" });
-	mocks.approver.mockReturnValue(true);
+	mocks.approver.mockResolvedValue("allow");
 	mocks.env.mockReturnValue({ OPENROUTER_API_KEY: "sk-or-test" });
 	mocks.treasury.mockReturnValue(null);
 	mocks.operator.mockReturnValue(null);
@@ -147,7 +149,8 @@ function admit() {
 describe("finance authorization at the read boundary", () => {
 	beforeEach(() => {
 		admit();
-		mocks.approver.mockImplementation((wallet) => wallet === "approved-wallet");
+		// The one admin check reads the user's bound wallets: only the user id "admin" has a listed one.
+		mocks.approver.mockImplementation(async (userId: string) => (userId === "admin" ? "allow" : "denied"));
 		mocks.redirect.mockImplementation(() => {
 			throw new Error("NEXT_REDIRECT");
 		});
@@ -157,11 +160,13 @@ describe("finance authorization at the read boundary", () => {
 		["anonymous", null],
 		["walletless OAuth", { id: "oauth-user", walletAddress: null }],
 		["non-approver", { id: "other-user", walletAddress: "other-wallet" }],
+		// Defect: the login wallet is listed in repo-spec but nothing binds it to the user, so the one admin check refuses.
+		["listed login wallet without a bound wallet", { id: "unbound-user", walletAddress: "approved-wallet" }],
 	] as const)("denies %s before any financial reads", async (_label, user) => {
 		mocks.session.mockResolvedValue(user);
 		await expect(getMoneyPlaneSnapshot()).rejects.toThrow("NEXT_REDIRECT");
 		expect(mocks.redirect).toHaveBeenCalledWith("/dashboard");
-		expect(mocks.approver).toHaveBeenCalledWith(user?.walletAddress ?? null);
+		if (user) expect(mocks.approver).toHaveBeenCalledWith(user.id);
 		for (const read of [
 			mocks.env,
 			mocks.treasury,
@@ -196,7 +201,7 @@ describe("finance authorization at the read boundary", () => {
 				unconverted: [],
 			},
 		});
-		expect(mocks.approver).toHaveBeenCalledWith("approved-wallet");
+		expect(mocks.approver).toHaveBeenCalledWith("admin");
 		expect(mocks.redirect).not.toHaveBeenCalled();
 		expect(mocks.env).toHaveBeenCalledTimes(1);
 		expect(mocks.walletReader).toHaveBeenCalledTimes(3);

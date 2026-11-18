@@ -349,15 +349,17 @@ describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", (
     create: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM),
     patch: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM)
   });
+  const check = vi.fn();
   const withAuthority = (ok: boolean) => {
     const store = doltgres();
+    check.mockReset();
+    check.mockResolvedValue(
+      ok ? { ok: true } : { ok: false, errorCode: "authz_denied" }
+    );
     mockGetContainer.mockReturnValue({
       doltgresWorkItems: store,
       log: { warn: vi.fn() },
-      nodeAdmin: {
-        check: async () =>
-          ok ? { ok: true } : { ok: false, errorCode: "authz_denied" }
-      }
+      nodeAdmin: { check }
     } as never);
     return store;
   };
@@ -367,7 +369,7 @@ describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", (
       const store = withAuthority(false);
       const err = await patchWorkItem(
         { id: "task.5001", set: { priority } } as never,
-        { id: "agent-1", walletAddress: null }
+        { id: "agent-1" }
       ).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(NodeAdminRequiredError);
       expect((err as NodeAdminRequiredError).status).toBe(403);
@@ -392,9 +394,10 @@ describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", (
   it("the node admin may set p0", async () => {
     const store = withAuthority(true);
     await patchWorkItem({ id: "task.5001", set: { priority: 0 } } as never, {
-      id: "u1",
-      walletAddress: "0xabc"
+      id: "u1"
     });
     expect(store.patch).toHaveBeenCalledTimes(1);
+    // Defect guard: the node-admin check is asked about the user id alone, never a login wallet, so a session and a bearer get one answer.
+    expect(check).toHaveBeenCalledWith({ userId: "u1" });
   });
 });

@@ -21,18 +21,18 @@ const MINT = "app/(admin)/_lib/admin-session.ts";
 /** Wiring that may name the port: its definition and the container that builds it. The routes and pages reach it only through the container. */
 const PORT_WIRING = ["ports/node-admin.port.ts", "ports/index.ts", "bootstrap/node-admin-port.ts", "bootstrap/container.ts"];
 
-/** Today's `isDaoAdmin(`, `isLedgerApprover(`, `checkApprover(`, `nodeAdmin.check(` and `checkNodeAdmin(` callers outside the Admin area. Remove an entry when task.0115 moves it; never add one. */
+/** Callers of the node-admin question (`adminCheck(`, `checkNodeAdmin(`, `nodeAdmin.check(`) and the roster lookup (`isDaoAdmin(`) outside the Admin area. An entry must be the one adminCheck (ONE_ADMIN_CHECK) or the roster beneath it, with its reason; the removed legacy asks (`isLedgerApprover(`, `checkApprover(`) stay in ASK so a reintroduction fails. */
 const ASK_ALLOWLIST: ReadonlyArray<{ path: string; reason: string }> = [
-  { path: "app/api/v1/attribution/epochs/", reason: "epoch review, finalize, sign and distribution routes" }, // task.0115
-  { path: "app/api/v1/attribution/_lib/approver-guard.ts", reason: "checkApprover definition" }, // task.0115
-  { path: "app/_facades/work/items.server.ts", reason: "work-items facade: priority 0/1" }, // task.0115
-  { path: "bootstrap/node-admin-gate.ts", reason: "the node-admin check itself" }, // task.0115
-  { path: "bootstrap/agent-authority.ts", reason: "tool-guard admin check" }, // task.0115
-  { path: "app/(admin)/admin/payments/money-plane.server.ts", reason: "payments page gate" }, // task.0115
+  { path: "app/api/v1/attribution/_lib/admin-guard.ts", reason: "attribution write and read gate: a thin wrapper over the one adminCheck (ONE_ADMIN_CHECK)" },
+  { path: "app/api/v1/payments/steward-withdrawal/route.ts", reason: "steward top-up gate: the one adminCheck (ONE_ADMIN_CHECK)" },
+  { path: "app/(app)/gov/review/page.tsx", reason: "Finish Epoch eligibility hint: the one adminCheck (ONE_ADMIN_CHECK)" },
+  { path: "app/_facades/work/items.server.ts", reason: "work-items facade: priority 0/1 through container.nodeAdmin, which is the one adminCheck (ONE_ADMIN_CHECK)" },
+  { path: "bootstrap/node-admin-gate.ts", reason: "the roster beneath adminCheck, and the adminCheck-backed NodeAdminAuthority" },
+  { path: "bootstrap/agent-authority.ts", reason: "defines the one adminCheck over bound wallets, and the tool guard" },
+  { path: "app/(admin)/admin/payments/money-plane.server.ts", reason: "payments page gate: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/(admin)/layout.tsx", reason: "layout gate: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/api/v1/agent/me/route.ts", reason: "self-check reports the one adminCheck (ONE_ADMIN_CHECK)" },
-  { path: "auth.ts", reason: "session isApprover flag" }, // task.0115
-  { path: "shared/config/repoSpec.server.ts", reason: "isDaoAdmin and isLedgerApprover definitions" }, // task.0115
+  { path: "shared/config/repoSpec.server.ts", reason: "isDaoAdmin definition: the roster lookup, called only beneath adminCheck" },
 ];
 const ASK = /\b(isDaoAdmin|isLedgerApprover|checkApprover|checkNodeAdmin|adminCheck)\(|\bnodeAdmin\.check\(/;
 // The container also hands the node-admin authority to the knowledge store and work-item capability as an object (not a call), so those files have no match to list.
@@ -84,5 +84,13 @@ describe("ADMIN_ACTS_IN_ADMIN", () => {
     // The list can only shrink: an entry nothing matches any more must be deleted.
     const stale = ASK_ALLOWLIST.filter((entry) => !violations.some((rel) => rel.startsWith(entry.path))).map((entry) => entry.path);
     expect(stale).toEqual([]);
+  });
+
+  it("calls the roster lookup (isDaoAdmin) only beneath the one admin check, and never the retired login-wallet asks (isLedgerApprover, checkApprover)", () => {
+    // Defect: a route that asked the roster with the session's login wallet admitted a login wallet with no bound wallet and refused a bearer.
+    const ROSTER_ONLY = ["bootstrap/node-admin-gate.ts", "shared/config/repoSpec.server.ts"];
+    const callers = files.filter((f) => /\b(isDaoAdmin|isLedgerApprover|checkApprover)\(/.test(code(f.text))).map((f) => f.rel);
+    expect(callers.sort()).toEqual([...ROSTER_ONLY].sort());
+    expect(files.filter((f) => /\b(isLedgerApprover|checkApprover)\b/.test(code(f.text))).map((f) => f.rel)).toEqual([]);
   });
 });

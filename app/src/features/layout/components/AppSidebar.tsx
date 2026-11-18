@@ -4,15 +4,16 @@
 /**
  * Module: `@features/layout/components/AppSidebar`
  * Purpose: Cogni-specific sidebar composition with schedule navigation, collapsible chat threads, and external links.
- * Scope: Composes vendor Sidebar primitives into the app sidebar. Does not handle authentication or data fetching.
- * Invariants: Admin nav item is shown only when the session wallet is a repo-spec approver (`session.user.isApprover`); the `(admin)/` layout still enforces server-side. Chat threads always visible as collapsible menu item.
- * Side-effects: reads NextAuth session (`useSession`)
+ * Scope: Composes vendor Sidebar primitives into the app sidebar. Does not handle authentication; its one read is the admin hint.
+ * Invariants: Admin nav item is shown only when the one admin check passes (`isAdmin` from /api/v1/agent/me); the `(admin)/` layout still enforces server-side. Chat threads always visible as collapsible menu item.
+ * Side-effects: IO (GET /api/v1/agent/me)
  * Links: src/components/vendor/shadcn/sidebar.tsx, src/features/ai/chat/components/ChatThreadsSidebarGroup.tsx
  * @public
  */
 
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   BookOpen,
@@ -27,7 +28,6 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSession } from "next-auth/react";
 import type { ReactElement } from "react";
 
 import {
@@ -81,12 +81,29 @@ function DiscordIcon({ className }: { className?: string }): ReactElement {
   );
 }
 
+/**
+ * UX hint only: whether to show the Admin link. The answer is the one admin check (`isAdmin` from /api/v1/agent/me, the caller's bound wallets
+ * against repo-spec approvers); the login wallet on the session never decides. The `(admin)/` layout still enforces server-side.
+ */
+function useIsNodeAdmin(): boolean {
+  const { data } = useQuery({
+    queryKey: ["agent-me-is-admin"],
+    queryFn: async (): Promise<boolean> => {
+      const res = await fetch("/api/v1/agent/me", { cache: "no-store" });
+      if (!res.ok) return false;
+      const body = (await res.json()) as { isAdmin?: boolean };
+      return body.isAdmin === true;
+    },
+    staleTime: 60_000,
+  });
+  return data === true;
+}
+
 export function AppSidebar(): ReactElement {
   const pathname = usePathname();
-  const { data: session } = useSession();
-  const isApprover = session?.user?.isApprover ?? false;
+  const isNodeAdmin = useIsNodeAdmin();
   const navItems = NAV_ITEMS.filter(
-    (item) => item.href !== "/admin" || isApprover
+    (item) => item.href !== "/admin" || isNodeAdmin
   );
 
   return (

@@ -55,6 +55,7 @@ function shortWallet(address: string): string {
 
 export default async function AdminIndexPage(): Promise<ReactElement> {
 	const user = await getServerSessionUser();
+	// Display only (WALLET_ADDRESS_IS_DISPLAY): the (admin) layout's one admin check already admitted this caller; the login wallet shown here decides nothing.
 	const wallet = user?.walletAddress ?? null;
 
 	return (

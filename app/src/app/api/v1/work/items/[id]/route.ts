@@ -168,7 +168,6 @@ export const PATCH = wrapRouteHandlerWithLogging<{
     try {
       const patched = await patchWorkItem(parseResult.data, {
         id: sessionUser.id,
-        walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info(
         {

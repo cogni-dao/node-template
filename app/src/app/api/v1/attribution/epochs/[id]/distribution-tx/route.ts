@@ -25,7 +25,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { checkApprover } from "@/app/api/v1/attribution/_lib/approver-guard";
+import { denyUnlessNodeAdmin } from "@/app/api/v1/attribution/_lib/admin-guard";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { readLiveDistributionMerkleRoot } from "@/bootstrap/settlement-runtime";
@@ -82,9 +82,8 @@ export const GET = wrapRouteHandlerWithLogging<{
       return NextResponse.json({ error: "epoch_not_found" }, { status: 404 });
     }
 
-    // APPROVER_GATED: node ledger approver (repo-spec) may read. Mirrors the finalize
-    // route's approver gate — checks against the epoch's pinned approvers when present.
-    const denied = checkApprover(ctx, sessionUser?.walletAddress, epoch);
+    // APPROVER_GATED: a node admin (the one admin check on the caller's bound wallets) may read.
+    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
     if (denied) return denied;
 
     if (epoch.status !== "finalized") {

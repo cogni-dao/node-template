@@ -296,7 +296,7 @@ export interface Container {
 	toolSource: ToolSourcePort;
 	/** External-agent knowledge contribution service — undefined when DOLTGRES_URL is unset */
 	knowledgeContributionService: ContributionService | undefined;
-	/** GOAL_CHANGE_IS_NODE_ADMIN / P0P1_IS_NODE_ADMIN: this node's one node-admin authority (repo-spec admin wallets). */
+	/** GOAL_CHANGE_IS_NODE_ADMIN / P0P1_IS_NODE_ADMIN: the one admin check (`agentAuthority.adminCheck`) as a NodeAdminAuthority; it decides on the user id alone. */
 	nodeAdmin: NodeAdminAuthority;
 	/** Runtime tool authority: principal lookup, guard wiring and role grant/revoke (task.5456). */
 	agentAuthority: AgentToolAuthority;
@@ -862,7 +862,8 @@ function createContainer(): Container {
 	let knowledgeCapability: KnowledgeCapability;
 	let edoCapability: EdoCapability;
 	let knowledgeContributionService: ContributionService | undefined;
-	const nodeAdmin = createApproversNodeAdminAuthority();
+	// The repo-spec roster is read only beneath `agentAuthority.adminCheck` (ONE_ADMIN_CHECK); nothing else may call it.
+	const adminRoster = createApproversNodeAdminAuthority();
 	let knowledgeStorePort: KnowledgeStorePort | undefined;
 	let doltgresWorkItems: WorkItemsDoltgresPort;
 	// One unauthenticated GitHub read for the agent tools and the work-item status gates.
@@ -1241,7 +1242,7 @@ function createContainer(): Container {
 	const agentAuthority = createAgentToolAuthority({
 		// Service role: agent_roles / agent_principals are deny-all for the app role.
 		sql: serviceDb.$client as unknown as AgentAuthoritySql,
-		nodeAdmin,
+		nodeAdmin: adminRoster,
 		log,
 		toolBundle: [...CORE_TOOL_BUNDLE],
 		// The owner join in an account decision needs the person's account to exist; it is created on their first decision.
@@ -1286,7 +1287,7 @@ function createContainer(): Container {
 		repoCapability,
 		toolSource,
 		knowledgeContributionService,
-		nodeAdmin,
+		nodeAdmin: createAdminCheckNodeAdminAuthority(() => agentAuthority.adminCheck),
 		agentAuthority,
 		nodeAdminPort: createNodeAdminPort(agentAuthority),
 		knowledgeStorePort,

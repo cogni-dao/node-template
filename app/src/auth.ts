@@ -37,7 +37,7 @@ import {
 import { verifyOperatorAttestation } from "@/app/_lib/auth/operator-attestation";
 import { siweMessageAddress, verifySiwe } from "@/app/_lib/auth/siwe-verify";
 import { reconcileSettlementsAfterBinding } from "@/bootstrap/settlement-runtime";
-import { getNodeId, isLedgerApprover } from "@/shared/config";
+import { getNodeId } from "@/shared/config";
 import {
 	identityEvents,
 	linkTransactions,
@@ -679,15 +679,8 @@ export const authOptions: NextAuthOptions = {
 					(token.walletAddress as string | null) ?? null;
 				session.user.displayName = (token.displayName as string | null) ?? null;
 				session.user.avatarColor = (token.avatarColor as string | null) ?? null;
-				// UX hint only — the `(admin)/` layout still enforces server-side.
-				// Fail-closed: any repo-spec read error → not an approver.
-				try {
-					session.user.isApprover = isLedgerApprover(
-						session.user.walletAddress,
-					);
-				} catch {
-					session.user.isApprover = false;
-				}
+				// No admin flag lives on the session: the login wallet never decides admin.
+				// Every admin decision is `agentAuthority.adminCheck` on the user's bound wallets.
 			}
 			return session;
 		},

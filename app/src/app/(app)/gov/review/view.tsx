@@ -68,7 +68,7 @@ import type {
 
 interface ReviewViewProps {
   readonly walletAddress: string | null;
-  readonly isCurrentApprover: boolean;
+  readonly isNodeAdmin: boolean;
   readonly operatorSetupUrl: string;
 }
 
@@ -128,7 +128,7 @@ function workflowPhases(
 
 export function ReviewView({
   walletAddress,
-  isCurrentApprover,
+  isNodeAdmin,
   operatorSetupUrl,
 }: ReviewViewProps): ReactElement {
   const { data, isLoading, error } = useFinishEpochWorkspace();
@@ -164,7 +164,7 @@ export function ReviewView({
     ? isEligibleForFinishEpochWork({
         selection,
         walletAddress,
-        isCurrentApprover,
+        isNodeAdmin,
       })
     : false;
   const period = selection

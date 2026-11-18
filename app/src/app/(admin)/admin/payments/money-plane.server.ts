@@ -39,12 +39,12 @@ import {
 import { redirect } from "next/navigation";
 
 import { creditPurchasesQuery } from "@/bootstrap/capabilities/finance";
+import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
 	getDaoTreasuryAddress,
 	getOperatorWalletConfig,
 	getStewardWalletConfig,
-	isLedgerApprover,
 } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
@@ -275,7 +275,11 @@ function readers(): { readers: PlaneReader[]; treasuryPlane: string | null; stew
 export async function getMoneyPlaneSnapshot(): Promise<NodeFinanceSnapshot> {
 	// Layouts may render concurrently with their children; gate before credentials or IO.
 	const user = await getServerSessionUser();
-	if (!isLedgerApprover(user?.walletAddress ?? null)) redirect("/dashboard");
+	// ONE_ADMIN_CHECK: the caller's bound wallets against repo-spec approvers; the session's login wallet never decides. An unavailable check refuses too.
+	const allowed = user
+		? await getContainer().agentAuthority.adminCheck(user.id).catch(() => "unavailable" as const)
+		: "denied";
+	if (allowed !== "allow") redirect("/dashboard");
 
 	const started = Date.now();
 	try {

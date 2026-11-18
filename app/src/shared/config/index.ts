@@ -31,6 +31,5 @@ export {
 	getStewardWalletConfig,
 	type InboundPaymentConfig,
 	isDaoAdmin,
-	isLedgerApprover,
 	type NodeTokenomicsConfig,
 } from "./repoSpec.server";

@@ -7,7 +7,7 @@
  * Scope: Server component. Runs the one node-admin check (`agentAuthority.adminCheck`, the same one the admin routes and /api/v1/agent/me use) on the signed-in user, and redirects non-admins to `/dashboard`. Hands the approved request to the same client sidebar shell as `(app)/`. Does not handle data fetching.
  * Invariants: ONE_ADMIN_CHECK — a page renders exactly when its API routes would admit the same user; admin pages are unreachable for non-admins. Authentication is enforced by `proxy.ts` (login redirect); this layout enforces the admin-role check on top.
  * Side-effects: IO (auth session read, repo-spec read on first call), structured gate log (route="admin.gate"), redirect
- * Links: src/app/api/v1/attribution/_lib/approver-guard.ts, src/shared/config/repoSpec.server.ts, .cogni/repo-spec.yaml
+ * Links: src/app/api/v1/attribution/_lib/admin-guard.ts, src/shared/config/repoSpec.server.ts, .cogni/repo-spec.yaml
  * @public
  */
 
