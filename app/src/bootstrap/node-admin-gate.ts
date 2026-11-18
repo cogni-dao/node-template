@@ -20,6 +20,7 @@
  * @public
  */
 
+import type { AdminCheck } from "@cogni/agent-grants";
 import type { NodeAdminAuthority } from "@cogni/knowledge-store";
 import { getLedgerApprovers, isDaoAdmin } from "@/shared/config";
 
@@ -37,6 +38,24 @@ export function createApproversNodeAdminAuthority(): NodeAdminAuthority {
 			return isDaoAdmin(actor.walletAddress)
 				? { ok: true }
 				: { ok: false, errorCode: "authz_denied" };
+		},
+	};
+}
+
+/**
+ * The knowledge merge and close gate as the one admin check (ONE_ADMIN_CHECK): a user passes when `adminCheck` allows its user id, which
+ * reads the wallets bound to that user, so a session and a bearer holding the same listed wallet get the same answer. `adminCheck` is a
+ * thunk because the agent authority is built after the knowledge service.
+ */
+export function createAdminCheckNodeAdminAuthority(adminCheck: () => AdminCheck): NodeAdminAuthority {
+	return {
+		async check(actor) {
+			const decision = await adminCheck()(actor.userId);
+			if (decision === "allow") return { ok: true };
+			if (decision === "unavailable") {
+				return { ok: false, errorCode: "authz_unavailable", reason: "admin_check_unavailable" };
+			}
+			return { ok: false, errorCode: "authz_denied" };
 		},
 	};
 }

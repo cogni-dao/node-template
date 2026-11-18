@@ -19,6 +19,7 @@ const fake = vi.hoisted(() => ({
   boundWallets: vi.fn(),
   adminCheck: vi.fn(),
   listOwnAccess: vi.fn(),
+  principalKind: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
@@ -31,7 +32,7 @@ vi.mock("@/bootstrap/http", () => ({
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn(async () => fake.user) }));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
-    agentAuthority: { boundWallets: fake.boundWallets, adminCheck: fake.adminCheck, listOwnAccess: fake.listOwnAccess },
+    agentAuthority: { boundWallets: fake.boundWallets, adminCheck: fake.adminCheck, listOwnAccess: fake.listOwnAccess, principalKind: fake.principalKind },
   }),
 }));
 
@@ -44,6 +45,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fake.boundWallets.mockResolvedValue([]);
   fake.adminCheck.mockResolvedValue("denied");
+  fake.principalKind.mockResolvedValue("agent");
   fake.listOwnAccess.mockResolvedValue([
     { scope: "knowledge:contribute", state: "granted", at: "2026-11-17T00:00:00.000Z", accountId: null },
     { scope: "work_item:transition", state: "pending", at: "2026-11-17T00:00:00.000Z", accountId: null },
@@ -60,6 +62,7 @@ describe("GET /api/v1/agent/me", () => {
     expect(await res.json()).toEqual({
       userId: "agent-1",
       via: "bearer",
+      kind: "agent",
       wallets: [],
       isAdmin: false,
       grants: [{ scope: "knowledge:contribute", accountId: null, since: "2026-11-17T00:00:00.000Z" }],
@@ -73,6 +76,16 @@ describe("GET /api/v1/agent/me", () => {
     fake.adminCheck.mockResolvedValue("allow");
     expect(await (await call()).json()).toMatchObject({ via: "session", wallets: ["0xabc"], isAdmin: true });
     expect(fake.adminCheck).toHaveBeenCalledWith("admin-1");
+  });
+
+  it("a freshly registered AI reads kind agent and a session human reads kind human, from the principal row alone", async () => {
+    fake.user = user("agent-1", "bearer");
+    expect(await (await call()).json()).toMatchObject({ kind: "agent" });
+    expect(fake.principalKind).toHaveBeenCalledWith("agent-1");
+    fake.user = user("human-1", "session");
+    fake.principalKind.mockResolvedValue("human");
+    expect(await (await call()).json()).toMatchObject({ via: "session", kind: "human" });
+    expect(fake.principalKind).toHaveBeenCalledWith("human-1");
   });
 
   it("an admin or store outage is 503 authz_unavailable, never a partial answer", async () => {

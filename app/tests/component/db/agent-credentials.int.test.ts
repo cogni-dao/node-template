@@ -38,10 +38,13 @@ describe("agent credentials (real Postgres)", () => {
   let service: Sql;
   let app: Sql;
   const users: string[] = [];
-  const makeUser = async () => {
+  /** An outside agent (registration writes its external principal row) unless `human`: a person has no principal row and can hold no key. */
+  const makeUser = async (opts: { human?: boolean; internal?: boolean } = {}) => {
     const id = randomUUID();
     await service`INSERT INTO users (id, name) VALUES (${id}, ${`cred-${id.slice(0, 6)}`})`;
     users.push(id);
+    if (opts.internal) await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`conf-${id}`}, ${id})`;
+    else if (!opts.human) await service`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${id})`;
     return id;
   };
   const store = () =>
@@ -78,12 +81,15 @@ describe("agent credentials (real Postgres)", () => {
     async setup(facts) {
       const ids: Record<string, string> = {};
       for (const [name, f] of Object.entries(facts)) {
-        const id = await makeUser();
+        const id = await makeUser({ human: f.human === true, internal: f.internal === true });
         ids[name] = id;
         const admin = f.roles ? await makeUser() : null;
-        if (f.wallet)
-          await service`UPDATE users SET wallet_address = ${`0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`} WHERE id = ${id}`;
-        if (f.internal) await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`conf-${id}`}, ${id})`;
+        // A bound wallet, in the normalized (lowercase) form the wallet index keys on. It is the same row an agent or a SIWE human holds.
+        if (f.wallet) {
+          const wallet = `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`;
+          await service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${id}, 'wallet', ${wallet})`;
+          if (f.human) await service`UPDATE users SET wallet_address = ${wallet} WHERE id = ${id}`;
+        }
         if (f.roles)
           await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${id}, 'probe:scope', ${admin}, now())`;
         if (f.github)
@@ -156,7 +162,7 @@ describe("agent credentials (real Postgres)", () => {
     });
 
     it("only a user with an EXTERNAL agent principal may hold a credential (trigger)", async () => {
-      const plain = await makeUser();
+      const plain = await makeUser({ human: true });
       const insert = (userId: string) =>
         service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
           VALUES (${userId}, ${randomUUID()}, 'key_upgrade', now() + interval '1 day', now() + interval '2 day')`;
@@ -185,7 +191,7 @@ describe("agent credentials (real Postgres)", () => {
       expect(await verifyBearer(store(), key.apiKey)).toMatchObject({ ok: true });
     });
 
-    it("upgrade writes an external principal on the SAME users.id and creates no second user", async () => {
+    it("upgrade keeps the one external principal row on the SAME users.id and creates no second user", async () => {
       const user = await makeUser();
       // Other component files insert users into this shared database in parallel, so never count ALL users: scope every fact to this principal.
       const name = (await service`SELECT name FROM users WHERE id = ${user}`)[0]?.name as string;

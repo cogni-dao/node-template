@@ -9,7 +9,7 @@
  * Invariants:
  *   - ONE_ADMIN_CHECK: `isAdmin` is the same `adminCheck` the admin mint and the tool guard use, on the caller's bound wallets,
  *     so this probe and an admin route always agree for the same caller.
- *   - `via` is the credential. `kind` (from the principal row) arrives with task.0144, once registration writes that row.
+ *   - `via` is the credential; `kind` is `agent` exactly when the caller has an `agent_principals` row (written at registration, backfilled for earlier agents), else `human`.
  *   - OWN_DATA_ONLY: the caller's own user id is the only input; the response names no other principal.
  *   - FAIL_CLOSED_NON_DISCLOSING: a store or admin outage is 503 `authz_unavailable`, never a partial answer.
  * Side-effects: IO (service-role database reads)
@@ -36,15 +36,17 @@ export const GET = wrapRouteHandlerWithLogging(
     const via = sessionUser.via === "session" ? "session" : "bearer";
     try {
       const authority = getContainer().agentAuthority;
-      const [wallets, admin, rows] = await Promise.all([
+      const [wallets, admin, rows, kind] = await Promise.all([
         authority.boundWallets(sessionUser.id),
         authority.adminCheck(sessionUser.id),
         authority.listOwnAccess(sessionUser.id),
+        authority.principalKind(sessionUser.id),
       ]);
       if (admin === "unavailable") return json({ error: "authz_unavailable" }, 503);
       return json({
         userId: sessionUser.id,
         via,
+        kind,
         wallets,
         isAdmin: admin === "allow",
         grants: rows

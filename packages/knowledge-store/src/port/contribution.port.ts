@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/port/contribution.port`
  * Purpose: Port interface for external-agent knowledge contributions backed by Dolt branches.
  * Scope: Interface + typed error classes. Does not contain implementation, I/O, or framework dependencies.
- * Invariants: EXTERNAL_CONTRIB_VIA_BRANCH, EDO_BEARER_VIA_CONTRIB_BRANCH, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION, PATCH_CARRIES_NO_CONTENT.
+ * Invariants: EXTERNAL_CONTRIB_VIA_BRANCH, EDO_BEARER_VIA_CONTRIB_BRANCH, ONE_ADMIN_CHECK, PATCH_CARRIES_NO_CONTENT.
  *   Appending is gated at the route by the `knowledge:contribute` authorize() check, not by author equality (bug.0019); closing is allowed for the contribution owner or an admin; merge requires an admin session.
  *   Bearer-authenticated EDO writes (hypothesis/decision/outcome) MUST open a
  *   contrib branch — the dedicated `createEdo*` methods apply the multi-row

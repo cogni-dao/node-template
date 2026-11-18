@@ -9,7 +9,7 @@
  * Scope: `@cogni-dao/agent-grants` + `bootstrap/agent-authority` + database policies. No HTTP, no LLM.
  * Invariants:
  *   - SERVICE_ROLE_ONLY: the app role sees no `agent_roles` / `agent_principals` row.
- *   - AGENTS_HOLD_NO_WALLET: seeded principal users have no wallet.
+ *   - AGENT_WALLET_IS_NOT_A_PAYEE: an agent may bind a wallet and be seen by the admin check, but no payout leaf resolves to its wallet.
  *   - NEVER_CACHED: a revoke denies the very next guarded call.
  * Side-effects: IO (testcontainers Postgres)
  * Notes: DATABASE_SERVICE_URL = BYPASSRLS; DATABASE_URL = app role with FORCE RLS.
@@ -75,7 +75,7 @@ describe("agent authority (real Postgres)", () => {
   describe("V2: migration applies to a fresh database and seeds both principals", () => {
     it("has the node-ai and prioritizer internal principals", async () => {
       const rows = await service`
-        SELECT slug, kind, user_id FROM agent_principals ORDER BY slug`;
+        SELECT slug, kind, user_id FROM agent_principals WHERE kind = 'internal' ORDER BY slug`;
       expect(rows.map((r) => ({ slug: r.slug, kind: r.kind, user_id: r.user_id }))).toEqual([
         { slug: NODE_AI_PRINCIPAL_SLUG, kind: "internal", user_id: NODE_AI_PRINCIPAL_USER_ID },
         { slug: PRIORITIZER_PRINCIPAL_SLUG, kind: "internal", user_id: PRIORITIZER_PRINCIPAL_USER_ID },
@@ -120,7 +120,8 @@ describe("agent authority (real Postgres)", () => {
       await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by)
         VALUES (${NODE_AI_PRINCIPAL_USER_ID}, 'rls:probe', ${u})`;
       expect(await app`SELECT 1 FROM agent_roles`).toHaveLength(0);
-      expect(await app`SELECT slug FROM agent_principals`).toHaveLength(2);
+      // Other component files register external principals concurrently; the seeded internal pair is what this proves readable.
+      expect(await app`SELECT slug FROM agent_principals WHERE kind = 'internal'`).toHaveLength(2);
       await expect(
         app`INSERT INTO agent_roles (principal_user_id, scope, approved_by)
           VALUES (${NODE_AI_PRINCIPAL_USER_ID}, 'rls:write', ${u})`
@@ -131,43 +132,80 @@ describe("agent authority (real Postgres)", () => {
     });
   });
 
-  describe("AGENTS_HOLD_NO_WALLET: an agent principal can never bind a wallet (database trigger)", () => {
-    const bind = (userId: string, provider: string, externalId: string) =>
-      service`INSERT INTO user_bindings (id, user_id, provider, external_id)
-        VALUES (${randomUUID()}, ${userId}, ${provider}, ${externalId})`;
+  describe("AGENT_WALLET_IS_NOT_A_PAYEE: an agent may bind a wallet, but is never a payee (database trigger)", () => {
     const addr = () => `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`;
-
-    it("refuses a wallet binding for a seeded internal principal", async () => {
-      await expect(bind(NODE_AI_PRINCIPAL_USER_ID, "wallet", addr())).rejects.toThrow(/cannot bind a wallet/);
-      await expect(bind(PRIORITIZER_PRINCIPAL_USER_ID, "wallet", addr())).rejects.toThrow(/cannot bind a wallet/);
-    });
-
-    it("refuses it on the real createBinding path (SIWE / import / attested)", async () => {
-      const { createBinding } = await import("@/adapters/server/identity/create-binding");
-      const { getSeedDb } = await import("@tests/_fixtures/db/seed-client");
-      await expect(
-        createBinding(getSeedDb(), NODE_AI_PRINCIPAL_USER_ID, "wallet", addr(), { method: "siwe" })
-      ).rejects.toMatchObject({
-        // drizzle wraps the driver error; the trigger's message and constraint are on the cause.
-        cause: { message: expect.stringMatching(/cannot bind a wallet/), constraint_name: "agent_principals_no_wallet_binding" },
-      });
-    });
-
-    it("refuses re-pointing an existing wallet binding onto an agent principal", async () => {
-      const human = await makeUser(addr());
-      await expect(
-        service`UPDATE user_bindings SET user_id = ${NODE_AI_PRINCIPAL_USER_ID} WHERE user_id = ${human} AND provider = 'wallet'`
-      ).rejects.toThrow(/cannot bind a wallet/);
-    });
-
-    it("refuses a wallet for a later-registered agent principal, and still allows other providers and ordinary users", async () => {
-      const agent = await makeUser();
+    const makeAgent = async (wallet: string) => {
+      const agent = await makeUser(wallet);
       await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('external', NULL, ${agent})`;
-      await expect(bind(agent, "wallet", addr())).rejects.toThrow(/cannot bind a wallet/);
-      await bind(agent, "github", `gh-${randomUUID()}`); // a non-wallet binding does not make an admin
-      await makeUser(addr()); // an ordinary human still binds a wallet
-      await service`DELETE FROM user_bindings WHERE user_id = ${agent}`;
-      await service`DELETE FROM agent_principals WHERE user_id = ${agent}`;
+      return agent;
+    };
+
+    it("lets an agent principal bind a wallet, and the admin check then sees it", async () => {
+      const wallet = addr();
+      const agent = await makeAgent(wallet);
+      const check = createAdminCheck(service as unknown as AgentAuthoritySql, {
+        check: async (input) => (input.walletAddress === wallet ? { ok: true } : { ok: false, errorCode: "authz_denied" }),
+      });
+      expect(await check(agent)).toBe("allow");
+    });
+
+    it("holds one owner per wallet whatever the casing (database unique index)", async () => {
+      const wallet = addr();
+      await makeAgent(wallet);
+      const other = await makeUser();
+      await expect(
+        service`INSERT INTO user_bindings (id, user_id, provider, external_id)
+          VALUES (${randomUUID()}, ${other}, 'wallet', ${`0x${wallet.slice(2).toUpperCase()}`})`
+      ).rejects.toThrow(/user_bindings_wallet_lower_unique/);
+    });
+
+    // The guard runs as the invoker. The leaf tables are written by the BYPASSRLS service role (`service` here, a real non-superuser role,
+    // exactly as in production), which sees users and user_bindings in full. These inserts hit the REAL tables: a guard that never fires fails here.
+    describe("the real payout tables refuse an agent wallet", () => {
+      const nodeId = randomUUID();
+      const scopeId = randomUUID();
+      let leafIndex = 0;
+      let epochId = "";
+      let manifestId = "";
+      let revisionId = "";
+
+      beforeAll(async () => {
+        const [epoch] = await service`INSERT INTO epochs (node_id, scope_id, period_start, period_end, weight_config)
+          VALUES (${nodeId}, ${scopeId}, now() - interval '2 days', now() - interval '1 day', '{}'::jsonb) RETURNING id`;
+        epochId = String(epoch?.id);
+        const [manifest] = await service`INSERT INTO epoch_distribution_manifests
+          (node_id, scope_id, epoch_id, distribution_id, statement_hash, merkle_root, chain_id, token_address, distribution_amount, total_allocated)
+          VALUES (${nodeId}, ${scopeId}, ${epochId}, 'd', 'h', 'r', 1, '0x00', 0, 0) RETURNING id`;
+        manifestId = String(manifest?.id);
+        const [revision] = await service`INSERT INTO distribution_settlement_revisions
+          (node_id, scope_id, sequence, distribution_id, statement_hash, merkle_root, chain_id, token_address, mint_delta, cumulative_total, trigger_kind, trigger_ref)
+          VALUES (${nodeId}, ${scopeId}, 1, 'd', 'h', 'r', 1, '0x00', 0, 0, 'probe', 'probe') RETURNING id`;
+        revisionId = String(revision?.id);
+      });
+
+      const epochLeaf = (wallet: string) =>
+        service`INSERT INTO epoch_distribution_leaves
+          (node_id, manifest_id, epoch_id, leaf_index, claimant_key, account, account_lower, amount, leaf_hash, proof_json)
+          VALUES (${nodeId}, ${manifestId}, ${epochId}, ${leafIndex++}, 'user:x', ${wallet}, ${wallet.toLowerCase()}, 1, 'h', '[]'::jsonb)`;
+      const settlementLeaf = (wallet: string) =>
+        service`INSERT INTO distribution_settlement_leaves
+          (revision_id, leaf_index, claimant_key, account, account_lower, cumulative_amount, delta_amount, receipt_ids_json, leaf_hash, proof_json)
+          VALUES (${revisionId}, ${leafIndex++}, 'user:x', ${wallet}, ${wallet.toLowerCase()}, 1, 1, '[]'::jsonb, 'h', '[]'::jsonb)`;
+
+      it("accepts a human's wallet on both tables (the positive control: the fixtures are valid)", async () => {
+        const human = addr();
+        await makeUser(human);
+        await epochLeaf(human);
+        await settlementLeaf(human);
+      });
+
+      it("refuses an agent's wallet on both tables, in any casing", async () => {
+        const wallet = addr();
+        await makeAgent(wallet);
+        await expect(epochLeaf(wallet)).rejects.toThrow(/cannot be a payee/);
+        await expect(settlementLeaf(wallet)).rejects.toThrow(/cannot be a payee/);
+        await expect(epochLeaf(`0x${wallet.slice(2).toUpperCase()}`)).rejects.toThrow(/cannot be a payee/);
+      });
     });
   });
 

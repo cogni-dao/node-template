@@ -52,6 +52,11 @@ describe("DrizzleAttributionAdapter (Component)", () => {
 
   beforeAll(async () => {
     actor = await seedTestActor(db);
+    // Settlement ownership is decided by the wallet BINDING (users.wallet_address is display), so seed the binding a SIWE login would write.
+    await db.execute(sql`
+      INSERT INTO user_bindings (id, user_id, provider, external_id)
+      VALUES (gen_random_uuid()::text, ${actor.user.id}, 'wallet', ${actor.user.walletAddress.toLowerCase()})
+      ON CONFLICT DO NOTHING`);
   });
 
   // No global afterAll cleanup needed — testcontainers PostgreSQL is ephemeral.

@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/service/contribution-service`
  * Purpose: Framework-agnostic typed handlers for the knowledge contribution flow.
  * Scope: Pure business logic — quotas, idempotency lookup, role gating, confidence cap. Does not contain HTTP, env, or lifecycle code; per-node `route.ts` files adapt these to Next.
- * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; MERGE_IS_NODE_ADMIN (bug.0044: merge, and close of another's inbox, need the node-admin authority); APPEND_AUTHORITY_IS_THE_DOOR (bug.0019: append is gated by authorize() at the route, never by author equality); CONTRIBUTION_OWNER_CAN_CLOSE.
+ * Invariants: ONE_ADMIN_CHECK (any credential); MERGE_IS_NODE_ADMIN (bug.0044: merge, and close of another's inbox, need the node-admin authority); APPEND_AUTHORITY_IS_THE_DOOR (bug.0019: append is gated by authorize() at the route, never by author equality); CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none (delegates I/O to KnowledgeContributionPort)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-contribution-flow
  * @public
@@ -361,7 +361,7 @@ export function createContributionService(
 
     async merge({ principal, contributionId, confidencePct, actor }) {
       if (!deps.canMergeKnowledge(principal)) {
-        throw new ContributionForbiddenError("merge requires admin session");
+        throw new ContributionForbiddenError("merge requires node admin");
       }
       // A terminal receipt is readback of an already-authorized durable write.
       // Its branch may be reaped and its node-admin authority unavailable now.
@@ -421,12 +421,11 @@ export function createContributionService(
       if (!record) {
         throw new ContributionNotFoundError(contributionId);
       }
-      const ownsContribution =
-        record.principalId === principal.id &&
-        record.principalKind === principal.kind;
+      // The owner is the user id, whatever the credential: a session and a bearer on one user own the same inbox (SAME_DOOR).
+      const ownsContribution = record.principalId === principal.id;
       if (!ownsContribution) {
         if (!deps.canMergeKnowledge(principal)) {
-          throw new ContributionForbiddenError("close requires admin session");
+          throw new ContributionForbiddenError("close requires node admin");
         }
         // MERGE_IS_NODE_ADMIN (bug.0044): closing another principal's inbox
         // is a reviewer act, so it needs the node-admin authority too.

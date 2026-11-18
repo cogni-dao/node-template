@@ -142,8 +142,8 @@ describe("upgrade", () => {
     expect(await again.json()).toEqual({ error: "v1_superseded" });
   });
 
-  it("a user the store refuses (wallet) is 403 not_agent_key", async () => {
-    fake.memory = memoryCredentialStore({ users: { [USER]: { wallet: true } } }) as never;
+  it("a user the store refuses (a human with no principal row) is 403 not_agent_key", async () => {
+    fake.memory = memoryCredentialStore({ users: { [USER]: { human: true } } }) as never;
     const res = await post(upgrade as never, v1());
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "not_agent_key" });

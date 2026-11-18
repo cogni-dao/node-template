@@ -27,7 +27,7 @@ const REFUSED_FOR_BEARERS: Readonly<Record<string, string>> = {
   "ledger.review-epoch": "epoch approver wallet required (checkApprover); a bearer has no wallet",
   "ledger.collect-trigger": "starts the ledger ingest schedule; an operator act with no AI door, so a bearer is refused",
   "ledger.update-user-projections": "retired (HTTP 410); nothing to gate",
-  "payments.intents": "needs a bound wallet (WalletRequiredError); a bearer has none, so it cannot call this today",
+  "payments.intents": "needs a bound wallet (WalletRequiredError); a bearer may now bind one (/api/v1/identity/wallet/bind), but credits purchase has no AI door, so a bearer is refused",
   "payments.attempt_submit": "submits a transaction hash for an attempt created by a wallet-bound intent; a bearer owns no attempt",
   "payments.steward-withdrawal": "steward wallet approver only; a bearer has no wallet",
 };
@@ -153,6 +153,11 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       "ai.chat",
       "ai.threads.delete",
       "chat.completions",
+      "identity.wallet.bind",
+      "identity.wallet.challenge",
+      // The service runs the one admin check on the caller itself, for a session and a bearer alike; close lets an owner close their own inbox without it (task.0144).
+      "knowledge.contributions.close",
+      "knowledge.contributions.merge",
     ]);
   });
 

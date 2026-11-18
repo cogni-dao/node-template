@@ -18,6 +18,8 @@ interface Row {
 }
 
 export interface MemoryUser {
+  /** No principal row: a person. Every other user is an outside agent. */
+  human?: boolean;
   wallet?: boolean;
   internal?: boolean;
   roles?: boolean;
@@ -84,7 +86,7 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       guard("issueUpgrade");
       const u = init.users[userId];
       if (!u) return { ok: false, reason: "unknown_user" };
-      if (u.wallet) return { ok: false, reason: "wallet_user" };
+      if (u.human) return { ok: false, reason: "wallet_user" };
       if (u.internal) return { ok: false, reason: "internal_principal" };
       if (rows.some((r) => r.userId === userId && ["active", "renew_only"].includes(state(r)))) return { ok: false, reason: "already_upgraded" };
       if (u.roles && !u.github) return { ok: false, reason: "binding_required" };
