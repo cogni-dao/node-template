@@ -16,9 +16,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fake = vi.hoisted(() => ({
   user: null as unknown,
-  token: null as string | null,
   boundWallets: vi.fn(),
-  isAgent: vi.fn(),
   adminCheck: vi.fn(),
   listOwnAccess: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -31,10 +29,9 @@ vi.mock("@/bootstrap/http", () => ({
       handler({ log: fake.log }, request, fake.user),
 }));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn(async () => fake.user) }));
-vi.mock("@/app/_lib/auth/request-identity", () => ({ currentBearerToken: vi.fn(async () => fake.token) }));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
-    agentAuthority: { isAgent: fake.isAgent, boundWallets: fake.boundWallets, adminCheck: fake.adminCheck, listOwnAccess: fake.listOwnAccess },
+    agentAuthority: { boundWallets: fake.boundWallets, adminCheck: fake.adminCheck, listOwnAccess: fake.listOwnAccess },
   }),
 }));
 
@@ -46,7 +43,6 @@ const user = (id: string, via: "session" | "bearer") => ({ id, walletAddress: nu
 beforeEach(() => {
   vi.clearAllMocks();
   fake.boundWallets.mockResolvedValue([]);
-  fake.isAgent.mockResolvedValue(false);
   fake.adminCheck.mockResolvedValue("denied");
   fake.listOwnAccess.mockResolvedValue([
     { scope: "knowledge:contribute", state: "granted", at: "2026-11-17T00:00:00.000Z", accountId: null },
@@ -56,15 +52,13 @@ beforeEach(() => {
 });
 
 describe("GET /api/v1/agent/me", () => {
-  it("a bearer reads its kind, wallets, the one admin check and only its live grants", async () => {
+  it("a bearer reads its wallets, the one admin check and only its live grants", async () => {
     fake.user = user("agent-1", "bearer");
-    fake.isAgent.mockResolvedValue(true);
     const res = await call();
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({
       userId: "agent-1",
-      kind: "agent",
       via: "bearer",
       wallets: [],
       isAdmin: false,
@@ -77,24 +71,8 @@ describe("GET /api/v1/agent/me", () => {
     fake.user = user("admin-1", "session");
     fake.boundWallets.mockResolvedValue(["0xabc"]);
     fake.adminCheck.mockResolvedValue("allow");
-    expect(await (await call()).json()).toMatchObject({ kind: "human", via: "session", wallets: ["0xabc"], isAdmin: true });
+    expect(await (await call()).json()).toMatchObject({ via: "session", wallets: ["0xabc"], isAdmin: true });
     expect(fake.adminCheck).toHaveBeenCalledWith("admin-1");
-  });
-
-  it("kind comes from the principal, never the credential: an AI on a wallet session is still an agent, a human with a key is human", async () => {
-    fake.user = user("agent-2", "session");
-    fake.isAgent.mockResolvedValue(true);
-    expect(await (await call()).json()).toMatchObject({ kind: "agent", via: "session" });
-    fake.user = user("human-1", "bearer");
-    fake.isAgent.mockResolvedValue(false);
-    expect(await (await call()).json()).toMatchObject({ kind: "human", via: "bearer" });
-  });
-
-  it("a signed v1 key with no principal row reads legacy_agent, never human", async () => {
-    fake.user = user("legacy-1", "bearer");
-    fake.token = "cogni_ag_sk_v1_abc";
-    expect(await (await call()).json()).toMatchObject({ kind: "legacy_agent", via: "bearer" });
-    fake.token = null;
   });
 
   it("an admin or store outage is 503 authz_unavailable, never a partial answer", async () => {
