@@ -413,6 +413,24 @@ describe("stage lines are not events", () => {
   });
 });
 
+describe("an expected gate refusal is not a stage error", () => {
+  it("emits no stage_error line at any level, and still throws gate_unmet", async () => {
+    const lines: Record<string, unknown>[] = [];
+    const record = (fields: Record<string, unknown>) => void lines.push(fields);
+    const { queries, make } = world("needs_triage");
+    const adapter = make({ logger: { debug: record, info: record, warn: record, error: record } });
+    await expect(patchStatus(adapter, "needs_implementation_review")).rejects.toMatchObject({
+      name: "WorkItemGateUnmetError",
+      missing: "path",
+    });
+    expect(wrote(queries)).toBe(false);
+    expect(lines.filter((fields) => fields.event === "adapter.work_items.stage_error")).toEqual([]);
+    expect(lines).toContainEqual(
+      expect.objectContaining({ event: "adapter.work_items.stage_complete", stage: "operation", refused: "gate_unmet" })
+    );
+  });
+});
+
 describe("the repository pin (prRepos)", () => {
   const triage = artifactRow("triage", `work:${ID}`, "implement");
   const move = (adapter: DoltgresWorkItemAdapter) => patchStatus(adapter, "needs_implementation_review");

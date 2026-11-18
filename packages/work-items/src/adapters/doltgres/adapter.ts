@@ -2239,10 +2239,18 @@ export class DoltgresWorkItemAdapter
         rawConn = undefined;
       }
       pendingRecovery = error instanceof PendingBranchRecoveryError;
-      this.logStage("error", context, "operation", "error", {
-        durationMs: Date.now() - reserveStartedAt,
-        ...errorFields(error),
-      });
+      if (error instanceof WorkItemGateUnmetError) {
+        // An expected refusal is not an error: the route's `work.items.patch_refused` is its terminal event, and nothing was written.
+        this.logStage("info", context, "operation", "complete", {
+          durationMs: Date.now() - reserveStartedAt,
+          refused: error.code,
+        });
+      } else {
+        this.logStage("error", context, "operation", "error", {
+          durationMs: Date.now() - reserveStartedAt,
+          ...errorFields(error),
+        });
+      }
       throw error;
     } finally {
       if (reserveTimer) clearTimeout(reserveTimer);
