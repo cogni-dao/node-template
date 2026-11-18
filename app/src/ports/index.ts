@@ -141,6 +141,10 @@ export type {
 	VerificationResult,
 	VerificationStatus,
 } from "./onchain-verifier.port";
+export type {
+	NodeAiWalletBinder,
+	NodeLoginSignerPort,
+} from "./node-login-signer.port";
 export type { OperatorWalletPort } from "./operator-wallet.port";
 export {
 	type CreatePaymentAttemptParams,
