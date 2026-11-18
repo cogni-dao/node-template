@@ -18,7 +18,7 @@ import { z } from "zod";
 import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
 
 import type { KnowledgeCapability, KnowledgeEntry } from "../capabilities/knowledge";
-import { REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
+import { ACCESS_REQUESTED_MESSAGE, REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
@@ -78,6 +78,10 @@ export const KnowledgeReadOutputSchema = z.object({
   mode: z.enum(["get", "list"]),
   entries: z.array(KnowledgeReadEntrySchema),
   totalFound: z.number(),
+  /** Set only when this node's AI asked the named node for access: the fixed, terminal answer of a remote read the target answered 401. */
+  status: z.literal("access_requested").optional(),
+  node: z.string().optional(),
+  message: z.string().optional(),
 });
 export type KnowledgeReadOutput = z.infer<typeof KnowledgeReadOutputSchema>;
 export type KnowledgeReadRedacted = KnowledgeReadOutput;
@@ -103,7 +107,7 @@ export const knowledgeReadContract: ToolContract<
   inputSchema: KnowledgeReadInputSchema,
   outputSchema: KnowledgeReadOutputSchema,
   redact: (output) => output,
-  allowlist: ["mode", "entries", "totalFound"] as const,
+  allowlist: ["mode", "entries", "totalFound", "status", "node", "message"] as const,
 };
 
 // ─── Implementation ──────────────────────────────────────────────────────────
@@ -161,6 +165,21 @@ async function executeRemote(
   const remote = deps.remoteKnowledge;
   const origin = remote?.originOf(alias);
   if (!remote || origin === undefined) throw new RemoteKnowledgeError("unknown_alias", null);
+  try {
+    return await readRemote(remote, origin, alias, input);
+  } catch (error) {
+    if (error instanceof RemoteKnowledgeError && error.code === "access_requested")
+      return { mode: input.id ? ("get" as const) : ("list" as const), entries: [], totalFound: 0, status: "access_requested" as const, node: alias, message: ACCESS_REQUESTED_MESSAGE };
+    throw error;
+  }
+}
+
+async function readRemote(
+  remote: RemoteKnowledgeCapability,
+  origin: string,
+  alias: string,
+  input: KnowledgeReadInput
+): Promise<KnowledgeReadOutput> {
   const withProvenance = (e: KnowledgeEntry) => ({
     ...withoutSourceProvenance(e),
     ...readSourceProvenance(origin, "knowledge", e.id),

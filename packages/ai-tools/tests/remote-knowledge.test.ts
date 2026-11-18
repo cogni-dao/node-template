@@ -8,6 +8,8 @@ import { createKnowledgeReadImplementation } from "../src/tools/knowledge-read";
 import { createKnowledgeSearchImplementation } from "../src/tools/knowledge-search";
 import {
   createRemoteKnowledgeTransport,
+  ACCESS_REQUESTED_MESSAGE,
+  REMOTE_ASK_INTERVAL_MS,
   REMOTE_ENTRY_CONTENT_MAX_CHARS,
   REMOTE_MAX_BODY_BYTES,
   RemoteKnowledgeError,
@@ -236,6 +238,104 @@ describe("the `node` argument is advertised only when the node has link targets"
       expect(schema.safeParse({ ...ok, anything: 1 }).success, name).toBe(false);
       // The stock tool still takes `node`.
       expect((find(CORE_TOOL_BUNDLE, name)?.contract.inputSchema as z.ZodType).safeParse({ ...ok, node: "toks5" }).success, name).toBe(true);
+    }
+  });
+});
+
+describe("a 401 to the node AI's signed read sends ONE access ask", () => {
+  const ENROLL = "https://toks5.example.org/api/v1/public/agent/service-enrollments";
+
+  /** GET answers `getStatus`; the enrollment POST answers `askStatus`. */
+  const rig = (getStatus: number, askStatus: number | Error = 201) => {
+    const clock = { now: 1_000_000 };
+    const asks: Array<{ url: string; init: RequestInit }> = [];
+    const onAsked = vi.fn();
+    const h = harness(
+      (url, init) => {
+        if (init.method === "POST") {
+          asks.push({ url, init });
+          if (askStatus instanceof Error) throw askStatus;
+          return new Response(JSON.stringify({ status: "pending" }), { status: askStatus });
+        }
+        return new Response("{}", { status: getStatus });
+      },
+      { now: () => clock.now, onAsked }
+    );
+    return { ...h, clock, asks, onAsked };
+  };
+  const deps = (r: ReturnType<typeof rig>) => ({ knowledgeCapability: {} as never, nodePublicOrigin: "https://local.example.org", remoteKnowledge: r.remote });
+
+  it("401 sends exactly one signed ask for knowledge:read to the enrollment route, then the read is access_requested (fixed message, no receipt)", async () => {
+    const r = rig(401);
+    const error = await r.remote.get("toks5", "k1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RemoteKnowledgeError);
+    expect(error).toMatchObject({ code: "access_requested", message: ACCESS_REQUESTED_MESSAGE });
+    expect(r.asks).toHaveLength(1);
+    expect(r.asks[0]?.url).toBe(ENROLL);
+    expect(r.asks[0]?.init).toMatchObject({ method: "POST", redirect: "manual", body: JSON.stringify({ scope: "knowledge:read" }) });
+    expect((r.asks[0]?.init.headers as Record<string, string>).authorization).toBe("Bearer signed-assertion");
+    // Two signed assertions: one for the read, one for the ask (a fresh one per call).
+    expect(r.authorize).toHaveBeenCalledTimes(2);
+    expect(r.authorize).toHaveBeenLastCalledWith(TARGET, "knowledge:read");
+    expect(r.onAsked).toHaveBeenCalledTimes(1);
+    expect(r.onAsked).toHaveBeenCalledWith({ alias: "toks5", scope: "knowledge:read", httpStatus: 201 });
+  });
+
+  it("the stock tools return the fixed terminal result { status: access_requested, node, message } with no entries", async () => {
+    const r = rig(401);
+    const out = await createKnowledgeReadImplementation(deps(r)).execute({ id: "k1", node: "toks5" }, undefined as never);
+    expect(out).toEqual({ mode: "get", entries: [], totalFound: 0, status: "access_requested", node: "toks5", message: "Access requested; an admin of that node must turn it On." });
+    const found = await createKnowledgeSearchImplementation(deps(r)).execute({ domain: "meta", query: "x", node: "toks5" }, undefined as never);
+    expect(found).toEqual({ query: "x", domain: "meta", results: [], totalFound: 0, status: "access_requested", node: "toks5", message: ACCESS_REQUESTED_MESSAGE });
+    // Both calls were answered from one ask.
+    expect(r.asks).toHaveLength(1);
+  });
+
+  it("a second 401 within 10 minutes sends no second ask and answers the same; after 10 minutes it asks again", async () => {
+    const r = rig(401);
+    await r.remote.get("toks5", "k1").catch(() => undefined);
+    r.clock.now += REMOTE_ASK_INTERVAL_MS - 1;
+    await expect(r.remote.get("toks5", "k2")).rejects.toMatchObject({ code: "access_requested" });
+    await expect(r.remote.list("toks5", { domain: "meta", limit: 5 })).rejects.toMatchObject({ code: "access_requested" });
+    expect(r.asks).toHaveLength(1);
+    r.clock.now += 1;
+    await expect(r.remote.get("toks5", "k3")).rejects.toMatchObject({ code: "access_requested" });
+    expect(r.asks).toHaveLength(2);
+  });
+
+  it("concurrent 401s send one ask", async () => {
+    const r = rig(401);
+    const results = await Promise.allSettled([r.remote.get("toks5", "a"), r.remote.get("toks5", "b"), r.remote.get("toks5", "c")]);
+    expect(results.every((x) => x.status === "rejected")).toBe(true);
+    expect(r.asks).toHaveLength(1);
+  });
+
+  it("a 403 stays policy_denied and never asks", async () => {
+    const r = rig(403);
+    const error = await r.remote.get("toks5", "k1").catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "policy_denied", message: "Tool call denied by policy" });
+    expect((error as RemoteKnowledgeError).receipt).toMatchObject({ retryable: false });
+    expect(r.asks).toHaveLength(0);
+    expect(r.onAsked).not.toHaveBeenCalled();
+  });
+
+  it("an ask the target refuses or cannot receive is policy_denied, not access_requested, and is not retried inside the interval", async () => {
+    for (const askStatus of [401, 503, new TypeError("net")]) {
+      const r = rig(401, askStatus);
+      await expect(r.remote.get("toks5", "k1"), String(askStatus)).rejects.toMatchObject({ code: "policy_denied" });
+      await expect(r.remote.get("toks5", "k1"), String(askStatus)).rejects.toMatchObject({ code: "policy_denied" });
+      expect(r.asks).toHaveLength(1);
+      r.clock.now += REMOTE_ASK_INTERVAL_MS;
+      await r.remote.get("toks5", "k1").catch(() => undefined);
+      expect(r.asks).toHaveLength(2);
+    }
+  });
+
+  it("other statuses never ask: a 404, a 5xx and a success", async () => {
+    for (const status of [404, 500]) {
+      const r = rig(status);
+      await r.remote.get("toks5", "k1").catch(() => undefined);
+      expect(r.asks).toHaveLength(0);
     }
   });
 });

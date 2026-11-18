@@ -73,3 +73,23 @@ describe("service links", () => {
     await expect(links.remoteKnowledge.get("toks5", "k1")).rejects.toMatchObject({ code: "unknown_alias" });
   });
 });
+
+describe("the node AI's own ask (a 401 to a signed remote read)", () => {
+  it("sends one signed ask and logs service_link.asked with alias, scope and status, never a token", async () => {
+    const s = signer();
+    const info = vi.fn();
+    const calls: Array<{ url: string; method: string | undefined }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method });
+      return init?.method === "POST" ? new Response(JSON.stringify({ status: "pending" }), { status: 201 }) : new Response("{}", { status: 401 });
+    }) as typeof fetch;
+    const links = createServiceLinks({ targets: TARGETS, signer: async () => s.signer, log: { info, warn: vi.fn() } as never, fetchImpl });
+    await expect(links.remoteKnowledge.get("toks5", "k1")).rejects.toMatchObject({ code: "access_requested" });
+    await expect(links.remoteKnowledge.get("toks5", "k2")).rejects.toMatchObject({ code: "access_requested" });
+    expect(calls.filter((c) => c.method === "POST")).toEqual([{ url: "https://toks5.example.org/api/v1/public/agent/service-enrollments", method: "POST" }]);
+    const asked = info.mock.calls.filter(([fields]) => (fields as { event?: string }).event === "service_link.asked");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.[0]).toMatchObject({ alias: "toks5", scope: "knowledge:read", httpStatus: 201 });
+    expect(JSON.stringify(info.mock.calls)).not.toContain("jwt-from-signer");
+  });
+});

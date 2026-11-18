@@ -62,7 +62,14 @@ export function createServiceLinks(deps: {
     if (!signer) throw new Error("no signer");
     return signer.authorizationHeader({ service: REMOTE_KNOWLEDGE_SERVICE, audienceNodeId: target.nodeId, scope });
   };
-  const transport = createRemoteKnowledgeTransport({ targets, authorize, fetchImpl: doFetch });
+  const transport = createRemoteKnowledgeTransport({
+    targets,
+    authorize,
+    fetchImpl: doFetch,
+    // The AI's own ask (a 401 to a signed read): alias, scope and the target's status, never a token.
+    onAsked: ({ alias, scope, httpStatus }) =>
+      deps.log.info({ event: EVENT_NAMES.SERVICE_LINK_ASKED, alias, scope, httpStatus, via: "tool" }, EVENT_NAMES.SERVICE_LINK_ASKED),
+  });
 
   const logged = async <T>(alias: string, op: string, call: () => Promise<T>): Promise<T> => {
     try {

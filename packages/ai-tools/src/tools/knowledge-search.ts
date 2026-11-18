@@ -20,7 +20,7 @@ import { z } from "zod";
 import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
 
 import type { KnowledgeCapability, KnowledgeEntry } from "../capabilities/knowledge";
-import { REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
+import { ACCESS_REQUESTED_MESSAGE, REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 
@@ -77,6 +77,10 @@ export const KnowledgeSearchOutputSchema = z.object({
   domain: z.string(),
   results: z.array(KnowledgeSearchResultSchema),
   totalFound: z.number(),
+  /** Set only when this node's AI asked the named node for access: the fixed, terminal answer of a remote read the target answered 401. */
+  status: z.literal("access_requested").optional(),
+  node: z.string().optional(),
+  message: z.string().optional(),
 });
 export type KnowledgeSearchOutput = z.infer<typeof KnowledgeSearchOutputSchema>;
 export type KnowledgeSearchRedacted = KnowledgeSearchOutput;
@@ -102,7 +106,7 @@ export const knowledgeSearchContract: ToolContract<
   inputSchema: KnowledgeSearchInputSchema,
   outputSchema: KnowledgeSearchOutputSchema,
   redact: (output) => output,
-  allowlist: ["query", "domain", "results", "totalFound"] as const,
+  allowlist: ["query", "domain", "results", "totalFound", "status", "node", "message"] as const,
 };
 
 // ─── Implementation ──────────────────────────────────────────────────────────
@@ -134,11 +138,17 @@ export function createKnowledgeSearchImplementation(
         const remoteOrigin = remote?.originOf(input.node);
         if (!remote || remoteOrigin === undefined) throw new RemoteKnowledgeError("unknown_alias", null);
         origin = remoteOrigin;
-        results = await remote.search(input.node, {
-          domain: input.domain,
-          query: input.query,
-          limit: input.limit ?? 10,
-        });
+        try {
+          results = await remote.search(input.node, {
+            domain: input.domain,
+            query: input.query,
+            limit: input.limit ?? 10,
+          });
+        } catch (error) {
+          if (error instanceof RemoteKnowledgeError && error.code === "access_requested")
+            return { query: input.query, domain: input.domain, results: [], totalFound: 0, status: "access_requested" as const, node: input.node, message: ACCESS_REQUESTED_MESSAGE };
+          throw error;
+        }
       } else {
         results = await deps.knowledgeCapability.search({
           domain: input.domain,
