@@ -20,6 +20,7 @@ import {
   browseQuery,
   matchesBrowse,
   nextBrowseCursor,
+  scanBrowseSearch,
   sortValue,
   summary,
 } from "../../domain/browse.js";
@@ -219,21 +220,31 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
           return cmp > 0 || (cmp === 0 && row.id > position.id);
         })
       : rows;
-    const window = remaining.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE);
     const needle = query.search?.toLowerCase();
-    const last = window[window.length - 1];
+    const window = needle
+      ? await scanBrowseSearch<(typeof remaining)[number]>(
+          async (after, limit) => {
+            const start = after ? remaining.indexOf(after) + 1 : 0;
+            return remaining.slice(start, start + limit);
+          },
+          (row) => matchesBrowse(row, needle)
+        )
+      : {
+          matches: remaining.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE),
+          scannedRows: Math.min(remaining.length, KNOWLEDGE_BROWSE_PAGE_SIZE),
+          resumeAfter:
+            remaining.length > KNOWLEDGE_BROWSE_PAGE_SIZE
+              ? remaining[KNOWLEDGE_BROWSE_PAGE_SIZE - 1]
+              : undefined,
+        };
+    const last = window.resumeAfter;
     return {
       revision: await this.currentCommit(),
-      items: window
-        .filter((row) => !needle || matchesBrowse(row, needle))
-        .map(summary),
-      scannedRows: window.length,
+      items: window.matches.map(summary),
+      scannedRows: window.scannedRows,
       total: rows.length,
       nextCursor:
-        last &&
-        (needle
-          ? window.length === KNOWLEDGE_BROWSE_PAGE_SIZE
-          : remaining.length > KNOWLEDGE_BROWSE_PAGE_SIZE)
+        last
           ? nextBrowseCursor(signature, summary(last), query.sort)
           : null,
     };

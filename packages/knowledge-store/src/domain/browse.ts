@@ -5,6 +5,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
+  KNOWLEDGE_BROWSE_PAGE_SIZE,
+  KNOWLEDGE_BROWSE_SEARCH_SCAN_MAX_ROWS,
   type KnowledgeBrowseQuery,
   KnowledgeBrowseQuerySchema,
   type KnowledgeSummary,
@@ -99,13 +101,59 @@ export function summary(row: Knowledge): KnowledgeSummary {
     createdAt: row.createdAt?.toISOString() ?? null,
   };
 }
+/** The six literal fields a browse search matches, case-insensitively. */
+export function matchesBrowseFields(
+  fields: readonly unknown[],
+  needle: string
+): boolean {
+  return fields.some(
+    (value) => typeof value === "string" && value.toLowerCase().includes(needle)
+  );
+}
 export function matchesBrowse(row: Knowledge, needle: string): boolean {
-  return [
-    row.id,
-    row.title,
-    row.content,
-    row.domain,
-    row.entryType,
-    row.entityId,
-  ].some((value) => value?.toLowerCase().includes(needle));
+  return matchesBrowseFields(
+    [row.id, row.title, row.content, row.domain, row.entryType, row.entityId],
+    needle
+  );
+}
+/** Rows per search read; a broad search stops after its first page of matches. */
+const SEARCH_BATCH_ROWS = 200;
+/**
+ * One search window: reads ordered candidate batches after the cursor until it
+ * holds a page of matches plus proof of one more, runs out of candidates, or
+ * examines `KNOWLEDGE_BROWSE_SEARCH_SCAN_MAX_ROWS`. `resumeAfter` is the row
+ * the next window continues after: the last match when another follows, the
+ * last examined row at the scan bound, absent when the candidates ran out.
+ */
+export async function scanBrowseSearch<T>(
+  readBatch: (after: T | undefined, limit: number) => Promise<readonly T[]>,
+  matches: (row: T) => boolean
+): Promise<{ matches: T[]; scannedRows: number; resumeAfter?: T }> {
+  const found: T[] = [];
+  let scannedRows = 0;
+  let after: T | undefined;
+  while (scannedRows < KNOWLEDGE_BROWSE_SEARCH_SCAN_MAX_ROWS) {
+    const limit = Math.min(
+      SEARCH_BATCH_ROWS,
+      KNOWLEDGE_BROWSE_SEARCH_SCAN_MAX_ROWS - scannedRows
+    );
+    const batch = await readBatch(after, limit);
+    for (const row of batch) {
+      if (matches(row)) {
+        if (found.length === KNOWLEDGE_BROWSE_PAGE_SIZE)
+          return {
+            matches: found,
+            scannedRows: scannedRows + 1,
+            resumeAfter: found.at(-1),
+          };
+        found.push(row);
+      }
+      scannedRows++;
+    }
+    if (batch.length < limit) return { matches: found, scannedRows };
+    after = batch.at(-1);
+  }
+  return after === undefined
+    ? { matches: found, scannedRows }
+    : { matches: found, scannedRows, resumeAfter: after };
 }

@@ -35,7 +35,13 @@ import {
   type KnowledgeSummary,
 } from "../../contracts.js";
 import { readBrowseWithinBudget } from "./browse-budget.js";
-import { browseQuery, nextBrowseCursor } from "../../domain/browse.js";
+import {
+  browseQuery,
+  matchesBrowseFields,
+  nextBrowseCursor,
+  scanBrowseSearch,
+  sortValue,
+} from "../../domain/browse.js";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
 import {
   type ActiveGoal,
@@ -457,7 +463,6 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     const column = columns[query.sort];
     // Filters (counted for the exact total) and the seek predicate are separate.
     const filters: string[] = [];
-    let seek: string | undefined;
     for (const [values, field] of [
       [query.domains, "domain"],
       [query.entryTypes, "entry_type"],
@@ -466,70 +471,45 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       if (values.length)
         filters.push(`${field} IN (${values.map(escapeValue).join(", ")})`);
     }
-    if (position) {
-      const idAfter = `id > ${escapeValue(position.id)}`;
-      if (query.sort === "createdAt" && position.value === "") {
+    const seekAfter = (after: { id: string; value: string | number }) => {
+      const idAfter = `id > ${escapeValue(after.id)}`;
+      if (query.sort === "createdAt" && after.value === "") {
         const nullTail = `(created_at IS NULL AND ${idAfter})`;
-        seek =
-          query.direction === "asc"
-            ? `(created_at IS NOT NULL OR ${nullTail})`
-            : nullTail;
-      } else {
-        const literal =
-          typeof position.value === "number"
-            ? String(position.value)
-            : escapeValue(position.value);
-        const operator = query.direction === "asc" ? ">" : "<";
-        const nullTail =
-          query.sort === "createdAt" && query.direction === "desc"
-            ? " OR created_at IS NULL"
-            : "";
-        seek = `(${column} ${operator} ${literal} OR (${column} = ${literal} AND ${idAfter})${nullTail})`;
+        return query.direction === "asc"
+          ? `(created_at IS NOT NULL OR ${nullTail})`
+          : nullTail;
       }
-    }
+      const literal =
+        typeof after.value === "number"
+          ? String(after.value)
+          : escapeValue(after.value);
+      const operator = query.direction === "asc" ? ">" : "<";
+      const nullTail =
+        query.sort === "createdAt" && query.direction === "desc"
+          ? " OR created_at IS NULL"
+          : "";
+      return `(${column} ${operator} ${literal} OR (${column} = ${literal} AND ${idAfter})${nullTail})`;
+    };
     const nullOrder =
       query.sort === "createdAt"
         ? query.direction === "asc"
           ? " NULLS FIRST"
           : " NULLS LAST"
         : "";
-    const conditions = seek ? [...filters, seek] : filters;
-    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     // The exact total counts the filters only, never the cursor position.
     const filterWhere = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
     const search = query.search?.toLowerCase();
     const fields = `id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at${search ? ", content" : ""}`;
-    const { rows, revision, total } = await readBrowseWithinBudget(
-      this.readSql,
-      this.browseTimeoutMs,
-      signal,
-      async (read) => {
-        const heads = await read("SELECT dolt_hashof('HEAD') as hash");
-        const revision = heads[0]?.hash;
-        if (typeof revision !== "string" || !revision)
-          throw new KnowledgeBusyError(
-            "Knowledge revision unavailable; retry shortly"
-          );
-        const rows = await read(
-          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? KNOWLEDGE_BROWSE_PAGE_SIZE : KNOWLEDGE_BROWSE_PAGE_SIZE + 1}`
-        );
-        const totalKey = `${revision}\u0000${filterWhere}`;
-        let total = this.browseTotals.get(totalKey);
-        if (total === undefined) {
-          const counted = await read(
-            `SELECT COUNT(*) AS total FROM knowledge${filterWhere}`
-          );
-          total = Number(counted[0]?.total ?? 0);
-          this.browseTotals.set(totalKey, total);
-          if (this.browseTotals.size > BROWSE_TOTALS_REMEMBERED) {
-            const oldest = this.browseTotals.keys().next().value;
-            if (oldest !== undefined) this.browseTotals.delete(oldest);
-          }
-        }
-        return { rows, revision, total };
-      }
-    );
-    const window = rows.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE);
+    const selectAfter = (
+      after: { id: string; value: string | number } | undefined,
+      limit: number
+    ) => {
+      const conditions = after ? [...filters, seekAfter(after)] : filters;
+      const where = conditions.length
+        ? `WHERE ${conditions.join(" AND ")}`
+        : "";
+      return `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${limit}`;
+    };
     const toSummary = (row: Record<string, unknown>): KnowledgeSummary => ({
       id: String(row.id),
       domain: String(row.domain),
@@ -544,46 +524,96 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         ? new Date(row.created_at as string).toISOString()
         : null,
     });
-    const items = window
-      .filter(
-        (row) =>
-          !search ||
-          [
-            row.id,
-            row.title,
-            row.content,
-            row.domain,
-            row.entry_type,
-            row.entity_id,
-          ].some(
-            (v) => typeof v === "string" && v.toLowerCase().includes(search)
-          )
-      )
-      .map(toSummary);
-    const hasMore = search
-      ? window.length === KNOWLEDGE_BROWSE_PAGE_SIZE
-      : rows.length > KNOWLEDGE_BROWSE_PAGE_SIZE;
-    const last = window[window.length - 1];
+    // The driver Date loses sub-millisecond precision. Keysets must compare
+    // the native microsecond key, not the display ISO value.
+    const keyOf = (row: Record<string, unknown>) => ({
+      id: String(row.id),
+      value:
+        query.sort === "createdAt"
+          ? String(row.browse_created_at ?? "")
+              .replace(" ", "T")
+              .replace(/([+-]\d{2})$/, "$1:00")
+          : sortValue(toSummary(row), query.sort),
+    });
+    const { window, revision, total } = await readBrowseWithinBudget(
+      this.readSql,
+      this.browseTimeoutMs,
+      signal,
+      async (read) => {
+        const heads = await read("SELECT dolt_hashof('HEAD') as hash");
+        const revision = heads[0]?.hash;
+        if (typeof revision !== "string" || !revision)
+          throw new KnowledgeBusyError(
+            "Knowledge revision unavailable; retry shortly"
+          );
+        // A search matches in the app (Doltgres has no ILIKE and LOWER()
+        // panics on out-of-line TEXT), over bounded keyset batches after the
+        // cursor (SEARCH_SCAN_BOUNDED), never one LIMIT-page of candidates.
+        let window: {
+          matches: Record<string, unknown>[];
+          scannedRows: number;
+          resumeAfter?: Record<string, unknown>;
+        };
+        if (search) {
+          window = await scanBrowseSearch(
+            (after, limit) =>
+              read(selectAfter(after ? keyOf(after) : position, limit)),
+            (row) =>
+              matchesBrowseFields(
+                [
+                  row.id,
+                  row.title,
+                  row.content,
+                  row.domain,
+                  row.entry_type,
+                  row.entity_id,
+                ],
+                search
+              )
+          );
+        } else {
+          const rows = await read(
+            selectAfter(position, KNOWLEDGE_BROWSE_PAGE_SIZE + 1)
+          );
+          const matches = rows.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE);
+          const last = matches.at(-1);
+          window = {
+            matches,
+            scannedRows: matches.length,
+            ...(rows.length > KNOWLEDGE_BROWSE_PAGE_SIZE &&
+              last && { resumeAfter: last }),
+          };
+        }
+        const totalKey = `${revision}\u0000${filterWhere}`;
+        let total = this.browseTotals.get(totalKey);
+        if (total === undefined) {
+          const counted = await read(
+            `SELECT COUNT(*) AS total FROM knowledge${filterWhere}`
+          );
+          total = Number(counted[0]?.total ?? 0);
+          this.browseTotals.set(totalKey, total);
+          if (this.browseTotals.size > BROWSE_TOTALS_REMEMBERED) {
+            const oldest = this.browseTotals.keys().next().value;
+            if (oldest !== undefined) this.browseTotals.delete(oldest);
+          }
+        }
+        return { window, revision, total };
+      }
+    );
+    const resume = window.resumeAfter;
     return {
       revision,
-      items,
-      scannedRows: window.length,
+      items: window.matches.map(toSummary),
+      scannedRows: window.scannedRows,
       total,
-      nextCursor:
-        hasMore && last
-          ? nextBrowseCursor(
-              signature,
-              toSummary(last),
-              query.sort,
-              // The driver Date loses sub-millisecond precision. Keysets must
-              // compare the native microsecond key, not the display ISO value.
-              query.sort === "createdAt"
-                ? String(last.browse_created_at ?? "")
-                    .replace(" ", "T")
-                    .replace(/([+-]\d{2})$/, "$1:00")
-                : undefined
-            )
-          : null,
+      nextCursor: resume
+        ? nextBrowseCursor(
+            signature,
+            toSummary(resume),
+            query.sort,
+            keyOf(resume).value
+          )
+        : null,
     };
   }
 

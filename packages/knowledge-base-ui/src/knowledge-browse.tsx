@@ -10,7 +10,7 @@
  *   - ONE_WINDOW_PER_VIEW and INTENT_ONLY_SEARCH (see `useKnowledgeBrowse`); the view mounts with no committed search, so body reads follow only submit.
  *   - CLEAR_RETURNS_TO_FIRST_WINDOW: "Clear filters" empties filters and search and always returns to window 1.
  *   - OPTIONS_FROM_NODE: `entryTypeOptions` / `sourceTypeOptions` are required, because the canonical lists live in the store root (not its browser-safe `/contracts`); nodes pass `EntryTypeSchema.options` / `SourceTypeSchema.options`.
- *   - EXACT_TOTAL: the status line states the window's position against the store's exact filtered total ("Showing 1–20 of 5,046"); a search window states the candidates it examined and its matches; a capped empty search window says to continue, not "no matches". The page size comes from `@cogni/knowledge-store/contracts`.
+ *   - EXACT_TOTAL: the status line states the window's position against the store's exact filtered total ("Showing 1–20 of 5,046"); a search window states its matches; below `KNOWLEDGE_BROWSE_SEARCH_SCAN_MAX_ROWS` candidates one submit searches all of them, and a window the scan bound cut states the entries it searched and offers Continue search (bug.0048). The page size comes from `@cogni/knowledge-store/contracts`.
  *   - HOST_QUERY_CLIENT: rendered under the host's `QueryClientProvider`.
  * Side-effects: IO (through the injected fetcher)
  * Links: task.0059, packages/knowledge-base-ui/src/use-knowledge-windows.ts
@@ -65,8 +65,9 @@ const count = (n: number) => n.toLocaleString("en-US");
 
 /**
  * The window's position against the exact filtered total: "Showing 21–40 of
- * 5,046". A search window states which candidates it examined and how many
- * matched ("Searched 1–20 of 5,046 candidates · 3 matches").
+ * 5,046". A search window states its matches: a full page has more, a window
+ * the scan bound cut says how many entries it searched and to continue, and a
+ * first window that ran out of candidates searched all of them.
  */
 export function knowledgeWindowSummary(
   page: KnowledgeBrowsePage | undefined,
@@ -76,18 +77,21 @@ export function knowledgeWindowSummary(
 ): string {
   if (isFetching) return "Loading window…";
   if (!page) return "Window not loaded";
+  const shown = page.items.length;
+  if (isSearch) {
+    const matches = `${count(shown)} ${shown === 1 ? "match" : "matches"}`;
+    if (!page.nextCursor)
+      return shown === 0 && windowIndex === 0
+        ? `No matches in ${count(page.total)} entries`
+        : `${matches} · end of results`;
+    return shown === KNOWLEDGE_BROWSE_PAGE_SIZE
+      ? `${matches} · more available`
+      : `${matches} in ${count(page.scannedRows)} entries searched · continue to search the rest`;
+  }
   const first = windowIndex * KNOWLEDGE_BROWSE_PAGE_SIZE + 1;
-  const covered = isSearch ? page.scannedRows : page.items.length;
-  const range =
-    covered > 0 ? `${count(first)}–${count(first + covered - 1)}` : "0";
-  const more = page.nextCursor
-    ? isSearch
-      ? " · continuation available"
-      : " · more available"
-    : " · end of results";
-  return isSearch
-    ? `Searched ${range} of ${count(page.total)} candidates · ${count(page.items.length)} matches${more}`
-    : `Showing ${range} of ${count(page.total)}${more}`;
+  const range = shown > 0 ? `${count(first)}–${count(first + shown - 1)}` : "0";
+  const more = page.nextCursor ? " · more available" : " · end of results";
+  return `Showing ${range} of ${count(page.total)}${more}`;
 }
 
 export function KnowledgeBrowse({
@@ -232,9 +236,11 @@ export function KnowledgeBrowse({
         isLoading={browse.awaitingFirstRead}
         {...(onSelect && { onRowClick: onSelect })}
         emptyMessage={
-          page?.nextCursor
-            ? "No matches in this window. Continue search to examine more entries."
-            : "No entries match these filters."
+          !isSearch
+            ? "No entries match these filters."
+            : page?.nextCursor
+              ? "No matches yet. Continue search to examine more entries."
+              : "No entries match this search."
         }
       />
       <div className="flex gap-2">

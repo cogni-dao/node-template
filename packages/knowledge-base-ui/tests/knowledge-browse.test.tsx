@@ -172,7 +172,8 @@ describe("KnowledgeBrowse", () => {
     await act(async () => {});
     expect(reads).toHaveLength(0);
     await user.click(screen.getByRole("button", { name: "Search" }));
-    await screen.findByText(/Searched 1–5 of 5,046 candidates/);
+    await screen.findByText("No matches in 5,046 entries");
+    expect(screen.getByText("No entries match this search.")).toBeTruthy();
     expect(reads).toHaveLength(1);
     expect(reads[0]?.get("search")).toBe("abcde");
     await user.type(box, "f{Enter}");
@@ -181,6 +182,19 @@ describe("KnowledgeBrowse", () => {
     await user.type(box, "{Enter}");
     await act(async () => {});
     expect(reads).toHaveLength(2);
+  });
+
+  it("a search window that found its match at the end of the candidates offers no Continue (bug.0048)", async () => {
+    const { fetchBrowse } = recorder(async () =>
+      windowOf({ scannedRows: 257, total: 257 }),
+    );
+    mount(fetchBrowse, windowOf());
+    submitSearch("node-template-selected-decision");
+    await screen.findByText("1 match · end of results");
+    expect(screen.getByText(entry.title)).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Continue search" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it("a search the store schema rejects shows the schema's issue and sends nothing", async () => {
@@ -196,7 +210,8 @@ describe("KnowledgeBrowse", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("an empty capped search window offers Continue; a failed window retries its own cursor; Restart returns to the first window", async () => {
+  it("a search window cut by the scan bound offers Continue search; a failed window retries its own cursor; Restart returns to the first window", async () => {
+    const later = { ...entry, id: "later-match", title: "later match" };
     let failed = false;
     const { reads, fetchBrowse } = recorder(async (params) => {
       if (params.get("cursor") === "after-20") {
@@ -204,31 +219,31 @@ describe("KnowledgeBrowse", () => {
           failed = true;
           throw Object.assign(new Error("deadline"), { status: 503 });
         }
-        return windowOf();
+        return windowOf({ items: [later] });
       }
-      return windowOf({ items: [], nextCursor: "after-20", scannedRows: 20 });
+      return windowOf({ items: [], nextCursor: "after-20", scannedRows: 1000 });
     });
     mount(fetchBrowse, windowOf());
     submitSearch("body");
-    await screen.findByText(/Searched 1–20 of 5,046 candidates · 0 matches · continuation available/);
+    await screen.findByText(
+      "0 matches in 1,000 entries searched · continue to search the rest",
+    );
     expect(
-      screen.getByText(
-        "No matches in this window. Continue search to examine more entries.",
-      ),
+      screen.getByText("No matches yet. Continue search to examine more entries."),
     ).toBeTruthy();
     expect(reads).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
     await screen.findByRole("alert");
     fireEvent.click(screen.getByRole("button", { name: "Retry window" }));
-    await screen.findByText(entry.title);
+    await screen.findByText(later.title);
     expect(reads.slice(1).map((params) => params.get("cursor"))).toEqual([
       "after-20",
       "after-20",
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Previous window" }));
-    await screen.findByText(/Searched 1–20 of 5,046 candidates/);
+    await screen.findByText(/0 matches in 1,000 entries searched/);
     fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
-    await screen.findByText(entry.title);
+    await screen.findByText(later.title);
     fireEvent.click(screen.getByRole("button", { name: "Restart" }));
     await waitFor(() => expect(reads.at(-1)?.get("cursor")).toBeNull());
     expect(reads.every((params) => params.get("search") === "body")).toBe(true);
@@ -433,12 +448,12 @@ describe("KnowledgeBrowse", () => {
 
   it("stale body windows ignore focus and reconnect, and a remount awaits intent", async () => {
     const { reads, fetchBrowse } = recorder(async () =>
-      windowOf({ items: [], nextCursor: "after-20", scannedRows: 20 }),
+      windowOf({ nextCursor: "after-20", scannedRows: 20 }),
     );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const first = mount(fetchBrowse, windowOf(), client);
     submitSearch("body");
-    await screen.findByText(/Searched 1–20 of 5,046 candidates/);
+    await screen.findByText(/1 match in 20 entries searched/);
     const key = knowledgeBrowseKey({ search: "body" });
     client.setQueryData(key, client.getQueryData(key), {
       updatedAt: Date.now() - 60_000,
@@ -466,12 +481,12 @@ describe("KnowledgeBrowse", () => {
   it("offers Restart after a revision change or a known mutation without rescanning, and Restart clears it", async () => {
     let revision = "rev-a";
     const { reads, fetchBrowse } = recorder(async () =>
-      windowOf({ items: [], nextCursor: "next-window", scannedRows: 20, revision }),
+      windowOf({ nextCursor: "next-window", scannedRows: 20, revision }),
     );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     mount(fetchBrowse, windowOf(), client);
     submitSearch("body");
-    await screen.findByText(/Searched 1–20 of 5,046 candidates/);
+    await screen.findByText(/1 match in 20 entries searched/);
     revision = "rev-b";
     fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
     const prompt = "Knowledge changed. Restart to begin a new live traversal.";
