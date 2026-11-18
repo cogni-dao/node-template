@@ -96,6 +96,7 @@ export const ApiContractV1 = c.router({
     path: "/work/items/:id",
     summary: workItemsGetOperation.summary,
     description: workItemsGetOperation.description,
+    query: workItemsGetOperation.input.omit({ id: true }),
     responses: {
       200: workItemsGetOperation.output,
     },
@@ -115,6 +116,7 @@ export const ApiContractV1 = c.router({
     path: "/work/items/:id/history",
     summary: workItemsHistoryOperation.summary,
     description: workItemsHistoryOperation.description,
+    query: workItemsHistoryOperation.input.omit({ id: true }),
     responses: {
       200: workItemsHistoryOperation.output,
     },
@@ -134,6 +136,7 @@ export const ApiContractV1 = c.router({
     path: "/work/items/:id/artifacts",
     summary: workItemsArtifactsListOperation.summary,
     description: workItemsArtifactsListOperation.description,
+    query: workItemsArtifactsListOperation.input.omit({ id: true }),
     responses: {
       200: workItemsArtifactsListOperation.output,
     },

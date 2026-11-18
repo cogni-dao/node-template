@@ -27,7 +27,7 @@ export const workItemsPatchOperation = {
   id: "work.items.patch.v1",
   summary: "Patch a work item",
   description:
-    "Updates whitelisted fields on a work item. Optional expectedRevision makes the patch compare-and-set; a stale revision returns 409 without writing. Required reason (one line, at most 25 words and 240 chars) says why; a PATCH without it is a 400. It is stored in history (GET /work/items/{id}/history), not in the item. Optional cites (at most 8, each { id } or { id, contribution }) name hub atoms you read; each is pinned to its commit in history, and an unknown id is a 400.",
+    "Updates whitelisted fields on a work item. Optional expectedRevision makes the patch compare-and-set; a stale revision returns 409 without writing. Required reason (one line, at most 25 words and 240 chars) says why; a PATCH without it is a 400. It is stored in history (GET /work/items/{id}/history), not in the item. Optional cites (at most 8, each { id } or { id, contribution }) name hub atoms you read; each is pinned to its commit in history, and an unknown id is a 400. A status move goes forward one ladder stage only with the exit artifact of the stage it leaves (POST /work/items/{id}/artifacts); otherwise it is a 409 `gate_unmet` with `from`, `to` and `missing`, and nothing is written. A failed PR read is a 503 `gate_facts_unavailable`.",
   // One schema for the route and the agent tool (core__work_item_update); it lives in @cogni-dao/work-items.
   input: WorkItemPatchInputSchema,
   output: WorkItemDtoSchema,
