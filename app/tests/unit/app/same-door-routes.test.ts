@@ -45,12 +45,15 @@ describe("same-door routes", () => {
     for (const tool of declared) expect(tool && tool in DECLARED, String(tool)).toBe(true);
   });
 
-  it("S4: no route-twin scope is admin-subject until an AI admin check exists (item I2); otherwise any bearer with a role row would pass it", () => {
+  it("S4: an admin-subject route door reuses the scope an admin-subject tool already declares (no new grant); no SAME_DOOR_ROUTES tool is admin-subject", () => {
     const contracts = new Map([...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map((t) => [t.contract.name, t.contract]));
     for (const tool of Object.keys(SAME_DOOR_ROUTES))
       expect(contracts.get(tool)?.requires?.subject, tool).not.toBe("admin");
+    // A bearer on an admin-subject door needs the role row AND the one admin check (ONE_ADMIN_CHECK: a role row alone never passes). The door must carry the exact
+    // `requires` of an existing admin tool, so a drifted copy cannot show a second row in the admin table.
+    const adminRequires = [...contracts.values()].flatMap((c) => (c.requires?.subject === "admin" ? [c.requires] : []));
     for (const [id, cap] of Object.entries(ROUTE_ONLY_CAPABILITIES))
-      expect(cap.requires.subject, id).not.toBe("admin");
+      if (cap.requires.subject === "admin") expect(adminRequires, id).toContainEqual(cap.requires);
     // The admin-subject tools are exactly the allowlisted ones.
     for (const [name, contract] of contracts)
       if (contract.requires?.subject === "admin") expect(name in NO_ROUTE_TWIN, name).toBe(true);
@@ -65,7 +68,7 @@ describe("same-door routes", () => {
         for (let i = 1; i < parts.length; i += 2) {
           const chunk = (parts[i + 1] ?? "").slice(0, 600);
           const routeId = /routeId:\s*"([^"]+)"/.exec(chunk)?.[1] ?? `${file}#${parts[i]}`;
-          if (/sameDoor:/.test(chunk) || routeId in DEFERRED_WRITE_ROUTES || routeId in OPEN_BY_DESIGN_ROUTES) continue;
+          if (/sameDoor:|bearerWrite:/.test(chunk) || routeId in DEFERRED_WRITE_ROUTES || routeId in OPEN_BY_DESIGN_ROUTES) continue;
           unaccounted.push(routeId);
         }
       }

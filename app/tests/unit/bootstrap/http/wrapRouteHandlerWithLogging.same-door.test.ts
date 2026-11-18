@@ -42,12 +42,15 @@ function fakeSql(state: {
   grants?: Set<string>;
   /** `account|user` pairs: who owns which account. */
   owners?: Set<string>;
+  /** user id -> wallets bound to it (`user_bindings`). */
+  wallets?: Record<string, string[]>;
 }): AgentAuthoritySql {
   const tag = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     state.queries += 1;
     if (state.down) throw new Error("db down");
     const text = strings.join("?");
     if (text.includes("INSERT INTO agent_roles")) return [{ id: "row-1" }]; // an ask's insert lands
+    if (text.includes("FROM user_bindings")) return (state.wallets?.[String(values[0])] ?? []).map((external_id) => ({ external_id }));
     if (text.includes("FROM billing_accounts") && text.includes("owner_user_id"))
       return state.owners?.has(`${values[0]}|${values[1]}`) ? [{ ok: 1 }] : [];
     if (text.includes("FROM agent_roles") && text.includes("resource = 'account'"))
@@ -62,7 +65,8 @@ function fakeSql(state: {
 
 const handler = vi.fn(async () => NextResponse.json({ ran: true }));
 const AGENT = "agent-user-1";
-const state = { roles: new Set<string>(), down: false, queries: 0, grants: new Set<string>(), owners: new Set<string>() };
+const LISTED = "0xListedAdmin";
+const state = { roles: new Set<string>(), down: false, queries: 0, grants: new Set<string>(), owners: new Set<string>(), wallets: {} as Record<string, string[]> };
 
 function route(sameDoor: string, user: SessionUser | null) {
   return wrapRouteHandlerWithLogging(
@@ -86,6 +90,7 @@ beforeEach(() => {
   state.roles = new Set();
   state.grants = new Set();
   state.owners = new Set();
+  state.wallets = {};
   state.down = false;
   state.queries = 0;
   fake.container = {
@@ -94,7 +99,7 @@ beforeEach(() => {
     clock: { now: () => new Date("2026-11-09T00:00:00Z").toISOString() },
     agentAuthority: createAgentToolAuthority({
       sql: fakeSql(state),
-      nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_denied" }) },
+      nodeAdmin: { check: async (actor) => (actor.walletAddress === LISTED ? { ok: true } : { ok: false, errorCode: "authz_denied" }) },
       log: log as never,
       toolBundle: CORE_TOOL_BUNDLE as never,
     }),
@@ -156,6 +161,24 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     expect((await call("knowledge.contribute", user("bearer"))).status).toBe(403);
     state.roles.add(`${AGENT}|knowledge:contribute`);
     expect((await call("knowledge.contribute", user("bearer"))).status).toBe(200);
+  });
+
+  it("the merge door (knowledge.merge): a bearer with no listed wallet gets 403 even with the role row, a listed wallet passes, a session needs the same check", async () => {
+    // No role row: refused by the principal lock.
+    expect((await call("knowledge.merge", user("bearer"))).status).toBe(403);
+    // A role row alone never passes an admin-subject scope: the one admin check on the bearer's own wallet decides.
+    state.roles.add(`${AGENT}|knowledge:write`);
+    state.wallets[AGENT] = ["0xNotListed"];
+    const denied = await call("knowledge.merge", user("bearer"));
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ error: "policy_denied", code: "policy_denied" });
+    expect(handler).not.toHaveBeenCalled();
+    state.wallets[AGENT] = [LISTED];
+    expect((await call("knowledge.merge", user("bearer"))).status).toBe(200);
+    // A session is not exempt: the same check, no role row needed.
+    expect((await call("knowledge.merge", user("session", "human-1"))).status).toBe(403);
+    state.wallets["human-1"] = [LISTED];
+    expect((await call("knowledge.merge", user("session", "human-1"))).status).toBe(200);
   });
 
   it("the route-only knowledge.read scope: a human reads, a bearer needs the knowledge:read row, and the ask for it is accepted", async () => {
