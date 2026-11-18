@@ -4,14 +4,16 @@
 /**
  * Module: `@bootstrap/node-admin-gate`
  * Purpose: This node's implementation of the shared `NodeAdminAuthority` seam
- *   (`@cogni/knowledge-store`) — the one check behind the goal-layer
- *   privileges: merging a goal-layer change and setting priority <= 1.
- * Scope: Composition only. This node has no OpenFGA, so the authority is the
- *   existing node-local admin seam `isDaoAdmin` (repo-spec
- *   `activity_ledger.approvers` + steward wallet), the same check that gates
- *   `(admin)/` and attribution writes. When this node adopts OpenFGA, swap this
- *   factory for a `node.administer` authority; no caller changes.
+ *   (`@cogni/knowledge-store`) in two forms: the repo-spec roster (`createApproversNodeAdminAuthority`,
+ *   `isDaoAdmin` over `activity_ledger.approvers` + steward wallet), and the one admin check as that seam
+ *   (`createAdminCheckNodeAdminAuthority`) behind the goal-layer privileges: merging a goal-layer change and
+ *   setting priority <= 1.
+ * Scope: Composition only. The roster is built once and handed only to `createAgentToolAuthority`, which asks it
+ *   per BOUND wallet inside `adminCheck`; every caller (admin pages, attribution and payment routes, work items,
+ *   knowledge merge) asks `agentAuthority.adminCheck(userId)`, never the roster and never the session's login
+ *   wallet. When this node adopts OpenFGA, swap the roster for a `node.administer` authority; no caller changes.
  * Invariants:
+ *   - ONE_ADMIN_CHECK: the roster is reachable only through `adminCheck` (import-lock test).
  *   - GOAL_CHANGE_IS_NODE_ADMIN / P0P1_IS_NODE_ADMIN (enforced by callers via the seam).
  *   - FAIL_CLOSED_WITH_DISTINCTION: no wallet / non-admin → `authz_denied`;
  *     no configured admin wallets → `authz_unavailable`.

@@ -46,8 +46,8 @@ vi.mock("@/bootstrap/settlement-runtime", () => ({
   readLiveDistributionMerkleRoot: readLiveRoot,
 }));
 
-vi.mock("@/app/api/v1/attribution/_lib/approver-guard", () => ({
-  checkApprover: vi.fn(() => null),
+vi.mock("@/app/api/v1/attribution/_lib/admin-guard", () => ({
+  denyUnlessNodeAdmin: vi.fn(async () => null),
 }));
 
 vi.mock("@/shared/config", () => ({

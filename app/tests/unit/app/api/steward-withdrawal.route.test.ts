@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fake = vi.hoisted(() => ({
   steward: vi.fn(),
   container: vi.fn(),
+  admin: vi.fn(),
   session: vi.fn(),
   withdraw: vi.fn(),
   info: vi.fn(),
@@ -71,8 +72,10 @@ describe("steward withdrawal route with fake wallet", () => {
     vi.resetAllMocks();
     vi.stubGlobal("fetch", fake.network);
     fake.steward.mockReturnValue({ address: steward });
-    fake.session.mockReturnValue({ walletAddress: steward.toUpperCase(), via: "session" });
+    fake.session.mockReturnValue({ id: "u1", walletAddress: steward.toUpperCase(), via: "session" });
+    fake.admin.mockResolvedValue("allow");
     fake.container.mockReturnValue({
+      agentAuthority: { adminCheck: fake.admin },
       operatorWallet: { withdrawToSteward: fake.withdraw },
     });
     fake.withdraw.mockResolvedValue({ txHash, receiptStatus: "success" });
@@ -141,13 +144,26 @@ describe("steward withdrawal route with fake wallet", () => {
     expect(fake.info).not.toHaveBeenCalled();
   });
 
-  it.each([
-    undefined,
-    "0x1111111111111111111111111111111111111111",
-  ])("rejects missing or different caller wallet before touching the container: %s", async (walletAddress) => {
-    fake.session.mockReturnValue({ walletAddress, via: "session" });
+  it("refuses a session whose login wallet is the steward but which the one admin check denies (no bound listed wallet)", async () => {
+    fake.admin.mockResolvedValue("denied");
     expect((await post()).status).toBe(403);
-    expect(fake.container).not.toHaveBeenCalled();
+    expect(fake.admin).toHaveBeenCalledWith("u1");
+    expect(fake.withdraw).not.toHaveBeenCalled();
+  });
+
+  it("allows a caller the one admin check allows even with no login wallet (a bearer with a bound listed wallet), and the terminal log names who, how and how much", async () => {
+    fake.session.mockReturnValue({ id: "key-1", walletAddress: null, via: "bearer" });
+    expect((await post({ amountUsd: 2.5 })).status).toBe(200);
+    expect(fake.admin).toHaveBeenCalledWith("key-1");
+    expect(fake.info).toHaveBeenCalledWith(
+      expect.objectContaining({ adminUserId: "key-1", via: "bearer", amount: 2.5 }),
+      "steward wallet funded"
+    );
+  });
+
+  it("is 503, not a pass, when the admin check is unavailable", async () => {
+    fake.admin.mockRejectedValue(new Error("db down"));
+    expect((await post()).status).toBe(503);
     expect(fake.withdraw).not.toHaveBeenCalled();
   });
 
@@ -160,7 +176,6 @@ describe("steward withdrawal route with fake wallet", () => {
     { amountUsd: "1" },
   ])("rejects invalid body without touching the wallet: %j", async (body) => {
     expect((await post(body)).status).toBe(400);
-    expect(fake.container).not.toHaveBeenCalled();
     expect(fake.withdraw).not.toHaveBeenCalled();
   });
 
@@ -176,7 +191,7 @@ describe("steward withdrawal route with fake wallet", () => {
   });
 
   it("fails closed when the operator wallet is unconfigured", async () => {
-    fake.container.mockReturnValue({ operatorWallet: undefined });
+    fake.container.mockReturnValue({ agentAuthority: { adminCheck: fake.admin }, operatorWallet: undefined });
     const response = await post();
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({

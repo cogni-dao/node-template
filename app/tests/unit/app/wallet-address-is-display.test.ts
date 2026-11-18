@@ -58,3 +58,25 @@ describe("WALLET_ADDRESS_IS_DISPLAY", () => {
     expect(Object.keys(ALLOWLIST).filter((rel) => !readers.includes(rel))).toEqual([]);
   });
 });
+
+/** Files that ask the admin question AND read a session's `.walletAddress`: each reads it as the finalize SIGNER, never as authority. */
+const SIGNER_ONLY: Readonly<Record<string, string>> = {
+  "app/src/app/api/v1/attribution/epochs/[id]/finalize/route.ts": "the EIP-712 signer address, verified against the epoch's pinned approvers; admin is decided by the one admin check above it",
+  "app/src/app/(app)/gov/review/page.tsx": "hands the signer wallet to the Finish Epoch view; `isNodeAdmin` comes from the one admin check",
+};
+const ASKS_ADMIN = /\b(adminCheck|checkNodeAdmin|denyUnlessNodeAdmin|requireAdminSession)\(/;
+const READS_SESSION_WALLET = /\b(sessionUser|user|session\.user)\??\.walletAddress\b/;
+const mixed = sourceFiles(join(ROOT, "app/src"))
+  .map((file) => ({ rel: relative(ROOT, file), text: code(readFileSync(file, "utf8")) }))
+  .filter((f) => ASKS_ADMIN.test(f.text) && READS_SESSION_WALLET.test(f.text))
+  .map((f) => f.rel);
+
+describe("ONE_ADMIN_CHECK: no admin decision reads the login wallet", () => {
+  it("a file that asks the admin question never reads a session's login wallet unless it is the signer (defect: the login wallet admitted a user with no bound wallet)", () => {
+    expect(mixed.filter((rel) => !(rel in SIGNER_ONLY))).toEqual([]);
+  });
+
+  it("the signer allowlist has no stale entry", () => {
+    expect(Object.keys(SIGNER_ONLY).filter((rel) => !mixed.includes(rel))).toEqual([]);
+  });
+});

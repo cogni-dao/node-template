@@ -21,7 +21,7 @@ import { AppSidebar, AppTopBar } from "@/features/layout";
 export function AdminShell({ children }: { children: ReactNode }): ReactNode {
   return (
     <SidebarProvider>
-      <AppSidebar />
+      <AppSidebar isNodeAdmin />
       <SidebarInset>
         <AppTopBar />
         <div className="flex flex-1 flex-col overflow-auto">{children}</div>

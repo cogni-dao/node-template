@@ -20,16 +20,16 @@ const WRITE_METHODS = "POST|PUT|PATCH|DELETE";
 
 /** A bearer-capable write route that is refused on purpose: a bearer gets 403 `bearer_write_undeclared`. Each reason says why no door or own-data reason fits. */
 const REFUSED_FOR_BEARERS: Readonly<Record<string, string>> = {
-  "ledger.finalize-epoch": "epoch approver wallet required (checkApprover); a bearer has no wallet",
-  "ledger.record-pool-component": "epoch approver wallet required (checkApprover); a bearer has no wallet",
-  "ledger.patch-review-subject-overrides": "epoch approver wallet required (checkApprover); a bearer has no wallet",
-  "ledger.delete-review-subject-override": "epoch approver wallet required (checkApprover); a bearer has no wallet",
-  "ledger.review-epoch": "epoch approver wallet required (checkApprover); a bearer has no wallet",
+  "ledger.finalize-epoch": "an epoch write has no AI door declared (the admin check itself is wallet-bound for any credential); a bearer is refused until one is",
+  "ledger.record-pool-component": "an epoch write has no AI door declared (the admin check itself is wallet-bound for any credential); a bearer is refused until one is",
+  "ledger.patch-review-subject-overrides": "an epoch write has no AI door declared (the admin check itself is wallet-bound for any credential); a bearer is refused until one is",
+  "ledger.delete-review-subject-override": "an epoch write has no AI door declared (the admin check itself is wallet-bound for any credential); a bearer is refused until one is",
+  "ledger.review-epoch": "an epoch write has no AI door declared (the admin check itself is wallet-bound for any credential); a bearer is refused until one is",
   "ledger.collect-trigger": "starts the ledger ingest schedule; an operator act with no AI door, so a bearer is refused",
   "ledger.update-user-projections": "retired (HTTP 410); nothing to gate",
   "payments.intents": "needs a bound wallet (WalletRequiredError); a bearer may now bind one (/api/v1/identity/wallet/bind), but credits purchase has no AI door, so a bearer is refused",
   "payments.attempt_submit": "submits a transaction hash for an attempt created by a wallet-bound intent; a bearer owns no attempt",
-  "payments.steward-withdrawal": "steward wallet approver only; a bearer has no wallet",
+  "payments.steward-withdrawal": "moves funds; a node admin through the one admin check only, with no AI door declared, so a bearer is refused",
 };
 
 /** `auth.mode: "none"` write routes outside `internal/` that authenticate the caller themselves. Each reason says how. */

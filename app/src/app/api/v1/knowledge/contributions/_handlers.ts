@@ -411,13 +411,12 @@ export async function handleMerge(
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   try {
     // MERGE_IS_NODE_ADMIN is enforced inside ContributionService.merge
-    // (before the raw-diff gate and expected head); this passes the acting wallet.
+    // (before the raw-diff gate and expected head) on the acting user id alone (ONE_ADMIN_CHECK).
     const result = await svc.merge({
       principal,
       contributionId,
       actor: {
         userId: sessionUser.id,
-        walletAddress: sessionUser.walletAddress ?? null,
       },
       ...(parsed.data.confidencePct != null
         ? { confidencePct: parsed.data.confidencePct }
@@ -476,7 +475,6 @@ export async function handleClose(
       contributionId,
       actor: {
         userId: sessionUser.id,
-        walletAddress: sessionUser.walletAddress ?? null,
       },
       reason: parsed.data.reason,
     });

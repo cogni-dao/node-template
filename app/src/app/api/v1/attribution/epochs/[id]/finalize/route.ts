@@ -18,7 +18,7 @@ import {
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { checkApprover } from "@/app/api/v1/attribution/_lib/approver-guard";
+import { denyUnlessNodeAdmin } from "@/app/api/v1/attribution/_lib/admin-guard";
 import { finalizeEpochInProcess, getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
@@ -42,16 +42,16 @@ export const POST = wrapRouteHandlerWithLogging<{
       return NextResponse.json({ error: "Invalid epoch ID" }, { status: 400 });
     }
 
-    // Load epoch so we can check against pinned approvers (APPROVERS_PINNED_AT_REVIEW)
+    // WRITE_ROUTES_APPROVER_GATED: the one admin check (caller's bound wallets), BEFORE any epoch read so a non-admin cannot probe which epochs exist. The epoch's pinned
+    // approver set (APPROVERS_PINNED_AT_REVIEW) is enforced on the SIGNER inside finalizeEpochInProcess (422).
+    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
+    if (denied) return denied;
+
     const store = getContainer().attributionStore;
     const epoch = await store.getEpoch(epochId);
     if (!epoch) {
       return NextResponse.json({ error: "Epoch not found" }, { status: 404 });
     }
-
-    // WRITE_ROUTES_APPROVER_GATED — checks against epoch's pinned approvers
-    const denied = checkApprover(ctx, sessionUser?.walletAddress, epoch);
-    if (denied) return denied;
 
     // Parse and validate request body
     const body = await request.json();
@@ -64,6 +64,9 @@ export const POST = wrapRouteHandlerWithLogging<{
     }
 
     const { signature } = parsed.data;
+    // The wallet here is the SIGNER of the EIP-712 signature, never the authority (AUTH_IS_NOT_PAYMENT-style
+    // separation): admin was decided above by the one admin check; this address is only verified against the
+    // pinned approvers and the signature. A bearer has no login wallet to sign with, so it gets 401 here.
     const signerAddress = sessionUser?.walletAddress;
     if (!signerAddress) {
       return NextResponse.json(

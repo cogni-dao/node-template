@@ -5,8 +5,8 @@
  * Module: `@features/layout/components/AppSidebar`
  * Purpose: Cogni-specific sidebar composition with schedule navigation, collapsible chat threads, and external links.
  * Scope: Composes vendor Sidebar primitives into the app sidebar. Does not handle authentication or data fetching.
- * Invariants: Admin nav item is shown only when the session wallet is a repo-spec approver (`session.user.isApprover`); the `(admin)/` layout still enforces server-side. Chat threads always visible as collapsible menu item.
- * Side-effects: reads NextAuth session (`useSession`)
+ * Invariants: Admin nav item is shown only when the `isNodeAdmin` prop is true (the server layout's one admin check); the `(admin)/` layout still enforces server-side. Chat threads always visible as collapsible menu item.
+ * Side-effects: none
  * Links: src/components/vendor/shadcn/sidebar.tsx, src/features/ai/chat/components/ChatThreadsSidebarGroup.tsx
  * @public
  */
@@ -27,7 +27,6 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSession } from "next-auth/react";
 import type { ReactElement } from "react";
 
 import {
@@ -81,12 +80,15 @@ function DiscordIcon({ className }: { className?: string }): ReactElement {
   );
 }
 
-export function AppSidebar(): ReactElement {
+/** `isNodeAdmin` is a UX hint from the server layout's one admin check; the login wallet never decides, and the `(admin)/` layout still enforces. */
+export function AppSidebar({
+  isNodeAdmin = false,
+}: {
+  readonly isNodeAdmin?: boolean;
+}): ReactElement {
   const pathname = usePathname();
-  const { data: session } = useSession();
-  const isApprover = session?.user?.isApprover ?? false;
   const navItems = NAV_ITEMS.filter(
-    (item) => item.href !== "/admin" || isApprover
+    (item) => item.href !== "/admin" || isNodeAdmin
   );
 
   return (

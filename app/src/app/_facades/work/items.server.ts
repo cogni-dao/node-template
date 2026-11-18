@@ -98,7 +98,6 @@ async function assertPriorityAuthority(
   if (!isPrivilegedPriority(priority)) return;
   const decision = await checkNodeAdmin(getContainer().nodeAdmin, {
     userId: actor.id,
-    walletAddress: actor.walletAddress ?? null,
   });
   if (!decision.ok) {
     const err = new NodeAdminRequiredError(decision, `work.items.priority.p${priority}`);
@@ -115,10 +114,9 @@ async function assertPriorityAuthority(
   }
 }
 
-/** The caller of a work-item write; `walletAddress` is null for agent keys. */
+/** The caller of a work-item write: its user id is all the node-admin check reads (ONE_ADMIN_CHECK), session or key alike. */
 export interface WorkItemActor {
   id: string;
-  walletAddress?: string | null;
 }
 
 export class WorkItemLeaseConflictError extends Error {

@@ -340,26 +340,16 @@ export function getLedgerApprovers(): string[] {
 }
 
 /**
- * Whether a wallet is in the ledger approver allowlist.
- * Case-insensitive; returns false for null/empty wallets (fail-closed).
- * Single source of truth for the `(admin)/` gate, the session `isApprover`
- * hint, and write-route enforcement.
- */
-export function isLedgerApprover(wallet: string | null | undefined): boolean {
-	if (!wallet) return false;
-	return getLedgerApprovers().includes(normalizeWalletAddress(wallet));
-}
-
-/**
- * DAO-admin gate. A wallet is an admin when it is a ledger approver
- * (activity_ledger.approvers) OR the configured steward wallet
- * (payments_out.steward_wallet). At MVP steward == approver == admin
- * (the same wallet), so a node whose admin tab is approver-gated already
- * lets the steward in; the steward clause keeps the two definitions aligned.
+ * The admin roster lookup: whether a WALLET is listed. It is not an authority decision by itself: it is called only
+ * beneath `agentAuthority.adminCheck` (ONE_ADMIN_CHECK, `bootstrap/node-admin-gate.ts`) with a wallet BOUND to the
+ * caller, never with a session's login wallet (an import-lock test fails on any other caller).
+ * A wallet is listed when it is a ledger approver (activity_ledger.approvers) OR the configured steward wallet
+ * (payments_out.steward_wallet). At MVP steward == approver == admin (the same wallet).
+ * Case-insensitive; false for null/empty wallets (fail-closed).
  */
 export function isDaoAdmin(wallet: string | null | undefined): boolean {
 	if (!wallet) return false;
-	if (isLedgerApprover(wallet)) return true;
+	if (getLedgerApprovers().includes(normalizeWalletAddress(wallet))) return true;
 	const steward = getStewardWalletConfig();
 	return (
 		!!steward &&

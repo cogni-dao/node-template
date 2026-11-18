@@ -72,7 +72,7 @@ curl -X PATCH -b session http://localhost:3000/api/v1/attribution/epochs/1/revie
 ## Standards
 
 - All routes use `wrapRouteHandlerWithLogging({ auth: { mode: "required" } })`
-- Write routes call `checkApprover()` from `_lib/approver-guard.ts` before mutations
+- Write routes call `denyUnlessNodeAdmin()` from `_lib/admin-guard.ts` (the one admin check, `agentAuthority.adminCheck`) before mutations
 - Approver allowlist sourced from `activity_ledger.approvers` in `.cogni/repo-spec.yaml`
 
 ## Dependencies
@@ -82,10 +82,10 @@ curl -X PATCH -b session http://localhost:3000/api/v1/attribution/epochs/1/revie
 
 ## Change Protocol
 
-- Update this file when **Routes** or **approver-guard** logic changes
+- Update this file when **Routes** or **admin-guard** logic changes
 - Bump **Last reviewed** date
 
 ## Notes
 
-- `_lib/approver-guard.ts` checks `sessionUser.walletAddress` against `getAttributionApprovers()`. Empty approvers list = all writes rejected.
+- `_lib/admin-guard.ts` is a thin wrapper over `agentAuthority.adminCheck(userId)` (bound wallets vs repo-spec approvers; 403 not admin, 503 unavailable). The session login wallet never decides; finalize uses it only as the EIP-712 signer. No approvers listed = every write refused.
 - Approver list is cached at process level; changes require restart.

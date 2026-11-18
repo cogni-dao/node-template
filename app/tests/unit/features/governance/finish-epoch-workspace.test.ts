@@ -129,7 +129,7 @@ describe("selectFinishEpochWork", () => {
 });
 
 describe("isEligibleForFinishEpochWork", () => {
-  it("requires a current approver to open review", () => {
+  it("requires the node-admin decision to open review, whatever wallet the session logged in with", () => {
     const selection = selectFinishEpochWork(
       [epoch("3", "open", "2026-08-22T00:00:00.000Z")],
       null,
@@ -141,19 +141,19 @@ describe("isEligibleForFinishEpochWork", () => {
       isEligibleForFinishEpochWork({
         selection,
         walletAddress: CURRENT,
-        isCurrentApprover: true,
+        isNodeAdmin: true,
       })
     ).toBe(true);
     expect(
       isEligibleForFinishEpochWork({
         selection,
-        walletAddress: PINNED,
-        isCurrentApprover: false,
+        walletAddress: CURRENT,
+        isNodeAdmin: false,
       })
     ).toBe(false);
   });
 
-  it("allows a pinned approver to finalize after the current set changes", () => {
+  it("finalize needs the node-admin decision and a signer wallet in the pinned set; a pinned login wallet alone grants nothing", () => {
     const selection = selectFinishEpochWork(
       [epoch("3", "review", "2026-08-22T00:00:00.000Z", [PINNED])],
       null,
@@ -165,8 +165,22 @@ describe("isEligibleForFinishEpochWork", () => {
       isEligibleForFinishEpochWork({
         selection,
         walletAddress: PINNED.toUpperCase(),
-        isCurrentApprover: false,
+        isNodeAdmin: true,
       })
     ).toBe(true);
+    expect(
+      isEligibleForFinishEpochWork({
+        selection,
+        walletAddress: PINNED,
+        isNodeAdmin: false,
+      })
+    ).toBe(false);
+    expect(
+      isEligibleForFinishEpochWork({
+        selection,
+        walletAddress: CURRENT,
+        isNodeAdmin: true,
+      })
+    ).toBe(false);
   });
 });

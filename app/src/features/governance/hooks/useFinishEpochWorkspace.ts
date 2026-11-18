@@ -123,20 +123,21 @@ export function selectFinishEpochWork(
     : null;
 }
 
-/** Current approvers open review; an epoch's pinned set owns later actions. */
+/**
+ * Authority is the one node-admin check (`isNodeAdmin`, decided on the server from the caller's bound wallets); the login wallet never grants it.
+ * The wallet here is the SIGNER of the finalize signature: signing needs one, and finalize accepts only a signer in the epoch's pinned set.
+ */
 export function isEligibleForFinishEpochWork(params: {
   readonly selection: FinishEpochSelection;
   readonly walletAddress: string | null;
-  readonly isCurrentApprover: boolean;
+  readonly isNodeAdmin: boolean;
 }): boolean {
-  if (!params.walletAddress) return false;
-  if (params.selection.kind === "open_review") {
-    return params.isCurrentApprover;
-  }
+  if (!params.walletAddress || !params.isNodeAdmin) return false;
+  if (params.selection.kind === "open_review") return true;
   const pinned = params.selection.epoch.approvers;
-  if (!pinned || pinned.length === 0) return params.isCurrentApprover;
-  const wallet = params.walletAddress.toLowerCase();
-  return pinned.some((approver) => approver.toLowerCase() === wallet);
+  if (!pinned || pinned.length === 0) return true;
+  const signer = params.walletAddress.toLowerCase();
+  return pinned.some((approver) => approver.toLowerCase() === signer);
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

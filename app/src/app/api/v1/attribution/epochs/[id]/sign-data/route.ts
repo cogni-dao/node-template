@@ -25,7 +25,7 @@ import { signDataV2Operation } from "@cogni/node-contracts";
 import { CHAIN_ID } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { checkApprover } from "@/app/api/v1/attribution/_lib/approver-guard";
+import { denyUnlessNodeAdmin } from "@/app/api/v1/attribution/_lib/admin-guard";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeId, getScopeId } from "@/shared/config";
@@ -51,15 +51,15 @@ export const GET = wrapRouteHandlerWithLogging<{
       return NextResponse.json({ error: "Invalid epoch ID" }, { status: 400 });
     }
 
+    // WRITE_ROUTES_APPROVER_GATED: the one admin check (caller's bound wallets), BEFORE any epoch read so a non-admin cannot probe which epochs exist.
+    const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
+    if (denied) return denied;
+
     const store = getContainer().attributionStore;
     const epoch = await store.getEpoch(epochId);
     if (!epoch) {
       return NextResponse.json({ error: "Epoch not found" }, { status: 404 });
     }
-
-    // WRITE_ROUTES_APPROVER_GATED — check against epoch's pinned approvers
-    const denied = checkApprover(ctx, sessionUser?.walletAddress, epoch);
-    if (denied) return denied;
 
     if (epoch.status !== "review") {
       return NextResponse.json(

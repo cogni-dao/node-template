@@ -21,7 +21,7 @@ import { Alert, AlertDescription, Button } from "@/components";
 export interface EpochReviewActionProps {
   readonly status: "open" | "review" | "finalized";
   readonly reviewReady: boolean;
-  readonly isApprover: boolean;
+  readonly isNodeAdmin: boolean;
   readonly isPending: boolean;
   readonly error: Error | null;
   readonly onOpen: () => void;
@@ -31,7 +31,7 @@ export interface EpochReviewActionProps {
 export function EpochReviewAction({
   status,
   reviewReady,
-  isApprover,
+  isNodeAdmin,
   isPending,
   error,
   onOpen,
@@ -51,14 +51,14 @@ export function EpochReviewAction({
                 : "This epoch is ready for review"}
             </p>
             <p className="text-muted-foreground mt-1 text-sm">
-              {isApprover
+              {isNodeAdmin
                 ? "Review the final contribution set, then sign to finalize it."
                 : "Waiting for an authorized ledger approver to continue."}
             </p>
           </div>
         </div>
 
-        {isApprover && (
+        {isNodeAdmin && (
           <Button
             className="min-h-11 shrink-0"
             disabled={isPending}

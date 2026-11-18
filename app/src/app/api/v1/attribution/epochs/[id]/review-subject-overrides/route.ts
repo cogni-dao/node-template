@@ -23,7 +23,7 @@ import {
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { checkApprover } from "@/app/api/v1/attribution/_lib/approver-guard";
+import { denyUnlessNodeAdmin } from "@/app/api/v1/attribution/_lib/admin-guard";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeId } from "@/shared/config";
@@ -111,7 +111,7 @@ export const PATCH = wrapRouteHandlerWithLogging<{
   },
   async (ctx, request, sessionUser, context) => {
     try {
-      const denied = checkApprover(ctx, sessionUser?.walletAddress);
+      const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
       if (denied) return denied;
 
       if (!context) throw new Error("context required for dynamic routes");
@@ -292,7 +292,7 @@ export const DELETE = wrapRouteHandlerWithLogging<{
   },
   async (ctx, request, sessionUser, context) => {
     try {
-      const denied = checkApprover(ctx, sessionUser?.walletAddress);
+      const denied = await denyUnlessNodeAdmin(ctx, sessionUser);
       if (denied) return denied;
 
       if (!context) throw new Error("context required for dynamic routes");

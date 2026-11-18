@@ -46,17 +46,15 @@ describe("handleMerge — node-admin gate wiring (story.5101)", () => {
     warn.mockReset();
   });
 
-  it("passes the acting session's wallet as the gate actor", async () => {
+  it("passes the acting user id alone as the gate actor, never the login wallet", async () => {
     merge.mockResolvedValue({ commitHash: "m1" });
     const res = await handleMerge(req(), "c1", session);
     expect(res.status).toBe(200);
     expect(merge.mock.calls[0]?.[0]).toMatchObject({
       contributionId: "c1",
-      actor: {
-        userId: "user-1",
-        walletAddress: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
-      },
+      actor: { userId: "user-1" },
     });
+    expect(merge.mock.calls[0]?.[0].actor).not.toHaveProperty("walletAddress");
   });
 
   it("maps a denial to 403 authz_denied and logs it", async () => {

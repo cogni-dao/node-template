@@ -18,7 +18,7 @@ admin-only surfaces in one role-gated shell.
 ## Pointers
 
 - [App AGENTS.md](../AGENTS.md)
-- [Approver guard pattern (API)](../api/v1/attribution/_lib/approver-guard.ts)
+- [Admin guard pattern (API)](../api/v1/attribution/_lib/admin-guard.ts)
 - [Repo-spec accessor](../../shared/config/repoSpec.server.ts)
 - [Multi-tenant + route-group research](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/research/node-scaling-multitenant-strategy.md)
 
@@ -43,11 +43,11 @@ admin-only surfaces in one role-gated shell.
 - **Login gate** — `proxy.ts` matcher includes `/admin/:path*`; unauthenticated
   visitors are redirected to `/`.
 - **Admin gate** — `layout.tsx` (server component) reads
-  `getServerSessionUser()` + `getLedgerApprovers()`. Non-approvers are
+  `getServerSessionUser()` + the one admin check (`agentAuthority.adminCheck`, bound wallets). Non-admins are
   redirected to `/dashboard`.
 - **No UI-only gating.** Hiding nav links is a UX hint; the server gate is
   the security boundary.
-- **Address comparison is case-insensitive** (lowercase both sides).
+- **Never decide admin from the session login wallet**: only the one admin check (bound wallets vs repo-spec approvers) decides, for a session and a bearer alike.
 
 ## Responsibilities
 
@@ -60,12 +60,12 @@ admin-only surfaces in one role-gated shell.
 
 1. Drop a `page.tsx` (server component preferred) under `(admin)/<feature>/`.
 2. The layout gates the shell, but data helpers re-check the approver
-   (`isLedgerApprover`) because layout and page render concurrently — the
+   (`agentAuthority.adminCheck`) because layout and page render concurrently — the
    layout redirect is not a data gate (see `admin/payments/money-plane.server.ts`).
 3. Link from `(admin)/admin/page.tsx` so the admin index discovers it.
 4. If the page needs an API mutation, ensure the corresponding API route
-   uses `checkApprover()` from
-   `@/app/api/v1/attribution/_lib/approver-guard`.
+   uses `denyUnlessNodeAdmin()` from
+   `@/app/api/v1/attribution/_lib/admin-guard`.
 
 ## Standards
 

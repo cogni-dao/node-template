@@ -236,7 +236,6 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const created = await createWorkItem(parseResult.data, {
         id: sessionUser.id,
-        walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info(
         {
