@@ -486,3 +486,4 @@ export async function serveReadyz<Name extends string>(
     };
   }
 }
+// cold-cache probe (task.0138): changes the build-cache key, not behavior
