@@ -66,7 +66,7 @@ describe("0044 backfill selector (real Postgres)", () => {
         await binding(ids.oauth, "github");
         await event(ids.oauth, "oauth");
         await profile(ids.oauth);
-        // Operator-attested GitHub sign-in (operator-attested-binding.server.ts:130): same traces, different method.
+        // Operator-attested GitHub sign-in (operator-attested-binding.server.ts:131): same traces, different method.
         await tx`INSERT INTO users (id, name) VALUES (${ids.attested}, 'attested human')`;
         await binding(ids.attested, "github");
         await event(ids.attested, "operator_attestation");
