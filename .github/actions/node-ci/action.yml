@@ -12,7 +12,8 @@ description: >-
 # that runs this action keeps the job name, so the required set is identical in every node.
 #
 # CALLER CONTRACT (every consuming job):
-#   - the job is named `static`, `unit` or `component` (no `name:`, no matrix, no `if:`, no `needs:`)
+#   - the job is named `static`, `unit` or `component` (no `name:`, no matrix, no `if:`, no `needs:`);
+#     the one exception is the opt-in SHARDED UNIT shape below
 #   - step 1 is actions/checkout with `fetch-depth: 0` (the classifier diffs a PR against its base)
 #   - step 2 is this action with `lane: <the job id>`
 #   - node-specific environment (test env vars, TESTCONTAINERS_*) is set on the caller's job or

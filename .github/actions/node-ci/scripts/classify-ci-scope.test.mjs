@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { classifyFiles, decide, parseTestChain, selectUnitFilters } from "./classify-ci-scope.mjs";
-import { parseShard, planShard, pureChain, selectUnitRun } from "./run-unit-tests.mjs";
+import { parseShard, planShard, pureChain, selectUnitRun, vitestCommand } from "./run-unit-tests.mjs";
 import { findUndeclaredWorkspaceEdges } from "./workspace-edges.mjs";
 
 const DIRS = ["app", "graphs", "packages/ids", "packages/metrics"];
@@ -133,6 +133,15 @@ const CASES = [
     assert.deepEqual(parseShard("2/4"), { index: 2, total: 4 });
     for (const bad of ["0/4", "5/4", "2", "2/", "/4", "a/b", "1/0", "-1/4", "1.5/4", "1/4/4"]) {
       assert.throws(() => parseShard(bad), /UNIT_SHARD/, bad);
+    }
+  }],
+  // Defect: the split package's test script is guessed at (a chained or custom script), so a shard silently
+  // runs something other than the package's own vitest invocation.
+  ["only a plain `vitest run` script can be split", () => {
+    assert.deepEqual(vitestCommand("vitest run"), ["run"]);
+    assert.deepEqual(vitestCommand("vitest run --config vitest.config.ts"), ["run", "--config", "vitest.config.ts"]);
+    for (const script of ["vitest", "vitest run && echo done", "pnpm build && vitest run", "vitest run; rm -rf .", "vitest run $(x)", "vitest run | tee", undefined, ""]) {
+      assert.equal(vitestCommand(script), null, String(script));
     }
   }],
   // Defect: sharding widens a PR's affected subset back to the whole chain (no saving), or narrows a full run.
