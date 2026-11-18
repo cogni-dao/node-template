@@ -40,6 +40,7 @@ import {
   isOwnOrigin,
   isPassGrade,
   parseArtifactSubject,
+  type TRIAGE_VERDICTS,
   type WorkItemArtifact,
 } from "./artifacts.js";
 import { isLegacyStatus, statusRank } from "./transitions.js";
@@ -219,11 +220,15 @@ export const TRIAGE_SCORE_AXES = [
 
 type Route = "research" | "design" | "implement";
 
-const ROUTE_STAGE: Readonly<Record<string, WorkItemStatus>> = {
+/**
+ * The ladder's exits from needs_triage: one stage per triage verdict, research or design (TRIAGE_VERDICTS). There is no
+ * exit to needs_implement, so every change passes design and design review (CEO 2026-11-18).
+ */
+export const TRIAGE_ROUTE_STAGES: Readonly<Record<(typeof TRIAGE_VERDICTS)[number], WorkItemStatus>> = {
   research: "needs_research",
   design: "needs_design",
-  implement: "needs_implement",
 };
+const ROUTE_STAGE: Readonly<Record<string, WorkItemStatus>> = TRIAGE_ROUTE_STAGES;
 
 /** The latest artifact of a kind on THIS item: the highest `seq` (timestamps tie; `seq` is exact). */
 function latestOf(

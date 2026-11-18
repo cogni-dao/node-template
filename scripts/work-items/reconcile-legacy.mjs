@@ -17,8 +17,8 @@
  *     stage after merge: with `--backfill` an item there whose PR is merged closes out on a fixture; any other stays where it is.
  *     `--legacy` lists every needs_closeout and blocked item on the target.
  *   - NO_AI: it calls no model and spends no AI budget; owners advance items past implementation review with real artifacts.
- *   - FACTS_ONLY: needs_triage -> needs_implement happens only when the item already has six nonzero scores and a `goal:` label;
- *     it records a `triage` artifact (route `implement`; `research` for a spike whose `pr` is a hub inbox) first. needs_implement
+ *   - FACTS_ONLY: needs_triage -> needs_design happens only when the item already has six nonzero scores and a `goal:` label;
+ *     it records a `triage` artifact (route `design`; `research` for a spike whose `pr` is a hub inbox) first. needs_implement
  *     -> needs_implementation_review happens only for a non-story whose `pr` names a deliverable. A missing goal label is never
  *     invented: the item stays and is listed.
  *   - LEDGER_TARGET_HOLDS: with `--from-ledger`, an item whose ledger target is needs_triage (it was blocked) is not advanced.
@@ -227,7 +227,8 @@ const isStory = (item) => item.type === "story";
 const hasMoves = (item) => (item.moves?.length ?? 0) > 0;
 const isInbox = (pr) => INBOX_URL.test(pr ?? "");
 const hasDeliverable = (pr) => /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/[0-9]+$/.test(pr ?? "") || isInbox(pr);
-const route = (item) => (item.type === "spike" && isInbox(item.pr) ? "research" : "implement");
+// Triage exits only to research or design (the ladder); a legacy item gets the same design review as new work.
+const route = (item) => (item.type === "spike" && isInbox(item.pr) ? "research" : "design");
 
 async function read(id) {
 	const item = await call("GET", `/work/items/${id}`);
@@ -262,8 +263,7 @@ function plan(item, artifacts, setPr, ledgerTarget) {
 				next = `stay: needs a human or agent triage: ${missing.join(", ")}`;
 			} else {
 				const r = route(item);
-				next = `triage artifact (${r}${hasMoves(item) ? "" : ", measurement gap note"}) -> ${r === "research" ? "needs_research" : "needs_implement"}`;
-				if (r === "implement" && !isStory(item) && hasDeliverable(pr)) next += " -> needs_implementation_review";
+				next = `triage artifact (${r}${hasMoves(item) ? "" : ", measurement gap note"}) -> ${r === "research" ? "needs_research" : "needs_design"}`;
 			}
 		}
 	} else if (status === "needs_implement") {
@@ -301,7 +301,7 @@ async function patch(item, set, reason, retryOn) {
 }
 
 function triageNote(item) {
-	const base = isStory(item) ? "Story: children carry the PRs; route implement." : `Re-triage of a legacy ${item.type}; route implement.`;
+	const base = isStory(item) ? "Story: re-triage routes to design." : `Re-triage of a legacy ${item.type}; route design.`;
 	const gap = hasMoves(item) ? "" : " Measurement gap: no moves recorded before cutover; none invented.";
 	return `${base}${gap}`.slice(0, 240);
 }
@@ -347,7 +347,7 @@ async function walk(state, setPr, ledgerTarget) {
 		if (!sixFilled(item) || !goalLabel(item)) return;
 		if (item.type === "spike" && !isInbox(item.pr)) return;
 		const r = route(item);
-		const stage = r === "research" ? "needs_research" : "needs_implement";
+		const stage = r === "research" ? "needs_research" : "needs_design";
 		const existing = state.artifacts.filter((a) => a.kind === "triage").sort((a, b) => b.seq - a.seq)[0];
 		const reason = `Legacy item re-triaged: scores and goal label present, route ${r}; moving forward on its own artifact.`;
 		// A fresh triage artifact of this route may already stand (a rerun); if the gate calls it stale, record a new one.
@@ -357,8 +357,8 @@ async function walk(state, setPr, ledgerTarget) {
 			moved = await patch(item, { status: stage }, reason);
 			if (!moved) return;
 		}
-		item = { ...item, status: stage };
-		if (stage !== "needs_implement") return;
+		// A re-triaged item stops at research or design; it advances on its own design review like new work.
+		return;
 	}
 	if (item.status === "needs_implement" && !isStory(item) && hasDeliverable(item.pr)) {
 		await patch(item, { status: "needs_implementation_review" }, "pr names this item's deliverable; ready for a fresh-context implementation review.");

@@ -303,7 +303,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
       await issuesOf({ ...designReview, subject: "work:task.0028@3" })
     ).toEqual(["subject"]);
     expect(await issuesOf({ ...designReview, subject: "work:task.0028" })).toEqual(["subject"]);
-    // a triage verdict is research, design or implement
+    // a triage verdict is research or design
     expect(
       await issuesOf({ kind: "triage", subject: "work:task.0028", verdict: "approve" })
     ).toEqual(["verdict"]);

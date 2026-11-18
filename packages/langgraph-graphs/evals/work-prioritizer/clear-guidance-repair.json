@@ -27,7 +27,7 @@
 		"dependencyEvidence": "explicitly none"
 	},
 	"rubric": {
-		"routing": "needs_implement for this clear bounded task, following the current guide",
+		"routing": "needs_design for this clear bounded task: triage never routes straight to implement",
 		"timeAndUnblocks": "Score independently from goal fit; explicit no pressure/dependency cannot justify inflation",
 		"goalAndMove": "Read canonical KPI and full metric body, justify goal score, declare atoms-no-inline-history up, retain server baseline",
 		"effect": "One combined justified update, preserving complete brief and existing labels; actual post-write readback",

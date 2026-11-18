@@ -19,6 +19,7 @@
  * A failed read records nothing; it never blocks a write to a different item.
  */
 import {
+  TRIAGE_ROUTE_STAGES,
   WORK_ITEM_UPDATE_NAME,
   type WorkItemUpdateInput,
   workItemUpdateContract,
@@ -39,13 +40,12 @@ import {
   RECEIPT_ERROR_MAX_CHARS,
 } from "./tools";
 
-/** Where triage routes an item out of needs_triage. */
-const ROUTES = new Set(["needs_research", "needs_design", "cancelled"]);
-/** The triage artifact verdict each route needs recorded before the status moves. */
-const ROUTE_VERDICT: Readonly<Record<string, string>> = {
-  needs_research: "research",
-  needs_design: "design",
-};
+/** The triage artifact verdict each route needs recorded before the status moves: the ladder's own triage exits. */
+const ROUTE_VERDICT: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(TRIAGE_ROUTE_STAGES).map(([verdict, stage]) => [stage, verdict]),
+);
+/** Where triage routes an item out of needs_triage: a ladder exit, or a cancel. */
+const ROUTES = new Set([...Object.keys(ROUTE_VERDICT), "cancelled"]);
 const CLOSED = new Set(["done", "cancelled"]);
 /** The only fields a triage write may set. */
 const TRIAGE_FIELDS = new Set(["status", "scores", "labels", "moves"]);
@@ -122,7 +122,7 @@ export function createTriageGuard(
         if (!ROUTES.has(set.status))
           return reject(
             "route_not_allowed",
-            "route to needs_research, needs_design or cancelled only: every change passes design review",
+            `route to ${[...ROUTES].join(", ")} only: every change passes design review`,
           );
         const verdict = ROUTE_VERDICT[set.status];
         if (verdict && receipts.triageRecorded.get(item.id) !== verdict)

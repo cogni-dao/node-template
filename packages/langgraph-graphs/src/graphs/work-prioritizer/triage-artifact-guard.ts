@@ -24,10 +24,12 @@ import {
   type StructuredToolInterface,
 } from "@langchain/core/tools";
 import { z } from "zod";
+import { TRIAGE_ROUTE_STAGES } from "@cogni/ai-tools";
 import type { RunReceipts } from "./receipts";
 import { MAX_CHANGED_ITEMS_PER_RUN, RECEIPT_ERROR_MAX_CHARS } from "./tools";
 
-const TRIAGE_VERDICTS = new Set(["research", "design"]);
+/** The ladder's triage verdicts (research, design), owned by @cogni-dao/work-items. */
+const TRIAGE_VERDICTS = new Set(Object.keys(TRIAGE_ROUTE_STAGES));
 
 const reject = (code: string, hint: string) =>
   `guard_rejected: ${code}: ${hint}`;

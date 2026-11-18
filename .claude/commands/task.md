@@ -20,7 +20,7 @@ curl -X POST https://cognidao.org/api/v1/work/items \
   }'
 ```
 
-Server allocates the id (`task.5XXX+`). Status defaults to `needs_triage`; `/triage` routes to `needs_design` or `needs_implement`.
+Server allocates the id (`task.5XXX+`). Status defaults to `needs_triage`; `/triage` routes to `needs_research` or `needs_design`; every change passes design review.
 
 ## Rules
 
@@ -31,6 +31,6 @@ Server allocates the id (`task.5XXX+`). Status defaults to `needs_triage`; `/tri
 
 ## Next
 
-`/triage <id>` (auto-routes to `/design` or `/implement` per status).
+`/triage <id>` (routes to `/research` or `/design`).
 
 #$TASK
