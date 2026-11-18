@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import type { AgentGrantsStore, GrantResource, PendingAskView, RoleRow, RoleState } from "../src";
+import type { OrgSource } from "../src/orgs";
 
 export interface MemoryRole {
   id: string;
@@ -44,6 +45,8 @@ export function memoryStore(init?: {
   names?: Record<string, string>;
   /** user id -> the billing account id that user owns. */
   accounts?: Record<string, string>;
+  /** billing account id -> the owner source of the org that owns it (the account's owner user is an org). */
+  orgAccounts?: Record<string, OrgSource>;
   failing?: boolean;
 }): AgentGrantsStore & { roles: MemoryRole[]; clock: MemoryClock } {
   const clock: MemoryClock = { now: Date.now() };
@@ -150,6 +153,10 @@ export function memoryStore(init?: {
     async ownsAccount(userId, accountId) {
       guard();
       return owns(userId, accountId);
+    },
+    async orgSourceOfAccount(accountId) {
+      guard();
+      return init?.orgAccounts?.[accountId] ?? null;
     },
     async accountOf(userId) {
       guard();

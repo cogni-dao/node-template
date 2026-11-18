@@ -18,6 +18,7 @@
  * @public
  */
 
+import type { OrgOwners } from "./orgs";
 import type { AgentGrantsStore, GrantResource, ScopeKind } from "./types";
 
 /** A one-time link lives 24 hours. */
@@ -78,16 +79,37 @@ export interface ApprovalRow {
 }
 
 /**
+ * Does `userId` own `accountId`? The owner user of the account does. When `owners` is given and the account's owner is an ORG, the org's owners from its
+ * owner source do (OWNERS_READ_AT_DECISION); nobody else does. A failed owner read throws `OwnerSourceUnavailableError`, never a yes.
+ */
+export async function ownsAccountOrOrg(
+  store: AgentGrantsStore,
+  userId: string,
+  accountId: string,
+  owners?: OrgOwners | undefined
+): Promise<boolean> {
+  if (await store.ownsAccount(userId, accountId)) return true;
+  if (!owners || !store.orgSourceOfAccount) return false;
+  const source = await store.orgSourceOfAccount(accountId);
+  return source ? (await owners.owners(source)).includes(userId) : false;
+}
+
+/**
  * ONE_GATE: may `me` approve, deny or revoke this row? Every decision in the package, and so on both routes, calls this and nothing else.
  *   - never the asking principal (NO_SELF_APPROVAL), for any row;
  *   - a node row: an admin session is present;
- *   - an account row with an account: `me` owns that account;
+ *   - an account row with an account: `me` owns that account (when the account's owner is an org and `owners` is given: `me` is one of the org's owners);
  *   - an account ask with no account yet: `me` owns an account (the decision writes that account onto the row).
  * A store failure is a throw; the caller maps it to "unavailable", never to yes.
  */
-export async function canApprove(store: AgentGrantsStore, me: ApprovalCaller, row: ApprovalRow): Promise<boolean> {
+export async function canApprove(
+  store: AgentGrantsStore,
+  me: ApprovalCaller,
+  row: ApprovalRow,
+  owners?: OrgOwners | undefined
+): Promise<boolean> {
   if (me.userId === row.principalUserId) return false;
   if (row.resource === "node") return me.admin !== null;
-  if (row.accountId) return store.ownsAccount(me.userId, row.accountId);
+  if (row.accountId) return ownsAccountOrOrg(store, me.userId, row.accountId, owners);
   return (await store.accountOf(me.userId)) !== null;
 }

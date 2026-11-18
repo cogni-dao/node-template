@@ -1,0 +1,478 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@cogni-dao/agent-grants/service-auth`
+ * Purpose: A service on a home node P calls a target node X with a short-lived signed assertion (RFC 7523 shape, OAuth 2.1 resource server). X issues no
+ *   key: it trusts P's published signing key, and a grant row an admin turned On decides every call.
+ *   Home side: `createServiceAssertionSigner`. Target side: `createServiceAssertionVerifier`, `ensureServicePrincipal`, `findServicePrincipal`, `requestServiceAccess`.
+ * Scope: Ed25519 over Web Crypto (no dependency, no node: import). The caller owns env, routes, transactions and logging. Holds no secret except the signer's
+ *   own private JWK, which the caller hands in and the package never logs or returns.
+ * Invariants:
+ *   - ASSERTION_IS_SHORT_LIVED: `exp - iat <= 300` s; the signer uses 120 s. The verifier rejects a longer window (`malformed`) and a reused `jti` inside it (`replayed`).
+ *   - TRUSTED_HOMES_ONLY: an issuer is accepted only if the target's configuration lists it, with its JWKS URI and allowed services.
+ *   - FAIL_CLOSED: every refusal is a result code; an unknown `kid` refetches at most once a minute and then fails closed; a JWKS fetch failure is `jwks_unavailable`.
+ *   - GRANTS_DECIDE_CALLS: a verified assertion only names the caller (issuer, service) and the scope it claims; it grants nothing. The grant row decides.
+ *   - ONE_PRINCIPAL_PER_SERVICE: `ensureServicePrincipal` maps (issuer, service) to one external principal on its own users row. No credential rows.
+ *   - NO_TOKEN_IN_ERRORS: no result, error or log field holds a token or a key.
+ * Side-effects: IO (SQL in the principal helpers; the default JWKS fetch)
+ * Links: https://node-template.cognidao.org/knowledge/node-service-enrollment
+ * @public
+ */
+
+import type { SqlTag } from "./postgres";
+import { writeExternalPrincipal } from "./principals";
+import { AgentRolesError, type AskOutcome, requestAccess } from "./roles";
+import type { AgentGrantsStore, ScopeKind } from "./types";
+
+/** Longest assertion lifetime the verifier accepts, in seconds. */
+export const SERVICE_ASSERTION_MAX_LIFETIME_SECONDS = 300;
+/** Lifetime the signer gives each assertion, in seconds. */
+const SIGNER_LIFETIME_SECONDS = 120;
+/** Clock skew tolerated on `exp` and `iat`, in seconds. */
+const CLOCK_SKEW_SECONDS = 30;
+/** An unknown `kid` refetches the JWKS at most this often. */
+export const JWKS_REFETCH_MIN_INTERVAL_MS = 60_000;
+/** A cached JWKS is refetched after this age, so a withdrawn key stops working. */
+export const JWKS_MAX_AGE_MS = 60 * 60_000;
+const MAX_TOKEN_CHARS = 4096;
+const JWKS_FETCH_TIMEOUT_MS = 5_000;
+const JWKS_MAX_BYTES = 64 * 1024;
+
+const SERVICE_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const SCOPE_CLAIM = /^[A-Za-z0-9:._-]+(?: [A-Za-z0-9:._-]+)*$/;
+const B64URL = /^[A-Za-z0-9_-]+$/;
+
+export interface PublicJwk {
+  readonly kty: "OKP";
+  readonly crv: "Ed25519";
+  readonly x: string;
+  readonly kid: string;
+  readonly use: "sig";
+  readonly alg: "EdDSA";
+}
+
+/** An Ed25519 private key as a JWK (`kty` OKP, `crv` Ed25519, `d` the secret, `x` the public key). */
+export interface Ed25519PrivateJwk {
+  readonly kty: "OKP";
+  readonly crv: "Ed25519";
+  readonly d: string;
+  readonly x: string;
+}
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+function toB64Url(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromB64Url(text: string): Uint8Array | null {
+  if (!B64URL.test(text)) return null;
+  try {
+    const bin = atob(text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+const jsonB64Url = (value: unknown): string => toB64Url(enc.encode(JSON.stringify(value)));
+
+function parseJsonObject(bytes: Uint8Array): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(dec.decode(bytes));
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True for a canonical https origin: `https://host[:port]`, nothing else. */
+export function isCanonicalHttpsOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.origin === value;
+  } catch {
+    return false;
+  }
+}
+
+/** The audience claim for a node id. */
+export const nodeAudience = (nodeId: string): string => `urn:cogni:node:${nodeId}`;
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+// Home side: the signer
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+
+export interface ServiceAssertionRequest {
+  /** The service slug (becomes `sub`), such as `git-review` or `node-ai`. */
+  readonly service: string;
+  /** The target node's id (becomes `aud` as `urn:cogni:node:<id>`). */
+  readonly audienceNodeId: string;
+  /** The permissions the call uses, space separated, such as `knowledge:read`. */
+  readonly scope: string;
+}
+
+export interface ServiceAssertionSigner {
+  sign(request: ServiceAssertionRequest): Promise<string>;
+  /** `Bearer <jwt>`: a fresh assertion per call. */
+  authorizationHeader(request: ServiceAssertionRequest): Promise<string>;
+  /** The public key set to serve at `/.well-known/jwks.json`. Never carries the private member. */
+  jwks(): { keys: PublicJwk[] };
+}
+
+export function createServiceAssertionSigner(opts: {
+  /** This node's canonical https origin (becomes `iss`). */
+  issuer: string;
+  kid: string;
+  privateJwk: Ed25519PrivateJwk;
+  /** Epoch milliseconds. Default `Date.now`. */
+  now?: () => number;
+}): ServiceAssertionSigner {
+  const { issuer, kid, privateJwk } = opts;
+  if (!isCanonicalHttpsOrigin(issuer)) throw new TypeError("issuer must be a canonical https origin");
+  if (!kid || /\s/.test(kid)) throw new TypeError("kid is required");
+  if (privateJwk?.kty !== "OKP" || privateJwk.crv !== "Ed25519" || typeof privateJwk.d !== "string" || typeof privateJwk.x !== "string")
+    throw new TypeError("privateJwk must be an Ed25519 OKP key with d and x");
+  const now = opts.now ?? Date.now;
+  let key: Promise<CryptoKey> | undefined;
+  const signingKey = () =>
+    (key ??= crypto.subtle.importKey(
+      "jwk",
+      { kty: "OKP", crv: "Ed25519", d: privateJwk.d, x: privateJwk.x },
+      { name: "Ed25519" },
+      false,
+      ["sign"]
+    ));
+  const publicJwk: PublicJwk = { kty: "OKP", crv: "Ed25519", x: privateJwk.x, kid, use: "sig", alg: "EdDSA" };
+
+  const sign = async (request: ServiceAssertionRequest): Promise<string> => {
+    if (!SERVICE_SLUG.test(request.service)) throw new TypeError("service must be a lowercase slug");
+    if (!request.audienceNodeId || /\s/.test(request.audienceNodeId)) throw new TypeError("audienceNodeId is required");
+    if (!SCOPE_CLAIM.test(request.scope)) throw new TypeError("scope must be space-separated permission names");
+    const iat = Math.floor(now() / 1000);
+    const header = jsonB64Url({ alg: "EdDSA", kid, typ: "JWT" });
+    const payload = jsonB64Url({
+      iss: issuer,
+      sub: request.service,
+      aud: nodeAudience(request.audienceNodeId),
+      client_id: `${issuer}#${request.service}`,
+      scope: request.scope,
+      iat,
+      exp: iat + SIGNER_LIFETIME_SECONDS,
+      jti: crypto.randomUUID(),
+    });
+    const input = `${header}.${payload}`;
+    const signature = await crypto.subtle.sign({ name: "Ed25519" }, await signingKey(), enc.encode(input));
+    return `${input}.${toB64Url(new Uint8Array(signature))}`;
+  };
+
+  return {
+    sign,
+    authorizationHeader: async (request) => `Bearer ${await sign(request)}`,
+    jwks: () => ({ keys: [{ ...publicJwk }] }),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+// Target side: replay store and verifier
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+
+/** Remembers each `jti` until its assertion expires. */
+export interface ReplayStore {
+  /** True when `jti` was already seen (a replay). Otherwise records it until `expiresAt` and returns false. */
+  seen(jti: string, expiresAt: Date): Promise<boolean>;
+}
+
+/**
+ * In-memory replay store, bounded to the assertion window (entries leave at their expiry) and to `maxEntries`. SINGLE REPLICA ONLY: another replica has its
+ * own memory, so a target with several replicas needs a shared store (Postgres) behind the same interface. At the bound the oldest entry goes first, which
+ * only a trusted home that signs thousands of assertions inside one window can trigger.
+ */
+export function createMemoryReplayStore(opts?: { maxEntries?: number; now?: () => number }): ReplayStore {
+  const maxEntries = opts?.maxEntries ?? 10_000;
+  const now = opts?.now ?? Date.now;
+  const entries = new Map<string, number>();
+  return {
+    async seen(jti, expiresAt) {
+      const at = now();
+      for (const [id, until] of entries) {
+        if (until > at) break;
+        entries.delete(id);
+      }
+      const until = entries.get(jti);
+      if (until !== undefined && until > at) return true;
+      entries.delete(jti);
+      entries.set(jti, Math.max(expiresAt.getTime(), at));
+      while (entries.size > maxEntries) {
+        const oldest = entries.keys().next().value;
+        if (oldest === undefined) break;
+        entries.delete(oldest);
+      }
+      return false;
+    },
+  };
+}
+
+/** One home node the target trusts. */
+export interface TrustedHome {
+  /** The home's canonical https origin: must equal the assertion's `iss`. */
+  readonly issuer: string;
+  readonly jwksUri: string;
+  /** The service slugs this home may call as. */
+  readonly services: readonly string[];
+}
+
+export type ServiceAssertionRefusal =
+  | "untrusted_issuer"
+  | "bad_signature"
+  | "wrong_audience"
+  | "expired"
+  | "replayed"
+  | "service_not_allowed"
+  | "malformed"
+  | "jwks_unavailable";
+
+/** A verified assertion: who is calling and the scope it claims. It grants nothing. */
+export interface VerifiedServiceAssertion {
+  readonly ok: true;
+  readonly issuer: string;
+  readonly service: string;
+  readonly clientId: string;
+  readonly scope: string;
+  readonly jti: string;
+}
+
+/**
+ * A refusal. `issuer` and `service` are present once the claims parsed, for the node's log only: they are NOT verified (the signature may be bad), so a
+ * caller never decides on them.
+ */
+export interface ServiceAssertionRefused {
+  readonly ok: false;
+  readonly code: ServiceAssertionRefusal;
+  readonly issuer?: string;
+  readonly service?: string;
+}
+
+export type ServiceAssertionResult = VerifiedServiceAssertion | ServiceAssertionRefused;
+
+export interface ServiceAssertionVerifier {
+  verify(token: string): Promise<ServiceAssertionResult>;
+}
+
+/** Default JWKS fetch: https only, 5 s timeout, 64 KiB cap. */
+async function defaultFetchJwks(jwksUri: string): Promise<unknown> {
+  const url = new URL(jwksUri);
+  if (url.protocol !== "https:") throw new Error("jwks uri must be https");
+  const res = await fetch(url, { signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS), redirect: "error", headers: { accept: "application/json" } });
+  if (!res.ok) throw new Error(`jwks status ${res.status}`);
+  const text = await res.text();
+  if (text.length > JWKS_MAX_BYTES) throw new Error("jwks too large");
+  return JSON.parse(text);
+}
+
+interface JwksState {
+  keys: Map<string, CryptoKey>;
+  /** When the keys were last fetched successfully. */
+  okAt: number | null;
+  /** When a fetch was last attempted (the refetch rate limit runs from it). */
+  attemptAt: number | null;
+  /** True when the last attempt failed. */
+  failed: boolean;
+  refresh: Promise<void> | null;
+}
+
+export function createServiceAssertionVerifier(opts: {
+  /** This node's id: the audience every assertion must name. */
+  selfNodeId: string;
+  trustedHomes: readonly TrustedHome[];
+  /** Fetch and parse a JWKS document. Default: https, 5 s, 64 KiB. */
+  fetchJwks?: (jwksUri: string) => Promise<unknown>;
+  replay: ReplayStore;
+  /** Epoch milliseconds. Default `Date.now`. */
+  now?: () => number;
+}): ServiceAssertionVerifier {
+  const now = opts.now ?? Date.now;
+  const fetchJwks = opts.fetchJwks ?? defaultFetchJwks;
+  const audience = nodeAudience(opts.selfNodeId);
+  const homes = new Map(opts.trustedHomes.map((home) => [home.issuer, home]));
+  const states = new Map<string, JwksState>();
+
+  const refresh = (home: TrustedHome, state: JwksState): Promise<void> => {
+    state.refresh ??= (async () => {
+      state.attemptAt = now();
+      try {
+        const doc = await fetchJwks(home.jwksUri);
+        const list = (doc as { keys?: unknown } | null)?.keys;
+        if (!Array.isArray(list)) throw new Error("jwks has no keys");
+        const keys = new Map<string, CryptoKey>();
+        for (const raw of list) {
+          const jwk = raw as Record<string, unknown> | null;
+          if (!jwk || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || typeof jwk.kid !== "string") continue;
+          if (jwk.use !== undefined && jwk.use !== "sig") continue;
+          try {
+            keys.set(jwk.kid, await crypto.subtle.importKey("jwk", { kty: "OKP", crv: "Ed25519", x: jwk.x }, { name: "Ed25519" }, false, ["verify"]));
+          } catch {
+            // an unusable key is skipped; the token that names it fails closed
+          }
+        }
+        state.keys = keys;
+        state.okAt = now();
+        state.failed = false;
+      } catch {
+        state.failed = true;
+      } finally {
+        state.refresh = null;
+      }
+    })();
+    return state.refresh;
+  };
+
+  /** The verification key for `kid`, or why there is none. A key older than `JWKS_MAX_AGE_MS` is never used. */
+  const keyFor = async (home: TrustedHome, kid: string): Promise<CryptoKey | "unknown_kid" | "jwks_unavailable"> => {
+    let state = states.get(home.issuer);
+    if (!state) states.set(home.issuer, (state = { keys: new Map(), okAt: null, attemptAt: null, failed: false, refresh: null }));
+    const current = state;
+    const fresh = () => current.okAt !== null && now() - current.okAt < JWKS_MAX_AGE_MS;
+    const cached = current.keys.get(kid);
+    if (cached && fresh()) return cached;
+    // First use, an expired cache or an unknown kid: refetch, but an unknown kid refetches at most once a minute.
+    if (current.refresh) await current.refresh;
+    else if (current.attemptAt === null || now() - current.attemptAt >= JWKS_REFETCH_MIN_INTERVAL_MS) await refresh(home, current);
+    if (current.failed || !fresh()) return "jwks_unavailable";
+    return current.keys.get(kid) ?? "unknown_kid";
+  };
+
+  return {
+    async verify(token) {
+      let who: { issuer?: string; service?: string } = {};
+      const refuse = (code: ServiceAssertionRefusal): ServiceAssertionResult => ({ ok: false, code, ...who });
+      if (typeof token !== "string" || token.length === 0 || token.length > MAX_TOKEN_CHARS) return refuse("malformed");
+      const parts = token.split(".");
+      if (parts.length !== 3) return refuse("malformed");
+      const [h, p, s] = parts as [string, string, string];
+      const headerBytes = fromB64Url(h);
+      const payloadBytes = fromB64Url(p);
+      const signature = fromB64Url(s);
+      if (!headerBytes || !payloadBytes || !signature) return refuse("malformed");
+      const header = parseJsonObject(headerBytes);
+      const claims = parseJsonObject(payloadBytes);
+      if (!header || !claims) return refuse("malformed");
+      if (header.alg !== "EdDSA" || typeof header.kid !== "string" || header.kid.length === 0) return refuse("malformed");
+      if (header.typ !== undefined && header.typ !== "JWT") return refuse("malformed");
+
+      const { iss, sub, aud, client_id: clientId, scope, iat, exp, jti } = claims;
+      if (
+        typeof iss !== "string" ||
+        typeof sub !== "string" ||
+        typeof aud !== "string" ||
+        typeof clientId !== "string" ||
+        typeof scope !== "string" ||
+        typeof jti !== "string" ||
+        jti.length === 0 ||
+        jti.length > 128 ||
+        typeof iat !== "number" ||
+        typeof exp !== "number" ||
+        !Number.isFinite(iat) ||
+        !Number.isFinite(exp) ||
+        !SCOPE_CLAIM.test(scope) ||
+        clientId !== `${iss}#${sub}` ||
+        exp <= iat ||
+        exp - iat > SERVICE_ASSERTION_MAX_LIFETIME_SECONDS
+      )
+        return refuse("malformed");
+
+      who = { issuer: iss.slice(0, 200), service: sub.slice(0, 100) };
+      const home = homes.get(iss);
+      if (!home) return refuse("untrusted_issuer");
+
+      const key = await keyFor(home, header.kid);
+      if (key === "jwks_unavailable") return refuse("jwks_unavailable");
+      if (key === "unknown_kid") return refuse("bad_signature");
+      let valid = false;
+      try {
+        valid = await crypto.subtle.verify({ name: "Ed25519" }, key, signature as BufferSource, enc.encode(`${h}.${p}`) as BufferSource);
+      } catch {
+        valid = false;
+      }
+      if (!valid) return refuse("bad_signature");
+
+      // The claims are trustworthy from here on.
+      if (!home.services.includes(sub)) return refuse("service_not_allowed");
+      if (aud !== audience) return refuse("wrong_audience");
+      const nowSeconds = now() / 1000;
+      if (nowSeconds >= exp + CLOCK_SKEW_SECONDS) return refuse("expired");
+      if (iat > nowSeconds + CLOCK_SKEW_SECONDS) return refuse("malformed");
+      // Replay is last so only a fully valid assertion can use up a `jti`. A store failure rejects (the node answers 503); it is never a pass.
+      if (await opts.replay.seen(`${iss}#${jti}`, new Date((exp + CLOCK_SKEW_SECONDS) * 1000))) return refuse("replayed");
+      return { ok: true, issuer: iss, service: sub, clientId, scope, jti };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+// Target side: the service principal and its ask
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+
+/**
+ * The users.id of the one principal for (issuer, service): a version-4-shaped UUID derived from sha-256 of `<issuer>#<service>`, so creation is idempotent
+ * with no lookup key beyond the id and a concurrent pair converge on one row.
+ */
+export async function servicePrincipalId(input: { issuer: string; service: string }): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`cogni-service-principal\u0000${input.issuer}#${input.service}`)));
+  const b = digest.slice(0, 16);
+  b[6] = ((b[6] as number) & 0x0f) | 0x40;
+  b[8] = ((b[8] as number) & 0x3f) | 0x80;
+  const hex = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+const serviceDisplayName = (input: { issuer: string; service: string }): string => `${input.service}@${new URL(input.issuer).host}`;
+
+/**
+ * Create or find the one external principal for (issuer, service): its own `users` row and an `external` `agent_principals` row. No credential rows.
+ * Idempotent and safe under concurrency (the id is derived). `tx` is a service-role connection.
+ */
+export async function ensureServicePrincipal(tx: SqlTag, input: { issuer: string; service: string }): Promise<string> {
+  if (!isCanonicalHttpsOrigin(input.issuer) || !SERVICE_SLUG.test(input.service)) throw new TypeError("issuer and service must be canonical");
+  const userId = await servicePrincipalId(input);
+  await tx`INSERT INTO users (id, name) VALUES (${userId}, ${serviceDisplayName(input)}) ON CONFLICT (id) DO NOTHING`;
+  await writeExternalPrincipal(tx, userId);
+  return userId;
+}
+
+/** The principal of (issuer, service) if it has been enrolled (it has asked), else null. Reads only. */
+export async function findServicePrincipal(sql: SqlTag, input: { issuer: string; service: string }): Promise<string | null> {
+  const userId = await servicePrincipalId(input);
+  const rows = await sql`SELECT 1 AS found FROM agent_principals WHERE user_id = ${userId} AND kind = 'external' LIMIT 1`;
+  return rows.length > 0 ? userId : null;
+}
+
+/**
+ * The service's ask: ensure its principal and write ONE pending ask for `scope` (the ordinary ask row; an admin turns it On in `/admin/ai-access`). Idempotent:
+ * a pending ask is reported (its link rotated), a live grant is reported as granted. Nothing is granted. The asked scope must be inside the assertion's own
+ * `scope` claim, so the signed assertion is what the service asked for.
+ */
+export async function requestServiceAccess(input: {
+  tx: SqlTag;
+  store: AgentGrantsStore;
+  assertion: VerifiedServiceAssertion;
+  scope: string;
+  declaredScopes: readonly string[];
+  askableScopes: readonly string[];
+  scopeKinds?: Readonly<Record<string, ScopeKind>>;
+}): Promise<{ userId: string; outcome: AskOutcome }> {
+  if (!input.assertion.scope.split(" ").includes(input.scope)) throw new AgentRolesError("invalid_scope", "scope is not in the signed assertion");
+  const userId = await ensureServicePrincipal(input.tx, { issuer: input.assertion.issuer, service: input.assertion.service });
+  const outcome = await requestAccess(input.store, {
+    principalUserId: userId,
+    scope: input.scope,
+    declaredScopes: input.declaredScopes,
+    askableScopes: input.askableScopes,
+    ...(input.scopeKinds ? { scopeKinds: input.scopeKinds } : {}),
+  });
+  return { userId, outcome };
+}

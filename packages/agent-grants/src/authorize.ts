@@ -22,6 +22,8 @@
  * @public
  */
 
+import { ownsAccountOrOrg } from "./approval";
+import type { OrgOwners } from "./orgs";
 import type {
   AccountAccess,
   AdminCheck,
@@ -129,6 +131,8 @@ export interface AuthorizeAccountInput {
   readonly via: "bearer" | "session";
   readonly scope: string;
   readonly accountId: string;
+  /** Owner sources (0.8.0). With them, an account owned by an org is also `owner` to each of the org's owners; a failed owner read throws (the route says 503). */
+  readonly owners?: OrgOwners | undefined;
 }
 
 /**
@@ -140,7 +144,7 @@ export async function authorizeAccount(
   store: AgentGrantsStore,
   input: AuthorizeAccountInput
 ): Promise<AccountAccess> {
-  if (await store.ownsAccount(input.callerUserId, input.accountId)) return "owner";
+  if (await ownsAccountOrOrg(store, input.callerUserId, input.accountId, input.owners)) return "owner";
   if (
     input.via === "bearer" &&
     (await store.hasLiveAccountGrant(input.callerUserId, input.scope, input.accountId))

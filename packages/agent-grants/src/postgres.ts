@@ -110,6 +110,16 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         SELECT 1 AS ok FROM billing_accounts WHERE id = ${accountId} AND owner_user_id = ${userId} LIMIT 1`;
       return rows.length > 0;
     },
+    async orgSourceOfAccount(accountId) {
+      const rows = await sql`
+        SELECT p.owner_source_kind, p.owner_source_ref
+        FROM billing_accounts b
+        JOIN agent_principals p ON p.user_id = b.owner_user_id AND p.kind = 'org'
+        WHERE b.id = ${accountId} LIMIT 1`;
+      const kind = str(rows[0]?.owner_source_kind);
+      const ref = str(rows[0]?.owner_source_ref);
+      return kind === "repo-spec" && ref ? { kind, ref } : null;
+    },
     async accountOf(userId) {
       const rows = await sql`SELECT id FROM billing_accounts WHERE owner_user_id = ${userId} LIMIT 1`;
       return str(rows[0]?.id);

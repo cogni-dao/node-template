@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/agent-grants",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -29,6 +29,16 @@
       "types": "./dist/grants-conformance.d.ts",
       "import": "./dist/grants-conformance.js",
       "default": "./dist/grants-conformance.js"
+    },
+    "./orgs": {
+      "types": "./dist/orgs.d.ts",
+      "import": "./dist/orgs.js",
+      "default": "./dist/orgs.js"
+    },
+    "./service-auth": {
+      "types": "./dist/service-auth.d.ts",
+      "import": "./dist/service-auth.js",
+      "default": "./dist/service-auth.js"
     }
   },
   "types": "./dist/index.d.ts",

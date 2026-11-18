@@ -10,6 +10,8 @@
  * @public
  */
 
+import type { OrgSource } from "./orgs";
+
 /**
  * Where a tool's authority lives. `own` data also needs a subject. `account` data belongs to one account: the principal needs a live
  * account row naming that account (`authorizeAccount()`), and a tool that declares it is checked against the run's account.
@@ -131,6 +133,11 @@ export interface AgentGrantsStore {
   ownsAccount(userId: string, accountId: string): Promise<boolean>;
   /** The billing account this user owns, or null when none exists yet. */
   accountOf(userId: string): Promise<string | null>;
+  /**
+   * The owner source of the org that owns this billing account, or null when its owner is not an org. Optional (0.8.0): a store without orgs omits it, and an
+   * account is then owned by its owner user alone. Read only when the caller passes owner sources to `canApprove` or `authorizeAccount`.
+   */
+  orgSourceOfAccount?(accountId: string): Promise<OrgSource | null>;
   /** The seeded user id of an internal principal slug, else null. */
   findInternalPrincipal(slug: string): Promise<{ userId: string } | null>;
   /** Every internal principal (user id and slug). The slug is its name. */

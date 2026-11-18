@@ -32,6 +32,7 @@ export {
   isLinkTokenShape,
   LINK_TTL_MS,
   newLinkToken,
+  ownsAccountOrOrg,
   resourceOfKind,
 } from "./approval";
 export {
@@ -67,7 +68,7 @@ export {
 export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildAccountAiView, buildAskView, buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
-export { principalKindOf, writeExternalPrincipal } from "./principals";
+export { type PrincipalKind, principalKindOf, writeExternalPrincipal } from "./principals";
 export {
   AgentRolesError,
   type AskOutcome,
