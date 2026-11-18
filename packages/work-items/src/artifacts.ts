@@ -343,16 +343,14 @@ export function toArtifactRef(artifact: WorkItemArtifact): WorkItemArtifactRef {
 const markdownCell = (value: string): string =>
   value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n\u0085\u2028\u2029]+/g, " ");
 
-/** The canonical scorecard rows as one GFM table, for a human view that renders Markdown. Pure. */
+/** The canonical scorecard rows as one GFM table, for a human view that renders Markdown. Pure. The `reason` column appears only when a row has one. */
 export function scorecardMarkdown(rows: readonly ScorecardRow[]): string {
-  const lines = [
-    "| tweak | human | ai | loki | trace | overall | reason |",
-    "|---|---|---|---|---|---|---|",
-  ];
+  const withReason = rows.some((row) => row.reason !== undefined && row.reason.trim() !== "");
+  const head = ["tweak", "human", "ai", "loki", "trace", "overall", ...(withReason ? ["reason"] : [])];
+  const lines = [`| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`];
   for (const row of rows) {
-    lines.push(
-      `| ${[row.tweak, row.human, row.ai, row.loki, row.trace, row.overall, row.reason ?? ""].map(markdownCell).join(" | ")} |`,
-    );
+    const cells = [row.tweak, row.human, row.ai, row.loki, row.trace, row.overall, ...(withReason ? [row.reason ?? ""] : [])];
+    lines.push(`| ${cells.map(markdownCell).join(" | ")} |`);
   }
   return lines.join("\n");
 }

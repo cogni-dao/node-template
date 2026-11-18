@@ -4,10 +4,11 @@
 /**
  * Module: `@app/(app)/work/_components/WorkItemDetailBody`
  * Purpose: Helps a human decide what the item is, whether its latest review lets it move, and why it moved.
- * Scope: Presentation of one item read. The Artifacts and History fields render page 1 of refs from the item read and an
- *   older page from the refs views; the selected artifact comes from the item read's `artifact` (story.0058).
+ * Scope: Presentation of one item read. Artifacts sits right below Moves in the same bordered `CitationRow` list; the
+ *   selected artifact (the item read's `artifact`) opens inline under its row. History lists why the item changed. Page 1
+ *   of each comes from the item read, an older page from the refs views (story.0058).
  * Invariants:
- *   - EXISTING_PARTS_ONLY: Field, Link, Markdown and RelativeTime; no new component (hub work-item-artifacts, Item page).
+ *   - EXISTING_PARTS_ONLY: CitationRow and its list classes (as Moves), Field, Link, Markdown and RelativeTime; no new component.
  *   - SECTIONS_NEED_THEIR_PARTS: Artifacts and History render only when the item read carries them.
  *   - ITEM_SCOPED_URL: `artifact`, `artifactsCursor` and `historyCursor` belong to this item; links set them with scroll off.
  * Side-effects: IO (older ref pages, only when a cursor parameter is set)
@@ -18,6 +19,12 @@
 "use client";
 
 import {
+	CITATION_HEADING_CLASS,
+	CITATION_LIST_CLASS,
+	type CitationLinkComponent,
+	type CitationTone,
+	CitationRow,
+	formatRelativeTime,
 	hasScores,
 	RelativeTime,
 	WorkItemScoresRadar,
@@ -52,10 +59,18 @@ const KIND_TITLES: Readonly<Record<ArtifactKind, string>> = {
 	validation: "Validation",
 };
 
-/** An artifact's human title: its kind and verdict, e.g. "Design review · request changes". */
-function artifactTitle(ref: { readonly kind: ArtifactKind; readonly verdict: string }): string {
-	return `${KIND_TITLES[ref.kind]} · ${ref.verdict.replace(/_/g, " ")}`;
+/** A verdict's tone in the shared row pill: green lets the item move, red sends it back, a triage route is neutral. */
+function verdictTone(verdict: string): CitationTone {
+	if (verdict === "approve" || verdict === "pass") return "positive";
+	if (verdict === "request_changes" || verdict === "fail") return "negative";
+	if (verdict === "notes") return "warning";
+	return "neutral";
 }
+
+/** The shared row's link: stays on the page, keeps scroll, never peeks (an artifact is not a knowledge entry). */
+const ScrollKeepingLink: CitationLinkComponent = ({ entityId: _entityId, href, ...props }) => (
+	<Link href={href} scroll={false} {...props} />
+);
 
 const ROW = "flex min-w-0 items-center justify-between gap-3";
 const ROW_TITLE = "min-w-0 truncate";
@@ -192,6 +207,77 @@ export function WorkItemDetailBody({
 							labels={item.labels}
 							LinkComponent={PeekLink}
 						/>
+						{/* Artifacts, right below Moves and drawn like it: each review or validation that lets the item move (story.0058).
+						    The selected one opens inline under its row; selecting it again closes it. */}
+						{read?.artifactRefs !== undefined && (
+							<section aria-label="Artifacts" className="flex flex-col gap-1.5">
+								<h3 className={CITATION_HEADING_CLASS}>Artifacts</h3>
+								{artifactsLoading ? (
+									<span className="text-muted-foreground text-sm">Loading reviews</span>
+								) : artifactsUnavailable ? (
+									<span className="text-muted-foreground text-sm">Reviews are unavailable</span>
+								) : !artifactPage?.refs.length ? (
+									<span className="text-muted-foreground text-sm">No reviews yet</span>
+								) : (
+									<div className={CITATION_LIST_CLASS}>
+										{artifactPage.refs.map((ref) => {
+											const open = selected !== undefined && "id" in selected && selected.id === ref.id;
+											return (
+												<div key={ref.id} className="flex flex-col">
+													<CitationRow
+														direction="out"
+														relation={ref.verdict.replace(/_/g, " ")}
+														tone={verdictTone(ref.verdict)}
+														slug={KIND_TITLES[ref.kind]}
+														href={itemScopedHref(item.id, searchParams, "artifact", open ? null : ref.id)}
+														hoverTitle={[ref.note, formatRelativeTime(ref.createdAt)].filter(Boolean).join(" · ")}
+														Link={ScrollKeepingLink}
+													/>
+													{open && (
+														<div className="flex flex-col gap-2 py-2 pl-6 text-sm">
+															{selected.note && <span className="text-muted-foreground">{selected.note}</span>}
+															{selected.body ? (
+																<Markdown content={selected.body} />
+															) : selected.rows?.length ? (
+																<Markdown content={scorecardMarkdown(selected.rows)} />
+															) : selected.url ? (
+																<Link href={selected.url} className="underline" target="_blank" rel="noreferrer">
+																	{selected.url}
+																</Link>
+															) : null}
+														</div>
+													)}
+												</div>
+											);
+										})}
+									</div>
+								)}
+								{selected !== undefined && !("id" in selected) && (
+									<span className="text-muted-foreground text-sm">
+										{"notFound" in selected ? "Artifact not found" : "The artifact is unavailable"}
+									</span>
+								)}
+								{(artifactPage?.nextCursor != null || artifactsCursor !== null) && (
+									<div className="flex gap-3">
+										{artifactsCursor !== null && (
+											<Link href={itemScopedHref(item.id, searchParams, "artifactsCursor", null)} scroll={false} className={PAGE_LINK}>
+												Newest
+											</Link>
+										)}
+										{artifactPage?.nextCursor != null && (
+											<Link
+												href={itemScopedHref(item.id, searchParams, "artifactsCursor", String(artifactPage.nextCursor))}
+												scroll={false}
+												className={PAGE_LINK}
+											>
+												Older
+											</Link>
+										)}
+									</div>
+								)}
+							</section>
+						)}
+
 						<WorkExpectations
 							itemId={item.id}
 							moves={item.moves ?? NO_MOVES}
@@ -233,80 +319,6 @@ export function WorkItemDetailBody({
 							</Field>
 						)}
 
-						{/* Artifacts: the reviews and validations that let the item move (story.0058) */}
-						{read?.artifactRefs !== undefined && (
-							<Field label="Artifacts">
-								{artifactsLoading ? (
-									<span className="text-muted-foreground">Loading reviews</span>
-								) : artifactsUnavailable ? (
-									<span className="text-muted-foreground">Reviews are unavailable</span>
-								) : !artifactPage?.refs.length ? (
-									<span className="text-muted-foreground">No reviews yet</span>
-								) : (
-									<div className="flex flex-col gap-1">
-										{artifactPage.refs.map((ref) => (
-											<Link
-												key={ref.id}
-												href={itemScopedHref(item.id, searchParams, "artifact", ref.id)}
-												scroll={false}
-												className={`${ROW} min-h-6 hover:underline`}
-												aria-current={selected && "id" in selected && selected.id === ref.id ? "true" : undefined}
-											>
-												<span className={ROW_TITLE}>{artifactTitle(ref)}</span>
-												<RelativeTime iso={ref.createdAt} className={ROW_TIME} />
-											</Link>
-										))}
-									</div>
-								)}
-								{(artifactPage?.nextCursor != null || artifactsCursor !== null) && (
-									<div className="mt-1 flex gap-3">
-										{artifactsCursor !== null && (
-											<Link href={itemScopedHref(item.id, searchParams, "artifactsCursor", null)} scroll={false} className={PAGE_LINK}>
-												Newest
-											</Link>
-										)}
-										{artifactPage?.nextCursor != null && (
-											<Link
-												href={itemScopedHref(item.id, searchParams, "artifactsCursor", String(artifactPage.nextCursor))}
-												scroll={false}
-												className={PAGE_LINK}
-											>
-												Older
-											</Link>
-										)}
-									</div>
-								)}
-							</Field>
-						)}
-
-						{/* The selected artifact in full */}
-						{selected !== undefined && (
-							<Field label="Artifact">
-								{"notFound" in selected ? (
-									<span className="text-muted-foreground">Artifact not found</span>
-								) : "unavailable" in selected ? (
-									<span className="text-muted-foreground">The artifact is unavailable</span>
-								) : (
-									<div className="flex flex-col gap-2">
-										<div className={ROW}>
-											<span className={`${ROW_TITLE} font-medium`}>{artifactTitle(selected)}</span>
-											<RelativeTime iso={selected.createdAt} className={ROW_TIME} />
-										</div>
-										{selected.note && <span className="text-muted-foreground">{selected.note}</span>}
-										{selected.body ? (
-											<Markdown content={selected.body} />
-										) : selected.rows?.length ? (
-											<Markdown content={scorecardMarkdown(selected.rows)} />
-										) : selected.url ? (
-											<Link href={selected.url} className="underline" target="_blank" rel="noreferrer">
-												{selected.url}
-											</Link>
-										) : null}
-									</div>
-								)}
-							</Field>
-						)}
-
 						{/* History: why the item changed, newest first */}
 						{read?.historyRefs !== undefined && (
 							<Field label="History">
@@ -318,12 +330,16 @@ export function WorkItemDetailBody({
 									<span className="text-muted-foreground">No history yet</span>
 								) : (
 									<div className="flex flex-col gap-1">
-										{historyPage.refs.map((ref) => (
+										{historyPage.refs.map((ref, index) => {
+											const created = ref.reason === null && historyPage.nextCursor === null && index === historyPage.refs.length - 1;
+											const text = ref.reason ?? (created ? "Created" : "No reason recorded");
+											return (
 											<div key={ref.commit} className={ROW}>
-												<span className={ROW_TITLE}>{ref.reason ?? "No reason recorded"}</span>
+												<span className={ROW_TITLE} title={text}>{text}</span>
 												<RelativeTime iso={ref.at} className={ROW_TIME} />
 											</div>
-										))}
+											);
+										})}
 									</div>
 								)}
 								{(historyPage?.nextCursor != null || historyCursor !== null) && (

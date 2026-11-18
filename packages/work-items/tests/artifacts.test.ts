@@ -708,6 +708,10 @@ describe("refs first, then one read (story.0058)", () => {
     expect((await readWorkItemArtifact(deps, "task.0028", "../x")).status).toBe(400);
   });
 
+  it("scorecardMarkdown leaves out the reason column when no row has a reason", () => {
+    expect(scorecardMarkdown([row()]).split("\n")[0]).toBe("| tweak | human | ai | loki | trace | overall |");
+  });
+
   it("scorecardMarkdown builds one GFM table and escapes pipes and line breaks", () => {
     const table = scorecardMarkdown([row({ tweak: "a|b", overall: "🟡 UNPROVEN", reason: "line one\nline two" })]);
     const lines = table.split("\n");
