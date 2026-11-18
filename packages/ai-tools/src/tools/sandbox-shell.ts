@@ -88,7 +88,7 @@ export const sandboxShellContract: ToolContract<
 > = {
   name: SANDBOX_SHELL_NAME,
   description:
-    "Run shell commands in this run's folder of the node's sandbox, a Linux box with git, python and build tools. " +
+    "Run shell commands in this run's folder of the node's sandbox, a Linux box with git, Node, pnpm, gh, python and build tools. " +
     "The command may be a multi-line script: put dependent steps in one call, and make separate calls only for independent work. " +
     "Calls of one run run one after another, in order. Files persist in the run's folder for 60 idle minutes; " +
     "`cd` and `export` last only one call, and background jobs end when the call ends. " +
@@ -99,7 +99,7 @@ export const sandboxShellContract: ToolContract<
   requires: {
     scope: "sandbox:exec",
     kind: "node",
-    subject: "admin",
+    subject: "member",
     label: "Run commands in the sandbox",
     description: "Run shell commands and edit code in the node's sandbox.",
   },

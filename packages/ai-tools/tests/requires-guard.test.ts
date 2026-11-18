@@ -81,7 +81,7 @@ describe("requires guard", () => {
     expect(by.core__schedule_manage).toMatchObject({ scope: "schedule:manage", kind: "own", subject: "member" });
     expect(by.core__edo_decide?.scope).toBe("edo:write");
     expect(by.core__vcs_merge_pr?.subject).toBe("admin");
-    expect(by.core__sandbox_shell).toMatchObject({ scope: "sandbox:exec", kind: "node", subject: "admin" });
+    expect(by.core__sandbox_shell).toMatchObject({ scope: "sandbox:exec", kind: "node", subject: "member" });
   });
 
   it("gives every requires a plain-language label, with no scope string, id, path, tool name or the word job", () => {
