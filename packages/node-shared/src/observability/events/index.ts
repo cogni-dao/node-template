@@ -72,6 +72,12 @@ export const EVENT_NAMES = {
 	AGENT_ROLE_REQUESTED: "agent_role.requested",
 	/** A DAO admin dismissed a pending ask: principalUserId, scope, deniedBy. */
 	AGENT_ROLE_DENIED: "agent_role.denied",
+	/** A service assertion verified (story.0038): issuer, service. Never the token. */
+	SERVICE_AUTH_VERIFIED: "service_auth.verified",
+	/** A service assertion was refused (story.0038): code, and issuer and service when the claims named them. Never the token. */
+	SERVICE_AUTH_REJECTED: "service_auth.rejected",
+	/** An org was created or found for an owner source (story.0038): orgUserId, sourceRef. */
+	ORG_ENSURED: "org.ensured",
 	/** revocable agent keys (task.0070): upgraded / rotated (a pending key issued), confirmed, revoked, refused. Carry userId and credentialId, never a key or hash. */
 	AGENT_CREDENTIAL_UPGRADED: "agent.credential.upgraded",
 	AGENT_CREDENTIAL_ROTATED: "agent.credential.rotated",

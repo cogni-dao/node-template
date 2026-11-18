@@ -152,6 +152,7 @@ import {
 	NODE_LOCAL_TOOL_BUNDLE,
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
+import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import {
@@ -300,6 +301,8 @@ export interface Container {
 	nodeAdmin: NodeAdminAuthority;
 	/** Runtime tool authority: principal lookup, guard wiring and role grant/revoke (task.5456). */
 	agentAuthority: AgentToolAuthority;
+	/** Service assertions (story.0038): the optional signer, the verifier over the trusted homes, and the org owner source. Thin wiring; the logic is in `@cogni/agent-grants`. */
+	serviceAuth: ServiceAuth;
 	/** ADMIN_ACTS_IN_ADMIN: the only door for node-admin writes; callable only with an `AdminSession` minted in `(admin)/`. */
 	nodeAdminPort: NodeAdminPort;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
@@ -1241,9 +1244,19 @@ function createContainer(): Container {
 		environment: env.DEPLOY_ENVIRONMENT ?? "local",
 	});
 
+	// story.0038: the signer (this node as a home), the verifier over the trusted homes (this node as a target) and the org owner source.
+	const agentSql = serviceDb.$client as unknown as AgentAuthoritySql;
+	const serviceAuth = createServiceAuth({
+		env,
+		nodeId,
+		sql: agentSql,
+		log,
+	});
+
 	const agentAuthority = createAgentToolAuthority({
 		// Service role: agent_roles / agent_principals are deny-all for the app role.
-		sql: serviceDb.$client as unknown as AgentAuthoritySql,
+		sql: agentSql,
+		owners: serviceAuth.owners,
 		nodeAdmin: adminRoster,
 		log,
 		toolBundle: [...CORE_TOOL_BUNDLE],
@@ -1291,6 +1304,7 @@ function createContainer(): Container {
 		knowledgeContributionService,
 		nodeAdmin: createAdminCheckNodeAdminAuthority(() => agentAuthority.adminCheck),
 		agentAuthority,
+		serviceAuth,
 		nodeAdminPort: createNodeAdminPort(agentAuthority),
 		knowledgeStorePort,
 		goalMetrics,

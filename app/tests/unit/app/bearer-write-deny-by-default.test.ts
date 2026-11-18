@@ -40,6 +40,7 @@ const MODE_NONE_SELF_AUTHENTICATED: Readonly<Record<string, string>> = {
   "agent.mine.preview": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.on": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.off": "human plane: refuseNonSession() then the signed-in person",
+  "agent.service-enrollment.create": "verifies the caller's signed service assertion (RFC 7523) against a trusted home's published keys, then writes one pending ask for that service principal; it grants nothing",
   "agent.credentials.rotate": "credentialBearerRoute verifies the caller's own revocable key (active or renew_only) and acts on that credential only",
   "agent.credentials.confirm": "credentialBearerRoute verifies the caller's own revocable key and acts on that credential only",
   "agent.credentials.revoke": "credentialBearerRoute verifies the caller's own revocable key and acts on that credential only",
@@ -158,6 +159,8 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       // The service runs the one admin check on the caller itself, for a session and a bearer alike; close lets an owner close their own inbox without it (task.0144).
       "knowledge.contributions.close",
       "knowledge.contributions.merge",
+      // Registers an org for a public repo: idempotent per source, grants no authority, touches none of the caller's data (REGISTRATION_GRANTS_NOTHING, story.0038).
+      "orgs.ensure",
     ]);
   });
 
