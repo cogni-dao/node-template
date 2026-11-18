@@ -100,6 +100,17 @@ const ScrollKeepingLink: CitationLinkComponent = ({ entityId: _entityId, href, .
 	<Link href={href} scroll={false} {...props} />
 );
 
+/** The item's PR opens where it lives, in a new tab (story.0069): humans follow the same link the item read gives agents. */
+const ExternalLink: CitationLinkComponent = ({ entityId: _entityId, ...props }) => (
+	<a target="_blank" rel="noreferrer" {...props} />
+);
+
+/** "owner/repo#N" for a GitHub pull URL, else the URL itself. */
+function pullLabel(url: string): string {
+	const match = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/i.exec(url);
+	return match ? `${match[1]}#${match[2]}` : url;
+}
+
 const ROW = "flex min-w-0 items-center justify-between gap-3";
 const ROW_TITLE = "min-w-0 truncate";
 const ROW_TIME = "shrink-0 text-muted-foreground text-xs";
@@ -426,7 +437,13 @@ export function WorkItemDetailBody({
 								)}
 								{item.pr && (
 									<Field label="PR">
-										<code className="text-xs">{item.pr}</code>
+										{/^https?:\/\//.test(item.pr) ? (
+											<div className={CITATION_LIST_CLASS}>
+												<CitationRow direction="out" relation="pr" tone="neutral" slug={pullLabel(item.pr)} href={item.pr} Link={ExternalLink} />
+											</div>
+										) : (
+											<code className="text-xs">{item.pr}</code>
+										)}
 									</Field>
 								)}
 							</div>

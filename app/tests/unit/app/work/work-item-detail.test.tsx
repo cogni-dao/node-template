@@ -134,6 +134,28 @@ describe("WorkItemDetail accessibility", () => {
     expectAccessibleDialog(item.title, /Details for task\.5174/);
     expect(errorSpy).not.toHaveBeenCalled();
   });
+  it("links the item's design atoms and its PR as rows a human can open (story.0069)", () => {
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          specRefs: ["knowledge:work-item-design-links"],
+          pr: "https://github.com/cogni-dao/node-template/pull/425",
+        }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("link", { name: "outgoing design work-item-design-links" })).toHaveAttribute(
+      "href",
+      "/knowledge/work-item-design-links"
+    );
+    const pr = screen.getByRole("link", { name: "outgoing pr cogni-dao/node-template#425" });
+    expect(pr).toHaveAttribute("href", "https://github.com/cogni-dao/node-template/pull/425");
+    expect(pr).toHaveAttribute("target", "_blank");
+  });
   it("shows artifact and history refs, and the selected validation's scorecard, only when the read carries them", () => {
     render(
       <WorkItemDetail
