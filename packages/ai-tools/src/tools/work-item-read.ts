@@ -61,6 +61,7 @@ export const workItemReadContract: ToolContract<
     "`moves` lists the metrics the item moves: each has its pinned baseline, the current reading and `moved` (as_declared, against, flat or unknown). unknown is never zero: it means a reading is missing. " +
     "Each move also names its goal chain: `metric` (id, title, unit, display), `kpi` (the goal KPI it moves or serves: metricId, title, comparator, target, status) and `goal` (id, title). Read the goal and KPI here rather than through goal or metric reads. " +
     "kpi and goal are absent when the metric serves no goal KPI; `context: \"unavailable\"` means the chain could not be resolved, never that there is none. " +
+    "`specRefs` names the design atoms the item is built against, each `knowledge:<atom-id>`: read each with core__knowledge_read before you design, build or review the item, and cite them. An entry in another form is an old untyped link, not a design. " +
     "Set includeLinks to also get `links`: the first page of the item's citation links with nextCursor (`links.unavailable` means they could not be read, not that there are none). " +
     "`artifacts` holds the latest triage, design review, implementation review and validation, without body. Refs first, then one read: includeArtifacts adds `artifactRefs` and includeHistory adds `historyRefs` (why each change happened), and artifactId adds `artifact`, one review or validation in full. The output is capped at 64 KB; on overflow ask for fewer parts.",
   effect: "read_only",
