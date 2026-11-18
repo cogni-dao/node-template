@@ -58,7 +58,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fake.user = sessionUser("admin-1");
   fake.check.mockResolvedValue({ ok: true });
-  fake.adminCheck.mockResolvedValue("denied");
+  fake.adminCheck.mockResolvedValue("allow");
   fake.list.mockResolvedValue({ permissions: [], more: 0 });
   fake.on.mockResolvedValue({ principalUserId: "agent-1", changed: true });
   fake.off.mockResolvedValue({ principalUserId: "agent-1", changed: true });
@@ -71,7 +71,7 @@ describe("requireAdminSession (the one mint)", () => {
   it("mints for a session the node-admin check approves, and logs one admin.action with the action and admin id", async () => {
     const result = await mint();
     expect(result.ok && result.session.userId).toBe("admin-1");
-    expect(fake.check).toHaveBeenCalledWith({ userId: "admin-1", walletAddress: "0xadmin-1" });
+    expect(fake.adminCheck).toHaveBeenCalledWith("admin-1");
     expect(fake.log.info).toHaveBeenCalledWith(
       { event: "admin.action", action: "ai_access.test", adminUserId: "admin-1", via: "session" },
       "admin.action"
@@ -80,11 +80,11 @@ describe("requireAdminSession (the one mint)", () => {
 
   it("a bearer meets the same admin check on its own bound wallets: denied is 403, allowed mints with via bearer", async () => {
     fake.user = sessionUser("agent-1", "bearer");
+    fake.adminCheck.mockResolvedValue("denied");
     const denied = await mint();
     expect(denied.ok).toBe(false);
     if (!denied.ok) expect(denied.response.status).toBe(403);
     expect(fake.adminCheck).toHaveBeenCalledWith("agent-1");
-    expect(fake.check).not.toHaveBeenCalled();
     fake.adminCheck.mockResolvedValue("allow");
     const allowed = await mint();
     expect(allowed.ok && allowed.session.userId).toBe("agent-1");
@@ -103,13 +103,13 @@ describe("requireAdminSession (the one mint)", () => {
     };
     expect(await status()).toBe(401);
     fake.user = sessionUser("agent-1", "bearer");
+    fake.adminCheck.mockResolvedValue("denied");
     expect(await status()).toBe(403);
     fake.user = sessionUser("member-1");
-    fake.check.mockResolvedValue({ ok: false, errorCode: "authz_denied" });
     expect(await status()).toBe(403);
-    fake.check.mockResolvedValue({ ok: false, errorCode: "authz_unavailable", reason: "no_node_admins_configured" });
+    fake.adminCheck.mockResolvedValue("unavailable");
     expect(await status()).toBe(503);
-    fake.check.mockRejectedValue(new Error("down"));
+    fake.adminCheck.mockRejectedValue(new Error("down"));
     expect(await status()).toBe(503);
     expect(fake.log.info).not.toHaveBeenCalledWith(expect.objectContaining({ event: "admin.action" }), "admin.action");
   });
@@ -137,7 +137,7 @@ describe("/api/v1/admin/ai-access", () => {
 
   it("non-admin: GET, POST and DELETE are 403 authz_denied and the port is never called", async () => {
     fake.user = sessionUser("member-1");
-    fake.check.mockResolvedValue({ ok: false, errorCode: "authz_denied" });
+    fake.adminCheck.mockResolvedValue("denied");
     for (const res of [await get(), await send(POST, body), await send(DELETE, body)]) {
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "authz_denied" });
@@ -147,6 +147,7 @@ describe("/api/v1/admin/ai-access", () => {
 
   it("a bearer with no admin wallet is 403 authz_denied on every verb, the same answer a non-admin session gets, and the port is never called", async () => {
     fake.user = sessionUser("agent-1", "bearer");
+    fake.adminCheck.mockResolvedValue("denied");
     for (const res of [await get(), await send(POST, body), await send(DELETE, body)]) {
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "authz_denied" });

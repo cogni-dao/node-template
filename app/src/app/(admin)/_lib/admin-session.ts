@@ -8,9 +8,8 @@
  *   node-admin check on the caller's wallet. Decides nothing else.
  * Invariants:
  *   - ADMIN_ACTS_IN_ADMIN / ONE_MINT: no other file casts to `AdminSession` (import-lock test).
- *   - ONE_ADMIN_CHECK (AUTHORITY_IS_NOT_KIND): a session and a bearer reach the same `NodeAdminAuthority`. A session is checked on
- *     its signed-in wallet; a bearer on the wallets bound to its own user (`agentAuthority.adminCheck`). A session write keeps
- *     the resolver's same-origin check.
+ *   - ONE_ADMIN_CHECK (AUTHORITY_IS_NOT_KIND): a session and a bearer reach the same `agentAuthority.adminCheck`, on the wallets
+ *     bound to the caller's user. A session write keeps the resolver's same-origin check.
  *   - FAIL_CLOSED_WITH_DISTINCTION: no session 401; not an admin 403 `authz_denied`; admin check down 503 `authz_unavailable`.
  *   - One `admin.action` log per minted decision: action name, admin user id and `via`, no credential.
  * Side-effects: IO (session read, repo-spec admin read, log)
@@ -44,13 +43,9 @@ export async function requireAdminSession(_request: Request, action: string): Pr
   if (!user) return refuse("unauthorized", 401);
   const via = user.via === "session" ? "session" : "bearer";
 
-  const allowed: "allow" | "denied" | "unavailable" =
-    via === "session"
-      ? await container.nodeAdmin
-          .check({ userId: user.id, walletAddress: user.walletAddress })
-          .then((d) => (d.ok ? "allow" : d.errorCode === "authz_unavailable" ? "unavailable" : "denied"))
-          .catch(() => "unavailable" as const)
-      : await container.agentAuthority.adminCheck(user.id).catch(() => "unavailable" as const);
+  // ONE_ADMIN_CHECK: the same `adminCheck` the tool guard and /api/v1/agent/me use: the caller is an admin when a wallet bound
+  // to its user (SIWE writes the session's wallet binding at sign-in) is a node admin. Credential type never matters.
+  const allowed = await container.agentAuthority.adminCheck(user.id).catch(() => "unavailable" as const);
   if (allowed === "unavailable") return refuse("authz_unavailable", 503);
   if (allowed !== "allow") return refuse("authz_denied", 403);
 
