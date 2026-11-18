@@ -5,9 +5,11 @@
  * The closeout program's `core__work_item_update`: the PATCH route's twin behind a thin guard. The host ToolRunner
  * still authorizes `work_item:transition`. The guard allows exactly one write shape, and only with live proof:
  *   - the item was read this run, and the call carries the exact revision read;
- *   - `set` is {status:"done", pr:<pull request URL>} and nothing else (task.0122: `deployVerified` is never written; it never counts);
- *   - the item is in needs_merge: closeout never closes from an earlier stage, so a review and a validation always stand
- *     between the PR and done. The store's gate re-checks the merge at the approved head before it writes;
+ *   - `set` is {status:"needs_closeout", pr:<pull request URL>} and nothing else (task.0122: `deployVerified` is never written; it never counts).
+ *     The program moves a merged, live item into the closeout stage; it never writes done: done needs a `closeout`
+ *     artifact (the KPI reading after one window), which a closeout run records (story.0047);
+ *   - the item is in needs_merge: closeout never advances from an earlier stage, so a review and a validation always stand
+ *     between the PR and closeout. The store's gate re-checks the merge at the approved head before it writes;
  *   - the item's own text links that pull request;
  *   - this run read the pull request merged, and the running build contains its merge commit;
  *   - the write carries a reason, and at most MAX_CLOSED_ITEMS_PER_RUN items close per run.
@@ -47,7 +49,7 @@ export function createCloseoutGuard(
     if (!CLOSABLE_FROM.has(item.status))
       return reject(
         "status_source",
-        `${item.id} is ${item.status}; closeout closes only needs_merge; an item still in review or validation is not closeable`,
+        `${item.id} is ${item.status}; closeout advances only needs_merge; an item still in review or validation is not closeable`,
       );
     if (input.expectedRevision !== item.revision)
       return reject(
@@ -57,11 +59,11 @@ export function createCloseoutGuard(
     const { set } = input;
     if (
       Object.keys(set).some((key) => !CLOSEOUT_FIELDS.has(key)) ||
-      set.status !== "done"
+      set.status !== "needs_closeout"
     )
       return reject(
         "write_shape",
-        'closeout sets exactly {"status":"done","pr":"<pull request URL>"}',
+        'closeout sets exactly {"status":"needs_closeout","pr":"<pull request URL>"}',
       );
     const match = PR_URL.exec(set.pr ?? "");
     if (!match)

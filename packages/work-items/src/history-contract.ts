@@ -65,13 +65,28 @@ export const HistoryOutputSchema = z.object({
   items: z.array(HistoryEntrySchema),
 });
 
+/** Refs per page of the history refs view (`?view=refs`) and of the item read's `historyRefs`. */
+export const HISTORY_REFS_PAGE = 20;
+
+/** A history ref: one version without `diff`. It is complete as listed (hub change-history-design). */
+export const HistoryRefSchema = HistoryEntrySchema.omit({ diff: true });
+export type HistoryRef = z.infer<typeof HistoryRefSchema>;
+
+/** One page of history refs, newest first. `nextCursor` is a commit: send it back as `cursor` for older versions. */
+export const HistoryRefsPageSchema = z.object({
+  refs: z.array(HistoryRefSchema).max(HISTORY_REFS_PAGE),
+  nextCursor: z.string().nullable(),
+  unavailable: z.literal(true).optional(),
+});
+export type HistoryRefsPage = z.infer<typeof HistoryRefsPageSchema>;
+
 export const workItemsHistoryOperation = {
   id: "work.items.history.v1",
   summary: "Read a work item's history",
   description:
-    "Returns the item's versions, newest first, each with its change reason, the atoms it cited (pinned to commits), actor and changed fields. The reason and cites are the PATCH `reason` and `cites`, stored in Dolt history.",
-  input: z.object({ id: z.string() }),
-  output: HistoryOutputSchema,
+    "Returns the item's versions, newest first, each with its change reason, the atoms it cited (pinned to commits), actor and changed fields. The reason and cites are the PATCH `reason` and `cites`, stored in Dolt history. With `view=refs`: one page of 20 versions without `diff` and `nextCursor`; send it back as `cursor` for older versions.",
+  input: z.object({ id: z.string(), view: z.literal("refs").optional(), cursor: z.string().optional() }),
+  output: z.union([HistoryOutputSchema, HistoryRefsPageSchema]),
 } as const;
 
 export type HistoryOutput = z.infer<typeof HistoryOutputSchema>;

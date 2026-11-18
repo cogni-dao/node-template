@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   closeWorkItemPermalink,
+  itemScopedHref,
   openWorkItemPermalink,
   workItemHref,
   workListHref,
@@ -107,5 +108,26 @@ describe("work-item permalink navigation", () => {
     expect(params.has("rankMin")).toBe(true);
     expect(params.get("rankMin")).toBe("");
     expect(params.get("rankMax")).toBe("");
+  });
+});
+
+describe("item-scoped parameters (story.0058)", () => {
+  const scoped = new URLSearchParams("q=permalink&artifact=wia-1&artifactsCursor=4&historyCursor=abc");
+
+  it("another item, or the list, never inherits the open item's artifact or ref cursors", () => {
+    const router = { push: vi.fn(), replace: vi.fn() };
+    openWorkItemPermalink(router, "story.5000", scoped);
+    closeWorkItemPermalink(router, scoped);
+    expect(router.push).toHaveBeenCalledWith("/work/items/story.5000?q=permalink", { scroll: false });
+    expect(router.replace).toHaveBeenCalledWith("/work?q=permalink", { scroll: false });
+  });
+
+  it("sets or clears one item-scoped parameter and keeps the rest", () => {
+    expect(itemScopedHref("task.1", searchParams, "artifact", "wia-2")).toBe(
+      "/work/items/task.1?status=needs_implement&sort=priority&q=permalink&artifact=wia-2",
+    );
+    expect(itemScopedHref("task.1", scoped, "historyCursor", null)).toBe(
+      "/work/items/task.1?q=permalink&artifact=wia-1&artifactsCursor=4",
+    );
   });
 });

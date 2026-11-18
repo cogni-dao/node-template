@@ -96,8 +96,11 @@ import { parseWorkItemScores } from "../../scores.js";
 import {
   formatCitesTrailer,
   type HistoryCite,
+  cutHistoryPage,
+  HistoryCursorUnknownError,
   HISTORY_READ_ROWS,
   type HistoryDiffRow,
+  type HistoryPage,
   type HistoryEntry,
   normalizeChangeReason,
   parseWorkItemCommitMessage,
@@ -359,6 +362,8 @@ const ARTIFACT_TABLE = "work_item_artifacts";
 /** Every artifact column but `body`: the item read never pays for a 16 KB review it does not return. */
 const ARTIFACT_SUMMARY_COLUMNS =
   'id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, url, author, created_at';
+/** A ref's columns: every column but `body` (hub work-item-artifacts, refs first). `rows` stays because `passGrade` needs it; `toArtifactRef` drops it. */
+const ARTIFACT_REF_COLUMNS = ARTIFACT_SUMMARY_COLUMNS;
 
 interface MutationProof {
   readonly verb: MutationVerb;
@@ -3573,13 +3578,47 @@ export class DoltgresWorkItemAdapter
   async history(id: WorkItemId): Promise<HistoryEntry[]> {
     return this.readOnCleanMain(async (conn) => {
       const rows = (await conn.unsafe(
-        `SELECT d.to_commit, d.to_commit_date, d.diff_type, l.message, l.committer, d.* FROM dolt_diff_work_items d JOIN dolt_log l ON l.commit_hash = d.to_commit WHERE d.to_id = ${escapeValue(id as string)} AND d.to_commit <> 'WORKING' ORDER BY d.to_commit_date DESC LIMIT ${HISTORY_READ_ROWS}`
+        `SELECT d.to_commit, d.to_commit_date, d.diff_type, l.message, l.committer, d.* FROM dolt_diff_work_items d JOIN dolt_log l ON l.commit_hash = d.to_commit WHERE d.to_id = ${escapeValue(id as string)} AND d.to_commit <> 'WORKING' ORDER BY d.to_commit_date DESC, d.to_commit DESC LIMIT ${HISTORY_READ_ROWS}`
       )) as unknown as HistoryDiffRow[];
-      return shapeHistory(rows, {
-        ignored: HISTORY_IGNORED_COLUMNS,
-        version: (row) => String(row.to_revision ?? ""),
-        reasonAndActor: (row) => parseWorkItemCommitMessage(row.message),
-      });
+      return this.shapeItemHistory(rows);
+    });
+  }
+
+  /**
+   * One page of versions, newest first (story.0058, hub change-history-design). Rows order by `(to_commit_date, to_commit)`;
+   * a `cursor` selects rows strictly older than that commit's own diff row, so equal dates neither skip nor repeat. Reads
+   * the raw surplus, shapes it, then takes `limit`. A cursor that names no version of this item throws
+   * `HistoryCursorUnknownError`.
+   */
+  async historyPage(
+    id: WorkItemId,
+    options: { readonly cursor?: string | undefined; readonly limit: number }
+  ): Promise<HistoryPage> {
+    const itemId = escapeValue(id as string);
+    const limit = Math.max(1, Math.min(HISTORY_READ_ROWS, Math.trunc(options.limit)));
+    return this.readOnCleanMain(async (conn) => {
+      let older = "";
+      if (options.cursor !== undefined) {
+        const cursor = escapeValue(options.cursor);
+        const known = (await conn.unsafe(
+          `SELECT to_commit FROM dolt_diff_work_items WHERE to_id = ${itemId} AND to_commit = ${cursor} LIMIT 1`
+        )) as ReadonlyArray<Record<string, unknown>>;
+        if (!known[0]) throw new HistoryCursorUnknownError(options.cursor);
+        const at = `(SELECT c.to_commit_date FROM dolt_diff_work_items c WHERE c.to_id = ${itemId} AND c.to_commit = ${cursor} LIMIT 1)`;
+        older = ` AND (d.to_commit_date < ${at} OR (d.to_commit_date = ${at} AND d.to_commit < ${cursor}))`;
+      }
+      const rows = (await conn.unsafe(
+        `SELECT d.to_commit, d.to_commit_date, d.diff_type, l.message, l.committer, d.* FROM dolt_diff_work_items d JOIN dolt_log l ON l.commit_hash = d.to_commit WHERE d.to_id = ${itemId} AND d.to_commit <> 'WORKING'${older} ORDER BY d.to_commit_date DESC, d.to_commit DESC LIMIT ${HISTORY_READ_ROWS}`
+      )) as unknown as HistoryDiffRow[];
+      return cutHistoryPage(this.shapeItemHistory(rows), rows, HISTORY_READ_ROWS, limit);
+    });
+  }
+
+  private shapeItemHistory(rows: readonly HistoryDiffRow[]): HistoryEntry[] {
+    return shapeHistory(rows, {
+      ignored: HISTORY_IGNORED_COLUMNS,
+      version: (row) => String(row.to_revision ?? ""),
+      reasonAndActor: (row) => parseWorkItemCommitMessage(row.message),
     });
   }
 
@@ -3592,7 +3631,40 @@ export class DoltgresWorkItemAdapter
     insert: (row) => this.insertArtifact(row),
     list: (itemId) => this.listArtifacts(itemId),
     latest: (itemId) => this.latestArtifacts(itemId),
+    refs: (itemId, options) => this.artifactRefs(itemId, options),
+    get: (itemId, artifactId) => this.getArtifact(itemId, artifactId),
   };
+
+  /** Refs order, highest `seq` first, `seq` below `before` when given, at most `limit` rows (bounded at one list). */
+  private async artifactRefs(
+    itemId: string,
+    options: { readonly before?: number; readonly limit: number }
+  ): Promise<readonly WorkItemArtifact[]> {
+    const limit = Math.max(1, Math.min(ARTIFACTS_LIST_MAX, Math.trunc(options.limit)));
+    const before =
+      options.before !== undefined && Number.isSafeInteger(options.before)
+        ? ` AND seq < ${escapeValue(options.before)}`
+        : "";
+    return this.readOnCleanMain(async (conn) => {
+      const rows = await conn.unsafe(
+        `SELECT ${ARTIFACT_REF_COLUMNS} FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)}${before} ORDER BY seq DESC LIMIT ${limit}`
+      );
+      return rows.map(rowToArtifact);
+    });
+  }
+
+  /** One artifact in full, only when it belongs to `itemId`. */
+  private async getArtifact(
+    itemId: string,
+    artifactId: string
+  ): Promise<WorkItemArtifact | null> {
+    return this.readOnCleanMain(async (conn) => {
+      const rows = await conn.unsafe(
+        `SELECT * FROM ${ARTIFACT_TABLE} WHERE item_id = ${escapeValue(itemId)} AND id = ${escapeValue(artifactId)} LIMIT 1`
+      );
+      return rows[0] ? rowToArtifact(rows[0] as Record<string, unknown>) : null;
+    });
+  }
 
   private async insertArtifact(
     input: NewWorkItemArtifact

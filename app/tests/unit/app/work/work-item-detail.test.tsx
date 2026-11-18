@@ -134,6 +134,83 @@ describe("WorkItemDetail accessibility", () => {
     expectAccessibleDialog(item.title, /Details for task\.5174/);
     expect(errorSpy).not.toHaveBeenCalled();
   });
+  it("shows artifact and history refs, and the selected validation's scorecard, only when the read carries them", () => {
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          artifactRefs: {
+            refs: [
+              { id: "wia-2", seq: 2, kind: "validation", verdict: "pass", passGrade: true, subject: "s", itemRevision: 3, createdAt: "2026-10-03T00:00:00.000Z" },
+              { id: "wia-1", seq: 1, kind: "design_review", verdict: "request_changes", subject: "s", itemRevision: 2, createdAt: "2026-10-02T00:00:00.000Z" },
+            ],
+            nextCursor: 1,
+          },
+          historyRefs: {
+            refs: [{ version: "2", commit: "c2", at: "2026-10-03T00:00:00.000Z", actor: null, reason: null, cites: [], changed: ["status"] }],
+            nextCursor: null,
+          },
+          artifact: {
+            id: "wia-2", itemId: item.id, seq: 2, itemRevision: 3, kind: "validation", subject: "s", verdict: "pass", author: "u",
+            createdAt: "2026-10-03T00:00:00.000Z",
+            rows: [{ tweak: "REFS ROUTE", human: "—", ai: "🟢", loki: "🟢", trace: "—", overall: "🟢 PASS" }],
+          },
+        }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    // Drawn like Moves: one bordered list of CitationRows, below Moves; the selected one opens inline and its link closes it.
+    expect(screen.getByRole("link", { name: /request changes Design review 1 · this item/ })).toHaveAttribute(
+      "href",
+      "/work/items/task.5174?artifact=wia-1",
+    );
+    expect(screen.getByRole("link", { name: /pass Validation 1 · this item/ })).toHaveAttribute("href", "/work/items/task.5174");
+    expect(screen.getAllByText(/^Artifacts?$/)).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Older" })).toHaveAttribute("href", "/work/items/task.5174?artifactsCursor=1");
+    expect(screen.getByText("Created")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "REFS ROUTE" })).toBeInTheDocument();
+  });
+
+  it("says the artifact is not found, and the reviews unavailable, instead of an empty answer", () => {
+    render(
+      <WorkItemDetail
+        item={{ ...item, artifactRefs: { refs: [], nextCursor: null, unavailable: true }, artifact: { notFound: true } }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Artifact not found")).toBeInTheDocument();
+    expect(screen.getByText("Reviews are unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
+  });
+
+  it("opens a selected artifact that is not on the shown page below the list", () => {
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          artifactRefs: { refs: [], nextCursor: null },
+          artifact: {
+            id: "wia-9", itemId: item.id, seq: 9, itemRevision: 3, kind: "design_review", subject: "s", verdict: "approve",
+            author: "u", createdAt: "2026-10-03T00:00:00.000Z", body: "Older review text",
+          },
+        }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Older review text")).toBeInTheDocument();
+  });
+
+  it("renders no Artifacts or History section for a read without those parts", () => {
+    render(<WorkItemDetail item={item} itemId={item.id} open onOpenChange={vi.fn()} />);
+    expect(screen.queryByText("Artifacts")).not.toBeInTheDocument();
+    expect(screen.queryByText("History")).not.toBeInTheDocument();
+  });
 });
 
 

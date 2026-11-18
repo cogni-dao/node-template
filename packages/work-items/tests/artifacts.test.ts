@@ -29,8 +29,11 @@ import {
   listWorkItemArtifacts,
   type NewWorkItemArtifact,
   parseArtifactSubject,
+  readWorkItemArtifact,
   recordWorkItemArtifact,
+  scorecardMarkdown,
   type ScorecardRow,
+  type WorkItemArtifactRefsPage,
   toLatestArtifacts,
   type WorkItemArtifact,
   type WorkItemArtifactDeps,
@@ -110,6 +113,8 @@ function world(
         },
         list: async () => [],
         latest: async () => [],
+        refs: async () => [],
+        get: async () => null,
       },
     },
   };
@@ -466,6 +471,33 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
     expect(other.body).toMatchObject({ issues: [{ path: ["subject"], message: "subject names a different work item" }] });
   });
 
+  it("closeout names THIS item, a done verdict, a note and a url or a body (story.0047)", async () => {
+    const closeout = {
+      kind: "closeout",
+      subject: "work:task.0028",
+      verdict: "done",
+      note: "KPI up 3 points after one window",
+      url: COMMENT,
+    };
+    const w = world();
+    const own = await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", closeout);
+    expect(own.status).toBe(201);
+    expect(w.stored[0]).toMatchObject({ kind: "closeout", verdict: "done", author: "closer-1" });
+    const bodyOnly = { ...closeout, body: "Refined atom k-1; removed the flag in PR 12" };
+    const { url: _url, ...noUrl } = bodyOnly;
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", noUrl)).status).toBe(201);
+    const { note: _note, ...noNote } = closeout;
+    const missingNote = await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", noNote);
+    expect(missingNote.status).toBe(400);
+    expect(missingNote.body).toMatchObject({ issues: [{ path: ["note"] }] });
+    const { url: _u, ...bare } = closeout;
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", bare)).status).toBe(400);
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", { ...closeout, verdict: "pass" })).status).toBe(400);
+    expect(
+      (await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", { ...closeout, subject: "work:task.0099" })).status
+    ).toBe(400);
+  });
+
   it("build subject: only this hub's own origin is accepted (case and a trailing slash in the config do not matter)", async () => {
     const live = (origin: string) => ({
       kind: "validation",
@@ -620,5 +652,125 @@ describe("reads", () => {
 
     // No port: the part is absent, not empty.
     expect((await composeItemEnvelope(item, {})).artifacts).toBeUndefined();
+  });
+});
+
+describe("refs first, then one read (story.0058)", () => {
+  /** `count` artifacts of one item, seq 1..count; every fifth is a validation with rows. */
+  const many = (count: number): WorkItemArtifact[] =>
+    Array.from({ length: count }, (_, index) => {
+      const seq = index + 1;
+      const validation = seq % 5 === 0;
+      return {
+        id: `wia-${seq}`,
+        itemId: "task.0028",
+        seq,
+        itemRevision: seq,
+        kind: validation ? "validation" : "implementation_review",
+        subject: `${PR}@${SHA}`,
+        verdict: validation ? "pass" : "approve",
+        ...(validation ? { rows: [row()] } : { body: `review ${seq}` }),
+        author: "user-1",
+        createdAt: "2026-11-18T00:00:00.000Z",
+      };
+    });
+
+  const withStore = (artifacts: WorkItemArtifact[]): WorkItemArtifactDeps => {
+    const w = world();
+    return {
+      ...w.deps,
+      artifacts: {
+        ...w.deps.artifacts,
+        // The adapter's order: highest seq first, below `before`, at most `limit`, without `rows` (non-validation) or `body`.
+        refs: async (_id, { before, limit }) =>
+          [...artifacts]
+            .sort((a, b) => b.seq - a.seq)
+            .filter((a) => before === undefined || a.seq < before)
+            .slice(0, limit)
+            .map(({ body: _body, ...rest }) => rest),
+        get: async (itemId, artifactId) =>
+          artifacts.find((a) => a.itemId === itemId && a.id === artifactId) ?? null,
+      },
+    };
+  };
+
+  it("pages refs by seq: 20 a page, nextCursor the lowest seq, null on the last page; no body, rows or author", async () => {
+    const deps = withStore(many(25));
+    const first = await listWorkItemArtifacts(deps, "task.0028", { view: "refs" });
+    expect(first.status).toBe(200);
+    const page = first.body as WorkItemArtifactRefsPage;
+    expect(page.refs.map((r) => r.seq)).toEqual(Array.from({ length: 20 }, (_, i) => 25 - i));
+    expect(page.nextCursor).toBe(6);
+    expect(page.refs.find((r) => r.kind === "validation")?.passGrade).toBe(true);
+    for (const ref of page.refs) {
+      expect(ref).not.toHaveProperty("body");
+      expect(ref).not.toHaveProperty("rows");
+      expect(ref).not.toHaveProperty("author");
+    }
+    const second = await listWorkItemArtifacts(deps, "task.0028", { view: "refs", cursor: "6" });
+    const older = second.body as WorkItemArtifactRefsPage;
+    expect(older.refs.map((r) => r.seq)).toEqual([5, 4, 3, 2, 1]);
+    expect(older.nextCursor).toBeNull();
+  });
+
+  it("keeps the list answer without view, and refuses an unknown view or a bad cursor with 400", async () => {
+    const deps = withStore(many(2));
+    expect((await listWorkItemArtifacts(deps, "task.0028")).body).toHaveProperty("items");
+    for (const query of [{ view: "all" }, { cursor: "3" }, { view: "refs", cursor: "0" }, { view: "refs", cursor: "x" }]) {
+      const refused = await listWorkItemArtifacts(deps, "task.0028", query);
+      expect(refused.status).toBe(400);
+      expect(refused.body).toMatchObject({ errorCode: "invalid_input" });
+      expect(refused.log).toMatchObject({ event: "work.items.artifacts_read", status: 400 });
+    }
+  });
+
+  it("reads one artifact in full, 404 for another item's artifact or a missing one, 400 for a malformed id", async () => {
+    const deps = withStore(many(5));
+    const one = await readWorkItemArtifact(deps, "task.0028", "wia-5");
+    expect(one.status).toBe(200);
+    expect((one.body as { artifact: WorkItemArtifact }).artifact).toMatchObject({ rows: [row()], passGrade: true });
+    expect((await readWorkItemArtifact(deps, "task.0028", "wia-4")).body).toMatchObject({ artifact: { body: "review 4" } });
+    expect((await readWorkItemArtifact(deps, "task.9999", "wia-4")).status).toBe(404);
+    expect((await readWorkItemArtifact(deps, "task.0028", "wia-99")).status).toBe(404);
+    expect((await readWorkItemArtifact(deps, "task.0028", "../x")).status).toBe(400);
+  });
+
+  it("scorecardMarkdown leaves out the reason column when no row has a reason", () => {
+    expect(scorecardMarkdown([row()]).split("\n")[0]).toBe("| PR TWEAK | HUMAN | AI | LOKI | TRACE | OVERALL |");
+  });
+
+  it("scorecardMarkdown builds one GFM table and escapes pipes and line breaks", () => {
+    const table = scorecardMarkdown([row({ tweak: "a|b", overall: "🟡 UNPROVEN", reason: "line one\nline two" })]);
+    const lines = table.split("\n");
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toBe("| a\\|b | — | 🟢 | 🟢 | — | 🟡 UNPROVEN | line one line two |");
+  });
+
+  it("the envelope adds refs and one artifact on request, degrades each part alone, and never fails the item", async () => {
+    const item = { id: "task.0028" };
+    const page: WorkItemArtifactRefsPage = { refs: [], nextCursor: null };
+    const events: unknown[] = [];
+    const read = await composeItemEnvelope(
+      item,
+      {
+        artifactRefs: { firstPage: async () => page },
+        historyRefs: {
+          firstPage: async () => {
+            throw new Error("dolt down");
+          },
+        },
+        artifactById: { get: async () => null },
+        log: (event) => events.push(event),
+      },
+      { includeArtifacts: true, includeHistory: true, artifactId: "wia-1" }
+    );
+    expect(read.artifactRefs).toEqual(page);
+    expect(read.historyRefs).toEqual({ refs: [], nextCursor: null, unavailable: true });
+    expect(read.artifact).toEqual({ notFound: true });
+    expect(events).toEqual([{ part: "historyRefs", workItemId: "task.0028", reason: "Error" }]);
+    // Not asked: absent.
+    const plain = await composeItemEnvelope(item, { artifactRefs: { firstPage: async () => page } });
+    expect(plain).not.toHaveProperty("artifactRefs");
+    expect(plain).not.toHaveProperty("artifact");
   });
 });

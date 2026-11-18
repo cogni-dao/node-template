@@ -4,6 +4,7 @@
 /**
  * Module: `@app/api/v1/work/items/[id]/artifacts`
  * Purpose: POST records an immutable triage, review or validation artifact on a work item; GET lists them, newest first (task.0028).
+ *   `GET ?view=refs&cursor=` returns one page of 20 refs and `nextCursor` (story.0058); without `view` the answer is unchanged.
  * Scope: Thin shells: session check, id, body parse, one `@cogni/work-items` handler call, one log event, response. PASS-grade and the insert live in the package.
  * Invariants:
  *   - SAME_DOOR: POST needs the `work_item:transition` grant, the same door `PATCH /work/items/{id}` runs (route id `work.items.artifacts.create` is the route twin of the tool `core__work_item_artifact_record`, which carries the same `work_item:transition` scope as `core__work_item_update`); a signed-in human passes. A granular review grant is a later story. GET needs a session, like history.
@@ -16,7 +17,6 @@
  */
 
 import {
-  type ArtifactResult,
   artifactInvalidJson,
   artifactsNotConfigured,
   listWorkItemArtifacts,
@@ -27,37 +27,11 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
+
+import { respond } from "./_respond";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const EVENT_BY_LOG = {
-  "work.items.artifact_recorded": EVENT_NAMES.WORK_ITEMS_ARTIFACT_RECORDED,
-  "work.items.artifact_refused": EVENT_NAMES.WORK_ITEMS_ARTIFACT_REFUSED,
-  "work.items.artifacts_read": EVENT_NAMES.WORK_ITEMS_ARTIFACTS_READ,
-} as const;
-
-/** One terminal log event per call, then the response. A failed call carries its `errorName` on that same line. */
-function respond(
-  ctx: {
-    readonly log: Parameters<typeof logEvent>[0];
-    readonly reqId: string;
-    readonly routeId: string;
-  },
-  startedAt: number,
-  { status, body, log }: ArtifactResult
-): NextResponse {
-  const { event, errorName, ...fields } = log;
-  logEvent(ctx.log, EVENT_BY_LOG[event], {
-    reqId: ctx.reqId,
-    routeId: ctx.routeId,
-    ...fields,
-    ...(errorName !== undefined ? { errorName } : {}),
-    durationMs: Date.now() - startedAt,
-  });
-  return NextResponse.json(body, { status });
-}
 
 export const POST = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
@@ -100,7 +74,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     routeId: "work.items.artifacts.list",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, _request, sessionUser, context) => {
+  async (ctx, request, sessionUser, context) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
@@ -111,6 +85,11 @@ export const GET = wrapRouteHandlerWithLogging<{
     const deps = getContainer().workItemArtifacts;
     if (!deps) return respond(ctx, startedAt, artifactsNotConfigured(id, "read"));
 
-    return respond(ctx, startedAt, await listWorkItemArtifacts(deps, id));
+    const params = new URL(request.url).searchParams;
+    return respond(
+      ctx,
+      startedAt,
+      await listWorkItemArtifacts(deps, id, { view: params.get("view"), cursor: params.get("cursor") })
+    );
   }
 );

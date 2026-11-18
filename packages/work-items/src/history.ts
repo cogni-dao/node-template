@@ -112,6 +112,39 @@ export interface HistoryEntry {
   readonly diff: Readonly<Record<string, HistoryFieldDiff>>;
 }
 
+/** One page of versions, newest first; `nextCursor` is the commit to send back for older versions, or null. */
+export interface HistoryPage {
+  readonly entries: readonly HistoryEntry[];
+  readonly nextCursor: string | null;
+}
+
+/** A history cursor that names no version of this item. */
+export class HistoryCursorUnknownError extends Error {
+  override readonly name = "HistoryCursorUnknownError";
+  constructor(cursor: string) {
+    super(`history cursor is not a version of this item: ${cursor.slice(0, 64)}`);
+  }
+}
+
+/**
+ * The page cut of a history read: shaped entries `entries` from `rawCount` raw rows read with cap `rawCap`. Takes `size`
+ * entries. The cursor is the last kept entry's commit when more entries remain; when the raw read hit its cap with fewer,
+ * the oldest raw row's commit; otherwise null. Known limit: in the raw-cap case, when that oldest row repeats the state of
+ * the next older row (a merge repeat cut at the cap), the next page shows that version once more. It never skips or loops,
+ * and it needs more than `HISTORY_READ_ROWS` raw rows for one page.
+ */
+export function cutHistoryPage(
+  entries: readonly HistoryEntry[],
+  rawRows: readonly { readonly to_commit: string }[],
+  rawCap: number,
+  size: number
+): HistoryPage {
+  const page = entries.slice(0, size);
+  if (entries.length > size) return { entries: page, nextCursor: page[page.length - 1]?.commit ?? null };
+  if (rawRows.length >= rawCap) return { entries: page, nextCursor: rawRows[rawRows.length - 1]?.to_commit ?? null };
+  return { entries: page, nextCursor: null };
+}
+
 /** One `dolt_diff_<table>` row joined to `dolt_log`, newest first. */
 export interface HistoryDiffRow {
   readonly to_commit: string;

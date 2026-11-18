@@ -51,6 +51,7 @@ import {
 } from "@cogni/knowledge-store";
 import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
+import { createItemRefPorts } from "@/bootstrap/capabilities/work-item-refs";
 import { getContainer } from "@/bootstrap/container";
 import { toHttpWorkItem } from "../read-envelopes.server";
 
@@ -352,9 +353,15 @@ export async function listWorkBoardColumns(
   return { columns, queryCount: columns.length };
 }
 
-/** Single-item read options; `includeLinks` adds the first page of citation links (`?include=links`). */
+/**
+ * Single-item read options; `includeLinks` adds the first page of citation links (`?include=links`), `includeArtifacts`
+ * and `includeHistory` the first page of artifact and history refs, `artifactId` one artifact in full (story.0058).
+ */
 export interface WorkItemReadOptions extends WorkSummaryReadOptions {
   readonly includeLinks?: boolean;
+  readonly includeArtifacts?: boolean;
+  readonly includeHistory?: boolean;
+  readonly artifactId?: string;
   /** Set false for a caller that needs only the stored move ids (the EDO expectations read). Default: resolve the chain. */
   readonly chain?: boolean;
   /** Set false for a caller that needs only the item (the EDO expectations read). Default: read the latest artifacts. */
@@ -381,6 +388,8 @@ async function withItemEnvelope(dto: WorkItemDto, options?: WorkItemReadOptions)
       links: createCitationLinksPort(() => container.knowledgeStorePort),
       // task.0028: the latest artifact of each kind, without body, one bounded read.
       artifacts: artifactStore ? { latest: (id) => artifactStore.latest(id) } : undefined,
+      // story.0058: refs first, then one read; the same ports the agent tool's capability wires.
+      ...createItemRefPorts({ artifacts: artifactStore, history: container.doltgresWorkItems }),
       log: (event) => container.log.warn(event, EVENT_NAMES.WORK_ITEMS_ENVELOPE_DEGRADED),
     },
     options,

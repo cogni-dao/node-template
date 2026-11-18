@@ -823,6 +823,8 @@ function createContainer(): Container {
 			},
 			principalId: runPrincipal,
 		},
+		// story.0058: the item's history pages for core__work_item_read with includeHistory, read at call time.
+		history: () => doltgresWorkItems,
 		// task.0122: an agent records the triage artifact through the same handler the route calls, and logs the same terminal event.
 		artifacts: {
 			deps: () => workItemArtifacts,

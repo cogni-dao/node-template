@@ -1,25 +1,109 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+/**
+ * Module: `@app/(app)/work/_components/WorkItemDetailBody`
+ * Purpose: Helps a human decide what the item is, whether its latest review lets it move, and why it moved.
+ * Scope: Presentation of one item read. Artifacts sits right below Moves in the same bordered `CitationRow` list; the
+ *   selected artifact (the item read's `artifact`) opens inline under its row. History lists why the item changed. Page 1
+ *   of each comes from the item read, an older page from the refs views (story.0058).
+ * Invariants:
+ *   - EXISTING_PARTS_ONLY: CitationRow and its list classes (as Moves), Field, Link, Markdown and RelativeTime; no new component.
+ *   - SECTIONS_NEED_THEIR_PARTS: Artifacts and History render only when the item read carries them.
+ *   - ITEM_SCOPED_URL: `artifact`, `artifactsCursor` and `historyCursor` belong to this item; links set them with scroll off.
+ * Side-effects: IO (older ref pages, only when a cursor parameter is set)
+ * Links: hub work-item-artifacts, change-history-design, ../_lib/workItemNavigation.ts
+ * @internal
+ */
+
 "use client";
 
 import {
+	CITATION_HEADING_CLASS,
+	CITATION_LIST_CLASS,
+	type CitationLinkComponent,
+	type CitationTone,
+	CitationRow,
+	formatRelativeTime,
 	hasScores,
+	RelativeTime,
 	WorkItemScoresRadar,
 	WorkExpectations,
 	type WorkMetric,
 } from "@cogni/knowledge-base-ui";
 import { WorkMoveLinks } from "@cogni/knowledge-base-ui/goals";
-import type { WorkItemDto } from "@cogni/node-contracts";
+import type { WorkItemDto, WorkItemsGetOutput } from "@cogni/node-contracts";
+import { type ArtifactKind, parseArtifactSubject, scorecardMarkdown } from "@cogni/work-items";
+import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { SheetDescription, SheetHeader, SheetTitle } from "@/components/sheet";
 import type { ReactElement } from "react";
 import { Markdown } from "@/components/markdown";
 
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
 import { PeekLink } from "../../_components/EntityPeek";
-import { isWorkItemNotFoundError } from "../_api/fetchWorkItems";
+import {
+	fetchArtifactRefs,
+	fetchHistoryRefs,
+	isWorkItemNotFoundError,
+} from "../_api/fetchWorkItems";
 import { fetchWorkExpectations } from "../_api/fetchWorkExpectations";
+import { itemScopedHref } from "../_lib/workItemNavigation";
 import { StatusPill, TypeIcon } from "./work-item-icons";
+
+const KIND_TITLES: Readonly<Record<ArtifactKind, string>> = {
+	triage: "Triage",
+	design_review: "Design review",
+	implementation_review: "Implementation review",
+	validation: "Validation",
+	closeout: "Closeout",
+};
+
+/** The pill's color is the verdict alone: green lets the item move, yellow asks for changes, red fails, a triage route is neutral. */
+function verdictTone(verdict: string): CitationTone {
+	if (verdict === "approve" || verdict === "pass" || verdict === "done") return "positive";
+	if (verdict === "request_changes" || verdict === "notes") return "warning";
+	if (verdict === "fail") return "negative";
+	return "neutral";
+}
+
+/** What an artifact judged, short: "PR #409 @ 2dea498", "inbox cef83e76", "build 2dea498", or the item. The package parses subjects. */
+function subjectLabel(subject: string): string {
+	const parsed = parseArtifactSubject(subject);
+	switch (parsed?.form) {
+		case "pr":
+			return `PR #${parsed.url.split("/").pop()} @ ${parsed.head.slice(0, 7)}`;
+		case "knowledge":
+			return `inbox ${parsed.contribution.slice(-8)}`;
+		case "build":
+			return `build ${parsed.buildSha.slice(0, 7)}`;
+		default:
+			return "this item";
+	}
+}
+
+/** The row text: kind, its iteration number and what it judged, e.g. "Design review 3 · inbox cef83e76". */
+function artifactRowLabel(
+	ref: { readonly kind: ArtifactKind; readonly verdict: string; readonly subject: string; readonly seq: number },
+	refs: readonly { readonly kind: ArtifactKind; readonly seq: number }[],
+): string {
+	if (ref.kind === "triage") return `Triage → route to ${ref.verdict}`;
+	const iteration = refs.filter((other) => other.kind === ref.kind && other.seq <= ref.seq).length;
+	return `${KIND_TITLES[ref.kind]} ${iteration} · ${subjectLabel(ref.subject)}`;
+}
+
+/** The shared row's link: stays on the page, keeps scroll, never peeks (an artifact is not a knowledge entry). */
+const ScrollKeepingLink: CitationLinkComponent = ({ entityId: _entityId, href, ...props }) => (
+	<Link href={href} scroll={false} {...props} />
+);
+
+const ROW = "flex min-w-0 items-center justify-between gap-3";
+const ROW_TITLE = "min-w-0 truncate";
+const ROW_TIME = "shrink-0 text-muted-foreground text-xs";
+const NO_PARAMS = new URLSearchParams();
+// Tap targets are at least 24px tall (frontend-development section 5).
+const PAGE_LINK = "inline-flex min-h-6 items-center text-muted-foreground text-xs underline";
 
 type SubjectRef = WorkItemDto["assignees"][number];
 const NO_MOVES: WorkMetric[] = [];
@@ -36,7 +120,7 @@ function assigneeLabel(a: SubjectRef): string {
 }
 
 export interface WorkItemDetailBodyProps {
-	readonly item: WorkItemDto | null;
+	readonly item: WorkItemsGetOutput | WorkItemDto | null;
 	readonly itemId?: string;
 	readonly isLoading?: boolean;
 	readonly error?: Error | null;
@@ -68,6 +152,47 @@ export function WorkItemDetailBody({
 }: WorkItemDetailBodyProps): ReactElement {
 	const isNotFound = isWorkItemNotFoundError(error);
 	const hasOperationalError = !isLoading && !isNotFound && (!item || !!error);
+	const read: WorkItemsGetOutput | null = item;
+	// Outside the app router (a host that renders the body alone) there are no parameters.
+	const searchParams = useSearchParams() ?? NO_PARAMS;
+	const artifactsCursor = searchParams.get("artifactsCursor");
+	const historyCursor = searchParams.get("historyCursor");
+	// Page 1 rides the item read; an older page comes from the refs view of its route and replaces the list.
+	const olderArtifacts = useQuery({
+		queryKey: ["work-item-artifact-refs", read?.id, artifactsCursor],
+		queryFn: ({ signal }) => fetchArtifactRefs(read?.id as string, artifactsCursor as string, signal),
+		enabled: read?.artifactRefs !== undefined && artifactsCursor !== null,
+		retry: false,
+	});
+	const olderHistory = useQuery({
+		queryKey: ["work-item-history-refs", read?.id, historyCursor],
+		queryFn: ({ signal }) => fetchHistoryRefs(read?.id as string, historyCursor as string, signal),
+		enabled: read?.historyRefs !== undefined && historyCursor !== null,
+		retry: false,
+	});
+	const artifactPage = artifactsCursor === null ? read?.artifactRefs : olderArtifacts.data;
+	const historyPage = historyCursor === null ? read?.historyRefs : olderHistory.data;
+	const artifactsLoading = artifactsCursor !== null && olderArtifacts.isLoading;
+	const historyLoading = historyCursor !== null && olderHistory.isLoading;
+	const artifactsUnavailable = artifactPage?.unavailable === true || (artifactsCursor !== null && olderArtifacts.isError);
+	const historyUnavailable = historyPage?.unavailable === true || (historyCursor !== null && olderHistory.isError);
+	const selected = read?.artifact;
+	const selectedArtifact = selected !== undefined && "id" in selected ? selected : undefined;
+	const selectedBody = selectedArtifact && (
+		// Real reviews run to thousands of characters: the open one scrolls inside its row, so the list stays in view.
+		<div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto py-2 pl-6 text-sm">
+			{selectedArtifact.note && <span className="text-muted-foreground">{selectedArtifact.note}</span>}
+			{selectedArtifact.body ? (
+				<Markdown content={selectedArtifact.body} />
+			) : selectedArtifact.rows?.length ? (
+				<Markdown content={scorecardMarkdown(selectedArtifact.rows)} />
+			) : selectedArtifact.url ? (
+				<Link href={selectedArtifact.url} className="underline" target="_blank" rel="noreferrer">
+					{selectedArtifact.url}
+				</Link>
+			) : null}
+		</div>
+	);
 
 	return (
 		<>
@@ -124,6 +249,79 @@ export function WorkItemDetailBody({
 							labels={item.labels}
 							LinkComponent={PeekLink}
 						/>
+						{/* Artifacts, right below Moves and drawn like it: each review or validation that lets the item move (story.0058).
+						    The selected one opens inline under its row; selecting it again closes it. */}
+						{read?.artifactRefs !== undefined && (
+							<section aria-label="Artifacts" className="flex flex-col gap-1.5">
+								<h3 className={CITATION_HEADING_CLASS}>Artifacts</h3>
+								{artifactsLoading ? (
+									<span className="text-muted-foreground text-sm">Loading reviews</span>
+								) : artifactsUnavailable ? (
+									<span className="text-muted-foreground text-sm">Reviews are unavailable</span>
+								) : !artifactPage?.refs.length ? (
+									<span className="text-muted-foreground text-sm">No reviews yet</span>
+								) : (
+									<div className={CITATION_LIST_CLASS}>
+										{artifactPage.refs.map((ref) => {
+											const open = selected !== undefined && "id" in selected && selected.id === ref.id;
+											return (
+												<div key={ref.id} className="flex flex-col">
+													<CitationRow
+														direction="out"
+														relation={ref.kind === "triage" ? "routed" : ref.verdict.replace(/_/g, " ")}
+														tone={verdictTone(ref.verdict)}
+														slug={artifactRowLabel(ref, artifactPage.refs)}
+														href={itemScopedHref(item.id, searchParams, "artifact", open ? null : ref.id)}
+														hoverTitle={[ref.note, formatRelativeTime(ref.createdAt)].filter(Boolean).join(" · ")}
+														Link={ScrollKeepingLink}
+													/>
+													{open && selectedBody}
+												</div>
+											);
+										})}
+									</div>
+								)}
+								{/* A selected artifact that is not on this page (a deep link, or after Older) opens below the list. */}
+								{selectedArtifact && !artifactPage?.refs.some((ref) => ref.id === selectedArtifact.id) && (
+									<div className={CITATION_LIST_CLASS}>
+										<CitationRow
+											direction="out"
+											relation={selectedArtifact.verdict.replace(/_/g, " ")}
+											tone={verdictTone(selectedArtifact.verdict)}
+											slug={`${KIND_TITLES[selectedArtifact.kind]} · ${subjectLabel(selectedArtifact.subject)}`}
+											href={itemScopedHref(item.id, searchParams, "artifact", null)}
+											hoverTitle={[selectedArtifact.note, formatRelativeTime(selectedArtifact.createdAt)].filter(Boolean).join(" · ")}
+											Link={ScrollKeepingLink}
+										/>
+										{selectedBody}
+									</div>
+								)}
+								{selected !== undefined && !("id" in selected) && (
+									<span className="text-muted-foreground text-sm">
+										{"notFound" in selected ? "Artifact not found" : "The artifact is unavailable"}
+									</span>
+								)}
+								{(artifactPage?.nextCursor != null || artifactsCursor !== null) && (
+									<div className="flex gap-3">
+										{artifactsCursor !== null && (
+											<Link href={itemScopedHref(item.id, searchParams, "artifactsCursor", null)} scroll={false} className={PAGE_LINK}>
+												Newest
+											</Link>
+										)}
+										{artifactPage?.nextCursor != null && (
+											<Link
+												href={itemScopedHref(item.id, searchParams, "artifactsCursor", String(artifactPage.nextCursor))}
+												scroll={false}
+												className={PAGE_LINK}
+											>
+												Older
+											</Link>
+										)}
+									</div>
+								)}
+							</section>
+						)}
+
 						<WorkExpectations
 							itemId={item.id}
 							moves={item.moves ?? NO_MOVES}
@@ -162,6 +360,50 @@ export function WorkItemDetailBody({
 						{item.outcome && (
 							<Field label="Outcome">
 								<Markdown content={item.outcome} />
+							</Field>
+						)}
+
+						{/* History: why the item changed, newest first */}
+						{read?.historyRefs !== undefined && (
+							<Field label="History">
+								{historyLoading ? (
+									<span className="text-muted-foreground">Loading history</span>
+								) : historyUnavailable ? (
+									<span className="text-muted-foreground">History is unavailable</span>
+								) : !historyPage?.refs.length ? (
+									<span className="text-muted-foreground">No history yet</span>
+								) : (
+									<div className="flex flex-col gap-1">
+										{historyPage.refs.map((ref, index) => {
+											const created = ref.reason === null && historyPage.nextCursor === null && index === historyPage.refs.length - 1;
+											const text = ref.reason ?? (created ? "Created" : "No reason recorded");
+											return (
+											<div key={ref.commit} className={ROW}>
+												<span className={ROW_TITLE} title={text}>{text}</span>
+												<RelativeTime iso={ref.at} className={ROW_TIME} />
+											</div>
+											);
+										})}
+									</div>
+								)}
+								{(historyPage?.nextCursor != null || historyCursor !== null) && (
+									<div className="mt-1 flex gap-3">
+										{historyCursor !== null && (
+											<Link href={itemScopedHref(item.id, searchParams, "historyCursor", null)} scroll={false} className={PAGE_LINK}>
+												Newest
+											</Link>
+										)}
+										{historyPage?.nextCursor != null && (
+											<Link
+												href={itemScopedHref(item.id, searchParams, "historyCursor", historyPage.nextCursor)}
+												scroll={false}
+												className={PAGE_LINK}
+											>
+												Older
+											</Link>
+										)}
+									</div>
+								)}
 							</Field>
 						)}
 

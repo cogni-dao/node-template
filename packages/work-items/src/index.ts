@@ -21,9 +21,10 @@ export type {
   HistoryDiffRow,
   HistoryEntry,
   HistoryFieldDiff,
+  HistoryPage,
   ShapeHistoryOptions,
 } from "./history.js";
-export type { HistoryOutput } from "./history-contract.js";
+export type { HistoryOutput, HistoryRef, HistoryRefsPage } from "./history-contract.js";
 export type {
   CiteRef,
   EntryResolver,
@@ -43,23 +44,31 @@ export {
 } from "./cites.js";
 export {
   ChangeReasonSchema,
+  HISTORY_REFS_PAGE,
   HistoryEntrySchema,
   HistoryOutputSchema,
+  HistoryRefSchema,
+  HistoryRefsPageSchema,
   workItemsHistoryOperation,
 } from "./history-contract.js";
 export type { WorkItemPatchInput } from "./patch-contract.js";
 export { composeItemEnvelope } from "./envelope.js";
 export type {
   EnvelopeDegradedEvent,
+  ItemArtifactByIdPort,
+  ItemArtifactRefsPort,
   ItemArtifactsPort,
   ItemEnvelopeDeps,
   ItemEnvelopeOptions,
+  ItemEnvelopeParts,
+  ItemHistoryRefsPort,
   ItemLinksPort,
 } from "./envelope.js";
 export type {
   ArtifactErrorCode,
   ArtifactItemStore,
   ArtifactKind,
+  ArtifactListQuery,
   ArtifactLog,
   ArtifactResult,
   ArtifactSubject,
@@ -70,6 +79,9 @@ export type {
   WorkItemArtifact,
   WorkItemArtifactDeps,
   WorkItemArtifactInput,
+  WorkItemArtifactRead,
+  WorkItemArtifactRef,
+  WorkItemArtifactRefsPage,
   WorkItemArtifactStore,
   WorkItemArtifactSummary,
   WorkItemArtifactsLatest,
@@ -82,11 +94,16 @@ export {
   ARTIFACT_NOTE_MAX,
   ARTIFACT_ROWS_MAX,
   ARTIFACT_URL_MAX,
+  ARTIFACT_REFS_PAGE,
   ARTIFACTS_LIST_MAX,
   isPassGrade,
   listWorkItemArtifacts,
   parseArtifactSubject,
+  readArtifactRefsPage,
+  readWorkItemArtifact,
   recordWorkItemArtifact,
+  scorecardMarkdown,
+  toArtifactRef,
   REVIEW_VERDICTS,
   SCORECARD_CELLS,
   SCORECARD_OVERALLS,
@@ -98,9 +115,13 @@ export {
   TRIAGE_VERDICTS,
   withPassGrade,
   WorkItemArtifactInputSchema,
+  WorkItemArtifactReadSchema,
+  WorkItemArtifactRefSchema,
+  WorkItemArtifactRefsPageSchema,
   WorkItemArtifactSchema,
   WorkItemArtifactSummarySchema,
   WorkItemArtifactsLatestSchema,
+  workItemsArtifactGetOperation,
   workItemsArtifactsCreateOperation,
   workItemsArtifactsListOperation,
 } from "./artifacts.js";
@@ -145,17 +166,20 @@ export {
 } from "./patch-contract.js";
 export type {
   HistoryReadLog,
+  HistoryReadQuery,
   WorkItemHistoryResult,
   WorkItemHistoryStore,
 } from "./history-read.js";
-export { readWorkItemHistory } from "./history-read.js";
+export { readHistoryRefsPage, readWorkItemHistory, toHistoryRef } from "./history-read.js";
 export {
   CHANGE_REASON_MAX_CHARS,
   CHANGE_REASON_MAX_WORDS,
   CHANGE_REASON_REQUIRED_MESSAGE,
   ChangeReasonInvalidError,
   checkChangeReason,
+  cutHistoryPage,
   formatCitesTrailer,
+  HistoryCursorUnknownError,
   HISTORY_MAX_VERSIONS,
   HISTORY_READ_ROWS,
   normalizeChangeReason,

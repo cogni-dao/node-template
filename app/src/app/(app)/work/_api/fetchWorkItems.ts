@@ -3,7 +3,8 @@
 
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems`
- * Purpose: Client-side fetch wrappers for bounded work summary pages, the work board, and item detail.
+ * Purpose: Client-side fetch wrappers for bounded work summary pages, the work board, item detail, and the item's older artifact
+ *   and history ref pages (story.0058).
  * Scope: Calls summary, board and detail endpoints with type-safe contracts. Does not implement business logic.
  * Invariants:
  *   - Returns typed summary pages, board columns or details, or throws `WorkItemFetchError` carrying the HTTP status (the package hooks retry only 5xx and network failures)
@@ -13,8 +14,13 @@
  * @internal
  */
 
-import type { WorkItemDto, WorkItemSummariesListOutput } from "@cogni/node-contracts";
-import type { WorkBoardColumns, WorkSummaryPage } from "@cogni/work-items";
+import type { WorkItemsGetOutput, WorkItemSummariesListOutput } from "@cogni/node-contracts";
+import type {
+  HistoryRefsPage,
+  WorkBoardColumns,
+  WorkItemArtifactRefsPage,
+  WorkSummaryPage,
+} from "@cogni/work-items";
 
 export class WorkItemFetchError extends Error {
   readonly status: number;
@@ -86,8 +92,16 @@ export async function fetchWorkBoard(
   return response.json() as Promise<WorkBoardColumns>;
 }
 
-export async function fetchWorkItem(id: string, signal?: AbortSignal): Promise<WorkItemDto> {
-  const response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
+export async function fetchWorkItem(
+  id: string,
+  signal?: AbortSignal,
+  options: { readonly include?: string; readonly artifact?: string | undefined } = {},
+): Promise<WorkItemsGetOutput> {
+  const params = new URLSearchParams();
+  if (options.include) params.set("include", options.include);
+  if (options.artifact) params.set("artifact", options.artifact);
+  const query = params.toString();
+  const response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}${query ? `?${query}` : ""}`, {
     method: "GET",
     ...(signal && { signal }),
     headers: { "Content-Type": "application/json" },
@@ -101,5 +115,32 @@ export async function fetchWorkItem(id: string, signal?: AbortSignal): Promise<W
     );
     throw new WorkItemFetchError(message, response.status);
   }
-  return response.json() as Promise<WorkItemDto>;
+  return response.json() as Promise<WorkItemsGetOutput>;
+}
+
+async function fetchRefsPage<T>(path: string, cursor: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(`${path}?view=refs&cursor=${encodeURIComponent(cursor)}`, {
+    method: "GET",
+    ...(signal && { signal }),
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new WorkItemFetchError(
+      await responseErrorMessage(response, `Failed to fetch refs (HTTP ${response.status})`),
+      response.status,
+    );
+  }
+  return response.json() as Promise<T>;
+}
+
+/** An older page of an item's artifact refs: the refs view of the artifacts route. */
+export function fetchArtifactRefs(id: string, cursor: string, signal?: AbortSignal): Promise<WorkItemArtifactRefsPage> {
+  return fetchRefsPage(`/api/v1/work/items/${encodeURIComponent(id)}/artifacts`, cursor, signal);
+}
+
+/** An older page of an item's history refs: the refs view of the history route. */
+export function fetchHistoryRefs(id: string, cursor: string, signal?: AbortSignal): Promise<HistoryRefsPage> {
+  return fetchRefsPage(`/api/v1/work/items/${encodeURIComponent(id)}/history`, cursor, signal);
 }

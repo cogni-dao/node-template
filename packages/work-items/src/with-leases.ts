@@ -62,6 +62,14 @@ export function withWorkItemLeases(
     ...(content.history
       ? { history: (id: WorkItem["id"]) => content.history!(id) }
       : {}),
+    ...(content.historyPage
+      ? {
+          historyPage: (
+            id: WorkItem["id"],
+            options: { readonly cursor?: string | undefined; readonly limit: number }
+          ) => content.historyPage!(id, options),
+        }
+      : {}),
     ...(content.writerHealth
       ? { writerHealth: () => content.writerHealth!() }
       : {}),

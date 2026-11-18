@@ -238,6 +238,7 @@ const UNMAPPED: Readonly<Record<string, string>> = {
   WorkItemDeletionRetiredError: "delete is retired by the node route with 410",
   MoveMetricGoneError: "read-time only: the judge reads it as unknown, never an HTTP answer",
   InvalidCursorError: "read-side: the list routes own it",
+  HistoryCursorUnknownError: "read-side: the history read answers it as 400 invalid_input",
 };
 
 describe("workItemWriteErrorResponse", () => {

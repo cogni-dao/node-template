@@ -18,6 +18,7 @@ import { metaLivezOutputSchema } from "../meta.livez.read.v1.contract";
 import { metaReadyzOutputSchema } from "../meta.readyz.read.v1.contract";
 import { metaRoutesOutputSchema } from "../meta.route-manifest.read.v1.contract";
 import {
+  workItemsArtifactGetOperation,
   workItemsArtifactsCreateOperation,
   workItemsArtifactsListOperation,
 } from "../work.items.artifacts.v1.contract";
@@ -135,6 +136,15 @@ export const ApiContractV1 = c.router({
     description: workItemsArtifactsListOperation.description,
     responses: {
       200: workItemsArtifactsListOperation.output,
+    },
+  },
+  workItemsArtifactGet: {
+    method: "GET",
+    path: "/work/items/:id/artifacts/:artifactId",
+    summary: workItemsArtifactGetOperation.summary,
+    description: workItemsArtifactGetOperation.description,
+    responses: {
+      200: workItemsArtifactGetOperation.output,
     },
   },
   knowledgeHistory: {
