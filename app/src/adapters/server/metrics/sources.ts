@@ -4,6 +4,7 @@ export {
 	type ConvergenceOutput,
 	doltInstant,
 	FIRST_PARENT_WALK_CAP,
+	readGithubActions,
 	readGithubStars,
 	readWorkConvergence,
 	readWorkCount,

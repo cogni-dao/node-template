@@ -25,8 +25,11 @@ import { type GoalSourcePort, readGoalsProgress } from "./progress.js";
 import { createTickReads } from "./tick-reads.js";
 import {
 	FIRST_PARENT_WALK_CAP,
+	GITHUB_ACTIONS_MAX_PAGE_BYTES,
+	GITHUB_ACTIONS_MAX_PAGES,
 	NO_INLINE_HISTORY_MAX_BYTES,
 	NO_INLINE_HISTORY_MAX_ROWS,
+	readGithubActions,
 	readGithubStars,
 	readKnowledgeMerges,
 	readNoInlineHistoryScope,
@@ -71,6 +74,7 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"work.count@1",
 	"work.convergence@1",
 	"github.stars@1",
+	"github.actions@1",
 	"no-inline-history@1",
 	"knowledge.merge-review@1",
 ] as const;
@@ -204,6 +208,47 @@ export function createGoalMetrics(deps: {
 				readGithubStars(p.owner, p.repo, signal, limits),
 			);
 		},
+	});
+	const actionsParams = z.strictObject({
+		owner: githubParams.shape.owner,
+		repo: githubParams.shape.repo,
+		workflow: z.string().regex(/^[A-Za-z0-9_.-]{1,100}\.ya?ml$/),
+		event: z.enum(["pull_request", "merge_group", "push"]).optional(),
+		days: z.number().int().min(1).max(7),
+		output: z.enum(["duration", "failure_rate", "flake_rate"]),
+		quantile: z.number().min(0.5).max(0.99).optional(),
+	});
+	registry.register({
+		id: "github.actions@1",
+		// The window ends now: the runs list cannot be replayed at a past instant.
+		unit: "%",
+		unitFor: (params) =>
+			actionsParams.parse(params).output === "duration" ? "min" : "%",
+		displayFor: (params) =>
+			actionsParams.parse(params).output === "duration" ? "volume" : "slo",
+		windowSeconds: (params) => actionsParams.parse(params).days * 86400,
+		paramsSchema: actionsParams.refine(
+			(p) => p.quantile === undefined || p.output === "duration",
+			{ message: "quantile applies only to output duration" },
+		),
+		// The whole page read is one source call of at most 10 requests, shared by
+		// every calculator of a tick that names the same workflow list. A 7-day
+		// window on this repo is about 620 runs (7 pages, ~1.4 MB and 1.5-3 s each,
+		// measured), so the 10-page cap leaves headroom; more runs than the cap is
+		// unknown, never truncated.
+		budget: {
+			timeoutMs: 45000,
+			maxSourceCalls: 1,
+			maxRows: GITHUB_ACTIONS_MAX_PAGES * 100,
+			maxResponseBytes: GITHUB_ACTIONS_MAX_PAGE_BYTES,
+		},
+		compute: async (params, ctx) =>
+			readGithubActions(
+				actionsParams.parse(params),
+				ctx.window,
+				(source) => ctx.read(source),
+				tick.shareOnce,
+			),
 	});
 	const noInlineHistoryParams = z.discriminatedUnion("measure", [
 		z.strictObject({
