@@ -149,7 +149,7 @@ describe("closeout guard", () => {
     expect(t.receipts.refused).toBe(10);
   });
 
-  it("does not close a legacy needs_closeout item: the placement job moves it first", async () => {
+  it("does not close a legacy needs_closeout item: it goes back to triage first", async () => {
     const t = setup();
     t.read(item("bug.0023", { status: "needs_closeout" }));
     t.pr(true);

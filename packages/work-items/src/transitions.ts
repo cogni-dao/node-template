@@ -91,7 +91,7 @@ export const VALID_TRANSITIONS: ReadonlyMap<
     ]
   ),
   ["done", []],
-  // Legacy: a move back to triage or a cancel; the placement job moves the rest.
+  // Legacy: only a move back to triage or a cancel.
   ["blocked", ["needs_triage", "cancelled"]],
   ["needs_closeout", ["needs_triage", "cancelled"]],
   ["cancelled", []],

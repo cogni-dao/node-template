@@ -30,9 +30,9 @@ describe("createDoltgresInboxStates", () => {
       },
     });
     const signal = new AbortController().signal;
-    expect(await states.stateOf("contrib-open", signal)).toEqual({ head: "h1", merged: false, open: true });
-    expect(await states.stateOf("contrib-merged", signal)).toEqual({ head: "h2", merged: true, open: false });
-    expect(await states.stateOf("contrib-closed", signal)).toEqual({ head: null, merged: false, open: false });
+    expect(await states.stateOf("contrib-open", signal)).toEqual({ head: "h1", merged: false });
+    expect(await states.stateOf("contrib-merged", signal)).toEqual({ head: "h2", merged: true });
+    expect(await states.stateOf("contrib-closed", signal)).toEqual({ head: null, merged: false });
     expect(await states.stateOf("contrib-none", signal)).toBeNull();
     expect(queries[0]).toBe(
       "SELECT state, head_commit FROM knowledge_contributions WHERE id = 'contrib-open' LIMIT 1"
