@@ -53,7 +53,7 @@ export interface SignalHandlerDeps {
   /** viem public client for RPC calls */
   readonly rpcClient: PublicClient;
   /** Resolve an authenticated Octokit for the target repo (handles installation lookup internally) */
-  readonly resolveOctokit: (owner: string, repo: string) => Promise<Octokit>;
+  readonly resolveOctokit?: (owner: string, repo: string) => Promise<Octokit>;
   /** DAO config from repo-spec */
   readonly daoConfig: {
     readonly signal_contract: string;
@@ -185,7 +185,17 @@ export async function handleSignal(
 
     // 6b. Role signals write a grant row: no VCS, no Octokit
     if (signal.target === "role") {
-      const result = await executeRoleSignal(signal, txHash, deps.roles, log);
+      // Chain time orders this signal against later decisions (a redelivered older signal must not override them).
+      const block = await deps.rpcClient.getBlock({
+        blockHash: receipt.blockHash,
+      });
+      const result = await executeRoleSignal(
+        signal,
+        txHash,
+        Number(block.timestamp) * 1000,
+        deps.roles,
+        log
+      );
       if (result.success) markTxExecuted(txHash);
       log.info(
         {
@@ -224,6 +234,17 @@ export async function handleSignal(
     }
 
     // 8. Resolve Octokit for target repo
+    if (!deps.resolveOctokit) {
+      log.warn(
+        { action: signal.action, target: signal.target },
+        "vcs signal skipped — GitHub App not configured"
+      );
+      return {
+        success: false,
+        action: "vcs_unavailable",
+        error: "GitHub App not configured",
+      };
+    }
     const repoRef = parseRepoRef(signal.repoUrl);
     const octokit = await deps.resolveOctokit(repoRef.owner, repoRef.repo);
 

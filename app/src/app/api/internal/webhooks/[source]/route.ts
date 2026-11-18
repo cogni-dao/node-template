@@ -57,7 +57,8 @@ function resolveWebhookSecret(
 function roleSignalPort() {
   try {
     return getContainer().agentAuthority;
-  } catch {
+  } catch (error) {
+    log.error({ error: String(error) }, "agent authority unavailable for role signals");
     return undefined;
   }
 }
@@ -162,7 +163,8 @@ export async function POST(
 
     if (source === "alchemy") {
       const payload = JSON.parse(bodyBuffer.toString("utf-8"));
-      dispatchSignalExecution(payload, env, log, roleSignalPort());
+      // No role signals here: this path can run before the signature is verified.
+      dispatchSignalExecution(payload, env, log);
     }
 
     return NextResponse.json(

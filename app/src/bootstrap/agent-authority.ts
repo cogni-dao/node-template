@@ -91,7 +91,9 @@ export interface AgentToolAuthority {
     principalSlug: string;
     scope: string;
     signalTx: string;
-  }): Promise<{ changed: boolean }>;
+    /** Chain time of the signal's block (ms since epoch): an older signal never overrides a later decision (stale). */
+    signalAtMs: number;
+  }): Promise<{ changed: boolean; stale: boolean }>;
   /** Dismiss a pending NODE ask (the agent then sees `denied`). */
   denyRequest(
     input: PrincipalRef & { scope: string; me: ApprovalCaller }
@@ -316,6 +318,17 @@ export function createAgentToolAuthority(deps: {
       const result = await withStore((store) =>
         applyDaoRole(store, { ...input, declaredScopes, scopeKinds })
       );
+      if (result.stale)
+        deps.log.warn(
+          {
+            event: EVENT_NAMES.SIGNAL_EXECUTION_COMPLETE,
+            outcome: "stale_noop",
+            action: input.action,
+            scope: input.scope,
+            signalTx: input.signalTx,
+          },
+          "role signal older than a later decision for this principal and scope: ignored"
+        );
       if (result.changed)
         deps.log.info(
           {
@@ -333,7 +346,7 @@ export function createAgentToolAuthority(deps: {
             ? EVENT_NAMES.AGENT_ROLE_GRANTED
             : EVENT_NAMES.AGENT_ROLE_REVOKED
         );
-      return { changed: result.changed };
+      return { changed: result.changed, stale: result.stale };
     },
     async denyRequest(input) {
       const result = await withStore((store) =>

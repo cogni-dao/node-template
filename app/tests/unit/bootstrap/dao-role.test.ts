@@ -22,12 +22,13 @@ const base = {
   principalSlug: "node-ai",
   scope: "work_item:transition",
   declaredScopes: ["work_item:transition"],
-  scopeKinds: { "work_item:transition": "node" as const },
+  scopeKinds: { "work_item:transition": "node" as const, "profile:read": "account" as const },
+  signalAtMs: Date.now() + 60_000,
 };
 const store = () => memoryStore({ principals: { "node-ai": AI } });
 
 describe("bootstrap/dao-role", () => {
-  it("grant writes exactly one live row approved by the DAO, never by the AI itself", async () => {
+  it("grant writes exactly one live row whose approver is the DAO principal", async () => {
     const s = store();
     const r = await applyDaoRole(s, { ...base, action: "grant" });
     expect(r.changed).toBe(true);
@@ -65,5 +66,49 @@ describe("bootstrap/dao-role", () => {
     const err = await applyDaoRole(s, { ...base, principalSlug: "nobody", action: "grant" }).catch((e) => e);
     expect(err).toBeInstanceOf(AgentRolesError);
     expect(s.roles).toHaveLength(0);
+  });
+
+  it("a DAO-signalled account-kind scope is refused as wrong_kind and writes no row", async () => {
+    const s = store();
+    await expect(
+      applyDaoRole(s, { ...base, scope: "profile:read", declaredScopes: ["profile:read"], action: "grant" })
+    ).rejects.toMatchObject({ code: "wrong_kind" });
+    expect(s.roles).toHaveLength(0);
+  });
+
+  describe("ordering by chain time", () => {
+    // Each signal is processed shortly after its block: chain time t, store clock t + 100.
+    const at = (s: ReturnType<typeof store>, chainMs: number, action: "grant" | "revoke") => {
+      s.clock.now = chainMs + 100;
+      return applyDaoRole(s, { ...base, action, signalAtMs: chainMs });
+    };
+
+    it("grant A, revoke B, then a redelivered A leaves the role Off", async () => {
+      const s = store();
+      await at(s, 1000, "grant");
+      await at(s, 2000, "revoke");
+      const replay = await at(s, 1000, "grant");
+      expect(replay).toMatchObject({ changed: false, stale: true });
+      expect(await s.hasLiveRole(AI, base.scope)).toBe(false);
+      expect(s.roles).toHaveLength(1);
+    });
+
+    it("a redelivered older revoke does not turn off a later grant", async () => {
+      const s = store();
+      await at(s, 1000, "grant");
+      await at(s, 2000, "revoke");
+      await at(s, 3000, "grant");
+      const replay = await at(s, 2000, "revoke");
+      expect(replay).toMatchObject({ changed: false, stale: true });
+      expect(await s.hasLiveRole(AI, base.scope)).toBe(true);
+    });
+
+    it("a newer grant after a revoke is applied", async () => {
+      const s = store();
+      await at(s, 1000, "grant");
+      await at(s, 2000, "revoke");
+      expect((await at(s, 3000, "grant")).changed).toBe(true);
+      expect(await s.hasLiveRole(AI, base.scope)).toBe(true);
+    });
   });
 });

@@ -8,6 +8,7 @@
  * Invariants:
  *   - DAO_IS_THE_APPROVER: the row's approver is the cogni_system principal, the identity the node's app acts as when it executes the DAO's vote.
  *     `agent_roles.approved_by` is a users FK, so the signal's transaction hash is not on the row; the caller logs it (`agent_role.granted`).
+ *   - ORDER_BY_CHAIN_TIME: a grant is refused when a revoke is at or after the signal's block time; a revoke is a no-op when the live row was granted after it.
  *   - AI_NEVER_SELF_APPROVES: the approver is never the AI principal (a node AI has its own seeded user); the package refuses `self_approval` anyway.
  * Side-effects: IO (store writes)
  * Links: packages/agent-grants/src/roles.ts, https://cognidao.org/knowledge/node-capability-grants-standard
@@ -19,6 +20,7 @@ import {
   type ApprovalCaller,
   grantRole,
   revokeRole,
+  resolveInternalPrincipal,
   type ScopeKinds,
 } from "@cogni/agent-grants";
 import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
@@ -37,13 +39,26 @@ export async function applyDaoRole(
     scope: string;
     declaredScopes: readonly string[];
     scopeKinds: ScopeKinds;
+    /** Chain time of the signal's block, ms since epoch. */
+    signalAtMs: number;
   }
-): Promise<{ principalUserId: string; changed: boolean }> {
-  const { principalSlug, scope, declaredScopes, scopeKinds } = input;
+): Promise<{ principalUserId: string | null; changed: boolean; stale: boolean }> {
+  const { principalSlug, scope, declaredScopes, scopeKinds, signalAtMs } = input;
+  // ORDER_BY_CHAIN_TIME: a signal older than a later decision on the same (principal, scope) is a no-op, so a redelivered grant (restart, another replica)
+  // cannot undo a later revoke, and a redelivered revoke cannot undo a later grant. The row times are the database's, the signal's is the block's.
+  const userId = await resolveInternalPrincipal(store, principalSlug);
+  if (userId) {
+    const t = await store.nodeRoleTimes(userId, scope);
+    const stale =
+      input.action === "grant"
+        ? t.lastRevokedAt !== null && t.lastRevokedAt >= signalAtMs
+        : t.liveGrantedAt !== null && t.liveGrantedAt > signalAtMs;
+    if (stale) return { principalUserId: userId, changed: false, stale: true };
+  }
   if (input.action === "grant") {
     const r = await grantRole(store, { principalSlug, scope, me: DAO_CALLER, declaredScopes, scopeKinds });
-    return { principalUserId: r.principalUserId, changed: r.created };
+    return { principalUserId: r.principalUserId, changed: r.created, stale: false };
   }
   const r = await revokeRole(store, { principalSlug, scope, me: DAO_CALLER, scopeKinds });
-  return { principalUserId: r.principalUserId, changed: r.revoked };
+  return { principalUserId: r.principalUserId, changed: r.revoked, stale: false };
 }

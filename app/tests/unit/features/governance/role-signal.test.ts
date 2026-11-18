@@ -54,26 +54,26 @@ describe("governance role signal", () => {
 
   it("never asks the node to write for a malformed target", async () => {
     const applyRole = vi.fn();
-    const r = await executeRoleSignal(signal({ paramsJson: "{}" }), "0xtx", { applyRole }, log);
+    const r = await executeRoleSignal(signal({ paramsJson: "{}" }), "0xtx", 5000, { applyRole }, log);
     expect(r).toMatchObject({ success: false, action: "validation_failed" });
     expect(applyRole).not.toHaveBeenCalled();
   });
 
   it("passes the signal tx hash to the node as the approval reference", async () => {
     const applyRole = vi.fn().mockResolvedValue({ changed: true });
-    const r = await executeRoleSignal(signal(), "0xtx", { applyRole }, log);
-    expect(applyRole).toHaveBeenCalledWith({ action: "grant", principalSlug: "node-ai", scope: "work_item:transition", signalTx: "0xtx" });
+    const r = await executeRoleSignal(signal(), "0xtx", 5000, { applyRole }, log);
+    expect(applyRole).toHaveBeenCalledWith({ action: "grant", principalSlug: "node-ai", scope: "work_item:transition", signalTx: "0xtx", signalAtMs: 5000 });
     expect(r).toMatchObject({ success: true, action: "role_granted" });
   });
 
   it("reports a replay as a successful no-op", async () => {
     const applyRole = vi.fn().mockResolvedValue({ changed: false });
-    expect(await executeRoleSignal(signal(), "0xtx", { applyRole }, log)).toMatchObject({ success: true, action: "role_unchanged" });
+    expect(await executeRoleSignal(signal(), "0xtx", 5000, { applyRole }, log)).toMatchObject({ success: true, action: "role_unchanged" });
   });
 
   it("turns an undeclared scope into a refusal, not an exception", async () => {
     const applyRole = vi.fn().mockRejectedValue(new AgentRolesError("invalid_scope", "scope is not declared"));
-    expect(await executeRoleSignal(signal(), "0xtx", { applyRole }, log)).toMatchObject({
+    expect(await executeRoleSignal(signal(), "0xtx", 5000, { applyRole }, log)).toMatchObject({
       success: false,
       action: "role_refused",
       error: "invalid_scope",
@@ -81,6 +81,6 @@ describe("governance role signal", () => {
   });
 
   it("refuses when the node offers no role authority", async () => {
-    expect(await executeRoleSignal(signal(), "0xtx", undefined, log)).toMatchObject({ success: false, action: "roles_unavailable" });
+    expect(await executeRoleSignal(signal(), "0xtx", 5000, undefined, log)).toMatchObject({ success: false, action: "roles_unavailable" });
   });
 });

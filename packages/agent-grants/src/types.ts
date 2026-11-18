@@ -121,6 +121,14 @@ export type AskResult = "created" | "pending" | "granted" | "too_many" | "node_f
 export interface AgentGrantsStore {
   /** A live (approved, unrevoked) node role row for this principal user id and scope. Never cached. */
   hasLiveRole(principalId: string, scope: string): Promise<boolean>;
+  /**
+   * Decision times of one principal's approved NODE rows for a scope, in ms since epoch: when the live row was granted and the latest revoke
+   * (either null when none). Lets a caller refuse a stale replay (a DAO signal older than a later decision). Never cached.
+   */
+  nodeRoleTimes(
+    principalUserId: string,
+    scope: string
+  ): Promise<{ liveGrantedAt: number | null; lastRevokedAt: number | null }>;
   /** The subset of `scopes` this principal holds a live NODE role for, in ONE read. Never cached. Account rows never count. */
   liveScopes(principalId: string, scopes: readonly string[]): Promise<string[]>;
   /** A live account row for exactly this principal, scope and account: approved, unrevoked, and with no end date or an end in the future. Never cached. */

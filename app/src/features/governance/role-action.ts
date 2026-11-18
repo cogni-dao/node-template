@@ -28,12 +28,15 @@ export interface RoleSignalPort {
     scope: string;
     /** The DAO signal that approved this: the transaction hash. */
     signalTx: string;
-  }): Promise<{ changed: boolean }>;
+    /** Chain time of the signal's block, ms since epoch. */
+    signalAtMs: number;
+  }): Promise<{ changed: boolean; stale?: boolean }>;
 }
 
 export async function executeRoleSignal(
   signal: Signal,
   txHash: string,
+  signalAtMs: number,
   port: RoleSignalPort | undefined,
   log: Logger
 ): Promise<ActionResult> {
@@ -49,10 +52,11 @@ export async function executeRoleSignal(
     return { success: false, action: "roles_unavailable", error: "node agent authority not available" };
   }
   try {
-    const { changed } = await port.applyRole({ ...target, signalTx: txHash });
-    log.info({ ...target, signalTx: txHash, changed }, "role signal applied");
+    const { changed, stale } = await port.applyRole({ ...target, signalTx: txHash, signalAtMs });
+    log.info({ ...target, signalTx: txHash, changed, stale: stale === true }, "role signal applied");
     const verb = target.action === "grant" ? "granted" : "revoked";
-    return { success: true, action: changed ? `role_${verb}` : "role_unchanged" };
+    // A stale signal is a successful no-op: it was seen and is superseded, so it is never retried.
+    return { success: true, action: stale ? "role_stale" : changed ? `role_${verb}` : "role_unchanged" };
   } catch (error) {
     if (error instanceof AgentRolesError) {
       log.warn({ ...target, signalTx: txHash, code: error.code }, "role signal refused");

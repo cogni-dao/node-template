@@ -80,6 +80,17 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         LIMIT 1`;
       return rows.length > 0;
     },
+    async nodeRoleTimes(principalId, scope) {
+      const rows = await sql`
+        SELECT max(granted_at) FILTER (WHERE revoked_at IS NULL) AS live_granted_at, max(revoked_at) AS last_revoked_at
+        FROM agent_roles
+        WHERE principal_user_id = ${principalId} AND scope = ${scope} AND resource = 'node' AND approved_by IS NOT NULL`;
+      const ms = (value: unknown): number | null => {
+        const text = iso(value);
+        return text ? Date.parse(text) : null;
+      };
+      return { liveGrantedAt: ms(rows[0]?.live_granted_at), lastRevokedAt: ms(rows[0]?.last_revoked_at) };
+    },
     async liveScopes(principalId, scopes) {
       if (scopes.length === 0) return [];
       const rows = await sql`

@@ -103,26 +103,26 @@ export function dispatchSignalExecution(
     ? Buffer.from(privateKeyBase64, "base64").toString("utf-8")
     : undefined;
 
-  // Octokit factory: looks up installation ID for the target repo, returns authenticated client
-  async function resolveOctokit(owner: string, repo: string): Promise<Octokit> {
-    // A role signal needs no GitHub App; only VCS actions do.
-    if (!appId || !privateKey) {
-      throw new Error("GH_REVIEW_APP_ID/PRIVATE_KEY not configured");
-    }
-    const appOctokit = new Octokit({
-      authStrategy: createAppAuth,
-      auth: { appId, privateKey },
-    });
-    const response = await appOctokit.request(
-      "GET /repos/{owner}/{repo}/installation",
-      { owner, repo }
-    );
-    const installationId = (response.data as { id: number }).id;
-    return new Octokit({
-      authStrategy: createAppAuth,
-      auth: { appId, privateKey, installationId },
-    });
-  }
+  // Octokit factory: looks up installation ID for the target repo, returns authenticated client.
+  // A role signal needs no GitHub App; without one a VCS signal answers `vcs_unavailable`.
+  const resolveOctokit =
+    appId && privateKey
+      ? async (owner: string, repo: string): Promise<Octokit> => {
+          const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: { appId, privateKey },
+          });
+          const response = await appOctokit.request(
+            "GET /repos/{owner}/{repo}/installation",
+            { owner, repo }
+          );
+          const installationId = (response.data as { id: number }).id;
+          return new Octokit({
+            authStrategy: createAppAuth,
+            auth: { appId, privateKey, installationId },
+          });
+        }
+      : undefined;
 
   // Dispatch each tx hash
   for (const txHash of txHashes) {
@@ -130,7 +130,7 @@ export function dispatchSignalExecution(
       try {
         await handleSignal(txHash, {
           rpcClient,
-          resolveOctokit,
+          ...(resolveOctokit ? { resolveOctokit } : {}),
           daoConfig,
           ...(roles ? { roles } : {}),
           log,
