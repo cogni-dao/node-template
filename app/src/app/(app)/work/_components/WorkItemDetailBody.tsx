@@ -61,7 +61,8 @@ const ROW = "flex min-w-0 items-center justify-between gap-3";
 const ROW_TITLE = "min-w-0 truncate";
 const ROW_TIME = "shrink-0 text-muted-foreground text-xs";
 const NO_PARAMS = new URLSearchParams();
-const PAGE_LINK = "text-muted-foreground text-xs underline";
+// Tap targets are at least 24px tall (frontend-development section 5).
+const PAGE_LINK = "inline-flex min-h-6 items-center text-muted-foreground text-xs underline";
 
 type SubjectRef = WorkItemDto["assignees"][number];
 const NO_MOVES: WorkMetric[] = [];
@@ -248,7 +249,7 @@ export function WorkItemDetailBody({
 												key={ref.id}
 												href={itemScopedHref(item.id, searchParams, "artifact", ref.id)}
 												scroll={false}
-												className={`${ROW} hover:underline`}
+												className={`${ROW} min-h-6 hover:underline`}
 												aria-current={selected && "id" in selected && selected.id === ref.id ? "true" : undefined}
 											>
 												<span className={ROW_TITLE}>{artifactTitle(ref)}</span>

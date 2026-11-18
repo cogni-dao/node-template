@@ -129,7 +129,9 @@ export class HistoryCursorUnknownError extends Error {
 /**
  * The page cut of a history read: shaped entries `entries` from `rawCount` raw rows read with cap `rawCap`. Takes `size`
  * entries. The cursor is the last kept entry's commit when more entries remain; when the raw read hit its cap with fewer,
- * the oldest raw row's commit; otherwise null.
+ * the oldest raw row's commit; otherwise null. Known limit: in the raw-cap case, when that oldest row repeats the state of
+ * the next older row (a merge repeat cut at the cap), the next page shows that version once more. It never skips or loops,
+ * and it needs more than `HISTORY_READ_ROWS` raw rows for one page.
  */
 export function cutHistoryPage(
   entries: readonly HistoryEntry[],

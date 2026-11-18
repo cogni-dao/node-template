@@ -170,6 +170,20 @@ describe("WorkItemDetail accessibility", () => {
     expect(screen.getByRole("cell", { name: "REFS ROUTE" })).toBeInTheDocument();
   });
 
+  it("says the artifact is not found, and the reviews unavailable, instead of an empty answer", () => {
+    render(
+      <WorkItemDetail
+        item={{ ...item, artifactRefs: { refs: [], nextCursor: null, unavailable: true }, artifact: { notFound: true } }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Artifact not found")).toBeInTheDocument();
+    expect(screen.getByText("Reviews are unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
+  });
+
   it("renders no Artifacts or History section for a read without those parts", () => {
     render(<WorkItemDetail item={item} itemId={item.id} open onOpenChange={vi.fn()} />);
     expect(screen.queryByText("Artifacts")).not.toBeInTheDocument();

@@ -4,11 +4,14 @@
 /**
  * Module: `@cogni/work-items/artifacts`
  * Purpose: The immutable review artifact record of a work item (task.0028, story.0047): the typed contract, the
- *   server-computed PASS-grade and the framework-agnostic record and list handlers.
+ *   server-computed PASS-grade and the framework-agnostic record, list, refs-page and one-artifact handlers (story.0058).
  * Scope: Pure contract and decisions over injected ports (`WorkItemArtifactStore`, the item store's `get`). Imports no web
  *   framework, auth, container or logger. Never reads knowledge tables.
  * Invariants:
  *   - INSERT_ONLY: the store has no update or delete; a later verdict is a new row, never an edit.
+ *   - REFS_NEVER_CARRY_BODY (story.0058): a ref holds no `rows`, `body` or `author`; `view=refs` pages 20 by `seq`, and
+ *     without `view` the list answers as before.
+ *   - ONE_ARTIFACT_OF_THIS_ITEM: `readWorkItemArtifact` returns an artifact only through its own item; another item's id is 404.
  *   - AUTHOR_IS_STAMPED: the caller never names the author; the handler stamps the authenticated principal.
  *   - AUTHOR_IS_AUDIT_ONLY: the stored `author` is a record for audit. No server check compares it with the subject's author (an
  *     inbox's principal, who set `pr`, who moved a story); fresh-context review is a rule in the review skills, and the move

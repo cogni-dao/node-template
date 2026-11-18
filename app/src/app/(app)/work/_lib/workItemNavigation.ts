@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Pure URL/history policy for route-backed work-item selection. */
+/**
+ * Pure URL/history policy for route-backed work-item selection. ITEM_SCOPED_PARAMS (`artifact`, `artifactsCursor`,
+ * `historyCursor`, story.0058) belong to one open item: opening another item, closing it or editing the list drops them.
+ */
 
 type SerializableSearchParams = Pick<URLSearchParams, "toString">;
 type WorkRouter = {

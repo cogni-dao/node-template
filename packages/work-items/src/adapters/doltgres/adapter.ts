@@ -362,9 +362,8 @@ const ARTIFACT_TABLE = "work_item_artifacts";
 /** Every artifact column but `body`: the item read never pays for a 16 KB review it does not return. */
 const ARTIFACT_SUMMARY_COLUMNS =
   'id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, url, author, created_at';
-/** A ref's columns: no `rows`, no `body` (hub work-item-artifacts, refs first). `verdict` and `rows` decide `passGrade`, so a validation ref reads its rows too. */
-const ARTIFACT_REF_COLUMNS =
-  'id, item_id, seq, item_revision, kind, subject, verdict, CASE WHEN kind = \'validation\' THEN "rows" ELSE NULL END AS "rows", note, url, author, created_at';
+/** A ref's columns: every column but `body` (hub work-item-artifacts, refs first). `rows` stays because `passGrade` needs it; `toArtifactRef` drops it. */
+const ARTIFACT_REF_COLUMNS = ARTIFACT_SUMMARY_COLUMNS;
 
 interface MutationProof {
   readonly verb: MutationVerb;
