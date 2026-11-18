@@ -9,7 +9,7 @@ import { displayFits, KpiBindingsSchema, StoredMetricSpecSchema } from "@cogni-d
  *   Pulls the framework-agnostic ContributionService from the container, maps
  *   SessionUser → Principal, and translates typed service errors to HTTP statuses.
  * Scope: Operator-side wiring only. Mirrors poly's identical handler set.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION,
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, ONE_ADMIN_CHECK (any credential),
  *   MERGE_IS_NODE_ADMIN (bug.0044, subsumes story.5101 GOAL_CHANGE_IS_NODE_ADMIN): every first
  *   merge, and a close of another principal's contribution, requires node admin — enforced in
  *   ContributionService (merge also gates raw diff ids at the head); mapped here to 403

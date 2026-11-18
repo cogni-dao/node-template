@@ -646,6 +646,22 @@ describe("createContributionService", () => {
     expect(port.lastClose?.principal).toEqual(agent);
   });
 
+  it("a session and a bearer on the same user id own the same inbox", async () => {
+    const port = new FakeContributionPort();
+    port.records = [contribution({ principalKind: "agent", principalId: "user-7" })];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+    });
+    await service.close({
+      principal: { id: "user-7", kind: "user" },
+      contributionId: "contrib-agent-1-abc123",
+      reason: "mine, by session",
+    });
+    expect(port.lastClose?.reason).toBe("mine, by session");
+  });
+
   it("rejects bearer close for another principal's contribution", async () => {
     const port = new FakeContributionPort();
     port.records = [contribution({ principalId: "agent-2" })];
