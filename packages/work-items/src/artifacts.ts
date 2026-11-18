@@ -56,6 +56,8 @@ export const VERDICTS_BY_KIND: Readonly<
 
 /** Most artifacts a list returns, and most scorecard rows one validation holds. */
 export const ARTIFACTS_LIST_MAX = 50;
+/** Refs per page of the refs view (`?view=refs`) and of the item read's `artifactRefs`. */
+export const ARTIFACT_REFS_PAGE = 20;
 export const ARTIFACT_ROWS_MAX = 50;
 export const ARTIFACT_URL_MAX = 2048;
 export const ARTIFACT_NOTE_MAX = 240;
@@ -294,6 +296,64 @@ export const WorkItemArtifactsLatestSchema = z.object({
 });
 export type WorkItemArtifactsLatest = z.infer<typeof WorkItemArtifactsLatestSchema>;
 
+/**
+ * A ref: what a reader needs to choose one artifact, never its `rows`, `body` or `author` (hub work-item-artifacts,
+ * refs first, then one read). A ref with a `url` and no body points the reader to that link.
+ */
+export const WorkItemArtifactRefSchema = WorkItemArtifactSchema.pick({
+  id: true,
+  seq: true,
+  kind: true,
+  verdict: true,
+  passGrade: true,
+  subject: true,
+  note: true,
+  url: true,
+  itemRevision: true,
+  createdAt: true,
+});
+export type WorkItemArtifactRef = z.infer<typeof WorkItemArtifactRefSchema>;
+
+/** One page of refs, highest `seq` first. `nextCursor` is the lowest `seq` on the page, or null on the last page. */
+export const WorkItemArtifactRefsPageSchema = z.object({
+  refs: z.array(WorkItemArtifactRefSchema).max(ARTIFACT_REFS_PAGE),
+  nextCursor: z.number().int().positive().nullable(),
+  unavailable: z.literal(true).optional(),
+});
+export type WorkItemArtifactRefsPage = z.infer<typeof WorkItemArtifactRefsPageSchema>;
+
+/** The item read's one artifact in full (`artifactId`): the artifact, or why there is none. */
+export const WorkItemArtifactReadSchema = z.union([
+  WorkItemArtifactSchema,
+  z.object({ notFound: z.literal(true) }),
+  z.object({ unavailable: z.literal(true) }),
+]);
+export type WorkItemArtifactRead = z.infer<typeof WorkItemArtifactReadSchema>;
+
+/** A ref of one stored artifact (`passGrade` derived). */
+export function toArtifactRef(artifact: WorkItemArtifact): WorkItemArtifactRef {
+  const { rows: _rows, body: _body, author: _author, itemId: _itemId, ...ref } = withPassGrade(artifact);
+  return ref;
+}
+
+/** Escapes a scorecard cell for a Markdown table: `|` and line breaks would split the row. */
+const markdownCell = (value: string): string =>
+  value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n\u0085\u2028\u2029]+/g, " ");
+
+/** The canonical scorecard rows as one GFM table, for a human view that renders Markdown. Pure. */
+export function scorecardMarkdown(rows: readonly ScorecardRow[]): string {
+  const lines = [
+    "| tweak | human | ai | loki | trace | overall | reason |",
+    "|---|---|---|---|---|---|---|",
+  ];
+  for (const row of rows) {
+    lines.push(
+      `| ${[row.tweak, row.human, row.ai, row.loki, row.trace, row.overall, row.reason ?? ""].map(markdownCell).join(" | ")} |`,
+    );
+  }
+  return lines.join("\n");
+}
+
 /** The row a store inserts. `author` is the stamped principal; the store stamps `itemRevision` inside its writer lock. */
 export interface NewWorkItemArtifact {
   readonly itemId: string;
@@ -315,6 +375,13 @@ export interface WorkItemArtifactStore {
   list(itemId: string): Promise<readonly WorkItemArtifact[]>;
   /** The highest-`seq` artifact of each kind, in one read, without `body`. */
   latest(itemId: string): Promise<readonly WorkItemArtifact[]>;
+  /**
+   * Refs order: highest `seq` first, only `seq` below `before` when given, at most `limit` rows, without `rows` or `body`.
+   * The caller asks for one more than a page to learn whether another page follows.
+   */
+  refs(itemId: string, options: { readonly before?: number; readonly limit: number }): Promise<readonly WorkItemArtifact[]>;
+  /** One artifact of this item in full, or null (another item's artifact id is null too). */
+  get(itemId: string, artifactId: string): Promise<WorkItemArtifact | null>;
 }
 
 /** A row with `passGrade` derived (validation only). */
@@ -608,13 +675,60 @@ export async function recordWorkItemArtifact(
   }
 }
 
-/** The artifacts of one item, newest first, at most `ARTIFACTS_LIST_MAX`. */
+/** The list query: `view=refs` asks for one page of refs, `cursor` (a `seq`) for the page below it. */
+export interface ArtifactListQuery {
+  readonly view?: string | null | undefined;
+  readonly cursor?: string | null | undefined;
+}
+
+const readRefused = (id: string, message: string, path: string): ArtifactResult => ({
+  status: 400,
+  body: { error: "invalid input", errorCode: "invalid_input", issues: [{ path: [path], message }] },
+  log: { event: READ, status: 400, outcome: "refused", workItemId: id, errorCode: "invalid_input" },
+});
+
+/** One page of refs: highest `seq` first, `before` exclusive. Reads one row past the page to set `nextCursor`. */
+export async function readArtifactRefsPage(
+  store: Pick<WorkItemArtifactStore, "refs">,
+  itemId: string,
+  before?: number,
+): Promise<WorkItemArtifactRefsPage> {
+  const rows = await store.refs(itemId, {
+    ...(before !== undefined ? { before } : {}),
+    limit: ARTIFACT_REFS_PAGE + 1,
+  });
+  const page = rows.slice(0, ARTIFACT_REFS_PAGE).map(toArtifactRef);
+  const last = page[page.length - 1];
+  return { refs: page, nextCursor: rows.length > ARTIFACT_REFS_PAGE && last ? last.seq : null };
+}
+
+/**
+ * The artifacts of one item. Without `view`, the full artifacts, newest first, at most `ARTIFACTS_LIST_MAX`, as before.
+ * With `view=refs`, one page of refs (`{ refs, nextCursor }`); `cursor` is the `nextCursor` of the page before.
+ */
 export async function listWorkItemArtifacts(
   deps: WorkItemArtifactDeps,
-  itemId: string
+  itemId: string,
+  query: ArtifactListQuery = {},
 ): Promise<ArtifactResult> {
+  const view = query.view ?? undefined;
+  if (view !== undefined && view !== "refs") return readRefused(itemId, "view must be refs", "view");
+  let before: number | undefined;
+  if (query.cursor !== undefined && query.cursor !== null) {
+    if (view !== "refs") return readRefused(itemId, "cursor needs view=refs", "cursor");
+    before = /^[1-9][0-9]{0,9}$/.test(query.cursor) ? Number(query.cursor) : Number.NaN;
+    if (!Number.isSafeInteger(before)) return readRefused(itemId, "cursor must be a positive seq", "cursor");
+  }
   try {
     if (!(await deps.items.get(toWorkItemId(itemId)))) return notFound(itemId, READ);
+    if (view === "refs") {
+      const page = await readArtifactRefsPage(deps.artifacts, itemId, before);
+      return {
+        status: 200,
+        body: page,
+        log: { event: READ, status: 200, outcome: "success", workItemId: itemId, artifactCount: page.refs.length },
+      };
+    }
     const artifacts = (await deps.artifacts.list(itemId))
       .slice(0, ARTIFACTS_LIST_MAX)
       .map(withPassGrade);
@@ -634,6 +748,33 @@ export async function listWorkItemArtifacts(
   }
 }
 
+/** One artifact of one item in full: `{ artifact }`, or 404 when the item or the artifact (of this item) is absent. */
+export async function readWorkItemArtifact(
+  deps: WorkItemArtifactDeps,
+  itemId: string,
+  artifactId: string,
+): Promise<ArtifactResult> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(artifactId)) return readRefused(itemId, "artifact id is malformed", "artifactId");
+  try {
+    if (!(await deps.items.get(toWorkItemId(itemId)))) return notFound(itemId, READ);
+    const artifact = await deps.artifacts.get(itemId, artifactId);
+    if (!artifact) {
+      return {
+        status: 404,
+        body: { error: `Artifact not found: ${artifactId}`, errorCode: "not_found" },
+        log: { event: READ, status: 404, outcome: "refused", workItemId: itemId, errorCode: "not_found" },
+      };
+    }
+    return {
+      status: 200,
+      body: { artifact: withPassGrade(artifact) },
+      log: { event: READ, status: 200, outcome: "success", workItemId: itemId, artifactCount: 1, kind: artifact.kind },
+    };
+  } catch (error) {
+    return unavailable(itemId, READ, error);
+  }
+}
+
 export const workItemsArtifactsCreateOperation = {
   id: "work.items.artifacts.create.v1",
   summary: "Record a review or validation artifact on a work item",
@@ -646,7 +787,19 @@ export const workItemsArtifactsCreateOperation = {
 export const workItemsArtifactsListOperation = {
   id: "work.items.artifacts.list.v1",
   summary: "List a work item's artifacts",
-  description: "Highest `seq` (newest) first, at most 50, each with its `body` when it has one.",
-  input: z.object({ id: z.string() }),
-  output: z.object({ items: z.array(WorkItemArtifactSchema).max(ARTIFACTS_LIST_MAX) }),
+  description:
+    "Highest `seq` (newest) first, at most 50, each with its `body` when it has one. With `view=refs`: one page of 20 refs (no `rows`, `body` or `author`) and `nextCursor`; send it back as `cursor` for the older page.",
+  input: z.object({ id: z.string(), view: z.literal("refs").optional(), cursor: z.string().optional() }),
+  output: z.union([
+    z.object({ items: z.array(WorkItemArtifactSchema).max(ARTIFACTS_LIST_MAX) }),
+    WorkItemArtifactRefsPageSchema,
+  ]),
+} as const;
+
+export const workItemsArtifactGetOperation = {
+  id: "work.items.artifacts.get.v1",
+  summary: "Read one work-item artifact in full",
+  description: "The artifact with its `rows`, `body` and `url`. An artifact of another item is a 404.",
+  input: z.object({ id: z.string(), artifactId: z.string() }),
+  output: z.object({ artifact: WorkItemArtifactSchema }),
 } as const;

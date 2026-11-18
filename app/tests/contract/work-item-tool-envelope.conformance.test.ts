@@ -16,7 +16,7 @@ import {
   KnowledgeReadOutputSchema, KnowledgeSearchOutputSchema,
 } from "@cogni/ai-tools";
 import { KnowledgeRowSchema } from "@cogni/knowledge-store/contracts";
-import { WorkItemDtoSchema } from "@cogni/work-items";
+import { WorkItemDtoSchema, WorkItemReadDtoSchema } from "@cogni/work-items";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -65,6 +65,8 @@ describe("exhaustive-minus-exclusion guard (task.0118)", () => {
   it("the read and query tool items carry every wire key, compared key by key through moves, metric, kpi, goal and links", () => {
     expect(missingDeep(WorkItemDtoSchema, WorkItemOutputSchema)).toEqual([]);
     expect(missingDeep(WorkItemDtoSchema, workItemReadContract.outputSchema.shape.item)).toEqual([]);
+    // story.0058: the read tool carries every part of the HTTP item read (artifacts, artifactRefs, historyRefs, artifact).
+    expect(missingDeep(WorkItemReadDtoSchema, workItemReadContract.outputSchema.shape.item)).toEqual([]);
     expect(missingDeep(WorkItemOutputSchema, WorkItemDtoSchema)).toEqual(["sourceUrl", "sourceUrlUnavailable"]);
     // The walker really descends: the sub-shapes this task added are on the path list.
     const paths = (schema: unknown, path = ""): string[] =>

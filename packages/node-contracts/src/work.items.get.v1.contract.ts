@@ -18,17 +18,18 @@
 import { WorkItemReadDtoSchema } from "@cogni/work-items";
 import { z } from "zod";
 
-/** Optional envelope parts a single-item read can add: `GET /api/v1/work/items/{id}?include=links`. */
-export const WORK_ITEM_INCLUDES = ["links"] as const;
+/** Optional envelope parts a single-item read can add: `GET /api/v1/work/items/{id}?include=links,artifacts,history`. */
+export const WORK_ITEM_INCLUDES = ["links", "artifacts", "history"] as const;
 
 export const workItemsGetOperation = {
   id: "work.items.get.v1",
   summary: "Get a work item by ID",
   description:
-    "Returns a single work item by its ID, or 404 if not found. Each moves entry carries its metric, the KPI it serves and the goal (task.0118). include=links adds the first page of citation links. `artifacts` holds the latest triage, design review, implementation review and validation, without their `body` (task.0028); `artifacts.unavailable` means they could not be read, not that there are none.",
+    "Returns a single work item by its ID, or 404 if not found. Each moves entry carries its metric, the KPI it serves and the goal (task.0118). include=links adds the first page of citation links; include=artifacts adds `artifactRefs` and include=history adds `historyRefs`, each the first page of refs with `nextCursor` (story.0058); artifact=<id> adds `artifact`, that one artifact in full, or `{ notFound: true }`. `artifacts` holds the latest triage, design review, implementation review and validation, without their `body` (task.0028); `artifacts.unavailable` means they could not be read, not that there are none.",
   input: z.object({
     id: z.string(),
     include: z.array(z.enum(WORK_ITEM_INCLUDES)).optional(),
+    artifact: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).optional(),
   }),
   output: WorkItemReadDtoSchema,
 } as const;

@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 
 import { ChangeReasonSchema } from "../src/history-contract.js";
 import { readWorkItemHistory } from "../src/history-read.js";
-import type { HistoryEntry } from "../src/history.js";
+import { cutHistoryPage, HistoryCursorUnknownError, type HistoryEntry } from "../src/history.js";
 
 const version = (reason: string | null): HistoryEntry => ({
   version: "2",
@@ -158,5 +158,50 @@ describe("ChangeReasonSchema", () => {
     ["a\u0000b", false],
   ])("%j -> %s", (value, ok) => {
     expect(ChangeReasonSchema.safeParse(value).success).toBe(ok);
+  });
+});
+
+describe("history refs view (story.0058)", () => {
+  const at = (n: number): HistoryEntry => ({ ...version(`reason ${n}`), version: String(n), commit: `c${n}` });
+
+  it("cutHistoryPage: cursor is the last kept entry when more remain, the oldest raw row at the raw cap, else null", () => {
+    const entries = Array.from({ length: 25 }, (_, i) => at(25 - i));
+    const raw = entries.map((e) => ({ to_commit: e.commit }));
+    expect(cutHistoryPage(entries, raw, 60, 20)).toMatchObject({ nextCursor: "c6" });
+    expect(cutHistoryPage(entries, raw, 60, 20).entries).toHaveLength(20);
+    // The raw read hit its cap but shaped to fewer than a page: continue below the oldest raw row.
+    const capped = Array.from({ length: 60 }, (_, i) => ({ to_commit: `r${i}` }));
+    expect(cutHistoryPage(entries.slice(0, 7), capped, 60, 20)).toMatchObject({ nextCursor: "r59" });
+    expect(cutHistoryPage(entries.slice(0, 7), raw.slice(0, 7), 60, 20)).toMatchObject({ nextCursor: null });
+  });
+
+  const store = (pages: Record<string, { entries: HistoryEntry[]; nextCursor: string | null }>) => ({
+    get: async () => ({ id: "task.0001" }),
+    history: async () => [at(1)],
+    historyPage: async (_id: unknown, options: { cursor?: string | undefined }) => {
+      const page = pages[options.cursor ?? ""];
+      if (!page) throw new HistoryCursorUnknownError(options.cursor ?? "");
+      return page;
+    },
+  });
+
+  it("returns refs without diff and pages by commit; the default answer is unchanged", async () => {
+    const s = store({ "": { entries: [at(2)], nextCursor: "c2" }, c2: { entries: [at(1)], nextCursor: null } });
+    const first = await readWorkItemHistory(s, "task.0001", { view: "refs" });
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual({ refs: [expect.not.objectContaining({ diff: expect.anything() })], nextCursor: "c2" });
+    expect((first.body as { refs: { commit: string }[] }).refs[0]?.commit).toBe("c2");
+    const older = await readWorkItemHistory(s, "task.0001", { view: "refs", cursor: "c2" });
+    expect(older.body).toMatchObject({ refs: [{ commit: "c1" }], nextCursor: null });
+    expect((await readWorkItemHistory(s, "task.0001")).body).toMatchObject({ items: [{ diff: {} }] });
+  });
+
+  it("refuses a foreign cursor, an unknown view and a cursor without view=refs with 400 invalid_input", async () => {
+    const s = store({ "": { entries: [], nextCursor: null } });
+    for (const query of [{ view: "refs", cursor: "zz" }, { view: "full" }, { cursor: "c1" }, { view: "refs", cursor: "C!" }]) {
+      const refused = await readWorkItemHistory(s, "task.0001", query);
+      expect(refused.status).toBe(400);
+      expect(refused.body).toMatchObject({ errorCode: "invalid_input" });
+    }
   });
 });

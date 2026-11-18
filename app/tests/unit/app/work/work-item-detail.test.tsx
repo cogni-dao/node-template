@@ -134,6 +134,47 @@ describe("WorkItemDetail accessibility", () => {
     expectAccessibleDialog(item.title, /Details for task\.5174/);
     expect(errorSpy).not.toHaveBeenCalled();
   });
+  it("shows artifact and history refs, and the selected validation's scorecard, only when the read carries them", () => {
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          artifactRefs: {
+            refs: [
+              { id: "wia-2", seq: 2, kind: "validation", verdict: "pass", passGrade: true, subject: "s", itemRevision: 3, createdAt: "2026-10-03T00:00:00.000Z" },
+              { id: "wia-1", seq: 1, kind: "design_review", verdict: "request_changes", subject: "s", itemRevision: 2, createdAt: "2026-10-02T00:00:00.000Z" },
+            ],
+            nextCursor: 1,
+          },
+          historyRefs: {
+            refs: [{ version: "2", commit: "c2", at: "2026-10-03T00:00:00.000Z", actor: null, reason: null, cites: [], changed: ["status"] }],
+            nextCursor: null,
+          },
+          artifact: {
+            id: "wia-2", itemId: item.id, seq: 2, itemRevision: 3, kind: "validation", subject: "s", verdict: "pass", author: "u",
+            createdAt: "2026-10-03T00:00:00.000Z",
+            rows: [{ tweak: "REFS ROUTE", human: "—", ai: "🟢", loki: "🟢", trace: "—", overall: "🟢 PASS" }],
+          },
+        }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("link", { name: /Design review · request changes/ })).toHaveAttribute(
+      "href",
+      "/work/items/task.5174?artifact=wia-1",
+    );
+    expect(screen.getByRole("link", { name: "Older" })).toHaveAttribute("href", "/work/items/task.5174?artifactsCursor=1");
+    expect(screen.getByText("No reason recorded")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "REFS ROUTE" })).toBeInTheDocument();
+  });
+
+  it("renders no Artifacts or History section for a read without those parts", () => {
+    render(<WorkItemDetail item={item} itemId={item.id} open onOpenChange={vi.fn()} />);
+    expect(screen.queryByText("Artifacts")).not.toBeInTheDocument();
+    expect(screen.queryByText("History")).not.toBeInTheDocument();
+  });
 });
 
 

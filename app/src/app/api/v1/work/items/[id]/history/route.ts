@@ -3,7 +3,8 @@
 
 /**
  * Module: `@app/api/v1/work/items/[id]/history`
- * Purpose: GET a work item's versions, newest first, each with its change reason (task.0052).
+ * Purpose: GET a work item's versions, newest first, each with its change reason (task.0052). `?view=refs&cursor=` returns one
+ *   page of 20 refs without `diff` and `nextCursor` (story.0058); without `view` the answer is unchanged.
  * Scope: Thin route: session check, id, `readWorkItemHistory` from `@cogni/work-items`, one log event, response.
  * Invariants: NOTE_NOT_BODY, ONE_HISTORY_SHAPE, one terminal log event per read (counts only).
  * Side-effects: IO (HTTP response, Doltgres read)
@@ -26,16 +27,18 @@ export const GET = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
   { routeId: "work.items.history", auth: { mode: "required", getSessionUser } },
-  async (ctx, _request, sessionUser, context) => {
+  async (ctx, request, sessionUser, context) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
     const startedAt = Date.now();
+    const params = new URL(request.url).searchParams;
     const { status, body, log } = await readWorkItemHistory(
       getContainer().doltgresWorkItems,
-      id
+      id,
+      { view: params.get("view"), cursor: params.get("cursor") }
     );
     const { event: _event, errorName, ...fields } = log;
     logEvent(ctx.log, EVENT_NAMES.WORK_ITEMS_HISTORY_READ, {

@@ -16,7 +16,7 @@
 import type { WorkItemArtifactStore } from "./artifacts.js";
 import type { CiteRef } from "./cites.js";
 import type { WorkItemSummary } from "./contracts.js";
-import type { HistoryEntry } from "./history.js";
+import type { HistoryEntry, HistoryPage } from "./history.js";
 import type { WorkItemLeasePort } from "./leases.js";
 import type { WorkBoardColumnPages } from "./board.js";
 import type { WorkSummaryReadOptions } from "./summary-query.js";
@@ -103,6 +103,11 @@ export interface WorkItemsPort {
   delete(id: WorkItemId, principalId: string): Promise<boolean>;
   /** Versions of one item, newest first, with their change reasons (task.0052). */
   history?(id: WorkItemId): Promise<HistoryEntry[]>;
+  /** One page of versions, newest first, older than `cursor` (story.0058); a foreign cursor throws `HistoryCursorUnknownError`. */
+  historyPage?(
+    id: WorkItemId,
+    options: { readonly cursor?: string | undefined; readonly limit: number }
+  ): Promise<HistoryPage>;
   /** In-memory writer state for deep readiness; makes no database call. */
   writerHealth?(): WorkItemWriterHealth;
   /** Insert-only review and validation artifacts (task.0028). Absent on a store that does not serve them. */

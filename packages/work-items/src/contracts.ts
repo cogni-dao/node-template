@@ -12,7 +12,12 @@
 
 import { z } from "zod";
 
-import { WorkItemArtifactsLatestSchema } from "./artifacts.js";
+import {
+	WorkItemArtifactReadSchema,
+	WorkItemArtifactRefsPageSchema,
+	WorkItemArtifactsLatestSchema,
+} from "./artifacts.js";
+import { HistoryRefsPageSchema } from "./history-contract.js";
 
 export const SubjectRefSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("user"), userId: z.string() }),
@@ -195,12 +200,15 @@ export const WorkItemDtoSchema = z.object({
 export type WorkItemDto = z.infer<typeof WorkItemDtoSchema>;
 
 /**
- * The single-item HTTP read (`GET /api/v1/work/items/{id}`): the item plus the latest review or validation
- * of each kind (task.0028). Not on `WorkItemDtoSchema`: the agent tool's output must carry every key of that
- * schema (agent-tool-context-envelope rule 3), and the tool does not serve artifacts yet.
+ * The single-item read (`GET /api/v1/work/items/{id}` and `core__work_item_read`): the item plus the latest review or
+ * validation of each kind (task.0028), and on request the first page of artifact and history refs and one artifact in
+ * full (story.0058: refs first, then one read).
  */
 export const WorkItemReadDtoSchema = WorkItemDtoSchema.extend({
 	artifacts: WorkItemArtifactsLatestSchema.optional(),
+	artifactRefs: WorkItemArtifactRefsPageSchema.optional(),
+	historyRefs: HistoryRefsPageSchema.optional(),
+	artifact: WorkItemArtifactReadSchema.optional(),
 });
 export type WorkItemReadDto = z.infer<typeof WorkItemReadDtoSchema>;
 

@@ -13,7 +13,7 @@
  * @public
  */
 
-import type { WorkItemDto, WorkItemPatchInput } from "@cogni-dao/work-items";
+import type { ItemEnvelopeParts, WorkItemDto, WorkItemPatchInput } from "@cogni-dao/work-items";
 import type { WorkItemQueryInput } from "../tools/work-item-query";
 
 /** Legacy capability assignee input; canonical tool output additionally carries its variant key. */
@@ -85,13 +85,19 @@ export interface WorkItemCapability {
   /**
    * One item as the single-item envelope (task.0118), the same read `GET /api/v1/work/items/{id}`
    * serves: each move carries its readings, verdict and metric → KPI → goal chain, and
-   * `includeLinks` adds the first page of citation links. `null` when absent. Optional: an
+   * `includeLinks` adds the first page of citation links. `includeArtifacts` and `includeHistory` add the first page of
+   * artifact and history refs, and `artifactId` that one artifact in full (story.0058). `null` when absent. Optional: an
    * implementation without it is read through `query` (moves without the chain).
    */
   read?(
     id: string,
-    options?: { readonly includeLinks?: boolean },
-  ): Promise<WorkItemInfo | null>;
+    options?: {
+      readonly includeLinks?: boolean;
+      readonly includeArtifacts?: boolean;
+      readonly includeHistory?: boolean;
+      readonly artifactId?: string;
+    },
+  ): Promise<(WorkItemInfo & ItemEnvelopeParts) | null>;
 
   /**
    * Record one immutable artifact (triage, review or validation) on an item: the same operation as

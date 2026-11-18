@@ -1527,6 +1527,30 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			});
 			expect(await adapter.artifacts.latest("task.9998")).toEqual([]);
 
+			// story.0058, refs first: highest seq first, below a cursor, never a review body; a validation keeps its rows for passGrade.
+			const refs = await adapter.artifacts.refs(itemId, { limit: 3 });
+			expect(refs.map((a) => a.seq)).toEqual([6, 5, 4]);
+			for (const ref of refs) expect(ref.body).toBeUndefined();
+			expect(refs.find((a) => a.id === second.id)?.rows).toEqual(rows);
+			const olderRefs = await adapter.artifacts.refs(itemId, { before: 4, limit: 21 });
+			expect(olderRefs.map((a) => a.seq)).toEqual([3, 2, 1]);
+			expect(olderRefs.find((a) => a.id === review.id)?.rows).toBeUndefined();
+			// One artifact in full, only through its own item.
+			expect(await adapter.artifacts.get(itemId, review.id)).toMatchObject({ body: review.body });
+			expect(await adapter.artifacts.get("task.9998", review.id)).toBeNull();
+			// History pages by (date, commit): page sizes cut exactly, the cursor continues strictly older, a foreign cursor throws.
+			const all = await adapter.history(toWorkItemId(itemId));
+			expect(all.length).toBeGreaterThanOrEqual(2);
+			const head = await adapter.historyPage(toWorkItemId(itemId), { limit: 1 });
+			expect(head.entries.map((e) => e.commit)).toEqual([all[0]!.commit]);
+			expect(head.nextCursor).toBe(all[0]!.commit);
+			const rest = await adapter.historyPage(toWorkItemId(itemId), { cursor: head.nextCursor!, limit: 20 });
+			expect(rest.entries.map((e) => e.commit)).toEqual(all.slice(1).map((e) => e.commit));
+			expect(rest.nextCursor).toBeNull();
+			await expect(
+				adapter.historyPage(toWorkItemId(itemId), { cursor: "0".repeat(32), limit: 20 }),
+			).rejects.toMatchObject({ name: "HistoryCursorUnknownError" });
+
 			// Insert-only on the real engine: every artifact is one Dolt commit with its actor, reason and id;
 			// recording moved nothing on the item beyond the one patch above.
 			const log = await writerSql.unsafe(

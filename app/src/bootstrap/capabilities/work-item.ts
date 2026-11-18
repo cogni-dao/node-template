@@ -41,7 +41,13 @@ import type {
   WorkItemStatus,
   WorkItemType,
 } from "@cogni/work-items";
-import type { EnvelopeDegradedEvent, ItemLinksPort, MoveReadingPort } from "@cogni/work-items";
+import type {
+  EnvelopeDegradedEvent,
+  ItemEnvelopeParts,
+  ItemLinksPort,
+  MoveReadingPort,
+  WorkItemHistoryStore,
+} from "@cogni/work-items";
 import {
   type ArtifactLog,
   type WorkItemArtifactDeps,
@@ -59,6 +65,8 @@ import {
   WorkItemRevisionConflictError,
   type WorkItemsDoltgresPort,
 } from "@cogni/work-items/adapters/doltgres";
+
+import { createItemRefPorts } from "./work-item-refs";
 
 /**
  * Dependencies for creating the work item capability.
@@ -94,6 +102,8 @@ export interface WorkItemCapabilityDeps {
     /** The one terminal record of the call, the same one the route logs (no body, no row, no url). */
     readonly log?: (log: ArtifactLog) => void;
   };
+  /** The item's history pages for `read` with `includeHistory` (story.0058); read at call time, like `artifacts`. */
+  readonly history?: () => Pick<WorkItemHistoryStore, "historyPage"> | undefined;
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
     readonly principalId: string | (() => string);
@@ -162,15 +172,27 @@ export function createWorkItemCapability(
      * item with each move's readings, verdict and metric → KPI → goal chain, and with `includeLinks`
      * the first page of citation links.
      */
-    async read(id, options): Promise<WorkItemInfo | null> {
+    async read(id, options): Promise<(WorkItemInfo & ItemEnvelopeParts) | null> {
       const result = await list({ ids: [id], limit: 1 });
       const item = result.items.map(toWorkItemInfo).find((entry) => entry.id === id);
       if (!item) return null;
-      // ONE_COMPOSITION: the same `composeItemEnvelope` the HTTP facade calls.
+      // ONE_COMPOSITION: the same `composeItemEnvelope` and the same ports the HTTP facade wires.
+      const store = deps.artifacts?.deps()?.artifacts;
       return composeItemEnvelope(
         item,
-        { readings: deps.moveReadings, links: deps.links, log: deps.log },
-        { includeLinks: options?.includeLinks === true },
+        {
+          readings: deps.moveReadings,
+          links: deps.links,
+          artifacts: store ? { latest: (itemId) => store.latest(itemId) } : undefined,
+          ...createItemRefPorts({ artifacts: store, history: deps.history?.() }),
+          log: deps.log,
+        },
+        {
+          includeLinks: options?.includeLinks === true,
+          includeArtifacts: options?.includeArtifacts === true,
+          includeHistory: options?.includeHistory === true,
+          ...(options?.artifactId !== undefined ? { artifactId: options.artifactId } : {}),
+        },
       );
     },
 

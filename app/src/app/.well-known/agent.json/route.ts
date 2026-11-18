@@ -46,6 +46,7 @@ import {
 	revokeAgentCredentialOperation,
 	rotateAgentCredentialOperation,
 	upgradeAgentCredentialOperation,
+	workItemsArtifactGetOperation,
 	workItemsArtifactsCreateOperation,
 	workItemsArtifactsListOperation,
 	workItemsClaimOperation,
@@ -319,6 +320,13 @@ export async function GET(request: Request) {
 				auth: { type: "bearer" },
 				inputSchema: z.toJSONSchema(workItemsArtifactsListOperation.input),
 				outputSchema: z.toJSONSchema(workItemsArtifactsListOperation.output),
+			},
+			getWorkItemArtifact: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/work/items/{id}/artifacts/{artifactId}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(workItemsArtifactGetOperation.input),
+				outputSchema: z.toJSONSchema(workItemsArtifactGetOperation.output),
 			},
 			getKnowledgeHistory: {
 				method: "GET",

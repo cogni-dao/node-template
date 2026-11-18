@@ -18,7 +18,10 @@ import type { z } from "zod";
 import {
   WorkItemArtifactInputSchema,
   WorkItemArtifactSchema,
+  WorkItemArtifactRefSchema,
+  WorkItemArtifactRefsPageSchema,
   WorkItemArtifactsLatestSchema,
+  workItemsArtifactGetOperation,
   workItemsArtifactsCreateOperation,
   workItemsArtifactsListOperation,
 } from "@cogni/work-items";
@@ -26,7 +29,10 @@ import {
 export {
   WorkItemArtifactInputSchema,
   WorkItemArtifactSchema,
+  WorkItemArtifactRefSchema,
+  WorkItemArtifactRefsPageSchema,
   WorkItemArtifactsLatestSchema,
+  workItemsArtifactGetOperation,
   workItemsArtifactsCreateOperation,
   workItemsArtifactsListOperation,
 };
