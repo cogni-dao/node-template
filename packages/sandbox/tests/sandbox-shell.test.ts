@@ -2,21 +2,18 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@tests/unit/adapters/server/sandbox-workspace/sandbox-shell`
+ * Module: `@cogni-dao/sandbox` sandbox-shell
  * Purpose: Guards the three defects the sandbox shell must not have: model text inside a shell string,
  *   a run folder that is not a UUID, and one run's calls overlapping.
  * Scope: SandboxShell over a fake client. No network.
  * Side-effects: none
- * Links: src/adapters/server/sandbox-workspace/sandbox-shell.ts
+ * Links: src/sandbox-shell.ts
  */
 
 import { describe, expect, it } from "vitest";
 
-import type {
-  SandboxCommandRequest,
-  SandboxCommandResult,
-} from "@/adapters/server/sandbox-workspace";
-import { SandboxShell } from "@/adapters/server/sandbox-workspace";
+import type { SandboxCommandRequest, SandboxCommandResult } from "../src/execd-client";
+import { SandboxShell } from "../src/sandbox-shell";
 
 const RUN_A = "11111111-1111-4111-8111-111111111111";
 const RUN_B = "22222222-2222-4222-8222-222222222222";
@@ -96,6 +93,7 @@ describe("SandboxShell", () => {
     let clock = 0;
     const shell = new SandboxShell(
       { runCommand: async () => done({ exitCode: 137, output: "x\nbash: line 1:   9 Killed  timeout" }) },
+      undefined,
       () => clock
     );
     // An out-of-memory 137 long before the limit is a plain failure.
@@ -110,9 +108,43 @@ describe("SandboxShell", () => {
           return done({ exitCode: 137 });
         },
       },
+      undefined,
       () => clock
     );
     const late = await slow.run({ runId: RUN_A, command: "sleep 9", timeoutMs: 5000 });
     expect(late.errorCode).toBe("timeout");
+  });
+
+  it("sends the cleanup tick at most every 5 minutes and reports its reading", async () => {
+    let clock = 10 * 60_000;
+    const reports: unknown[] = [];
+    let ticks = 0;
+    const shell = new SandboxShell(
+      {
+        runCommand: async (req) => {
+          if (req.envs?.SB_CMD !== undefined) return done();
+          ticks += 1;
+          return done({
+            output: "reaped=2 workspaces=3 disk_used_pct=11 mem_current=100 mem_max=max",
+          });
+        },
+      },
+      (r) => reports.push(r),
+      () => clock
+    );
+    await shell.run({ runId: RUN_A, command: "ls", timeoutMs: 5000 });
+    clock += 60_000;
+    await shell.run({ runId: RUN_A, command: "ls", timeoutMs: 5000 });
+    clock += 5 * 60_000;
+    await shell.run({ runId: RUN_A, command: "ls", timeoutMs: 5000 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ticks).toBe(2);
+    expect(reports[0]).toEqual({
+      reaped: 2,
+      workspaces: 3,
+      diskUsedPct: 11,
+      memCurrent: "100",
+      memMax: "max",
+    });
   });
 });

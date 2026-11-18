@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@adapters/server/sandbox-workspace/sandbox-host`
+ * Module: `@cogni-dao/sandbox/sandbox-host`
  * Purpose: Derive the public origin of one of this node's isolated services from the app's own public origin.
  * Scope: Pure host-string math. Does not read env, resolve DNS, or perform I/O.
  * Invariants:

@@ -3,29 +3,32 @@
 
 /**
  * Module: `@bootstrap/capabilities/sandbox-workspace`
- * Purpose: Factory for the sandbox shell capability (`core__sandbox_shell`) from server environment.
- * Scope: Resolves sandbox origin + token and binds each call to the calling run. Does not implement transport.
+ * Purpose: Compose the sandbox shell capability (`core__sandbox_shell`) from server environment.
+ * Scope: Thin composition over `@cogni/sandbox`: env keys in, capability out, tick readings to the event registry.
+ *   Holds no transport or queue code.
  * Invariants:
  *   - NO_SECRETS_IN_CONTEXT: SANDBOX_EXECD_TOKEN resolved from env, never passed through tool params.
  *   - DERIVED_HOST: origin = SANDBOX_BASE_URL override, else derived from APP_BASE_URL + node slug.
  *   - UNCONFIGURED_IS_NULL: missing token or underivable origin returns null (the tool answers `unavailable`), never a guess.
  *   - RUN_FROM_THE_SCOPE: the run id comes from the execution scope the tool guard binds, never from tool params.
- * Side-effects: none (factory only)
- * Links: src/adapters/server/sandbox-workspace/, services/sandbox/
+ * Side-effects: logs `adapter.sandbox.tick`
+ * Links: packages/sandbox, services/sandbox/
  * @internal
  */
 
 import type { SandboxShellCapability } from "@cogni/ai-tools";
+import {
+  createSandboxShellCapability as composeSandboxShellCapability,
+  deriveIsolatedServiceOrigin,
+  SANDBOX_SERVICE_NAME,
+} from "@cogni/sandbox";
 
 import { getExecutionScope } from "@/adapters/server";
-import {
-  deriveIsolatedServiceOrigin,
-  ExecdSandboxClient,
-  SANDBOX_SERVICE_NAME,
-  SandboxShell,
-} from "@/adapters/server/sandbox-workspace";
 import { getNodeName } from "@/shared/config";
 import type { ServerEnv } from "@/shared/env";
+import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+
+const logger = makeLogger({ component: "SandboxShell" });
 
 /** Resolve the sandbox origin this node's app should call, or null when unknown. */
 export function resolveSandboxWorkspaceOrigin(
@@ -49,12 +52,22 @@ export function createSandboxShellCapability(
   if (!accessToken) return null;
   const baseUrl = resolveSandboxWorkspaceOrigin(env, getNodeName());
   if (!baseUrl) return null;
-  const shell = new SandboxShell(new ExecdSandboxClient({ baseUrl, accessToken }));
-  return {
-    async run(params) {
-      const { runId } = getExecutionScope();
-      if (!runId) throw new Error("no run to give a folder");
-      return shell.run({ runId, ...params });
+  return composeSandboxShellCapability({
+    baseUrl,
+    accessToken,
+    runId: () => getExecutionScope().runId,
+    onTick: (report) => {
+      if ("errorCode" in report) {
+        logger.warn(
+          { event: EVENT_NAMES.ADAPTER_SANDBOX_TICK, error_code: report.errorCode },
+          EVENT_NAMES.ADAPTER_SANDBOX_TICK
+        );
+      } else {
+        logger.info(
+          { event: EVENT_NAMES.ADAPTER_SANDBOX_TICK, ...report },
+          EVENT_NAMES.ADAPTER_SANDBOX_TICK
+        );
+      }
     },
-  };
+  });
 }

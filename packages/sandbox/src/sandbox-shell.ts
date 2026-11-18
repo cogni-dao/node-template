@@ -2,10 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@adapters/server/sandbox-workspace/sandbox-shell`
+ * Module: `@cogni-dao/sandbox/sandbox-shell`
  * Purpose: Run one model-written command in one run's folder of the node's sandbox, and keep the sandbox clean.
  * Scope: Wraps ExecdSandboxClient with the call wrapper, per-run ordering and the cleanup tick. Does not read env,
- *   know the run's identity (the caller passes `runId`) or expose a model-facing tool.
+ *   write logs, know the run's identity (the caller passes `runId`) or expose a model-facing tool.
  * Invariants:
  *   - USER_TEXT_NEVER_IN_A_SHELL_STRING: the `command` execd runs is fixed; the model's text, the folder and the limit
  *     travel in `envs` (SB_CMD, SB_DIR, SB_SECS).
@@ -13,24 +13,12 @@
  *   - RUN_ID_IS_A_UUID: the folder name is checked before it reaches the sandbox.
  *   - TIMEOUT_ONLY_AT_THE_LIMIT: `timeout` is reported only when the call ran to its limit; any other failure is `nonzero_exit`.
  *   - TICK_ON_USE_ONLY: the cleanup tick runs at most every 5 minutes, and only when a call arrives.
- * Side-effects: IO (HTTPS to the sandbox lease), logs `adapter.sandbox.tick`
+ * Side-effects: IO (HTTPS to the sandbox lease); reports each tick reading to the injected `onTick`
  * Links: https://node-template.cognidao.org/knowledge/node-sandbox-design, https://node-template.cognidao.org/knowledge/node-sandbox-lifecycle
- * @internal
+ * @public
  */
 
-import type {
-  SandboxShellParams,
-  SandboxShellResult,
-} from "@cogni/ai-tools";
-
-import { EVENT_NAMES, makeLogger } from "@/shared/observability";
-
-import {
-  type ExecdSandboxClient,
-  SandboxRequestError,
-} from "./execd-sandbox.client";
-
-const logger = makeLogger({ component: "SandboxShell" });
+import { type ExecdSandboxClient, SandboxRequestError } from "./execd-client";
 
 export const MAX_COMMAND_BYTES = 16 * 1024;
 const MIN_TIMEOUT_MS = 1_000;
@@ -59,10 +47,41 @@ printf 'reaped=%s workspaces=%s disk_used_pct=%s mem_current=%s mem_max=%s\\n' \
 /** bash's own job line when the wrapper kills a call: `bash: line 1: 12 Killed ...` or `[1]+ Killed ...`. */
 const KILLED_JOB_LINE = /^(?:(?:\S+: )?line \d+: +\d+|\[\d+\][+-]?) +Killed\b.*(?:\n|$)/gm;
 
+/** One command for the calling run's folder. Structurally the `@cogni-dao/ai-tools` SandboxShellParams. */
+export interface SandboxShellParams {
+  /** Shell text; may be a multi-line script. */
+  readonly command: string;
+  /** Call limit in milliseconds, 1000..900000. */
+  readonly timeoutMs: number;
+}
+
+/** `none` = exit 0; `nonzero_exit` = the command failed; `timeout` = the call ran to its limit. */
+export type SandboxShellErrorCode = "none" | "nonzero_exit" | "timeout";
+
+/** Structurally the `@cogni-dao/ai-tools` SandboxShellResult. */
+export interface SandboxShellResult {
+  readonly exitCode: number;
+  readonly output: string;
+  readonly truncated: boolean;
+  readonly errorCode: SandboxShellErrorCode;
+}
+
 export interface SandboxShellRun extends SandboxShellParams {
   /** The calling run's id; its folder is `/workspace/<runId>`. */
   readonly runId: string;
 }
+
+/** One cleanup tick: the lease's readings, or `errorCode` when the tick failed. Counts and sizes only. */
+export type SandboxTickReport =
+  | {
+      readonly reaped: number;
+      readonly workspaces: number;
+      readonly diskUsedPct: number;
+      /** Bytes, or `unknown` when the lease's cgroup files are missing. */
+      readonly memCurrent: string;
+      readonly memMax: string;
+    }
+  | { readonly errorCode: "transport_error" };
 
 export class SandboxShell {
   /** The last call of each run that has calls waiting or running; the next call of that run chains onto it. */
@@ -71,6 +90,7 @@ export class SandboxShell {
 
   constructor(
     private readonly client: Pick<ExecdSandboxClient, "runCommand">,
+    private readonly onTick: (report: SandboxTickReport) => void = () => {},
     private readonly now: () => number = Date.now
   ) {}
 
@@ -79,7 +99,7 @@ export class SandboxShell {
     if (!UUID.test(runId)) {
       throw new SandboxRequestError("run id is not a UUID", null);
     }
-    if (Buffer.byteLength(command, "utf8") > MAX_COMMAND_BYTES) {
+    if (new TextEncoder().encode(command).length > MAX_COMMAND_BYTES) {
       throw new SandboxRequestError("command is over 16 KiB", null);
     }
     if (
@@ -159,25 +179,15 @@ export class SandboxShell {
           result.output
         );
       if (!reading) throw new Error("no reading line");
-      logger.info(
-        {
-          event: EVENT_NAMES.ADAPTER_SANDBOX_TICK,
-          reaped: Number(reading[1]),
-          workspaces: Number(reading[2]),
-          diskUsedPct: Number(reading[3]),
-          memCurrent: reading[4] || "unknown",
-          memMax: reading[5] || "unknown",
-        },
-        EVENT_NAMES.ADAPTER_SANDBOX_TICK
-      );
+      this.onTick({
+        reaped: Number(reading[1]),
+        workspaces: Number(reading[2]),
+        diskUsedPct: Number(reading[3]),
+        memCurrent: reading[4] || "unknown",
+        memMax: reading[5] || "unknown",
+      });
     } catch {
-      logger.warn(
-        {
-          event: EVENT_NAMES.ADAPTER_SANDBOX_TICK,
-          error_code: "transport_error",
-        },
-        EVENT_NAMES.ADAPTER_SANDBOX_TICK
-      );
+      this.onTick({ errorCode: "transport_error" });
     }
   }
 }

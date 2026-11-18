@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@adapters/server/sandbox-workspace/execd-sandbox.client`
+ * Module: `@cogni-dao/sandbox/execd-client`
  * Purpose: Minimal server-only client for the node's remote sandbox (OpenSandbox execd behind Caddy).
  * Scope: Runs one shell command via `POST /command` and folds the streamed events into one bounded result.
  *   Does not manage sessions, files or PTY, and does not know runs, folders or queues (see sandbox-shell.ts).

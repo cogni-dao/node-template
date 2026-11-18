@@ -4,7 +4,7 @@ name: Publish Packages
 # `@cogni-dao/knowledge-store`, `@cogni-dao/knowledge-base`,
 # `@cogni-dao/knowledge-base-ui`, `@cogni-dao/graph-execution`,
 # `@cogni-dao/ai-tools`, `@cogni-dao/langgraph-graphs`, and
-# `@cogni-dao/money-plane`, `@cogni-dao/scheduling`, `@cogni-dao/agent-grants` — so node repos can
+# `@cogni-dao/money-plane`, `@cogni-dao/scheduling`, `@cogni-dao/agent-grants`, `@cogni-dao/sandbox` — so node repos can
 # DEPEND on them instead of vendoring their source. Four divergent copies of the
 # work-items adapter existed across the fleet when bug.5358 was audited, and a
 # single availability fix then cost nine PRs across six repositories (story.5069).
@@ -59,6 +59,7 @@ on:
       - "money-plane-v*"
       - "agent-grants-v*"
       - "substrate-health-v*"
+      - "sandbox-v*"
       - "node-declarations-v*"
   # Rehearsal only. Every publishing step below is gated on `push`, so a
   # dispatch packs the tarball and runs the artifact assertions against it
@@ -108,6 +109,7 @@ env:
      {"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"},
      {"name":"@cogni-dao/agent-grants","dir":"packages/agent-grants","tagPrefix":"agent-grants-v"},
      {"name":"@cogni-dao/substrate-health","dir":"packages/substrate-health","tagPrefix":"substrate-health-v"},
+     {"name":"@cogni-dao/sandbox","dir":"packages/sandbox","tagPrefix":"sandbox-v"},
      {"name":"@cogni-dao/node-declarations","dir":"packages/node-declarations","tagPrefix":"node-declarations-v"}]
 
 jobs:
