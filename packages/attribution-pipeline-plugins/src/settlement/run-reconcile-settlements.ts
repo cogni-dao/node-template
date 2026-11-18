@@ -154,13 +154,35 @@ export async function runReconcileSettlements(
       }
     }
 
-    const claimantKeys = [...new Set(pending.map((item) => item.claimantKey))];
-    const resolutions = await walletResolver.resolveWallets(claimantKeys);
-    const byClaimantKey = new Map(
-      resolutions.map((resolution) => [resolution.claimantKey, resolution])
-    );
+    // FREEZE_AT_CUTOFF: each liability resolves as of its own cutoff (its creation at epoch finalize), so a beneficiary accepted or revoked later
+    // never reinterprets earlier work. Liabilities of one epoch share a cutoff, so this is one resolver call per epoch.
+    const keysByCutoff = new Map<number, Set<string>>();
+    for (const item of pending) {
+      const cutoff = item.createdAt.getTime();
+      const keys = keysByCutoff.get(cutoff) ?? new Set<string>();
+      keys.add(item.claimantKey);
+      keysByCutoff.set(cutoff, keys);
+    }
+    const resolutionByCutoffAndKey = new Map<
+      string,
+      Awaited<ReturnType<typeof walletResolver.resolveWallets>>[number]
+    >();
+    for (const [cutoff, keys] of keysByCutoff) {
+      const resolutions = await walletResolver.resolveWallets(
+        [...keys],
+        new Date(cutoff)
+      );
+      for (const resolution of resolutions) {
+        resolutionByCutoffAndKey.set(
+          `${cutoff}:${resolution.claimantKey}`,
+          resolution
+        );
+      }
+    }
     const resolvable = pending.flatMap((liability) => {
-      const resolution = byClaimantKey.get(liability.claimantKey);
+      const resolution = resolutionByCutoffAndKey.get(
+        `${liability.createdAt.getTime()}:${liability.claimantKey}`
+      );
       return resolution?.wallet && resolution.userId
         ? [
             {

@@ -6,7 +6,7 @@
  * Purpose: Seeded internal agent principals: the users graphs act as (catalog slug -> user id).
  * Scope: Deterministic UUIDs and slugs. Does not contain authorization logic.
  * Invariants: IDs match the rows seeded by migration 0037_seed_agent_principals.sql. Each user has no credential,
- *   and AGENT_WALLET_IS_NOT_A_PAYEE (a payout guard) keeps any wallet it binds out of payouts.
+ *   and AUTH_IS_NOT_PAYMENT keeps any wallet it binds out of payouts (payout is its own config).
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard
  * @public

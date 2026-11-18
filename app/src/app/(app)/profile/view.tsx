@@ -35,6 +35,7 @@ import { Spinner } from "@cogni/node-ui-kit/shadcn/spinner";
 import { OpenAIIcon } from "@/features/ai/icons/providers/OpenAIIcon";
 
 import { AiAccessProfile } from "./AiAccessProfile.client";
+import { PayoutProfile } from "./PayoutProfile.client";
 
 /* ─── Types ────────────────────────────────────────────────────────── */
 
@@ -1137,6 +1138,8 @@ export function ProfileView({
       {/* ── Ownership ── */}
 
       <AiAccessProfile />
+
+      <PayoutProfile />
 
       <SectionHeading>Ownership</SectionHeading>
 

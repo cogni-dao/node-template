@@ -316,6 +316,13 @@
       "when": 1794968422913,
       "tag": "0044_backfill_agent_principals",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794985213298,
+      "tag": "0045_payout_is_its_own_config",
+      "breakpoints": true
     }
   ]
 }

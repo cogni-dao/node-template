@@ -4,10 +4,10 @@
 /**
  * Module: `@cogni/aragon-osx/wallet-resolver`
  * Purpose: Read-only port that resolves an attribution claimant key to the CONTRIBUTOR's own EVM wallet.
- * Scope: Defines the ClaimantWalletResolver port + result types only; does not perform I/O — the Postgres adapter that reads user_bindings / users lives in @cogni/db-client.
+ * Scope: Defines the ClaimantWalletResolver port + result types only; does not perform I/O — the Postgres adapter that reads the payout config lives in @cogni/db-client.
  * Invariants:
  * - RESOLVER_READ_ONLY: the port never writes a binding; an unresolved claimant returns null, never a synthesized address.
- * - RESOLVER_CONTRIBUTOR_WALLET: it resolves to the contributor's OWN wallet, never an operator/treasury wallet (no-central-custody).
+ * - RESOLVER_CONTRIBUTOR_WALLET: it resolves to the contributor's own PAYOUT address (or its accepted beneficiary's), never an operator/treasury wallet and never a sign-in wallet (AUTH_IS_NOT_PAYMENT).
  * - RESOLVER_NULL_IS_UNRESOLVED: null wallet ⇒ the claimant surfaces as the `claimants_unresolved` settlement blocker.
  * Side-effects: none (port + types only)
  * Links: https://cognidao.org/knowledge/node-template-identity-model, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/decentralized-user-identity.md, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/tokenomics.md
@@ -42,8 +42,10 @@ export interface ClaimantWalletResolver {
    * Resolve a batch of claimant keys to wallets.
    * Every input key appears exactly once in the output; order is not guaranteed.
    * Unknown / unresolved keys return `{ userId, wallet: null }`.
+   * `asOf` is the claim's cutoff: an accepted beneficiary is read as of that instant (FREEZE_AT_CUTOFF). Default: now.
    */
   resolveWallets(
-    claimantKeys: readonly string[]
+    claimantKeys: readonly string[],
+    asOf?: Date
   ): Promise<readonly ClaimantWalletResolution[]>;
 }

@@ -9,7 +9,7 @@
  * Scope: `@cogni-dao/agent-grants` + `bootstrap/agent-authority` + database policies. No HTTP, no LLM.
  * Invariants:
  *   - SERVICE_ROLE_ONLY: the app role sees no `agent_roles` / `agent_principals` row.
- *   - AGENT_WALLET_IS_NOT_A_PAYEE: an agent may bind a wallet and be seen by the admin check, but no payout leaf resolves to its wallet.
+ *   - AUTH_IS_NOT_PAYMENT: an agent may bind a wallet and be seen by the admin check; the binding decides no payout (claimant-payout-address.int.test.ts).
  *   - NEVER_CACHED: a revoke denies the very next guarded call.
  * Side-effects: IO (testcontainers Postgres)
  * Notes: DATABASE_SERVICE_URL = BYPASSRLS; DATABASE_URL = app role with FORCE RLS.
@@ -132,7 +132,7 @@ describe("agent authority (real Postgres)", () => {
     });
   });
 
-  describe("AGENT_WALLET_IS_NOT_A_PAYEE: an agent may bind a wallet, but is never a payee (database trigger)", () => {
+  describe("an agent may bind a wallet and the admin check sees it (a binding is auth config, never payment)", () => {
     const addr = () => `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`;
     const makeAgent = async (wallet: string) => {
       const agent = await makeUser(wallet);
@@ -157,55 +157,6 @@ describe("agent authority (real Postgres)", () => {
         service`INSERT INTO user_bindings (id, user_id, provider, external_id)
           VALUES (${randomUUID()}, ${other}, 'wallet', ${`0x${wallet.slice(2).toUpperCase()}`})`
       ).rejects.toThrow(/user_bindings_wallet_lower_unique/);
-    });
-
-    // The guard runs as the invoker. The leaf tables are written by the BYPASSRLS service role (`service` here, a real non-superuser role,
-    // exactly as in production), which sees users and user_bindings in full. These inserts hit the REAL tables: a guard that never fires fails here.
-    describe("the real payout tables refuse an agent wallet", () => {
-      const nodeId = randomUUID();
-      const scopeId = randomUUID();
-      let leafIndex = 0;
-      let epochId = "";
-      let manifestId = "";
-      let revisionId = "";
-
-      beforeAll(async () => {
-        const [epoch] = await service`INSERT INTO epochs (node_id, scope_id, period_start, period_end, weight_config)
-          VALUES (${nodeId}, ${scopeId}, now() - interval '2 days', now() - interval '1 day', '{}'::jsonb) RETURNING id`;
-        epochId = String(epoch?.id);
-        const [manifest] = await service`INSERT INTO epoch_distribution_manifests
-          (node_id, scope_id, epoch_id, distribution_id, statement_hash, merkle_root, chain_id, token_address, distribution_amount, total_allocated)
-          VALUES (${nodeId}, ${scopeId}, ${epochId}, 'd', 'h', 'r', 1, '0x00', 0, 0) RETURNING id`;
-        manifestId = String(manifest?.id);
-        const [revision] = await service`INSERT INTO distribution_settlement_revisions
-          (node_id, scope_id, sequence, distribution_id, statement_hash, merkle_root, chain_id, token_address, mint_delta, cumulative_total, trigger_kind, trigger_ref)
-          VALUES (${nodeId}, ${scopeId}, 1, 'd', 'h', 'r', 1, '0x00', 0, 0, 'probe', 'probe') RETURNING id`;
-        revisionId = String(revision?.id);
-      });
-
-      const epochLeaf = (wallet: string) =>
-        service`INSERT INTO epoch_distribution_leaves
-          (node_id, manifest_id, epoch_id, leaf_index, claimant_key, account, account_lower, amount, leaf_hash, proof_json)
-          VALUES (${nodeId}, ${manifestId}, ${epochId}, ${leafIndex++}, 'user:x', ${wallet}, ${wallet.toLowerCase()}, 1, 'h', '[]'::jsonb)`;
-      const settlementLeaf = (wallet: string) =>
-        service`INSERT INTO distribution_settlement_leaves
-          (revision_id, leaf_index, claimant_key, account, account_lower, cumulative_amount, delta_amount, receipt_ids_json, leaf_hash, proof_json)
-          VALUES (${revisionId}, ${leafIndex++}, 'user:x', ${wallet}, ${wallet.toLowerCase()}, 1, 1, '[]'::jsonb, 'h', '[]'::jsonb)`;
-
-      it("accepts a human's wallet on both tables (the positive control: the fixtures are valid)", async () => {
-        const human = addr();
-        await makeUser(human);
-        await epochLeaf(human);
-        await settlementLeaf(human);
-      });
-
-      it("refuses an agent's wallet on both tables, in any casing", async () => {
-        const wallet = addr();
-        await makeAgent(wallet);
-        await expect(epochLeaf(wallet)).rejects.toThrow(/cannot be a payee/);
-        await expect(settlementLeaf(wallet)).rejects.toThrow(/cannot be a payee/);
-        await expect(epochLeaf(`0x${wallet.slice(2).toUpperCase()}`)).rejects.toThrow(/cannot be a payee/);
-      });
     });
   });
 

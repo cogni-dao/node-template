@@ -3,13 +3,12 @@
 
 /**
  * Module: `@cogni/db-client/adapters/drizzle-claimant-wallet-resolver`
- * Purpose: Read-only Postgres implementation of the ClaimantWalletResolver port — resolves an attribution claimant key to the CONTRIBUTOR's own EVM wallet for epoch distribution.
- * Scope: SELECT-only over `user_bindings` and `users`; implements the @cogni/aragon-osx port. Does NOT write bindings, mint, or move tokens.
+ * Purpose: Read-only Postgres implementation of the ClaimantWalletResolver port — resolves an attribution claimant key to its earner's PAYOUT address for epoch distribution.
+ * Scope: SELECT-only. `user_bindings` is read for the GitHub identity of a claimant key only; the payee comes from the payout config (`resolvePayoutAddresses`). Does NOT write, mint, or move tokens.
  * Invariants:
  * - RESOLVER_READ_ONLY: only SELECT statements; never inserts/updates a binding (no binding-write flow).
  * - RESOLVER_NULL_IS_UNRESOLVED: a claimant with no wallet resolves to `wallet: null` — never a synthesized address.
- * - AGENT_WALLET_IS_NOT_A_PAYEE: a wallet an `agent_principals` user owns (a `wallet` binding or `users.wallet_address`, matched by lowercase address) never resolves, for the agent or for any other user who presents the same address; the claimant stays `wallet: null`. An AI can prove a wallet (so it can be an admin) but is never paid to it.
- * - RESOLVER_CONTRIBUTOR_WALLET: resolves the person's OWN wallet (user_bindings provider='wallet' only; `users.wallet_address` is display and decides nothing); never an operator/treasury wallet.
+ * - AUTH_IS_NOT_PAYMENT: the wallet is the earner's explicit payout address (or its accepted beneficiary's), read only from `payout_addresses` / `payout_beneficiaries`. A sign-in wallet binding or `users.wallet_address` never pays, and the principal's kind never decides: no payout address means `wallet: null` (held).
  * - RESOLVER_GITHUB_VIA_BINDING: `identity:github:<externalId>` → user_id via user_bindings(provider='github', external_id), mirroring AttributionStore.resolveIdentities.
  * Side-effects: IO (database reads)
  * Links: https://cognidao.org/knowledge/node-template-identity-model, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/decentralized-user-identity.md, packages/aragon-osx/src/wallet-resolver.ts
@@ -19,14 +18,14 @@
 import type {
   ClaimantWalletResolution,
   ClaimantWalletResolver,
-  HexAddress,
 } from "@cogni/aragon-osx";
-import { agentPrincipals } from "@cogni/db-schema/agent-authority";
 import { userBindings } from "@cogni/db-schema/identity";
-import { users } from "@cogni/db-schema/refs";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import type { Database } from "../client";
+import { resolvePayoutAddresses } from "./payout-address";
+
+const IDENTITY_PROVIDERS: ReadonlySet<string> = new Set(["github", "discord", "google"]);
 
 interface ParsedClaimant {
   readonly claimantKey: string;
@@ -75,22 +74,25 @@ function parseClaimantKey(claimantKey: string): ParsedClaimant {
  * Resolution chain:
  *  1. claimant key → user_id (direct for `user:<id>`; via user_bindings for
  *     `identity:<provider>:<externalId>` — same join AttributionStore.resolveIdentities uses).
- *  2. user_id → EVM wallet: prefer the `wallet` binding in user_bindings
- *     (provider='wallet', external_id=address); never users.wallet_address
- *     (display only; legacy rows were backfilled into bindings and lowercased).
+ *  2. user_id → payout address as of `asOf` (the claim's cutoff): the earner's own
+ *     payout address, or its accepted beneficiary's (`resolvePayoutAddresses`).
  */
 export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
   constructor(private readonly db: Database) {}
 
   async resolveWallets(
-    claimantKeys: readonly string[]
+    claimantKeys: readonly string[],
+    asOf: Date = new Date()
   ): Promise<readonly ClaimantWalletResolution[]> {
     const parsed = [...new Set(claimantKeys)].map(parseClaimantKey);
 
     // Step 1: resolve identity claimants → user_id via user_bindings.
     const identityClaimants = parsed.filter(
       (p): p is ParsedClaimant & { provider: string; externalId: string } =>
-        p.provider !== null && p.externalId !== null
+        // Only the account providers say who a claimant is; a sign-in wallet never does (AUTH_IS_NOT_PAYMENT).
+        p.provider !== null &&
+        IDENTITY_PROVIDERS.has(p.provider) &&
+        p.externalId !== null
     );
     const identityUserIdByKey =
       await this.resolveIdentityUserIds(identityClaimants);
@@ -116,8 +118,8 @@ export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
       ),
     ];
 
-    // Step 2: resolve user_id → wallet.
-    const walletByUserId = await this.resolveWalletsByUserId(userIds);
+    // Step 2: resolve user_id → payout address (AUTH_IS_NOT_PAYMENT).
+    const walletByUserId = await resolvePayoutAddresses(this.db, userIds, asOf);
 
     return parsed.map((p) => {
       const userId = userIdByClaimant.get(p.claimantKey) ?? null;
@@ -175,85 +177,4 @@ export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
     }
     return result;
   }
-
-  /** Resolve user_id → EVM wallet (user_bindings 'wallet' binding). */
-  private async resolveWalletsByUserId(
-    userIds: readonly string[]
-  ): Promise<Map<string, HexAddress>> {
-    const result = new Map<string, HexAddress>();
-    if (userIds.length === 0) return result;
-
-    // Primary: explicit wallet bindings.
-    const walletBindings = await this.db
-      .select({
-        userId: userBindings.userId,
-        externalId: userBindings.externalId,
-      })
-      .from(userBindings)
-      .where(
-        and(
-          eq(userBindings.provider, "wallet"),
-          inArray(userBindings.userId, [...userIds])
-        )
-      );
-    for (const row of walletBindings) {
-      const addr = toHexAddress(row.externalId);
-      if (addr && !result.has(row.userId)) {
-        result.set(row.userId, addr);
-      }
-    }
-
-    // `users.wallet_address` is display: it never resolves a payee. Legacy rows were backfilled into user_bindings (0011) and lowercased (0043).
-
-    return this.withoutAgentWallets(result);
-  }
-
-  /**
-   * AGENT_WALLET_IS_NOT_A_PAYEE: drop every resolved wallet an agent principal owns, matched by lowercase address. Matching the address (not just the
-   * user) also covers a human whose login row carries the same address as an agent's binding.
-   */
-  private async withoutAgentWallets(
-    resolved: Map<string, HexAddress>
-  ): Promise<Map<string, HexAddress>> {
-    const addresses = [
-      ...new Set([...resolved.values()].map((a) => a.toLowerCase())),
-    ];
-    if (addresses.length === 0) return resolved;
-
-    const bound = await this.db
-      .select({ address: sql<string>`lower(${userBindings.externalId})` })
-      .from(userBindings)
-      .innerJoin(agentPrincipals, eq(agentPrincipals.userId, userBindings.userId))
-      .where(
-        and(
-          eq(userBindings.provider, "wallet"),
-          inArray(sql`lower(${userBindings.externalId})`, addresses)
-        )
-      );
-    const primary = await this.db
-      .select({ address: sql<string>`lower(${users.walletAddress})` })
-      .from(users)
-      .innerJoin(agentPrincipals, eq(agentPrincipals.userId, users.id))
-      .where(inArray(sql`lower(${users.walletAddress})`, addresses));
-    const agentOwned = new Set([...bound, ...primary].map((row) => row.address));
-
-    for (const [userId, addr] of resolved) {
-      if (agentOwned.has(addr.toLowerCase())) resolved.delete(userId);
-    }
-    return resolved;
-  }
-}
-
-const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-
-/**
- * Validate a stored address as a 20-byte hex EVM address and return it as a
- * HexAddress. Returns null when malformed. Casing is preserved as stored (the
- * SIWE flow writes EIP-55 checksummed addresses); downstream
- * `buildDaoTokenMerkleDistribution` re-validates and compares case-insensitively.
- */
-function toHexAddress(value: string | null): HexAddress | null {
-  if (!value) return null;
-  if (!EVM_ADDRESS_RE.test(value)) return null;
-  return value as HexAddress;
 }
