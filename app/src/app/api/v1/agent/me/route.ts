@@ -42,12 +42,11 @@ export const GET = wrapRouteHandlerWithLogging(
     const legacy = bearer !== null && !isRevocableKey(bearer);
     try {
       const authority = getContainer().agentAuthority;
-      const [agent, wallets, admin, rows] = await Promise.all([
-        authority.isAgent(sessionUser.id),
-        authority.boundWallets(sessionUser.id),
-        authority.adminCheck(sessionUser.id),
-        authority.listOwnAccess(sessionUser.id),
-      ]);
+      // One read at a time: a self-check holds at most one pooled connection, so it never adds pool pressure.
+      const agent = await authority.isAgent(sessionUser.id);
+      const wallets = await authority.boundWallets(sessionUser.id);
+      const admin = await authority.adminCheck(sessionUser.id);
+      const rows = await authority.listOwnAccess(sessionUser.id);
       if (admin === "unavailable") return json({ error: "authz_unavailable" }, 503);
       return json({
         userId: sessionUser.id,
