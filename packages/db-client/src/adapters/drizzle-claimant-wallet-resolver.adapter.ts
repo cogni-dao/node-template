@@ -9,7 +9,7 @@
  * - RESOLVER_READ_ONLY: only SELECT statements; never inserts/updates a binding (no binding-write flow).
  * - RESOLVER_NULL_IS_UNRESOLVED: a claimant with no wallet resolves to `wallet: null` — never a synthesized address.
  * - AGENT_WALLET_IS_NOT_A_PAYEE: a wallet an `agent_principals` user owns (a `wallet` binding or `users.wallet_address`, matched by lowercase address) never resolves, for the agent or for any other user who presents the same address; the claimant stays `wallet: null`. An AI can prove a wallet (so it can be an admin) but is never paid to it.
- * - RESOLVER_CONTRIBUTOR_WALLET: resolves the person's OWN wallet (users.wallet_address / user_bindings provider='wallet'); never an operator/treasury wallet.
+ * - RESOLVER_CONTRIBUTOR_WALLET: resolves the person's OWN wallet (user_bindings provider='wallet' only; `users.wallet_address` is display and decides nothing); never an operator/treasury wallet.
  * - RESOLVER_GITHUB_VIA_BINDING: `identity:github:<externalId>` → user_id via user_bindings(provider='github', external_id), mirroring AttributionStore.resolveIdentities.
  * Side-effects: IO (database reads)
  * Links: https://cognidao.org/knowledge/node-template-identity-model, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/decentralized-user-identity.md, packages/aragon-osx/src/wallet-resolver.ts
@@ -24,7 +24,7 @@ import type {
 import { agentPrincipals } from "@cogni/db-schema/agent-authority";
 import { userBindings } from "@cogni/db-schema/identity";
 import { users } from "@cogni/db-schema/refs";
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import type { Database } from "../client";
 
@@ -76,8 +76,8 @@ function parseClaimantKey(claimantKey: string): ParsedClaimant {
  *  1. claimant key → user_id (direct for `user:<id>`; via user_bindings for
  *     `identity:<provider>:<externalId>` — same join AttributionStore.resolveIdentities uses).
  *  2. user_id → EVM wallet: prefer the `wallet` binding in user_bindings
- *     (provider='wallet', external_id=address), falling back to users.wallet_address
- *     (the SIWE primary). Both hold the same checksummed address in practice.
+ *     (provider='wallet', external_id=address); never users.wallet_address
+ *     (display only; legacy rows were backfilled into bindings and lowercased).
  */
 export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
   constructor(private readonly db: Database) {}
@@ -176,7 +176,7 @@ export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
     return result;
   }
 
-  /** Resolve user_id → EVM wallet (user_bindings 'wallet' binding, then users.wallet_address). */
+  /** Resolve user_id → EVM wallet (user_bindings 'wallet' binding). */
   private async resolveWalletsByUserId(
     userIds: readonly string[]
   ): Promise<Map<string, HexAddress>> {
@@ -203,24 +203,7 @@ export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
       }
     }
 
-    // Fallback: users.wallet_address (the SIWE primary) for any user without a
-    // 'wallet' binding row. Same address in practice; covers older rows.
-    const missing = userIds.filter((id) => !result.has(id));
-    if (missing.length > 0) {
-      const userRows = await this.db
-        .select({
-          id: users.id,
-          walletAddress: users.walletAddress,
-        })
-        .from(users)
-        .where(
-          and(inArray(users.id, [...missing]), isNotNull(users.walletAddress))
-        );
-      for (const row of userRows) {
-        const addr = toHexAddress(row.walletAddress);
-        if (addr) result.set(row.id, addr);
-      }
-    }
+    // `users.wallet_address` is display: it never resolves a payee. Legacy rows were backfilled into user_bindings (0011) and lowercased (0043).
 
     return this.withoutAgentWallets(result);
   }

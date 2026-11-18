@@ -17,7 +17,12 @@ import { normalizeWalletAddress } from "@cogni/node-shared";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import postgres, { type Sql } from "postgres";
 import { getAddress } from "viem";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { generateTestWallet } from "@tests/_fixtures/auth/siwe-helpers";
+import { SiweMessage } from "siwe";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+// NextAuth hands authorize() a CSRF token as the SIWE nonce; fix it so the test can sign for it.
+vi.mock("next-auth/react", () => ({ getCsrfToken: async () => "csrfnonce12345" }));
 
 import { createBinding } from "@/adapters/server/identity/create-binding";
 
@@ -71,4 +76,34 @@ describe("an agent-bound wallet has one owner and is never paid (real Postgres)"
     const resolved = await new DrizzleClaimantWalletResolver(db).resolveWallets([`user:${human}`, `user:${agent}`]);
     expect(resolved.map((r) => r.wallet)).toEqual([null, null]);
   });
+
+  it("a SIWE login with a wallet an agent already bound signs in as that same user and creates no new user (defect: login minted a second, powerless user for the wallet)", async () => {
+    const signer = generateTestWallet(`login-owner-${randomUUID()}`);
+    const agent = await makeUser();
+    await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('external', NULL, ${agent})`;
+    await createBinding(getSeedDb(), agent, "wallet", normalizeWalletAddress(signer.account.address), { method: "siwe_bind" });
+
+    const { authOptions } = await import("@/auth");
+    const provider = authOptions.providers.find((p) => p.id === "credentials") as unknown as {
+      options: { authorize: (c: Record<string, string>, req: { headers: Record<string, string> }) => Promise<{ id: string } | null> };
+    };
+    const origin = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
+    const message = new SiweMessage({
+      domain: new URL(origin).host,
+      address: signer.account.address,
+      statement: "Sign in",
+      uri: origin,
+      version: "1",
+      chainId: 1,
+      nonce: "csrfnonce12345",
+    }).prepareMessage();
+    const signature = await signer.account.signMessage({ message });
+
+    const loggedIn = await provider.options.authorize({ message, signature }, { headers: {} });
+
+    expect(loggedIn?.id).toBe(agent);
+    // Scoped to this wallet: other component files create users concurrently, so a table-wide count would race.
+    const minted = await service`SELECT id FROM users WHERE lower(wallet_address) = ${normalizeWalletAddress(signer.account.address)}`;
+    expect(minted).toEqual([]);
+  }, 60_000);
 });
