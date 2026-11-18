@@ -50,6 +50,9 @@ vi.mock("@/bootstrap/container", () => {
       taskQueue: "scheduler-tasks",
     })),
     getContainer: vi.fn(() => ({
+      agentAuthority: { payerFor: async () => null },
+      serviceAccountService: { getBillingAccountById: async () => null },
+      log: { info: () => undefined },
       executionRequestPort,
       runStream: {
       subscribe: async function* () {
@@ -135,6 +138,9 @@ describe("app/_facades/ai/completion.server", () => {
 
     const { getContainer } = await import("@/bootstrap/container");
     vi.mocked(getContainer).mockReturnValue({
+      agentAuthority: { payerFor: async () => null },
+      serviceAccountService: { getBillingAccountById: async () => null },
+      log: { info: () => undefined },
       executionRequestPort: createExecutionRequestPortMock(),
       runStream: createRunStreamMock({
         responseContent: "",

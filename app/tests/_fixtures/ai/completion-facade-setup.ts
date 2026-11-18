@@ -239,6 +239,10 @@ export function createContainerMock(
     getContainer: () => ({
       runStream: createRunStreamMock(streamOptions),
       executionRequestPort: createExecutionRequestPortMock(),
+      // No payer binding: the run bills the caller's own account.
+      agentAuthority: { payerFor: async () => null },
+      serviceAccountService: { getBillingAccountById: async () => null },
+      log: { info: () => undefined },
     }),
   };
 }
