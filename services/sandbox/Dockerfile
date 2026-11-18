@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 #
-# Node sandbox — general-purpose remote code-execution workspace (story.0064).
+# Node sandbox — the standard code-execution workspace every node pins (story.0064).
+# Published as ghcr.io/cogni-dao/node-template-sandbox; a node needing more tools
+# builds FROM this image's digest instead of copying this file.
 #
 # Topology (one container, one public port):
 #   $PORT (Caddy) ── GET /version → {"version","buildSha"} from COGNI_REPO_SHA
@@ -14,15 +16,17 @@
 #   execd  — OpenSandbox (Apache-2.0) https://github.com/opensandbox-group/OpenSandbox
 #            release docker/execd/v1.1.0; /execd is a static (CGO_ENABLED=0) Go binary.
 #   caddy  — Apache-2.0 https://github.com/caddyserver/caddy v2.11.7; /usr/bin/caddy is static.
+#   node   — node:22.23.5-trixie-slim, the app Dockerfile's Node major, so agent checks match CI.
 
 FROM opensandbox/execd:v1.1.0@sha256:6cf7dba2f21f0b536e100563d841ac58a9f31c2b0a081b7ac76796a24d6f47e2 AS execd
 
 FROM caddy:2.11.7@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af AS caddy
 
-FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+FROM node:22.23.5-trixie-slim@sha256:68c76cfad89921b927eae28ba21407475e29d0ce450afcdbe70c1532db042b64
 
-# Common developer tools only. No sudo, no package-manager access at runtime
-# (the workload runs as an unprivileged user).
+# Developer tools for coding a node repo: clone, pnpm install, targeted checks,
+# open a pull request. No sudo, no package-manager access at runtime (the
+# workload runs as an unprivileged user). pnpm matches the repo's packageManager.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
@@ -30,10 +34,21 @@ RUN apt-get update \
     ca-certificates \
     curl \
     git \
+    jq \
     python3 \
     python3-pip \
     python3-venv \
-  && rm -rf /var/lib/apt/lists/*
+    ripgrep \
+    unzip \
+  && install -d -m 0755 /etc/apt/keyrings \
+  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && chmod 0644 /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends gh \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g pnpm@9.12.2 \
+  && npm cache clean --force
 
 COPY --from=execd /execd /usr/local/bin/execd
 # Hardening-floor launcher; must stay root-owned and not group/world-writable.
@@ -59,7 +74,8 @@ ENV BUILD_SHA=${BUILD_SHA} \
     HOME=/home/sandbox \
     XDG_CONFIG_HOME=/home/sandbox/.config \
     XDG_DATA_HOME=/home/sandbox/.local/share \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    LANG=C.UTF-8
 
 USER 10001:10001
 WORKDIR /workspace
