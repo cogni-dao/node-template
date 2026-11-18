@@ -20,7 +20,7 @@ describe("catalog duties", () => {
     expect(triage.duty.instruction).toContain("work-item-triage");
     expect(triage.schedulable).toBe(true);
     expect(closeout.duty.purpose).toBe("node-work-closeout");
-    expect(closeout.schedulable).toBe(false);
+    expect(closeout.schedulable).toBe(true);
   });
 
   it("names no specific duty in the operator prompt itself", () => {

@@ -220,7 +220,10 @@ describe("native coordinator workflow guidance", () => {
 			names.filter((name) => name !== "core__knowledge_read"),
 		);
 		expect(model).toBe(4);
-		expect(deniedCards).toBe(2);
+		// One denied read per catalog-declared graph card, read once each.
+		expect(deniedCards).toBe(
+			Object.values(LANGGRAPH_CATALOG).filter((entry) => entry.guidanceId).length,
+		);
 		expect(hostCalls.filter((name) => name === "core__goal_list")).toHaveLength(
 			1,
 		);
