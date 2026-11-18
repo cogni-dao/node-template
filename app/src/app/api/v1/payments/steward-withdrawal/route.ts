@@ -135,6 +135,10 @@ export const POST = wrapRouteHandlerWithLogging(
 				amountUsd,
 				amountUsdcAtomic: amountUsdcAtomic.toString(),
 				steward: stewardConfig.address,
+				// The admin who triggered the transfer and the credential they used (any node admin may; the destination is pinned).
+				adminUserId: sessionUser.id,
+				via: sessionUser.via === "session" ? "session" : "bearer",
+				amount: amountUsd,
 			},
 			outcome.receiptStatus === "success" ? "steward wallet funded" : outcome.receiptStatus === "reverted" ? "steward wallet funding reverted" : "steward wallet funding broadcast, pending",
 		);

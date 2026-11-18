@@ -151,10 +151,14 @@ describe("steward withdrawal route with fake wallet", () => {
     expect(fake.withdraw).not.toHaveBeenCalled();
   });
 
-  it("allows a caller the one admin check allows even with no login wallet (a bearer with a bound listed wallet)", async () => {
+  it("allows a caller the one admin check allows even with no login wallet (a bearer with a bound listed wallet), and the terminal log names who, how and how much", async () => {
     fake.session.mockReturnValue({ id: "key-1", walletAddress: null, via: "bearer" });
-    expect((await post()).status).toBe(200);
+    expect((await post({ amountUsd: 2.5 })).status).toBe(200);
     expect(fake.admin).toHaveBeenCalledWith("key-1");
+    expect(fake.info).toHaveBeenCalledWith(
+      expect.objectContaining({ adminUserId: "key-1", via: "bearer", amount: 2.5 }),
+      "steward wallet funded"
+    );
   });
 
   it("is 503, not a pass, when the admin check is unavailable", async () => {
