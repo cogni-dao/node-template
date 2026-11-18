@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fake = vi.hoisted(() => ({
   user: null as unknown,
+  token: null as string | null,
   boundWallets: vi.fn(),
   isAgent: vi.fn(),
   adminCheck: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock("@/bootstrap/http", () => ({
       handler({ log: fake.log }, request, fake.user),
 }));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn(async () => fake.user) }));
+vi.mock("@/app/_lib/auth/request-identity", () => ({ currentBearerToken: vi.fn(async () => fake.token) }));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
     agentAuthority: { isAgent: fake.isAgent, boundWallets: fake.boundWallets, adminCheck: fake.adminCheck, listOwnAccess: fake.listOwnAccess },
@@ -86,6 +88,13 @@ describe("GET /api/v1/agent/me", () => {
     fake.user = user("human-1", "bearer");
     fake.isAgent.mockResolvedValue(false);
     expect(await (await call()).json()).toMatchObject({ kind: "human", via: "bearer" });
+  });
+
+  it("a signed v1 key with no principal row reads legacy_agent, never human", async () => {
+    fake.user = user("legacy-1", "bearer");
+    fake.token = "cogni_ag_sk_v1_abc";
+    expect(await (await call()).json()).toMatchObject({ kind: "legacy_agent", via: "bearer" });
+    fake.token = null;
   });
 
   it("an admin or store outage is 503 authz_unavailable, never a partial answer", async () => {
