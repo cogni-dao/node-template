@@ -530,6 +530,7 @@ describe("the stage order", () => {
       "needs_implementation_review",
       "needs_validation",
       "needs_merge",
+      "needs_closeout",
       "done",
     ]);
   });
