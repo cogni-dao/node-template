@@ -331,6 +331,13 @@ export const KNOWLEDGE_BROWSE_PAGE_SIZE = 20;
 export const KNOWLEDGE_BROWSE_FILTER_VALUES_MAX = 50;
 /** Longest exact browse filter value. */
 export const KNOWLEDGE_BROWSE_FILTER_VALUE_MAX_LENGTH = 500;
+/**
+ * SEARCH_SCAN_BOUNDED: most candidate rows one browse search window examines
+ * for an app-side body match. Below it, one submit searches every candidate;
+ * at it, the window returns the matches so far with a cursor at the last
+ * examined row, so an empty window with a cursor is progress.
+ */
+export const KNOWLEDGE_BROWSE_SEARCH_SCAN_MAX_ROWS = 1000;
 /** Longest browse body search. */
 export const KNOWLEDGE_BROWSE_SEARCH_MAX_LENGTH = 2000;
 /** Longest browse continuation cursor. */
@@ -374,10 +381,14 @@ export const KnowledgeBrowsePageSchema = z.object({
   items: z.array(KnowledgeSummarySchema).max(KNOWLEDGE_BROWSE_PAGE_SIZE),
   nextCursor: z.string().nullable(),
   /**
-   * Rows examined after the cursor to fill this window. A search reads every
-   * candidate after the cursor and stops counting at the window's last match.
+   * Rows examined after the cursor for this window: at most a page without a
+   * search, at most `KNOWLEDGE_BROWSE_SEARCH_SCAN_MAX_ROWS` with one.
    */
-  scannedRows: z.number().int().min(0),
+  scannedRows: z
+    .number()
+    .int()
+    .min(0)
+    .max(KNOWLEDGE_BROWSE_SEARCH_SCAN_MAX_ROWS),
   /**
    * Exact number of entries matching the window's filters (domains, entry
    * types, source types) at `revision`. With `search`, it is the candidate set

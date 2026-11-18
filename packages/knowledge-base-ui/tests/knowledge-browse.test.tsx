@@ -197,7 +197,7 @@ describe("KnowledgeBrowse", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("a full search window offers Next; a failed window retries its own cursor; Restart returns to the first window", async () => {
+  it("a search window cut by the scan bound offers Continue search; a failed window retries its own cursor; Restart returns to the first window", async () => {
     const later = { ...entry, id: "later-match", title: "later match" };
     let failed = false;
     const { reads, fetchBrowse } = recorder(async (params) => {
@@ -208,13 +208,18 @@ describe("KnowledgeBrowse", () => {
         }
         return windowOf({ items: [later] });
       }
-      return windowOf({ nextCursor: "after-20", scannedRows: 300 });
+      return windowOf({ items: [], nextCursor: "after-20", scannedRows: 1000 });
     });
     mount(fetchBrowse, windowOf());
     submitSearch("body");
-    await screen.findByText("Showing matches 1–1 · searched 5,046 entries · more available");
+    await screen.findByText(
+      "0 matches in 1,000 entries searched · continue to search the rest",
+    );
+    expect(
+      screen.getByText("No matches yet. Continue search to examine more entries."),
+    ).toBeTruthy();
     expect(reads).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Next window" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
     await screen.findByRole("alert");
     fireEvent.click(screen.getByRole("button", { name: "Retry window" }));
     await screen.findByText(later.title);
@@ -223,8 +228,8 @@ describe("KnowledgeBrowse", () => {
       "after-20",
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Previous window" }));
-    await screen.findByText(/Showing matches 1–1/);
-    fireEvent.click(screen.getByRole("button", { name: "Next window" }));
+    await screen.findByText(/0 matches in 1,000 entries searched/);
+    fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
     await screen.findByText(later.title);
     fireEvent.click(screen.getByRole("button", { name: "Restart" }));
     await waitFor(() => expect(reads.at(-1)?.get("cursor")).toBeNull());
@@ -435,7 +440,7 @@ describe("KnowledgeBrowse", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const first = mount(fetchBrowse, windowOf(), client);
     submitSearch("body");
-    await screen.findByText(/Showing matches 1–1/);
+    await screen.findByText(/1 match in 20 entries searched/);
     const key = knowledgeBrowseKey({ search: "body" });
     client.setQueryData(key, client.getQueryData(key), {
       updatedAt: Date.now() - 60_000,
@@ -468,9 +473,9 @@ describe("KnowledgeBrowse", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     mount(fetchBrowse, windowOf(), client);
     submitSearch("body");
-    await screen.findByText(/Showing matches 1–1/);
+    await screen.findByText(/1 match in 20 entries searched/);
     revision = "rev-b";
-    fireEvent.click(screen.getByRole("button", { name: "Next window" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
     const prompt = "Knowledge changed. Restart to begin a new live traversal.";
     await screen.findByText(prompt);
     expect(reads).toHaveLength(2);

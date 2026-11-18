@@ -623,6 +623,23 @@ describe("native Doltgres knowledge browsing", () => {
 			expect(result.nextCursor).toBeNull();
 			expect(result.scannedRows).toBe(result.total);
 		}
+		// More than a page of matches across microsecond ties and 200-row
+		// batches: every window continues after its last match, exactly once.
+		const matched: string[] = [];
+		let cursor: string | undefined;
+		for (let page = 0; page < 40; page++) {
+			const result = await store.browseKnowledge({
+				search: "plain",
+				...(cursor ? { cursor } : {}),
+			});
+			matched.push(...result.items.map((row) => row.id));
+			if (!result.nextCursor) break;
+			expect(result.items).toHaveLength(20);
+			cursor = result.nextCursor;
+		}
+		expect(matched).toHaveLength(549);
+		expect(new Set(matched).size).toBe(549);
+		expect(matched).not.toContain(id(549));
 		expect(
 			(await store.listKnowledge("a", { q: "legacytrigger" })).map(
 				(row) => row.id,
