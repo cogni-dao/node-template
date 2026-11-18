@@ -67,6 +67,7 @@ export {
 export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildAccountAiView, buildAskView, buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
+export { principalKindOf, writeExternalPrincipal } from "./principals";
 export {
   AgentRolesError,
   type AskOutcome,

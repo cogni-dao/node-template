@@ -44,7 +44,6 @@ import {
 	createContributionService,
 	createEdoCapability,
 	createKnowledgeCapability,
-	defaultCanMergeKnowledge,
 	type KnowledgeStorePort,
 	type NodeAdminAuthority,
 	shapeGate,
@@ -166,7 +165,10 @@ import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
-import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
+import {
+	createAdminCheckNodeAdminAuthority,
+	createApproversNodeAdminAuthority,
+} from "@/bootstrap/node-admin-gate";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
@@ -917,7 +919,9 @@ function createContainer(): Container {
 			: undefined;
 		knowledgeContributionService = createContributionService({
 			port: contributionPort,
-			canMergeKnowledge: defaultCanMergeKnowledge,
+			// ONE_ADMIN_CHECK: who may merge or close is decided by `agentAuthority.adminCheck` alone, for a session and a bearer alike,
+			// so the kind-based gate is open and the admin check below is the gate.
+			canMergeKnowledge: () => true,
 			rateLimit: { maxOpenPerPrincipal: 10 },
 			// v0 write-pipeline: shape gate only on the contribution path.
 			// Provenance is stamped by the adapter (`source_type='external'`,
@@ -925,7 +929,9 @@ function createContainer(): Container {
 			// reserved for internal `core__knowledge_write` where the caller
 			// controls those fields. See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.knowledge-syntropy.md.
 			gates: [shapeGate],
-			nodeAdmin,
+			nodeAdmin: createAdminCheckNodeAdminAuthority(
+				() => agentAuthority.adminCheck,
+			),
 			...(pushMainOnMerge ? { pushMainOnMerge } : {}),
 		});
 		log.info(
