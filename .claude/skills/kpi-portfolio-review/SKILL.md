@@ -7,9 +7,9 @@ description: Review the whole measurement and autonomy portfolio critically. Use
 
 This file is only the trigger. The knowledge hub is the authoritative, refinable contract.
 
-Read these entries from this node's authenticated knowledge API, then follow them:
-- `GET /api/v1/knowledge/kpi-portfolio-review`
-- `GET /api/v1/knowledge/metrics-expert`
-- `GET /api/v1/knowledge/node-ai-operations-matrix`
+Read these node-owned entries with `COGNI_NODE_API_KEY`, then follow them:
+- `GET https://node-template.cognidao.org/api/v1/knowledge/kpi-portfolio-review`
+- `GET https://node-template.cognidao.org/api/v1/knowledge/metrics-expert`
+- `GET https://node-template.cognidao.org/api/v1/knowledge/node-ai-operations-matrix`
 
 Do not reconstruct or preserve a fallback copy in this repository.
