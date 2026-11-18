@@ -32,6 +32,11 @@ export interface SandboxShellCapabilityConfig {
   readonly runId: () => string | undefined;
   /** Receives one report per cleanup tick (at most every 5 minutes, only while the tool is used). */
   readonly onTick?: (report: SandboxTickReport) => void;
+  /**
+   * Extra environment for each call, e.g. `{ GH_TOKEN }` from the operator push-token route. Optional: without it,
+   * or when it fails, the call runs and only steps that need the value (git push) fail.
+   */
+  readonly callEnv?: () => Promise<Readonly<Record<string, string>>>;
   /** Injectable fetch for tests. */
   readonly fetchImpl?: typeof fetch;
 }
@@ -55,7 +60,8 @@ export function createSandboxShellCapability(
     async run(params) {
       const runId = config.runId();
       if (!runId) throw new Error("no run to give a folder");
-      return shell.run({ runId, ...params });
+      const env = config.callEnv ? await config.callEnv().catch(() => ({})) : {};
+      return shell.run({ runId, ...params, env });
     },
   };
 }

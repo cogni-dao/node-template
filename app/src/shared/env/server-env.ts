@@ -223,6 +223,10 @@ export const serverSchema = z.object({
     (url) => !url || url.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(url),
     { message: "SANDBOX_BASE_URL must be https (http only for localhost)" }
   ),
+  // The node AI's own operator principal (developer on this node). Optional: without it the sandbox
+  // runs and only git push fails. Its push token comes from the operator App (POST /vcs/push-token).
+  COGNI_OPERATOR_API_KEY: optionalString,
+  COGNI_OPERATOR_URL: z.string().url().default("https://cognidao.org"),
 
   // Tavily Web Search - Optional
   // Required for research graph web search capability
