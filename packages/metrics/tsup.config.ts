@@ -12,6 +12,7 @@ export default defineConfig({
 		"src/contracts.ts",
 		"src/http.ts",
 		"src/knowledge.ts",
+		"src/prometheus.ts",
 		"src/schema.ts",
 		"src/sources.ts",
 		"src/no-inline-history.ts",

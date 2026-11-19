@@ -22,6 +22,11 @@ import {
 	type MetricService,
 } from "./index.js";
 import { type GoalSourcePort, readGoalsProgress } from "./progress.js";
+import {
+	createHttpRequestsCalculator,
+	type PromInstantReader,
+	type PromScopeInput,
+} from "./prometheus.js";
 import { createTickReads } from "./tick-reads.js";
 import {
 	FIRST_PARENT_WALK_CAP,
@@ -83,6 +88,7 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"no-inline-history@1",
 	"knowledge.merge-review@1",
 	"fleet.train-lag@1",
+	"http.requests@1",
 ] as const;
 /** `work.count@1` → `work.count`: the family every version of a calculator shares. */
 export function calculatorFamily(id: string): string {
@@ -113,6 +119,13 @@ export function createGoalMetrics(deps: {
 	 * passed to sources, which must honour them.
 	 */
 	nodeCalculators?: readonly MetricCalculator[];
+	/**
+	 * The Prometheus-compatible instant reader `http.requests@1` queries. Without
+	 * it the calculator stays registered and reads unknown (`prometheus:not_configured`).
+	 * `labels` are fixed extra matchers (never the node or env label names);
+	 * `labelNames` is the one override point for the scrape's node and env names.
+	 */
+	prometheus?: { query: PromInstantReader } & PromScopeInput;
 }) {
 	const registry = new MetricRegistry();
 	const scope = {
@@ -352,6 +365,14 @@ export function createGoalMetrics(deps: {
 			return ctx.read((signal, limits) => readFleetTrainLag(p, new Date(ctx.window.end), signal, limits));
 		},
 	});
+	registry.register(
+		createHttpRequestsCalculator({
+			prometheus: deps.prometheus,
+			node: deps.node,
+			environment: deps.environment,
+			share: tick.shareOnce,
+		}),
+	);
 	const nodeCalculatorIds: string[] = [];
 	for (const calculator of deps.nodeCalculators ?? []) {
 		// A definition can only name an id the spec schema accepts.
