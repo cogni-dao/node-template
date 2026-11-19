@@ -30,9 +30,9 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
-  --color-danger: hsl(var(--color-danger));
-  --color-warning: hsl(var(--color-warning));
-  --color-success: hsl(var(--color-success));
+  --color-danger: hsl(var(--danger));
+  --color-warning: hsl(var(--warning));
+  --color-success: hsl(var(--success));
   --color-info: hsl(var(--info));
   --color-invert: hsl(var(--invert));
   --color-invert-foreground: hsl(var(--invert-foreground));
@@ -145,10 +145,10 @@
     --muted-foreground: 211 11% 39%; /* fg muted #59636e, 6.1:1 */
     --accent: 210 23% 95%; /* hover */
     --accent-foreground: 213 13% 14%;
-    --destructive: 356 71% 48%; /* #d1242f */
+    --destructive: 356 71% 43%;
     --destructive-foreground: 0 0% 100%;
     --border: 208 20% 85%; /* #d1d9e0 */
-    --input: 208 20% 85%;
+    --input: 213 10% 58%; /* control edge, 3.1:1 (WCAG 1.4.11) */
     --ring: 217 91% 45%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -169,11 +169,12 @@
     --accent-to: 217 91% 58%;
     --accent-glow: 217 91% 50%;
 
-    /* Status colours are text-grade (>=4.5:1 on canvas); tint backgrounds with /10-/15. */
-    --color-danger: 356 71% 48%; /* #d1242f */
-    --color-warning: 40 100% 30%; /* #9a6700 */
-    --color-success: 137 66% 30%; /* #1a7f37 */
-    --info: 261 69% 59%; /* #8250df */
+    /* Status colours are text-grade: >=4.5:1 on canvas, muted and their own /15 tint.
+       Primer's success, attention, danger and done hues, one notch darker. */
+    --danger: 356 71% 43%;
+    --warning: 40 100% 25%;
+    --success: 137 66% 26%;
+    --info: 261 60% 53%;
     --invert: 213 13% 14%;
     --invert-foreground: 0 0% 100%;
     /* The neon brand mark needs a dark backing on light surfaces. */
@@ -199,19 +200,19 @@
     --card-foreground: 210 67% 96.5%;
     --popover: 214 25% 11%;
     --popover-foreground: 210 67% 96.5%;
-    --primary: 217 84% 55%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 217 91% 60%; /* link-grade 5.2:1; a bright fill takes canvas-dark text */
+    --primary-foreground: 216 28% 7%;
     --secondary: 212 19% 16%; /* #212830 */
     --secondary-foreground: 210 67% 96.5%;
-    --muted: 214 25% 11%;
+    --muted: 212 19% 16%; /* one step off cards */
     --muted-foreground: 214 8% 60%; /* #9198a1, 6.5:1 */
     --accent: 218 17% 18%; /* hover #262c36 */
     --accent-foreground: 210 67% 96.5%;
     --destructive: 3 93% 63%; /* #f85149 */
-    --destructive-foreground: 0 0% 100%;
+    --destructive-foreground: 216 28% 7%;
     --border: 214 12% 27%; /* #3d444d */
-    --input: 214 12% 27%;
-    --ring: 217 84% 55%;
+    --input: 215 9% 44%; /* control edge, 3.7:1 */
+    --ring: 217 91% 60%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -227,13 +228,13 @@
     --syntax-keyword: 220 100% 65%; /* blue - keywords */
 
     /* Accent gradient stops (aligned with brand hue 217) */
-    --accent-from: 217 84% 50%;
-    --accent-to: 217 92% 64%;
-    --accent-glow: 217 90% 58%;
+    --accent-from: 217 91% 55%;
+    --accent-to: 217 92% 66%;
+    --accent-glow: 217 90% 60%;
 
-    --color-danger: 3 93% 63%; /* #f85149 */
-    --color-warning: 41 72% 48%; /* #d29922 */
-    --color-success: 128 49% 49%; /* #3fb950 */
+    --danger: 3 93% 63%; /* #f85149 */
+    --warning: 41 72% 48%; /* #d29922 */
+    --success: 128 49% 49%; /* #3fb950 */
     --info: 262 90% 73%; /* #ab7df8 */
     --invert: 214 12% 27%;
     --invert-foreground: 210 67% 96.5%;
@@ -242,12 +243,12 @@
     /* Sidebar: the canvas, separated by its border */
     --sidebar: 216 28% 7%;
     --sidebar-foreground: 210 67% 96.5%;
-    --sidebar-primary: 217 84% 55%;
-    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 216 28% 7%;
     --sidebar-accent: 218 17% 18%;
     --sidebar-accent-foreground: 210 67% 96.5%;
     --sidebar-border: 214 12% 27%;
-    --sidebar-ring: 217 84% 55%;
+    --sidebar-ring: 217 91% 60%;
   }
 
   /* Hero animation tokens (isolated, code.ts only) */
