@@ -21,6 +21,7 @@ import type {
   MetricsCapability,
   RemoteKnowledgeCapability,
   RepoCapability,
+  SandboxShellCapability,
   ScheduleCapability,
   ToolImplementation,
   VcsCapability,
@@ -41,6 +42,7 @@ import {
   createRepoListImplementation,
   createRepoOpenImplementation,
   createRepoSearchImplementation,
+  createSandboxShellImplementation,
   createScheduleListImplementation,
   createScheduleManageImplementation,
   createVcsCommitContainsImplementation,
@@ -68,6 +70,7 @@ import {
   REPO_LIST_NAME,
   REPO_OPEN_NAME,
   REPO_SEARCH_NAME,
+  SANDBOX_SHELL_NAME,
   SCHEDULE_LIST_NAME,
   SCHEDULE_MANAGE_NAME,
   VCS_COMMIT_CONTAINS_NAME,
@@ -81,6 +84,7 @@ import {
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
   WORK_ITEM_ARTIFACT_RECORD_NAME,
+  sandboxShellUnavailableImplementation,
   WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 
@@ -100,6 +104,8 @@ export interface ToolBindingDeps {
   readonly repoCapability: RepoCapability;
   readonly scheduleCapability: ScheduleCapability;
   readonly vcsCapability: VcsCapability;
+  /** Null when no sandbox token or host is configured: the shell tool then answers `unavailable`. */
+  readonly sandboxShellCapability: SandboxShellCapability | null;
   /** Build SHA of the running app (APP_BUILD_SHA, as /version reports it). */
   readonly runningBuildSha?: string | undefined;
   readonly workItemCapability: WorkItemCapability;
@@ -197,6 +203,12 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     [SCHEDULE_LIST_NAME]: createScheduleListImplementation({
       scheduleCapability: deps.scheduleCapability,
     }) as AnyToolImplementation,
+
+    [SANDBOX_SHELL_NAME]: (deps.sandboxShellCapability
+      ? createSandboxShellImplementation({
+          sandboxShellCapability: deps.sandboxShellCapability,
+        })
+      : sandboxShellUnavailableImplementation) as AnyToolImplementation,
 
     [SCHEDULE_MANAGE_NAME]: createScheduleManageImplementation({
       scheduleCapability: deps.scheduleCapability,

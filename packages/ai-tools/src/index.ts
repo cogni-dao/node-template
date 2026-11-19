@@ -55,6 +55,10 @@ export type {
   RepoSearchHit,
   RepoSearchParams,
   RepoSearchResult,
+  SandboxShellCapability,
+  SandboxShellErrorCode,
+  SandboxShellParams,
+  SandboxShellResult,
   ScheduleCapability,
   ScheduleCreateParams,
   ScheduleInfo,
@@ -324,6 +328,19 @@ export {
   scheduleListContract,
   scheduleListStubImplementation,
 } from "./tools/schedule-list";
+export {
+  createSandboxShellImplementation,
+  SANDBOX_SHELL_NAME,
+  type SandboxShellDeps,
+  type SandboxShellInput,
+  SandboxShellInputSchema,
+  type SandboxShellOutput,
+  SandboxShellOutputSchema,
+  type SandboxShellRedacted,
+  sandboxShellBoundTool,
+  sandboxShellContract,
+  sandboxShellUnavailableImplementation,
+} from "./tools/sandbox-shell";
 export {
   createScheduleManageImplementation,
   SCHEDULE_MANAGE_NAME,

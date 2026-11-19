@@ -158,7 +158,8 @@ type SubstrateName =
   | "tigerbeetle"
   | "langfuse"
   | "openbao-eso"
-  | "openfga";
+  | "openfga"
+  | "sandbox";
 
 type ProbeRun = (
   ctx: RequestContext,
@@ -276,6 +277,16 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     readyz: {
       kind: "na",
       reason: "Secret delivery is already proven by assertRuntimeSecrets.",
+    },
+  },
+  {
+    dependency: "sandbox",
+    envKeys: ["SANDBOX_BASE_URL"],
+    isDeclared: (env) => Boolean(env.SANDBOX_EXECD_TOKEN),
+    readyz: {
+      kind: "na",
+      reason:
+        "Per-run remote workspace companion reached on demand by the sandbox shell tool; its origin is derived from APP_BASE_URL, so it is not a serving dependency.",
     },
   },
   {

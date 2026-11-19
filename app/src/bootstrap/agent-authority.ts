@@ -255,6 +255,14 @@ export function createAgentToolAuthority(deps: {
     }
   };
 
+  // The guard only reads. A pooled connection can die on the network path (bug.0062), so a guard read that loses its connection
+  // runs once more on a fresh one before it fails closed.
+  const withStoreRead: WithStore = (fn) =>
+    withStore(fn).catch((error: unknown) => {
+      if (isConnectionLoss(error)) return withStore(fn);
+      throw error;
+    });
+
   const onDecision = (event: AuthzEvent): void => {
     const level = event.decision === "allow" ? "info" : "warn";
     deps.log[level](
@@ -265,7 +273,7 @@ export function createAgentToolAuthority(deps: {
 
   return {
     resolvePrincipal: (slug) => withStore((store) => resolveInternalPrincipal(store, slug)),
-    guardDeps: { withStore, adminCheck, onDecision },
+    guardDeps: { withStore: withStoreRead, adminCheck, onDecision },
     scopeKinds,
     async listNodeAi() {
       // The scopes each AI may use come from the contracts of every tool its graphs list. NODE scopes only: an account scope is the person's,
@@ -551,4 +559,14 @@ export function createAgentToolAuthority(deps: {
     listOwnAccess: (principalUserId) =>
       withStore((store) => listOwnAccess(store, principalUserId)),
   };
+}
+
+/** postgres.js codes for a connection that ended under a query; the transaction did not commit. */
+const CONNECTION_LOSS_CODES = new Set(["CONNECTION_CLOSED", "CONNECTION_ENDED", "CONNECTION_DESTROYED"]);
+function isConnectionLoss(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    CONNECTION_LOSS_CODES.has(String((error as { code?: unknown }).code))
+  );
 }
