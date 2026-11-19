@@ -258,7 +258,7 @@ describe("features/analytics/services/analytics", () => {
 
       // Filters should be identical
       expect(denominatorFilters).toBe(requestRateFilters);
-      expect(denominatorFilters).toContain('app="cogni-template"');
+      expect(denominatorFilters).not.toContain("app=");
       expect(denominatorFilters).toContain('env="production"');
       expect(denominatorFilters).toContain('route!="meta.metrics"');
     });

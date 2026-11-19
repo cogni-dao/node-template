@@ -111,8 +111,10 @@ export async function getAnalyticsSummary(
   const now = new Date();
   const start = new Date(now.getTime() - config.durationSeconds * 1000);
 
-  // Build base filters
-  const baseFilters = `app="cogni-template",env="${params.env}",route!="meta.metrics"`;
+  // Build base filters. No `app` or node matcher: the platform labels every scraped lane series itself
+  // (`app="cogni-node"`, `node`, `env`), and the operator read proxy confines every query to this node and env
+  // (story.5169). An `app="cogni-template"` matcher selects nothing on a lane.
+  const baseFilters = `env="${params.env}",route!="meta.metrics"`;
 
   // Query request count denominator (for k-anonymity)
   const denominatorQuery = `sum(increase(http_requests_total{${baseFilters}}[${config.step}]))`;
@@ -150,7 +152,7 @@ export async function getAnalyticsSummary(
     }),
     // Total tokens
     metricsQuery.queryInstant({
-      query: `sum(increase(ai_llm_tokens_total{app="cogni-template",env="${params.env}"}[${params.window}]))`,
+      query: `sum(increase(ai_llm_tokens_total{env="${params.env}"}[${params.window}]))`,
       time: now,
     }),
     // Error rate (percentage)
@@ -167,7 +169,7 @@ export async function getAnalyticsSummary(
     }),
     // Token rate timeseries
     metricsQuery.queryRange({
-      query: `sum(increase(ai_llm_tokens_total{app="cogni-template",env="${params.env}"}[${config.step}]))`,
+      query: `sum(increase(ai_llm_tokens_total{env="${params.env}"}[${config.step}]))`,
       start,
       end: now,
       step: config.step,
