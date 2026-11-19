@@ -239,6 +239,7 @@ const UNMAPPED: Readonly<Record<string, string>> = {
   MoveMetricGoneError: "read-time only: the judge reads it as unknown, never an HTTP answer",
   InvalidCursorError: "read-side: the list routes own it",
   HistoryCursorUnknownError: "read-side: the history read answers it as 400 invalid_input",
+  WriteAttributionInvalidError: "host defect (task.0133): the host built a bad attribution, never client input; it surfaces as the node's internal error, like any unmapped error",
 };
 
 describe("workItemWriteErrorResponse", () => {

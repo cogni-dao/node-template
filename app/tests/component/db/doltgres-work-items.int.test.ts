@@ -1002,7 +1002,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				title: "Out-of-line text search",
 				summary: `prefix ${"x".repeat(8_000)} panic-proof-needle`,
 			},
-			principalId,
+			{ actor: principalId },
 		);
 		await expect(
 			adapter.list({ text: "PANIC-PROOF-NEEDLE" }),
@@ -1012,14 +1012,14 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 
 		const created = await adapter.create(
 			{ id, type: "task", title: "Doltgres acceptance" },
-			principalId,
+			{ actor: principalId },
 		);
 		expect(created.id).toBe(id);
 		expect((await adapter.list({ ids: [id] })).items).toHaveLength(1);
 
 		const patched = await adapter.patch(
 			{ reason: "test change", id, set: { title: "Doltgres accepted" } },
-			principalId,
+			{ actor: principalId },
 		);
 		expect(patched.title).toBe("Doltgres accepted");
 
@@ -1033,7 +1033,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await blocker.unsafe("SELECT pg_advisory_lock(5001001)");
 			await expect(adapter.get(id)).resolves.toMatchObject({ id });
 			await expect(
-				adapter.patch({ reason: "test change", id, set: { title: "blocked" } }, principalId),
+				adapter.patch({ reason: "test change", id, set: { title: "blocked" } }, { actor: principalId }),
 			).rejects.toBeInstanceOf(WorkItemsBusyError);
 		} finally {
 			await blocker
@@ -1053,7 +1053,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		try {
 			await expect(adapter.get(id)).resolves.toMatchObject({ id });
 			await expect(
-				adapter.patch({ reason: "test change", id, set: { title: "scoped blocked" } }, principalId),
+				adapter.patch({ reason: "test change", id, set: { title: "scoped blocked" } }, { actor: principalId }),
 			).rejects.toBeInstanceOf(WorkItemsBusyError);
 		} finally {
 			await writerGuard.release();
@@ -1088,7 +1088,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			// quarantine its native capacity while the independent reader serves.
 			const recoveryAttempt = adapter.patch(
 				{ reason: "test change", id, set: { title: "pool death" } },
-				principalId,
+				{ actor: principalId },
 			);
 			const destroyTimer = setTimeout(() => {
 				void oldPool.end({ timeout: 0 });
@@ -1109,7 +1109,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		// replaced its writer pool, so the very next write is admitted.
 		expect(adapter.writerHealth()).toEqual({ state: "available" });
 		await expect(
-			adapter.patch({ reason: "test change", id, set: { title: "fresh writer" } }, principalId),
+			adapter.patch({ reason: "test change", id, set: { title: "fresh writer" } }, { actor: principalId }),
 		).resolves.toMatchObject({ id, title: "fresh writer" });
 		// The test still waits for the old native session to depart before it
 		// rebuilds the adapter for the remaining scenarios.
@@ -1135,7 +1135,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		// write plane (COMMAND_QUERY_SEPARATION); a read used to do it here only
 		// because a read used to take the write lock.
 		await expect(
-			adapter.patch({ reason: "test change", id, set: { title: "Doltgres accepted" } }, principalId),
+			adapter.patch({ reason: "test change", id, set: { title: "Doltgres accepted" } }, { actor: principalId }),
 		).resolves.toMatchObject({ id, title: "Doltgres accepted" });
 		const verifier = createWorkItemClient();
 		try {
@@ -1148,13 +1148,13 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await verifier.end({ timeout: 0 });
 		}
 
-		await expect(adapter.delete(id, principalId)).rejects.toMatchObject({
+		await expect(adapter.delete(id, { actor: principalId })).rejects.toMatchObject({
 			name: "WorkItemDeletionRetiredError",
 		});
-		await adapter.patch({ reason: "test change", id, set: { status: "cancelled" } }, principalId);
+		await adapter.patch({ reason: "test change", id, set: { status: "cancelled" } }, { actor: principalId });
 		await adapter.patch(
 			{ reason: "test change", id: searchId, set: { status: "cancelled" } },
-			principalId,
+			{ actor: principalId },
 		);
 		await expect(adapter.get(id)).resolves.toMatchObject({
 			id,
@@ -1187,12 +1187,12 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		try {
 			const created = await adapter.create(
 				{ id, type: "task", title: "CAS me", priority: 3, rank: 9 },
-				creator,
+				{ actor: creator },
 			);
 			// Matching expectedRevision lands and bumps the revision by one.
 			const casPatched = await adapter.patch(
 				{ reason: "test change", id, expectedRevision: created.revision, set: { title: "CAS landed" } },
-				creator,
+				{ actor: creator },
 			);
 			expect(casPatched).toMatchObject({
 				id,
@@ -1205,7 +1205,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await expect(
 				adapter.patch(
 					{ reason: "test change", id, expectedRevision: created.revision, set: { title: "stale" } },
-					creator,
+					{ actor: creator },
 				),
 			).rejects.toBeInstanceOf(WorkItemRevisionConflictError);
 			expect(await mainHash()).toBe(beforeStale);
@@ -1222,7 +1222,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					expectedRevision: casPatched.revision,
 					set: { priority: 0, rank: 1, labels: ["triaged"] },
 				},
-				collaborator,
+				{ actor: collaborator },
 			);
 			expect(triaged).toMatchObject({
 				priority: 0,
@@ -1241,7 +1241,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await expect(
 				adapter.patch(
 					{ reason: "test change", id, set: { priority: 5, title: "renamed by collaborator" } },
-					collaborator,
+					{ actor: collaborator },
 				),
 			).resolves.toMatchObject({
 				priority: 5,
@@ -1251,7 +1251,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 
 			// The creator's unconditioned patch is unchanged.
 			await expect(
-				adapter.patch({ reason: "test change", id, set: { title: "creator unconditioned" } }, creator),
+				adapter.patch({ reason: "test change", id, set: { title: "creator unconditioned" } }, { actor: creator }),
 			).resolves.toMatchObject({
 				title: "creator unconditioned",
 				revision: triaged.revision + 2,
@@ -1300,7 +1300,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		const id = toWorkItemId("task.9507");
 		const principal = "doltgres-moves-writer";
 		try {
-			await adapter.create({ id, type: "task", title: "Move a metric" }, principal);
+			await adapter.create({ id, type: "task", title: "Move a metric" }, { actor: principal });
 			await expect(adapter.get(id)).resolves.not.toHaveProperty("moves");
 
 			const first = await adapter.patch(
@@ -1309,7 +1309,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					reason: "this change should raise the ratio",
 					set: { moves: [{ metricId: "convergence-ratio", direction: "up" }] },
 				},
-				principal,
+				{ actor: principal },
 			);
 			expect(first.moves).toEqual([
 				{ metricId: "convergence-ratio", direction: "up", baselineObservationId: OBS_1 },
@@ -1323,7 +1323,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					reason: "direction corrected",
 					set: { moves: [{ metricId: "convergence-ratio", direction: "down" }] },
 				},
-				principal,
+				{ actor: principal },
 			);
 			expect(second.moves).toEqual([
 				{ metricId: "convergence-ratio", direction: "down", baselineObservationId: OBS_1 },
@@ -1332,7 +1332,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 
 			// [] clears it; adding the metric back pins a new baseline.
 			await expect(
-				adapter.patch({ id, reason: "moves nothing after all", set: { moves: [] } }, principal),
+				adapter.patch({ id, reason: "moves nothing after all", set: { moves: [] } }, { actor: principal }),
 			).resolves.toMatchObject({ moves: [] });
 			const third = await adapter.patch(
 				{
@@ -1340,7 +1340,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					reason: "moves it again",
 					set: { moves: [{ metricId: "convergence-ratio", direction: "up" }] },
 				},
-				principal,
+				{ actor: principal },
 			);
 			expect(third.moves).toEqual([
 				{ metricId: "convergence-ratio", direction: "up", baselineObservationId: OBS_2 },
@@ -1354,7 +1354,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					title: "Filed with a metric",
 					moves: [{ metricId: "deploy-first-try-7d", direction: "up" }],
 				},
-				principal,
+				{ actor: principal },
 			);
 			expect(filed.moves).toEqual([
 				{ metricId: "deploy-first-try-7d", direction: "up", baselineObservationId: null },
@@ -1404,7 +1404,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		try {
 			await adapter.create(
 				{ id: toWorkItemId(itemId), type: "task", title: "Review me" },
-				"artifact-creator",
+				{ actor: "artifact-creator" },
 			);
 			// Triage: no url, a one-line note; the item's revision is stamped by the server (0 at create).
 			const triage = await adapter.artifacts.insert({
@@ -1413,7 +1413,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				subject: `work:${itemId}`,
 				verdict: "implement",
 				note: "Measurement gap: no KPI reads artifacts yet",
-				author: "artifact-router",
+				attribution: { actor: "artifact-router" },
 			});
 			expect(triage).toMatchObject({ seq: 1, itemRevision: 0, kind: "triage", verdict: "implement" });
 			expect(triage.url).toBeUndefined();
@@ -1423,7 +1423,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					id: toWorkItemId(itemId),
 					set: { title: "Review me, revised" },
 				},
-				"artifact-creator",
+				{ actor: "artifact-creator" },
 			);
 			// A review with a body and no url (an inbox has no comment surface); the revision follows the patch.
 			const review = await adapter.artifacts.insert({
@@ -1433,7 +1433,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				verdict: "request_changes",
 				body: "Full review: it's \"two\" findings.\nSecond line \u{1F534}",
 				note: "Rename the route",
-				author: "artifact-reviewer",
+				attribution: { actor: "artifact-reviewer" },
 			});
 			expect(review).toMatchObject({
 				itemId,
@@ -1455,7 +1455,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				verdict: "fail",
 				rows: [{ ...rows[0]!, overall: "\u{1F534} FAIL", ai: "\u{1F534}" }] as never,
 				url: `${pr}#issuecomment-2`,
-				author: "artifact-validator",
+				attribution: { actor: "artifact-validator" },
 			});
 			const second = await adapter.artifacts.insert({
 				itemId,
@@ -1464,7 +1464,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				verdict: "notes",
 				rows: rows as never,
 				url: `${pr}#issuecomment-3`,
-				author: "artifact-validator",
+				attribution: { actor: "artifact-validator" },
 			});
 			// The sequence is per item and gapless: 1, 2, 3, 4.
 			expect([triage.seq, review.seq, first.seq, second.seq]).toEqual([1, 2, 3, 4]);
@@ -1478,7 +1478,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				subject: inbox,
 				verdict: "approve",
 				body: "Looks right.",
-				author: "artifact-reviewer",
+				attribution: { actor: "artifact-reviewer" },
 			});
 			const changed = await adapter.artifacts.insert({
 				itemId,
@@ -1486,7 +1486,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				subject: inbox,
 				verdict: "request_changes",
 				body: "One more thing.",
-				author: "artifact-reviewer",
+				attribution: { actor: "artifact-reviewer" },
 			});
 			expect([approved.seq, changed.seq]).toEqual([5, 6]);
 			expect(changed.itemRevision).toBe(approved.itemRevision);
@@ -1687,7 +1687,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 						id: toWorkItemId("task.9599"),
 						set: { title: "must not land" },
 					},
-					"component-agent",
+					{ actor: "component-agent" },
 				),
 			).rejects.toThrow(/Work item not found/);
 			// Parked, never deleted: gone from the op namespace, present under
@@ -1778,7 +1778,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 
 			await adapter.create(
 				{ id, type: "task", title: "Scoped staging acceptance" },
-				principalId,
+				{ actor: principalId },
 			);
 			workItemCreated = true;
 
@@ -1803,7 +1803,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		} finally {
 			if (workItemCreated) {
 				await adapter
-					.patch({ reason: "test change", id, set: { status: "cancelled" } }, principalId)
+					.patch({ reason: "test change", id, set: { status: "cancelled" } }, { actor: principalId })
 					.catch(() => undefined);
 			}
 			if (knowledgeSession) {
@@ -2048,7 +2048,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 						type: "task",
 						title: "Never resume",
 					},
-					"native-capacity-probe",
+					{ actor: "native-capacity-probe" },
 				)
 				.catch((error: unknown) => error);
 			await expect
@@ -2069,7 +2069,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				await expect(
 					adapter.create(
 						{ type: "task", title: "Retry cannot allocate" },
-						"native-capacity-probe",
+						{ actor: "native-capacity-probe" },
 					),
 				).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
 			expect(reservations).toBe(0);
@@ -2086,7 +2086,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await expect(
 				adapter.patch(
 					{ reason: "test change", id: toWorkItemId("task.9612"), set: { title: "Fresh request" } },
-					"native-capacity-probe",
+					{ actor: "native-capacity-probe" },
 				),
 			).rejects.toThrow(/not found/);
 			expect(reservations).toBe(1);
@@ -2142,7 +2142,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 						type: "task",
 						title: "Must remain uncommitted",
 					},
-					"native-cleanup-probe",
+					{ actor: "native-cleanup-probe" },
 				)
 				.catch((failure: unknown) => failure);
 			expect(error).toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
@@ -2984,7 +2984,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 							type: "task",
 							title: "Must never execute",
 						},
-						"orphan-budget-probe",
+						{ actor: "orphan-budget-probe" },
 					)
 					.catch((error: unknown) => error);
 				if (wave === 0) {
@@ -3032,7 +3032,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	const pid = Number((await writer.unsafe('SELECT pg_backend_pid() AS pid'))[0].pid);
 	process.send({phase: 'ready', pid, processPid: process.pid});
 	await new Promise(resolve => process.once('message', resolve));
-	const result = await adapter.create({id: 'task.9611', type: 'task', title: 'Must never execute'}, 'orphan-child').catch(error => error);
+	const result = await adapter.create({id: 'task.9611', type: 'task', title: 'Must never execute'}, {actor: 'orphan-child'}).catch(error => error);
 	process.send({phase: 'result', busy: result instanceof WorkItemsBusyError, retired, recreated, admissions, mutations}, async () => {
 	  await Promise.allSettled([...pools, reader].map(pool => pool.end({timeout: 0})));
 	  process.exit(0);
@@ -3144,7 +3144,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					type: "task",
 					title: "New intent after actual settlement",
 				},
-				"orphan-budget-probe",
+				{ actor: "orphan-budget-probe" },
 			);
 			freshCreated = true;
 			expect(fresh.id).toBe("task.9612");
@@ -3157,7 +3157,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				await adapter
 					.patch(
 						{ reason: "test change", id: toWorkItemId("task.9612"), set: { status: "cancelled" } },
-						"orphan-budget-probe",
+						{ actor: "orphan-budget-probe" },
 					)
 					.catch(() => undefined);
 			if (childDeadline) clearTimeout(childDeadline);
@@ -3226,7 +3226,7 @@ const pid = Number((await writer.unsafe('SELECT pg_backend_pid() AS pid'))[0].pi
 process.send({phase: 'ready', pid, processPid: process.pid});
 await wait('go');
 if (role === 'original') {
- const error = await adapter.create({id: itemId, type: 'task', title: 'One canonical original intent'}, 'restart-probe').catch(error => error);
+ const error = await adapter.create({id: itemId, type: 'task', title: 'One canonical original intent'}, {actor: 'restart-probe'}).catch(error => error);
  process.send({phase: 'outcome', name: error.name, retryable: error.retryable, lookup: error.receipt?.lookup ?? null, inserts});
  await new Promise(() => {});
 } else {
@@ -3237,8 +3237,8 @@ if (role === 'original') {
  }
  // A nonretryable landed-intent receipt is resolved by canonical lookup;
  // it is never permission to issue the original DML a second time.
- const retry = stage === 'merged' ? await adapter.get(itemId) : await adapter.create({id: itemId, type: 'task', title: 'One canonical original intent'}, 'restart-probe').catch(error => error);
- if (stage === 'merged') await adapter.create({id: ${JSON.stringify(freshId)}, type: 'task', title: 'Distinct new request'}, 'restart-probe');
+ const retry = stage === 'merged' ? await adapter.get(itemId) : await adapter.create({id: itemId, type: 'task', title: 'One canonical original intent'}, {actor: 'restart-probe'}).catch(error => error);
+ if (stage === 'merged') await adapter.create({id: ${JSON.stringify(freshId)}, type: 'task', title: 'Distinct new request'}, {actor: 'restart-probe'});
  const item = await adapter.get(itemId);
  // Test-only quiescence probe: waits for the reserved cleanup to return the
  // max-one writer before process teardown, without cancelling native work.
@@ -3492,7 +3492,7 @@ if (role === 'original') {
 		try {
 			await adapter.create(
 				{ id, type: "task", title: "Canonical duplicate fixture" },
-				"native-duplicate-proof",
+				{ actor: "native-duplicate-proof" },
 			);
 			await initial.unsafe("SELECT 1");
 			const pidA = Number(
@@ -3501,7 +3501,7 @@ if (role === 'original') {
 			await expect(
 				adapter.create(
 					{ id, type: "task", title: "Canonical duplicate fixture" },
-					"native-duplicate-proof",
+					{ actor: "native-duplicate-proof" },
 				),
 			).rejects.toMatchObject({ name: "WorkItemAlreadyExistsError" });
 			// Existing terminal domain-error recovery retires the settled session.
@@ -3544,7 +3544,7 @@ if (role === 'original') {
 						type: "task",
 						title: "Distinct request after duplicate",
 					},
-					"native-duplicate-proof",
+					{ actor: "native-duplicate-proof" },
 				),
 			).resolves.toMatchObject({ id: freshId, revision: 0 });
 			await replacement.unsafe("SELECT 1");
@@ -3618,7 +3618,7 @@ if (role === 'original') {
 			await store.registerDomain({ id: "scope-mix", name: "Scope proof" });
 			await work.create(
 				{ id, type: "task", title: "before mixed write" },
-				"mixed-principal",
+				{ actor: "mixed-principal" },
 			);
 			// Preserve the historical null-title case through the public write API.
 			await store.withWrite(
@@ -3752,7 +3752,7 @@ if (role === 'original') {
 			).toEqual(mainBefore);
 			expect(await knowledgeRead.unsafe("SELECT * FROM dolt_status")).toHaveLength(0);
 			await expect(
-				work.patch({ reason: "test change", id, set: { title: "must wait" } }, "mixed-principal"),
+				work.patch({ reason: "test change", id, set: { title: "must wait" } }, { actor: "mixed-principal" }),
 			).rejects.toBeInstanceOf(WorkItemsBusyError);
 			await expect(work.get(id)).resolves.toMatchObject({
 				title: "before mixed write",
@@ -3768,7 +3768,7 @@ if (role === 'original') {
 			await expect(
 				work.patch(
 					{ reason: "test change", id, set: { title: "after knowledge acknowledgement" } },
-					"mixed-principal",
+					{ actor: "mixed-principal" },
 				),
 			).resolves.toMatchObject({ title: "after knowledge acknowledgement" });
 		} finally {

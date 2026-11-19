@@ -143,7 +143,7 @@ function world(
 const patchStatus = (adapter: DoltgresWorkItemAdapter, status: string, principal = "mover") =>
   adapter.patch(
     { id: toWorkItemId(ID), reason: "move it", set: { status: status as never } },
-    principal
+    { actor: principal }
   );
 
 const wrote = (queries: string[]) =>
@@ -161,7 +161,7 @@ describe("create is triage only", () => {
     await expect(
       make().create(
         { type: "task", title: "skip triage", status: "needs_implement" } as never,
-        "creator"
+        { actor: "creator" }
       )
     ).rejects.toMatchObject({ name: "WorkItemGateUnmetError", from: "create", to: "needs_implement" });
     expect(queries).toEqual([]);
@@ -260,7 +260,7 @@ describe("status_revision", () => {
     const { queries, make } = world("needs_validation", { pr: PR });
     await make().patch(
       { id: toWorkItemId(ID), reason: "rename", set: { title: "renamed" } },
-      "editor"
+      { actor: "editor" }
     );
     expect(queries.find((q) => q.startsWith("UPDATE work_items"))).not.toContain("status_revision");
   });
@@ -460,7 +460,7 @@ describe("deploy_verified is retired", () => {
     const adapter = make({ logger: { info: vi.fn(), warn, error: vi.fn() } });
     await adapter.patch(
       { id: toWorkItemId(ID), reason: "flag", set: { deployVerified: true } },
-      "closer"
+      { actor: "closer" }
     );
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ event: "adapter.work_items.deploy_verified_write", workItemId: ID }),
@@ -474,7 +474,7 @@ describe("the deliverable kind of pr changes only via triage", () => {
   const setPr = (adapter: DoltgresWorkItemAdapter, pr: string, status?: string) =>
     adapter.patch(
       { id: toWorkItemId(ID), reason: "switch it", set: { pr, ...(status ? { status: status as never } : {}) } },
-      "implementer"
+      { actor: "implementer" }
     );
 
   it.each(["needs_implementation_review", "needs_validation", "needs_merge"])(

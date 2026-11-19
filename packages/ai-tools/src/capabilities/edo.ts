@@ -9,4 +9,6 @@
  * Side-effects: none
  * @public
  */
-export type { EdoSourceType, HypothesizeParams, DecideParams, RecordOutcomeParams, RecordOutcomeResult, ChainDirection, GetChainParams, ChainNodeEntry, GetChainResult, EdoCapability } from "@cogni-dao/knowledge-store/contracts";
+export type { EdoSourceType, HypothesizeParams, DecideParams, RecordOutcomeParams, RecordOutcomeResult, ChainDirection, GetChainParams, ChainNodeEntry, GetChainResult } from "@cogni-dao/knowledge-store/contracts";
+/** The tool-facing capability: the host binds the run attribution to each write (task.0133), so a tool never builds one. */
+export type { EdoToolCapability as EdoCapability } from "@cogni-dao/knowledge-store/contracts";

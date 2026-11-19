@@ -33,6 +33,7 @@ import {
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { routeAttribution } from "@/bootstrap/write-attribution";
 import {
   EVENT_NAMES,
   logEvent,
@@ -200,10 +201,12 @@ export const POST = wrapRouteHandlerWithLogging(
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
     // The package owns parse, refusals and the one terminal event (bug.0063); this route keeps auth, the actor and node errors.
+    const attribution = routeAttribution(sessionUser.id);
     const result = await handleWorkItemCreate({
       readJson: () => request.json(),
       parse: (body) => workItemsCreateOperation.input.safeParse(body),
-      write: (input) => createWorkItem(input, { id: sessionUser.id }),
+      write: (input) => createWorkItem(input, { id: sessionUser.id }, attribution),
+      attribution,
       toBody: (created) => workItemsCreateOperation.output.parse(created),
       mapNodeError: (e) => {
         if (e instanceof NodeAdminRequiredError)

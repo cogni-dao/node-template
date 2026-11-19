@@ -112,12 +112,12 @@ describe("required logical knowledge write scopes", () => {
       evaluateAt: new Date("2026-10-20T00:00:00Z"),
       sourceType: "agent" as const,
     };
-    const first = await edo.hypothesize(input);
+    const first = await edo.hypothesize(input, { actor: "edo-test-actor" });
     const commits = store.commitLog.length;
-    expect(await edo.hypothesize(input)).toEqual(first);
+    expect(await edo.hypothesize(input, { actor: "edo-test-actor" })).toEqual(first);
     expect(store.commitLog).toHaveLength(commits);
     await expect(
-      edo.hypothesize({ ...input, content: "Different prediction" })
+      edo.hypothesize({ ...input, content: "Different prediction" }, { actor: "edo-test-actor" })
     ).rejects.toBeInstanceOf(KnowledgeWriteConflictError);
   });
   it("concurrent resolver retries create exactly one outcome and resolving edge", async () => {
@@ -131,7 +131,7 @@ describe("required logical knowledge write scopes", () => {
       content: "Will be tested",
       evaluateAt: new Date("2026-10-20T00:00:00Z"),
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
     const input = {
       hypothesisId: "hypothesis",
       domain: "meta",
@@ -140,6 +140,7 @@ describe("required logical knowledge write scopes", () => {
       outcomeContent: "Prediction held",
       edge: "validates" as const,
       sourceType: "agent" as const,
+      attribution: { actor: "edo-test-actor" },
     };
     const results = await Promise.all([
       resolver.resolveHypothesis(input),
@@ -190,8 +191,8 @@ describe("required logical knowledge write scopes", () => {
       sourceType: "agent" as const,
       evidenceForIds: [ENTRY.id],
     };
-    await edo.hypothesize(hypothesis);
-    await edo.hypothesize({ ...hypothesis, id: "other-hypothesis" });
+    await edo.hypothesize(hypothesis, { actor: "edo-test-actor" });
+    await edo.hypothesize({ ...hypothesis, id: "other-hypothesis" }, { actor: "edo-test-actor" });
     const decision = {
       id: "decision",
       domain: "meta",
@@ -200,14 +201,14 @@ describe("required logical knowledge write scopes", () => {
       sourceType: "agent" as const,
       derivesFromHypothesisId: hypothesis.id,
     };
-    const first = await edo.decide(decision);
+    const first = await edo.decide(decision, { actor: "edo-test-actor" });
     const commits = store.commitLog.length;
-    expect(await edo.decide(decision)).toEqual(first);
+    expect(await edo.decide(decision, { actor: "edo-test-actor" })).toEqual(first);
     await expect(
-      edo.hypothesize({ ...hypothesis, evidenceForIds: ["other-finding"] })
+      edo.hypothesize({ ...hypothesis, evidenceForIds: ["other-finding"] }, { actor: "edo-test-actor" })
     ).rejects.toBeInstanceOf(KnowledgeWriteConflictError);
     await expect(
-      edo.decide({ ...decision, derivesFromHypothesisId: "other-hypothesis" })
+      edo.decide({ ...decision, derivesFromHypothesisId: "other-hypothesis" }, { actor: "edo-test-actor" })
     ).rejects.toBeInstanceOf(KnowledgeWriteConflictError);
     expect(store.commitLog).toHaveLength(commits);
   });

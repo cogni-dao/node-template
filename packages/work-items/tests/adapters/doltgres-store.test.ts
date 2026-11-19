@@ -79,7 +79,7 @@ function build(wiring: Pick<DoltgresWorkItemStoreOptions, "entryResolver" | "met
 const patch = (store: DoltgresWorkItemAdapter, extra: Record<string, unknown>) =>
   store.patch(
     { id: toWorkItemId(ID), reason: "why", set: { title: "u" }, ...extra } as never,
-    PRINCIPAL,
+    { actor: PRINCIPAL },
   );
 
 const baseline: MetricBaselinePort = { latestObservationId: async () => null };

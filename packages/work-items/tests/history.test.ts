@@ -93,6 +93,31 @@ describe("parseWorkItemCommitMessage", () => {
     });
   });
 
+  it("reads the requester and the run from their own lines (task.0133)", () => {
+    const message = [
+      "work-items: patch task.1 by actor:agent-a",
+      "Reason: why",
+      "Requested-by: schedule-owner-1",
+      "Run: run-9 system_scheduled",
+      `Cites: change-history-design@${COMMIT_A}`,
+    ].join("\n");
+    expect(parseWorkItemCommitMessage(message)).toMatchObject({
+      actor: "agent-a",
+      requestedBy: "schedule-owner-1",
+      run: { id: "run-9", kind: "system_scheduled" },
+    });
+    // A direct write has neither; a Run line with an unknown kind, or one buried in a reason, is not read.
+    const direct = parseWorkItemCommitMessage("work-items: patch task.1 by actor:agent-a\nReason: why");
+    expect(direct).not.toHaveProperty("requestedBy");
+    expect(direct).not.toHaveProperty("run");
+    expect(
+      parseWorkItemCommitMessage("x by actor:a\nRun: run-9 someone_else").run
+    ).toBeUndefined();
+    expect(
+      parseWorkItemCommitMessage("x by actor:a\nReason: Run: run-9 system_scheduled").run
+    ).toBeUndefined();
+  });
+
   it("reads main and inbox pins from the Cites line", () => {
     const message = [
       "work-items: patch task.1 by actor:agent-a",

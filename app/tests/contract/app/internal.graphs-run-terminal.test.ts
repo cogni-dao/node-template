@@ -21,6 +21,7 @@ const VIRTUAL_KEY_ID = "30000000-0000-4000-a000-000000000001";
 const mocks = vi.hoisted(() => ({
   runGraph: vi.fn(),
   scopedSignal: undefined as AbortSignal | undefined,
+  scopedRunKind: "unset" as string | undefined,
   checkIdempotency: vi.fn().mockResolvedValue({ status: "new" }),
   createPendingRequest: vi.fn().mockResolvedValue({
     status: "claimed",
@@ -80,8 +81,9 @@ vi.mock("@/bootstrap/graph-executor.factory", () => {
   };
   return {
     createGraphExecutor: () => executor,
-    createScopedGraphExecutor: (params: { abortSignal?: AbortSignal }) => {
+    createScopedGraphExecutor: (params: { abortSignal?: AbortSignal; runKind: string | undefined }) => {
       mocks.scopedSignal = params.abortSignal;
+      mocks.scopedRunKind = params.runKind;
       return executor;
     },
   };
@@ -125,6 +127,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.scopedSignal = undefined;
+    mocks.scopedRunKind = "unset";
     mocks.checkIdempotency.mockResolvedValue({ status: "new" });
     mocks.getRunByRunId.mockResolvedValue(null);
   });
@@ -155,6 +158,43 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
       body: JSON.stringify({ executionGrantId: "40000000-0000-4000-a000-000000000001", runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" } } }),
     }), { params: Promise.resolve({ graphId: "langgraph:work-prioritizer" }) });
     expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.not.objectContaining({ unattended: expect.anything() }));
+  });
+
+  const runChat = () =>
+    POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:default/runs", {
+      method: "POST",
+      headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": "api:kind" },
+      body: JSON.stringify({ executionGrantId: null, runId: RUN_ID, input: {
+        messages: [{ role: "user", content: "hello" }], modelRef: { providerKey: "platform", modelId: "test-model" },
+        actorUserId: USER_ID, billingAccountId: BILLING_ID, virtualKeyId: VIRTUAL_KEY_ID,
+      } }),
+    }), { params: Promise.resolve({ graphId: "langgraph:default" }) });
+
+  it.each(["user_immediate", "system_scheduled", "system_webhook"])(
+    "forwards the run record's kind %s into the run scope, for a run that has no grant (task.0133)",
+    async (runKind) => {
+      mocks.getRunByRunId.mockResolvedValue({ runKind, triggerSource: "api", graphId: "langgraph:default", triggerRef: null, scheduledFor: null });
+      await runChat();
+      expect(mocks.getRunByRunId).toHaveBeenCalledWith(expect.anything(), RUN_ID);
+      expect(mocks.scopedRunKind).toBe(runKind);
+    }
+  );
+
+  it("an unreadable run record never fails the run: it runs with no run kind (task.0133)", async () => {
+    mocks.getRunByRunId.mockRejectedValue(new Error("ledger down"));
+    const response = await runChat();
+    expect(response.status).toBe(200);
+    expect(mocks.runGraph).toHaveBeenCalled();
+    expect(mocks.scopedRunKind).toBeUndefined();
+  });
+
+  it("a missing run record or one with a null kind runs with no run kind (task.0133)", async () => {
+    for (const record of [null, { runKind: null, triggerSource: "api", graphId: "langgraph:default", triggerRef: null, scheduledFor: null }]) {
+      mocks.scopedRunKind = "unset";
+      mocks.getRunByRunId.mockResolvedValue(record);
+      await runChat();
+      expect(mocks.scopedRunKind).toBeUndefined();
+    }
   });
 
   it("aborts cooperative execution at the host deadline", async () => {

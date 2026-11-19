@@ -259,7 +259,7 @@ describe("EDO foundation — full hypothesis loop", () => {
       resolutionStrategy: "agent", // opt into the resolver cron
       evidenceForIds: ["evt:fed-meeting-announce"],
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
     expect(hypothesis.id).toBe("h:fed-rate-cut-march");
 
     // 2. Agent takes a decision deriving from the hypothesis.
@@ -270,7 +270,7 @@ describe("EDO foundation — full hypothesis loop", () => {
       content: "Allocate 5% of treasury to YES at <40c",
       derivesFromHypothesisId: hypothesis.id,
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
     expect(decision.id).toBe("d:long-rate-cut-position");
 
     // Pre-resolution state: the hypothesis is in pendingResolutions when
@@ -299,7 +299,7 @@ describe("EDO foundation — full hypothesis loop", () => {
       edge: "validates",
       sourceType: "agent",
       sourceNode: "operator-cron",
-    });
+    }, { actor: "edo-test-actor" });
 
     // 4. Loop closure assertions.
     expect(outcomeResult.alreadyResolved).toBe(false);
@@ -347,7 +347,7 @@ describe("EDO foundation — full hypothesis loop", () => {
       evaluateAt: new Date("2026-01-01"),
       resolutionStrategy: "agent",
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
 
     await capability.recordOutcome({
       id: "o:rep-1",
@@ -357,7 +357,7 @@ describe("EDO foundation — full hypothesis loop", () => {
       hypothesisId: "h:rep",
       edge: "validates",
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
 
     const second = await capability.recordOutcome({
       id: "o:rep-1",
@@ -367,7 +367,7 @@ describe("EDO foundation — full hypothesis loop", () => {
       hypothesisId: "h:rep",
       edge: "validates",
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
 
     expect(second.alreadyResolved).toBe(true);
     // No second outcome row was created.
@@ -389,7 +389,7 @@ describe("EDO foundation — full hypothesis loop", () => {
       evaluateAt: new Date("2020-01-01"), // long past
       // resolutionStrategy intentionally omitted → null → manual
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
     const pending = await resolver.pendingResolutions(new Date("2026-06-01"), {
       strategy: "agent",
     });
@@ -528,7 +528,7 @@ describe("EDO chain walk — walkChain", () => {
       resolutionStrategy: "agent",
       evidenceForIds: ["evt"],
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
     await capability.decide({
       id: "d",
       domain: DOMAIN,
@@ -536,7 +536,7 @@ describe("EDO chain walk — walkChain", () => {
       content: "...",
       derivesFromHypothesisId: "h",
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
     await capability.recordOutcome({
       id: "o",
       domain: DOMAIN,
@@ -545,7 +545,7 @@ describe("EDO chain walk — walkChain", () => {
       hypothesisId: "h",
       edge: "validates",
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
 
     // From the hypothesis, `both` reveals the event (out) + decision + outcome (in).
     const both = await resolver.walkChain("h", { direction: "both" });
@@ -593,7 +593,7 @@ describe("EDO chain walk — walkChain", () => {
       evaluateAt: new Date("2026-01-01"),
       evidenceForIds: ["evt"],
       sourceType: "agent",
-    });
+    }, { actor: "edo-test-actor" });
     // Hypothesis cites the event → out from h reveals evt.
     const out = await resolver.walkChain("h", { direction: "out" });
     expect(out.map((n) => n.entry.id).sort()).toEqual(["evt", "h"]);

@@ -52,13 +52,13 @@ export function withWorkItemLeases(
           ) => content.listBoardColumns!(...args),
         }
       : {}),
-    async create(input, principalId) {
-      return content.create(input, principalId);
+    async create(input, attribution) {
+      return content.create(input, attribution);
     },
-    async patch(input, principalId) {
-      return content.patch(input, principalId);
+    async patch(input, attribution) {
+      return content.patch(input, attribution);
     },
-    delete: (id, principalId) => content.delete(id, principalId),
+    delete: (id, attribution) => content.delete(id, attribution),
     ...(content.history
       ? { history: (id: WorkItem["id"]) => content.history!(id) }
       : {}),

@@ -423,7 +423,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
       baseHashPending: hash.promise,
     });
     const error = await adapter
-      .create({ type: "task", title: "not dispatched" }, "principal-1")
+      .create({ type: "task", title: "not dispatched" }, { actor: "principal-1" })
       .catch((failure: unknown) => failure);
     expect(error).toMatchObject({ code: "work_items_native_capacity_held" });
     expect(error).not.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
@@ -511,7 +511,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     const receipt = await adapter
       .create(
         { id: toWorkItemId("task.9997"), type: "task", title: "abandoned DML" },
-        "principal-1"
+        { actor: "principal-1" }
       )
       .catch((error: unknown) => error);
     expect(receipt).toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
@@ -538,7 +538,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     await expect(
       adapter.patch(
         { reason: "test change", id: toWorkItemId("task.9998"), set: { title: "fresh intent" } },
-        "principal-1"
+        { actor: "principal-1" }
       )
     ).rejects.toThrow(/not found/);
     expect(inserted).toBe(1);
@@ -730,7 +730,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
       queryTimeoutMs: 5,
     });
     await expect(
-      adapter.create({ type: "task", title: "abandoned lock" }, "principal-1")
+      adapter.create({ type: "task", title: "abandoned lock" }, { actor: "principal-1" })
     ).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
     expect(queries.some((query) => query.includes("pg_advisory_unlock"))).toBe(
       false
@@ -746,7 +746,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     await expect(
       adapter.patch(
         { reason: "test change", id: toWorkItemId("task.9998"), set: { title: "successor" } },
-        "principal-1"
+        { actor: "principal-1" }
       )
     ).rejects.toThrow(/not found/);
     expect(releases).toBe(2);
@@ -799,11 +799,11 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     });
     const original = adapter.create(
       { type: "task", title: "abandoned" },
-      "principal-1"
+      { actor: "principal-1" }
     );
     const queued = adapter.create(
       { type: "task", title: "already queued" },
-      "principal-1"
+      { actor: "principal-1" }
     );
     await Promise.all([
       expect(original).rejects.toMatchObject({
@@ -815,7 +815,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     ]);
     for (let attempt = 0; attempt < 5; attempt++)
       await expect(
-        adapter.create({ type: "task", title: "retry" }, "principal-1")
+        adapter.create({ type: "task", title: "retry" }, { actor: "principal-1" })
       ).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
     expect(queries).toEqual(["SELECT 1 AS work_items_ready"]);
     expect(reserved).toBe(0);
@@ -829,7 +829,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     await expect(
       adapter.patch(
         { reason: "test change", id: toWorkItemId("task.9998"), set: { title: "fresh intent" } },
-        "principal-1"
+        { actor: "principal-1" }
       )
     ).rejects.toThrow(/not found/);
     expect(reserved).toBe(1);
@@ -931,7 +931,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
 
     const created = await adapter.create(
       { type: "task", title: "survives timeout" },
-      "principal-1"
+      { actor: "principal-1" }
     );
     expect(created.id).toBe("task.0001");
     expect(state.inserts).toBe(1);
@@ -953,7 +953,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
           id: toWorkItemId("task.0001"),
           set: { title: "still writable" },
         },
-        "principal-1"
+        { actor: "principal-1" }
       )
     ).resolves.toMatchObject({ title: "still writable" });
     expect(state.inserts).toBe(1);
@@ -965,7 +965,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     });
 
     await expect(
-      adapter.create({ type: "task", title: "survives timeout" }, "principal-1")
+      adapter.create({ type: "task", title: "survives timeout" }, { actor: "principal-1" })
     ).resolves.toMatchObject({
       id: "task.0001",
       title: "survives timeout",
@@ -989,7 +989,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
       within(
         adapter.create(
           { type: "task", title: "times out after DML" },
-          "principal-1"
+          { actor: "principal-1" }
         )
       )
     ).rejects.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
@@ -1005,7 +1005,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
       within(
         adapter.create(
           { type: "task", title: "successor create" },
-          "principal-1"
+          { actor: "principal-1" }
         )
       )
     ).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
@@ -1021,7 +1021,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
 
     await expect(
       within(
-        adapter.create({ type: "task", title: "times out after DML" }, "principal-1")
+        adapter.create({ type: "task", title: "times out after DML" }, { actor: "principal-1" })
       )
     ).rejects.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
     expect(adapter.writerHealth()).toMatchObject({ state: "held" });
@@ -1039,7 +1039,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     expect(adapter.writerHealth()).toEqual({ state: "available" });
 
     await expect(
-      within(adapter.create({ type: "task", title: "next write" }, "principal-1"))
+      within(adapter.create({ type: "task", title: "next write" }, { actor: "principal-1" }))
     ).resolves.toMatchObject({ title: "next write" });
     expect(state.inserts).toBe(2);
   });
@@ -1053,7 +1053,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
       within(
         adapter.create(
           { type: "task", title: "nested recovery" },
-          "principal-1"
+          { actor: "principal-1" }
         )
       )
     ).resolves.toMatchObject({ id: "task.0001" });
@@ -1071,7 +1071,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
       within(
         adapter.create(
           { type: "bug", title: "successor create" },
-          "principal-1"
+          { actor: "principal-1" }
         )
       )
     ).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
@@ -1087,7 +1087,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     await expect(
       adapter.create(
         { type: "task", title: "ambiguous durable merge" },
-        "principal-1"
+        { actor: "principal-1" }
       )
     ).rejects.toMatchObject({
       name: "WorkItemWriteOutcomeUnknownError",
@@ -1126,7 +1126,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
 
     // Transport loss is not native completion: do not replace or replay it.
     await expect(
-      adapter.create({ type: "bug", title: "successor" }, "principal-1")
+      adapter.create({ type: "bug", title: "successor" }, { actor: "principal-1" })
     ).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
     expect(state.inserts).toBe(1);
     expect(state.branch).toMatch(/^work-item-op\//);
@@ -1136,11 +1136,11 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
       failFreshReachability: true,
     });
     await expect(
-      adapter.create({ type: "task", title: "prior unknown" }, "principal-1")
+      adapter.create({ type: "task", title: "prior unknown" }, { actor: "principal-1" })
     ).rejects.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
     state.failHistoricalReachability = true;
     const error = await adapter
-      .create({ type: "bug", title: "new intent never runs" }, "principal-1")
+      .create({ type: "bug", title: "new intent never runs" }, { actor: "principal-1" })
       .catch((error) => error);
     expect(error).toBeInstanceOf(WorkItemsBusyError);
     expect(error).not.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
@@ -1169,7 +1169,7 @@ describe("ref housekeeping gets its own budget", () => {
     });
 
     await expect(
-      adapter.create({ type: "task", title: "slow checkout" }, "principal-1")
+      adapter.create({ type: "task", title: "slow checkout" }, { actor: "principal-1" })
     ).resolves.toMatchObject({ id: "task.0001" });
     expect(state.durable).toBe(true);
     // Non-vacuous: the slow query really was the ref-movement one.
@@ -1183,7 +1183,7 @@ describe("ref housekeeping gets its own budget", () => {
     });
 
     await expect(
-      adapter.create({ type: "task", title: "blown budget" }, "principal-1")
+      adapter.create({ type: "task", title: "blown budget" }, { actor: "principal-1" })
     ).rejects.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
   });
 });

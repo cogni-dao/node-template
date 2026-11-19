@@ -106,6 +106,12 @@ import {
   parseWorkItemCommitMessage,
   shapeHistory
 } from "../../history.js";
+import {
+  attributionCommitLines,
+  requireWriteAttribution,
+  type WriteAttribution,
+  type WriteRunKind,
+} from "../../attribution.js";
 import { normalizeWorkItemOrder } from "../../query-order.js";
 import { rankScoreSql } from "../../rank-policy.js";
 import {
@@ -361,13 +367,16 @@ type MutationVerb =
 const ARTIFACT_TABLE = "work_item_artifacts";
 /** Every artifact column but `body`: the item read never pays for a 16 KB review it does not return. */
 const ARTIFACT_SUMMARY_COLUMNS =
-  'id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, url, author, created_at';
+  'id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, url, author, run_id, run_kind, created_at';
 /** A ref's columns: every column but `body` (hub work-item-artifacts, refs first). `rows` stays because `passGrade` needs it; `toArtifactRef` drops it. */
 const ARTIFACT_REF_COLUMNS = ARTIFACT_SUMMARY_COLUMNS;
 
 interface MutationProof {
   readonly verb: MutationVerb;
   readonly principal: string;
+  /** The node run's subject and run (task.0133): written as the `Requested-by:` and `Run:` commit lines. Absent on a proof read back from a commit. */
+  readonly requestedBy?: string | undefined;
+  readonly run?: WriteAttribution["run"];
   itemId?: string;
   beforeRow?: Record<string, unknown>;
   afterRow?: Record<string, unknown>;
@@ -567,6 +576,27 @@ function requirePrincipal(principalId: string): string {
   return value;
 }
 
+/** The checked attribution of a write: a blank actor is unauthorized; any other bad value is a host bug (never stored). */
+function requireAttribution(attribution: WriteAttribution): WriteAttribution {
+  requirePrincipal(attribution?.actor ?? "");
+  return requireWriteAttribution(attribution);
+}
+
+/** The proof fields every write carries from its attribution. */
+function attributionProof(attribution: WriteAttribution): {
+  readonly principal: string;
+  readonly requestedBy?: string | undefined;
+  readonly run?: WriteAttribution["run"];
+} {
+  return {
+    principal: attribution.actor,
+    ...(attribution.requestedBy !== undefined
+      ? { requestedBy: attribution.requestedBy }
+      : {}),
+    ...(attribution.run ? { run: attribution.run } : {}),
+  };
+}
+
 /**
  * SCORES_BOUNDS_IN_PACKAGE (story.5111): every adapter write runs the package
  * validator, so a caller that skips the HTTP contract cannot store an
@@ -614,6 +644,12 @@ function rowToArtifact(row: Record<string, unknown>): WorkItemArtifact {
     ...(body !== undefined ? { body } : {}),
     ...(url !== undefined ? { url } : {}),
     author: String(row.author),
+    ...(optionalString(row.run_id) !== undefined
+      ? { runId: optionalString(row.run_id) as string }
+      : {}),
+    ...(optionalString(row.run_kind) !== undefined
+      ? { runKind: optionalString(row.run_kind) as WriteRunKind }
+      : {}),
     createdAt:
       row.created_at instanceof Date
         ? row.created_at.toISOString()
@@ -942,8 +978,9 @@ function asRevision(value: unknown): number | undefined {
 
 /**
  * Commit message of one mutation: line 1 names the operation and actor (crash
- * recovery reads only this line); a patch adds `Reason:` and, with cites, a last
- * `Cites:` line. Reason and cite ids hold no line break, so neither can forge a line.
+ * recovery reads only this line); then `Reason:`, an artifact's `Artifact:` and `Seq:`,
+ * `Requested-by:` and `Run:` (a node run's write only, task.0133) and, with cites, a last
+ * `Cites:` line. Every value holds no line break, so none can forge a line.
  */
 function commitMessage(
   message: string,
@@ -954,6 +991,13 @@ function commitMessage(
   if (proof.reason) lines.push(`Reason: ${proof.reason}`);
   if (proof.artifactId) lines.push(`Artifact: ${proof.artifactId}`);
   if (proof.artifactSeq !== undefined) lines.push(`Seq: ${proof.artifactSeq}`);
+  lines.push(
+    ...attributionCommitLines({
+      actor: principalId,
+      requestedBy: proof.requestedBy,
+      run: proof.run,
+    })
+  );
   if (proof.cites?.length) lines.push(`Cites: ${formatCitesTrailer(proof.cites)}`);
   return lines.join("\n");
 }
@@ -3670,7 +3714,8 @@ export class DoltgresWorkItemAdapter
   private async insertArtifact(
     input: NewWorkItemArtifact
   ): Promise<WorkItemArtifact> {
-    const principal = requirePrincipal(input.author);
+    const attribution = requireAttribution(input.attribution);
+    const principal = attribution.actor;
     if (!(ARTIFACT_KINDS as readonly string[]).includes(input.kind)) {
       throw new Error(`Unknown artifact kind: ${String(input.kind)}`);
     }
@@ -3687,7 +3732,7 @@ export class DoltgresWorkItemAdapter
       principal,
       async (conn) => {
         const rows = await conn.unsafe(
-          `INSERT INTO ${ARTIFACT_TABLE} (id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, body, url, author) VALUES (${escapeValue(id)}, ${escapeValue(itemId)}, ${escapeValue(seq)}, ${escapeValue(itemRevision)}, ${escapeValue(input.kind)}, ${escapeValue(input.subject)}, ${escapeValue(input.verdict)}, ${escapeValue(input.rows ?? null)}, ${escapeValue(input.note ?? null)}, ${escapeValue(input.body ?? null)}, ${escapeValue(input.url ?? null)}, ${escapeValue(principal)}) RETURNING *`
+          `INSERT INTO ${ARTIFACT_TABLE} (id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, body, url, author, run_id, run_kind) VALUES (${escapeValue(id)}, ${escapeValue(itemId)}, ${escapeValue(seq)}, ${escapeValue(itemRevision)}, ${escapeValue(input.kind)}, ${escapeValue(input.subject)}, ${escapeValue(input.verdict)}, ${escapeValue(input.rows ?? null)}, ${escapeValue(input.note ?? null)}, ${escapeValue(input.body ?? null)}, ${escapeValue(input.url ?? null)}, ${escapeValue(principal)}, ${escapeValue(attribution.run?.id ?? null)}, ${escapeValue(attribution.run?.kind ?? null)}) RETURNING *`
         );
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) throw new Error("INSERT returned no artifact row");
@@ -3696,7 +3741,7 @@ export class DoltgresWorkItemAdapter
       {
         proof: {
           verb: "artifact",
-          principal,
+          ...attributionProof(attribution),
           itemId,
           artifactId: id,
           reason,
@@ -4051,9 +4096,10 @@ export class DoltgresWorkItemAdapter
 
   async create(
     input: WorkItemsCreateInput,
-    principalId: string
+    attribution: WriteAttribution
   ): Promise<WorkItem> {
-    const principal = requirePrincipal(principalId);
+    const attributed = requireAttribution(attribution);
+    const principal = attributed.actor;
     // CREATE_IS_TRIAGE_ONLY (task.0122): a new item enters at needs_triage.
     if (input.status !== undefined && input.status !== "needs_triage") {
       throw new WorkItemGateUnmetError(
@@ -4143,7 +4189,7 @@ export class DoltgresWorkItemAdapter
           }
         },
         {
-          proof: { verb: "create", principal },
+          proof: { verb: "create", ...attributionProof(attributed) },
         }
       );
 
@@ -4190,9 +4236,10 @@ export class DoltgresWorkItemAdapter
    */
   async patch(
     input: WorkItemsPatchInput,
-    principalId: string
+    attribution: WriteAttribution
   ): Promise<WorkItem> {
-    const principal = requirePrincipal(principalId);
+    const attributed = requireAttribution(attribution);
+    const principal = attributed.actor;
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
     const reason = normalizeChangeReason(input.reason);
@@ -4292,7 +4339,7 @@ export class DoltgresWorkItemAdapter
       {
         proof: {
           verb: "patch",
-          principal,
+          ...attributionProof(attributed),
           itemId: id,
           expectedRevision,
           reason,
@@ -4590,7 +4637,7 @@ export class DoltgresWorkItemAdapter
     return cites;
   }
 
-  async delete(_id: WorkItemId, _principalId: string): Promise<boolean> {
+  async delete(_id: WorkItemId, _attribution: WriteAttribution): Promise<boolean> {
     throw new WorkItemDeletionRetiredError();
   }
 

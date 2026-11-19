@@ -11,6 +11,7 @@
  * @public
  */
 
+import { attributedCommitMessage } from "../../attribution.js";
 import {
   KNOWLEDGE_BROWSE_PAGE_SIZE,
   type KnowledgeBrowsePage,
@@ -738,7 +739,10 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
     return this.store.withWrite(
       {
         operationId: `edo.resolve:${input.hypothesisId}`,
-        message: `edo: resolve hypothesis ${input.hypothesisId}`,
+        message: attributedCommitMessage(
+          `edo: resolve hypothesis ${input.hypothesisId}`,
+          input.attribution
+        ),
       },
       async (write) => {
         const existing = (

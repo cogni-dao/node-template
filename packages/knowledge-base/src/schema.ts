@@ -343,7 +343,7 @@ export const workItems = pgTable(
  * `seq` is the artifact's place in its item's sequence (1, 2, 3...), assigned by the server
  * inside the writer lock as the item's highest `seq` plus one, and unique per item: the highest
  * `seq` of a kind is the latest, never the clock (timestamps tie); `item_revision` is the item's
- * revision when written, stamped by the server in the same place; `author` is the principal the
+ * revision when written, stamped by the server in the same place; `author` is the actor the
  * server stamped. Insert-only: a later verdict is a new row, never an edit, and the latest decides. `item_id` has no FK: work_items rows are patched in
  * place and a verdict must survive any edit of its item.
  */
@@ -366,6 +366,10 @@ export const workItemArtifacts = pgTable(
     body: text("body"),
     url: text("url"),
     author: text("author").notNull(),
+    // The node run that wrote the artifact (activity-attribution, task.0133): null for a direct write (a route, a session or an
+    // outside AI's key). `run_kind` is the run record's kind: user_immediate, system_scheduled or system_webhook. Both host-set.
+    runId: text("run_id"),
+    runKind: text("run_kind"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

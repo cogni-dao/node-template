@@ -167,7 +167,7 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
           reason: "this raises the ratio",
           set: { moves: [{ metricId: "convergence-ratio", direction: "up" }] },
         },
-        "principal-1",
+        { actor: "principal-1" },
       );
       expect((await response.json()).moves).toMatchObject([
         {
@@ -354,7 +354,7 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
           ...filed,
           moves: [{ metricId: "convergence-ratio", direction: "up" }],
         },
-        "principal-1",
+        { actor: "principal-1" },
       );
       expect((await response.json()).moves[0]).toMatchObject({
         baselineObservationId: OBS_BASE,

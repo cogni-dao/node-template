@@ -24,8 +24,10 @@ import type {
   KnowledgeEntry,
   RecordOutcomeParams,
   RecordOutcomeResult,
+  WriteAttribution,
 } from "./contracts.js";
 
+import { attributedCommitMessage } from "./attribution.js";
 import { assertCitationReplay } from "./domain/write-replay.js";
 import type { EdoResolverPort } from "./port/edo-resolver.port.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
@@ -47,11 +49,17 @@ export function createEdoCapability(
   resolver: EdoResolverPort
 ): EdoCapability {
   return {
-    async hypothesize(params: HypothesizeParams): Promise<KnowledgeEntry> {
+    async hypothesize(
+      params: HypothesizeParams,
+      attribution: WriteAttribution
+    ): Promise<KnowledgeEntry> {
       return store.withWrite(
         {
           operationId: `edo.hypothesize:${params.id}`,
-          message: `edo: hypothesize '${params.id}'`,
+          message: attributedCommitMessage(
+            `edo: hypothesize '${params.id}'`,
+            attribution
+          ),
         },
         async (write) => {
           // Existing request identity includes its complete evidence edge set.
@@ -94,11 +102,17 @@ export function createEdoCapability(
       );
     },
 
-    async decide(params: DecideParams): Promise<KnowledgeEntry> {
+    async decide(
+      params: DecideParams,
+      attribution: WriteAttribution
+    ): Promise<KnowledgeEntry> {
       return store.withWrite(
         {
           operationId: `edo.decide:${params.id}`,
-          message: `edo: decide '${params.id}'`,
+          message: attributedCommitMessage(
+            `edo: decide '${params.id}'`,
+            attribution
+          ),
         },
         async (write) => {
           if (await write.getKnowledge(params.id)) {
@@ -137,7 +151,8 @@ export function createEdoCapability(
     },
 
     async recordOutcome(
-      params: RecordOutcomeParams
+      params: RecordOutcomeParams,
+      attribution: WriteAttribution
     ): Promise<RecordOutcomeResult> {
       // resolveHypothesis writes outcome + citation + recomputes confidence +
       // commits — all enforced through the same port.
@@ -151,6 +166,7 @@ export function createEdoCapability(
         sourceType: params.sourceType,
         sourceRef: params.sourceRef ?? null,
         sourceNode: params.sourceNode ?? null,
+        attribution,
       });
 
       const outcome = await store.getKnowledge(result.outcomeId);

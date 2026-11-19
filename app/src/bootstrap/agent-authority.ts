@@ -45,6 +45,8 @@ import {
   previewAsk,
   type PrincipalKind,
   principalKindOf,
+  type PrincipalClass,
+  classifyPrincipal,
   requestAccess,
   type RoleState,
   type NodeAiPermissionView,
@@ -65,6 +67,7 @@ import {
   type VerifiedServiceAssertion,
 } from "@cogni/agent-grants/service-auth";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
+import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import type { NodeAdminAuthority } from "@cogni/knowledge-store";
 import type { Logger } from "pino";
@@ -142,6 +145,8 @@ export interface AgentToolAuthority {
    * Throws AgentRolesError for a scope outside the assertion, an undeclared or unaskable scope, or too many open asks.
    */
   requestServiceAccess(assertion: VerifiedServiceAssertion, scope: string): Promise<AskOutcome>;
+  /** The one classifier of a write's actor: internal, external, human, system (the node's `cogni_system` principal) or unclassified (task.0133). */
+  principalClass(userId: string): Promise<PrincipalClass>;
   /** The wallets bound to this user (`user_bindings`, provider `wallet`), for the self-check (`/api/v1/agent/me`). */
   boundWallets(userId: string): Promise<string[]>;
   /** The agent's own rows by state. */
@@ -467,6 +472,8 @@ export function createAgentToolAuthority(deps: {
         );
       return outcome;
     },
+    principalClass: (userId) =>
+      classifyPrincipal(deps.sql, userId, [COGNI_SYSTEM_PRINCIPAL_USER_ID]),
     async boundWallets(userId) {
       const rows = (await deps.sql`
         SELECT external_id FROM user_bindings

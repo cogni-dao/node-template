@@ -121,10 +121,10 @@ describe("lease/content composition", () => {
     } as unknown as WorkItemLeasePort;
     const adapter = withWorkItemLeases(content, leases);
     await expect(
-      adapter.create({ type: "task", title: "committed" }, "p")
+      adapter.create({ type: "task", title: "committed" }, { actor: "p" })
     ).resolves.toBe(item);
     await expect(
-      adapter.patch({ reason: "test change", id: item.id, set: { title: "committed" } }, "p")
+      adapter.patch({ reason: "test change", id: item.id, set: { title: "committed" } }, { actor: "p" })
     ).resolves.toBe(item);
     expect(leases.getMany).not.toHaveBeenCalled();
   });

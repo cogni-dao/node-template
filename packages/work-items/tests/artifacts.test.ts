@@ -107,7 +107,10 @@ function world(
             ...(input.note ? { note: input.note } : {}),
             ...(input.body ? { body: input.body } : {}),
             ...(input.url ? { url: input.url } : {}),
-            author: input.author,
+            author: input.attribution.actor,
+            ...(input.attribution.run
+              ? { runId: input.attribution.run.id, runKind: input.attribution.run.kind }
+              : {}),
             createdAt: "2026-11-13T12:00:00.000Z",
           };
         },
@@ -187,12 +190,12 @@ describe("recordWorkItemArtifact: the write contract", () => {
 
   it("201: stores the artifact with the authenticated principal as author, never one from the body", async () => {
     const w = world({ inbox: { "contrib-derek-1": "author-1" } });
-    const result = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", {
+    const result = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "reviewer-1" }, {
       ...designReview,
     });
     expect(result.status).toBe(201);
     expect(w.stored).toEqual([
-      { itemId: "task.0028", ...designReview, author: "reviewer-1" },
+      { itemId: "task.0028", ...designReview, attribution: { actor: "reviewer-1" } },
     ]);
     expect(result.log).toEqual({
       event: "work.items.artifact_recorded",
@@ -203,7 +206,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
       verdict: "approve",
     });
     // A body that names an author is not a valid body.
-    const named = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", {
+    const named = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "reviewer-1" }, {
       ...designReview,
       author: "someone-else",
     });
@@ -212,7 +215,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
 
   it("400: design_waiver is not a kind, and a body that names an author or an item revision is refused", async () => {
     const w = world();
-    const waiver = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", {
+    const waiver = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "reviewer-1" }, {
       kind: "design_waiver",
       subject: "work:task.0028",
       verdict: "waived",
@@ -221,7 +224,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
     expect(waiver.status).toBe(400);
     expect((waiver.body as { issues: { path: string[] }[] }).issues[0]?.path).toEqual(["kind"]);
     for (const extra of [{ author: "someone-else" }, { itemRevision: 0 }]) {
-      const r = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", { ...designReview, ...extra });
+      const r = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "reviewer-1" }, { ...designReview, ...extra });
       expect(r.status).toBe(400);
     }
     expect(w.stored).toEqual([]);
@@ -232,13 +235,13 @@ describe("recordWorkItemArtifact: the write contract", () => {
   it("400: a review or validation needs a url or a body; either alone is enough; note and body are bounded", async () => {
     const w = world({ inbox: { "contrib-derek-1": "author-1" } });
     const { url: _url, ...noUrl } = designReview;
-    const none = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", noUrl);
+    const none = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "reviewer-1" }, noUrl);
     expect(none.status).toBe(400);
     expect(none.body).toMatchObject({
       issues: [{ path: ["url"], message: "a design_review needs a url or a body" }],
     });
     // An inbox has no comment surface: the body alone holds the review.
-    const bodyOnly = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", {
+    const bodyOnly = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "reviewer-1" }, {
       ...noUrl,
       body: "Findings:\n1. one\n2. two",
       note: "Request one change",
@@ -248,7 +251,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
     expect(w.stored[0]?.url).toBeUndefined();
     // Bounds: 240 characters of note, 16000 of body, one line of note.
     const edge = (extra: Record<string, unknown>) =>
-      recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", { ...designReview, ...extra });
+      recordWorkItemArtifact(w.deps, "task.0028", { actor: "reviewer-1" }, { ...designReview, ...extra });
     expect((await edge({ note: "n".repeat(240) })).status).toBe(201);
     expect((await edge({ note: "n".repeat(241) })).status).toBe(400);
     expect((await edge({ note: "two\nlines" })).status).toBe(400);
@@ -266,7 +269,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
       url: COMMENT,
     };
     const issuesOf = async (body: unknown) => {
-      const r = await recordWorkItemArtifact(w.deps, "task.0028", "validator-1", body);
+      const r = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "validator-1" }, body);
       expect(r.status).toBe(400);
       return (r.body as { issues: { path: (string | number)[] }[] }).issues.map((i) =>
         i.path.join(".")
@@ -316,7 +319,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
       row({ tweak: "POST ARTIFACTS" }),
       row({ tweak: "ITEM READ", human: "🟡", overall: "🟡 UNPROVEN", reason: "no storageState" }),
     ];
-    const result = await recordWorkItemArtifact(w.deps, "task.0028", "validator-1", {
+    const result = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "validator-1" }, {
       kind: "validation",
       subject: `${PR}@${SHA}`,
       verdict: "notes",
@@ -331,7 +334,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
 
   it("404: a missing item, with nothing stored", async () => {
     const w = world({ item: null });
-    const result = await recordWorkItemArtifact(w.deps, "task.9", "reviewer-1", designReview);
+    const result = await recordWorkItemArtifact(w.deps, "task.9", { actor: "reviewer-1" }, designReview);
     expect(result.status).toBe(404);
     expect(result.body).toEqual({
       error: "Work item not found: task.9",
@@ -349,9 +352,9 @@ describe("recordWorkItemArtifact: the write contract", () => {
       verdict: "approve",
       url: COMMENT,
     };
-    expect((await recordWorkItemArtifact(reads.deps, "task.0028", "r", pr)).status).toBe(503);
+    expect((await recordWorkItemArtifact(reads.deps, "task.0028", { actor: "r" }, pr)).status).toBe(503);
     const write = world({ insertThrows: true });
-    const failed = await recordWorkItemArtifact(write.deps, "task.0028", "r", designReview);
+    const failed = await recordWorkItemArtifact(write.deps, "task.0028", { actor: "r" }, designReview);
     expect(failed.status).toBe(503);
     expect(failed.body).toEqual({ error: "artifacts_unavailable", errorCode: "artifacts_unavailable" });
     expect(reads.stored).toEqual([]);
@@ -368,7 +371,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
         code: "42P01",
       }),
     });
-    const missingTable = await recordWorkItemArtifact(sqlFailure.deps, "task.0028", "r", designReview);
+    const missingTable = await recordWorkItemArtifact(sqlFailure.deps, "task.0028", { actor: "r" }, designReview);
     expect(missingTable.log).toMatchObject({ dbCode: "42P01" });
     expect(JSON.stringify(missingTable.log)).not.toContain("does not exist");
   });
@@ -376,7 +379,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
   it("409: a write whose outcome is unknown is distinct and not retryable, never a plain 503", async () => {
     const w = world({ insertError: new WorkItemWriteOutcomeUnknownError("op-1", "work-item-op/x", "c1", "task.0028"),
     });
-    const result = await recordWorkItemArtifact(w.deps, "task.0028", "r", designReview);
+    const result = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "r" }, designReview);
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({
       error: "work_item_write_outcome_unknown",
@@ -393,7 +396,7 @@ describe("recordWorkItemArtifact: the write contract", () => {
 
   it("404: an item that vanishes between the handler's read and the store's is not found, not unavailable", async () => {
     const w = world({ insertError: new Error("Work item not found: task.0028") });
-    const result = await recordWorkItemArtifact(w.deps, "task.0028", "r", designReview);
+    const result = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "r" }, designReview);
     expect(result.status).toBe(404);
     expect(result.body).toEqual({ error: "Work item not found: task.0028", errorCode: "not_found" });
     expect(result.log).toMatchObject({ event: "work.items.artifact_refused", status: 404 });
@@ -424,7 +427,7 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
     const w = world();
     // The same principal may write the work and record its review: no server check compares them.
     for (const author of ["linker-1", "linker-1", "reviewer-1"]) {
-      const result = await recordWorkItemArtifact(w.deps, "task.0028", author, prReview);
+      const result = await recordWorkItemArtifact(w.deps, "task.0028", { actor: author }, prReview);
       expect(result.status).toBe(201);
       expect((result.body as { artifact: WorkItemArtifact }).artifact.author).toBe(author);
     }
@@ -434,13 +437,13 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
       verdict: "approve",
       url: "https://node-template.cognidao.org/knowledge/inbox/contrib-derek-1",
     };
-    expect((await recordWorkItemArtifact(w.deps, "task.0028", "contrib-derek-1-author", designReview)).status).toBe(201);
-    expect(w.stored.map((row) => row.author)).toEqual(["linker-1", "linker-1", "reviewer-1", "contrib-derek-1-author"]);
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", { actor: "contrib-derek-1-author" }, designReview)).status).toBe(201);
+    expect(w.stored.map((row) => row.attribution.actor)).toEqual(["linker-1", "linker-1", "reviewer-1", "contrib-derek-1-author"]);
   });
 
   it("PR subject: a PR that is not the item's pr is refused as invalid", async () => {
     const w = world();
-    const other = await recordWorkItemArtifact(w.deps, "task.0028", "reviewer-1", {
+    const other = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "reviewer-1" }, {
       ...prReview,
       subject: `https://github.com/cogni-dao/node-template/pull/1@${SHA}`,
     });
@@ -451,7 +454,7 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
       issues: [{ path: ["subject"], message: "subject is not this item's pr" }],
     });
     const unlinked = world({ item: { revision: 4 } });
-    expect((await recordWorkItemArtifact(unlinked.deps, "task.0028", "reviewer-1", prReview)).status).toBe(400);
+    expect((await recordWorkItemArtifact(unlinked.deps, "task.0028", { actor: "reviewer-1" }, prReview)).status).toBe(400);
   });
 
   it("triage must name THIS item, and needs no url", async () => {
@@ -462,14 +465,14 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
       note: "Measurement gap: no KPI reads artifacts until task.0103",
     };
     const w = world();
-    const own = await recordWorkItemArtifact(w.deps, "task.0028", "router-1", triage);
+    const own = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "router-1" }, triage);
     expect(own.status).toBe(201);
-    expect(w.stored[0]).toMatchObject({ kind: "triage", verdict: "design", author: "router-1" });
+    expect(w.stored[0]).toMatchObject({ kind: "triage", verdict: "design", attribution: { actor: "router-1" } });
     // Never straight to implement: every change passes design review (CEO 2026-11-18).
-    const skip = await recordWorkItemArtifact(world().deps, "task.0028", "router-1", { ...triage, verdict: "implement" });
+    const skip = await recordWorkItemArtifact(world().deps, "task.0028", { actor: "router-1" }, { ...triage, verdict: "implement" });
     expect(skip.status).toBe(400);
     expect(w.stored[0]?.url).toBeUndefined();
-    const other = await recordWorkItemArtifact(w.deps, "task.0028", "router-1", { ...triage, subject: "work:task.0099" });
+    const other = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "router-1" }, { ...triage, subject: "work:task.0099" });
     expect(other.status).toBe(400);
     expect(other.body).toMatchObject({ issues: [{ path: ["subject"], message: "subject names a different work item" }] });
   });
@@ -483,21 +486,21 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
       url: COMMENT,
     };
     const w = world();
-    const own = await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", closeout);
+    const own = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "closer-1" }, closeout);
     expect(own.status).toBe(201);
-    expect(w.stored[0]).toMatchObject({ kind: "closeout", verdict: "done", author: "closer-1" });
+    expect(w.stored[0]).toMatchObject({ kind: "closeout", verdict: "done", attribution: { actor: "closer-1" } });
     const bodyOnly = { ...closeout, body: "Refined atom k-1; removed the flag in PR 12" };
     const { url: _url, ...noUrl } = bodyOnly;
-    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", noUrl)).status).toBe(201);
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", { actor: "closer-1" }, noUrl)).status).toBe(201);
     const { note: _note, ...noNote } = closeout;
-    const missingNote = await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", noNote);
+    const missingNote = await recordWorkItemArtifact(w.deps, "task.0028", { actor: "closer-1" }, noNote);
     expect(missingNote.status).toBe(400);
     expect(missingNote.body).toMatchObject({ issues: [{ path: ["note"] }] });
     const { url: _u, ...bare } = closeout;
-    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", bare)).status).toBe(400);
-    expect((await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", { ...closeout, verdict: "pass" })).status).toBe(400);
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", { actor: "closer-1" }, bare)).status).toBe(400);
+    expect((await recordWorkItemArtifact(w.deps, "task.0028", { actor: "closer-1" }, { ...closeout, verdict: "pass" })).status).toBe(400);
     expect(
-      (await recordWorkItemArtifact(w.deps, "task.0028", "closer-1", { ...closeout, subject: "work:task.0099" })).status
+      (await recordWorkItemArtifact(w.deps, "task.0028", { actor: "closer-1" }, { ...closeout, subject: "work:task.0099" })).status
     ).toBe(400);
   });
 
@@ -516,15 +519,15 @@ describe("recordWorkItemArtifact: subjects and authorship", () => {
     };
     const own = world({ ownOrigin: "HTTPS://Node-Template-Test.cognidao.org/" });
     expect(
-      (await recordWorkItemArtifact(own.deps, "story.0047", "validator-1", live("https://node-template-test.cognidao.org"))).status
+      (await recordWorkItemArtifact(own.deps, "story.0047", { actor: "validator-1" }, live("https://node-template-test.cognidao.org"))).status
     ).toBe(201);
-    const other = await recordWorkItemArtifact(own.deps, "story.0047", "validator-1", live("https://cognidao.org"));
+    const other = await recordWorkItemArtifact(own.deps, "story.0047", { actor: "validator-1" }, live("https://cognidao.org"));
     expect(other.status).toBe(400);
     expect(other.body).toEqual(refusal);
     expect(own.stored).toHaveLength(1);
     // With no origin configured nothing matches: fail closed.
     const none = world({ ownOrigin: null });
-    expect((await recordWorkItemArtifact(none.deps, "story.0047", "validator-1", live("https://node-template-test.cognidao.org"))).body).toEqual(refusal);
+    expect((await recordWorkItemArtifact(none.deps, "story.0047", { actor: "validator-1" }, live("https://node-template-test.cognidao.org"))).body).toEqual(refusal);
     expect(none.stored).toEqual([]);
   });
 });
