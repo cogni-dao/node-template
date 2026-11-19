@@ -21,23 +21,23 @@
 // SOURCE: app/src/styles/system.css + tailwind.css (brand) `:root { ... }` (light mode).
 // Mirror here when the source block changes.
 const LIGHT_TOKEN_BLOCK = `:root {
-  --background: 240 10% 95.5%;
-  --foreground: 210 13% 12.5%;
+  --background: 210 40% 96.1%;
+  --foreground: 222 47% 11%;
   --card: 0 0% 100%;
-  --card-foreground: 210 13% 12.5%;
+  --card-foreground: 222 47% 11%;
   --popover: 0 0% 100%;
-  --popover-foreground: 210 13% 12.5%;
+  --popover-foreground: 222 47% 11%;
   --primary: 217 91% 45%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 240 11% 94%;
-  --secondary-foreground: 210 13% 12.5%;
-  --muted: 240 10% 91.5%;
-  --muted-foreground: 222 8% 32%;
-  --accent: 240 10% 91.8%;
-  --accent-foreground: 210 13% 12.5%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 214 32% 91.4%;
+  --muted-foreground: 215 19% 35%;
+  --accent: 212 39% 93.5%;
+  --accent-foreground: 222 47% 11%;
   --destructive: 0 74% 39%;
-  --border: 240 10% 86.5%;
-  --input: 231 6% 55%;
+  --border: 213 27% 84%;
+  --input: 216 15% 55%;
   --ring: 217 91% 45%;
   --chart-1: 220 70% 50%;
   --chart-2: 160 60% 45%;

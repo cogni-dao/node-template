@@ -133,27 +133,28 @@
     --dropdown-lg: 10rem;
     --dropdown-xl: 12rem;
 
-    /* Neutrals follow Radix slate (light) and gray (dark), the shadcn/Vercel layering: a soft grey
-       canvas, white raised cards, chrome one step darker. Roles and floors:
+    /* Light follows the Stripe / Tailwind UI pattern: cool slate neutrals tinted toward the brand
+       hue, a slate-100 canvas, white cards with visible slate-300 edges, near-white chrome, navy
+       text and a brand-tinted active state. Roles and floors:
        https://node-template.cognidao.org/knowledge/ui-token-system */
-    --background: 240 10% 95.5%; /* canvas, soft grey, never pure white */
-    --foreground: 210 13% 12.5%; /* slate-12 #1c2024 */
-    --card: 0 0% 100%; /* raised: white on the grey canvas */
-    --card-foreground: 210 13% 12.5%;
+    --background: 210 40% 96.1%; /* slate-100 #f1f5f9 */
+    --foreground: 222 47% 11%; /* slate-900 #0f172a */
+    --card: 0 0% 100%; /* raised: white on the slate canvas */
+    --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 210 13% 12.5%;
+    --popover-foreground: 222 47% 11%;
     --primary: 217 91% 45%; /* fleet default; each node's tailwind.css overrides the brand variables */
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 11% 94%;
-    --secondary-foreground: 210 13% 12.5%;
-    --muted: 240 10% 91.5%; /* wells and chips */
-    --muted-foreground: 222 8% 32%; /* secondary text, 7.5:1 on canvas */
-    --accent: 240 10% 91.8%; /* hover */
-    --accent-foreground: 210 13% 12.5%;
+    --secondary: 210 40% 96.1%; /* slate-100 chips on white cards */
+    --secondary-foreground: 222 47% 11%;
+    --muted: 214 32% 91.4%; /* slate-200 wells and chips */
+    --muted-foreground: 215 19% 35%; /* slate-600 #475569, 6.9:1 on canvas, 7.6:1 on white */
+    --accent: 212 39% 93.5%; /* hover, visible on canvas and cards */
+    --accent-foreground: 222 47% 11%;
     --destructive: 0 74% 39%;
     --destructive-foreground: 0 0% 100%;
-    --border: 240 10% 86.5%; /* slate-6 */
-    --input: 231 6% 55%; /* control edge, 3.2:1 on the canvas (WCAG 1.4.11) */
+    --border: 213 27% 84%; /* slate-300 #cbd5e1: card and divider edges stay visible */
+    --input: 216 15% 55%; /* control edge, 3.3:1 on the canvas (WCAG 1.4.11) */
     --ring: 217 91% 45%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -181,14 +182,14 @@
     --invert: 213 13% 14%;
     --invert-foreground: 0 0% 100%;
 
-    /* Chrome (sidebar + top bar): one step darker than the canvas */
-    --sidebar: 240 10% 92.5%;
-    --sidebar-foreground: 210 13% 12.5%;
+    /* Chrome (sidebar + top bar): slate-50, crisp against the slate-100 canvas */
+    --sidebar: 210 40% 98%;
+    --sidebar-foreground: 222 47% 11%;
     --sidebar-primary: 217 91% 45%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 9% 87%;
-    --sidebar-accent-foreground: 210 13% 12.5%;
-    --sidebar-border: 240 10% 86.5%;
+    --sidebar-accent: 214 95% 93%; /* blue-100: the active and hover nav pill */
+    --sidebar-accent-foreground: 226 71% 40%; /* blue-800, 7.2:1 on the pill */
+    --sidebar-border: 213 27% 84%;
     --sidebar-ring: 217 91% 45%;
 
     --radius: 0.5rem;
