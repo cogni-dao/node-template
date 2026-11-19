@@ -72,7 +72,7 @@ pnpm typecheck
 
 - Update this file when **Exports** change
 - Bump **Last reviewed** date
-- Token names must match CSS variables in src/styles/tailwind.css
+- Token names must match CSS variables in src/styles/system.css (shared system, synced to forks); src/styles/tailwind.css (node_local) holds only the brand hue
 - CVA factory changes require updating components that use them
 
 ## Notes

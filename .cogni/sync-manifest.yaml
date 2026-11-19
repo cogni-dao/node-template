@@ -24,8 +24,9 @@ node_local:
   - "app/src/app/(public)/page.tsx"
   # Home/landing feature surface (components, copy, hero).
   - "app/src/features/home/**"
-  # Design tokens. Colours, radii, accent stops — a node's visual identity lives here,
-  # so node-template must never overwrite it.
+  # The brand hue: a node's visual identity, so node-template must never overwrite it.
+  # The shared design system (neutrals, status, chrome, @theme mappings) lives in
+  # app/src/styles/system.css, which is shell and syncs, so one token fix reaches every node.
   - "app/src/styles/tailwind.css"
   # Branding assets / theme extensions.
   - "app/src/styles/branding/**"
