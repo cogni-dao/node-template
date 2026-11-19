@@ -82,7 +82,7 @@ describe("work-item revision HTTP boundary", () => {
         reason: "r",
         set: { summary: "updated" },
       },
-      "principal-1"
+      { actor: "principal-1" }
     );
     expect(await response.json()).toMatchObject({ revision: 8 });
   });
@@ -124,7 +124,7 @@ describe("work-item revision HTTP boundary", () => {
     expect(response.status).toBe(200);
     expect(patch).toHaveBeenCalledWith(
       { id: "task.0001", reason: "r", set: { summary: "updated" } },
-      "principal-1"
+      { actor: "principal-1" }
     );
   });
 
@@ -164,10 +164,10 @@ describe("work-item revision HTTP boundary", () => {
     expect(response.status).toBe(200);
     expect(patch).toHaveBeenCalledWith(
       { id: "task.0001", reason: "r", cites, set: { summary: "updated" } },
-      "principal-1"
+      { actor: "principal-1" }
     );
     expect(info).toHaveBeenCalledWith(
-      { event: "work.items.patch_success", routeId: "work.items.patch", outcome: "success", status: 200, workItemId: "task.0001", citeCount: 2 },
+      { event: "work.items.patch_success", routeId: "work.items.patch", outcome: "success", status: 200, workItemId: "task.0001", actor: "principal-1", citeCount: 2 },
       "work.items.patch_success"
     );
   });
@@ -207,6 +207,7 @@ describe("work-item revision HTTP boundary", () => {
         routeId: "work.items.patch",
         outcome: "refused",
         workItemId: "task.0001",
+        actor: "principal-1",
         status: 409,
         errorCode: "gate_unmet",
         from: "needs_merge",

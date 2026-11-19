@@ -20,6 +20,7 @@ const patchDeps = (overrides: Partial<Parameters<typeof handleWorkItemPatch>[1]>
   parse: (body: unknown) => WorkItemPatchInputSchema.safeParse(body),
   write: async () => ({ id: "task.1" }),
   toBody: (r: unknown) => r,
+  attribution: { actor: "caller-1" },
   ...overrides,
 });
 
@@ -28,6 +29,21 @@ describe("handleWorkItemPatch", () => {
     const r = await handleWorkItemPatch("task.1", patchDeps());
     expect(r.status).toBe(200);
     expect(r.event).toMatchObject({ event: WORK_ITEM_WRITE_EVENTS.patchSuccess, outcome: "success", workItemId: "task.1", citeCount: 0 });
+  });
+
+  it("a route write's events carry the actor alone; a node run's carry the requester and the run too (task.0133)", async () => {
+    const route = await handleWorkItemPatch("task.1", patchDeps());
+    expect(route.event).toMatchObject({ actor: "caller-1" });
+    expect(route.event).not.toHaveProperty("requestedBy");
+    expect(route.event).not.toHaveProperty("runId");
+    const run = { actor: "node-ai", requestedBy: "owner-1", run: { id: "run-9", kind: "system_scheduled" as const } };
+    const ran = await handleWorkItemPatch("task.1", patchDeps({ attribution: run }));
+    expect(ran.event).toMatchObject({ outcome: "success", actor: "node-ai", requestedBy: "owner-1", runId: "run-9", runKind: "system_scheduled" });
+    // A refusal names who tried: the same fields on the refused event.
+    const refused = await handleWorkItemPatch("task.1", patchDeps({ attribution: run, readJson: async () => ({ reason: "r", set: { specRefs: ["x"] } }) }));
+    expect(refused.event).toMatchObject({ outcome: "refused", errorCode: "invalid_input", actor: "node-ai", requestedBy: "owner-1", runId: "run-9", runKind: "system_scheduled" });
+    const bad = await handleWorkItemPatch("task.1", patchDeps({ readJson: async () => { throw new Error("bad"); } }));
+    expect(bad.event).toMatchObject({ errorCode: "invalid_json", actor: "caller-1" });
   });
 
   it("an untyped design link is one refused event with invalid_input", async () => {
@@ -62,8 +78,9 @@ describe("handleWorkItemCreate", () => {
       parse: (body) => ({ success: true as const, data: body }),
       write: async () => ({ id: "task.9", node: "shared" }),
       toBody: (r) => r,
+      attribution: { actor: "caller-1" },
     });
     expect(r.status).toBe(201);
-    expect(r.event).toMatchObject({ event: WORK_ITEM_WRITE_EVENTS.createSuccess, workItemId: "task.9", node: "shared" });
+    expect(r.event).toMatchObject({ event: WORK_ITEM_WRITE_EVENTS.createSuccess, workItemId: "task.9", node: "shared", actor: "caller-1" });
   });
 });

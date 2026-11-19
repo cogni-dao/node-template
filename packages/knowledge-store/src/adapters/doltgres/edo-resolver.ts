@@ -15,6 +15,7 @@
  */
 
 import type { Sql } from "postgres";
+import { attributedCommitMessage } from "../../attribution.js";
 import {
   initializeConfidence,
   isConfidenceExempt,
@@ -109,7 +110,10 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
     return this.store.withWrite(
       {
         operationId: `edo.resolve:${input.hypothesisId}`,
-        message: `edo: resolve hypothesis ${input.hypothesisId}`,
+        message: attributedCommitMessage(
+          `edo: resolve hypothesis ${input.hypothesisId}`,
+          input.attribution
+        ),
       },
       async (write) => {
         const existing = (

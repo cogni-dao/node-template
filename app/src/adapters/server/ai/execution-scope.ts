@@ -13,6 +13,8 @@
  *     (`subjectUserId`, the authenticated caller, bearer agents included; absent for a run with no caller) and a payer (`billing`). The launcher
  *     sets the subject; the tool guard binds the principal around each tool call. RLS and user-scoped
  *     capabilities use the subject, else the principal (`scopeUserId`).
+ *   - ACTING_PRINCIPAL_FOR_WRITES (task.0133): a write records `actingPrincipal(scope)` as its actor, never `scopeUserId`; the subject
+ *     is recorded as the requester, and `runId` with `runKind` (host-set) as the run. An unknown run never blocks a write: it omits the `Run:` line.
  * Side-effects: none (ALS is process-scoped, no I/O)
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/unified-graph-launch.md
  * @public
@@ -21,6 +23,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { ModelRef, SourceSystem } from "@cogni/ai-core";
+import type { WriteRunKind } from "@cogni/work-items";
 import type { BillingContext, LlmService } from "@/ports";
 
 /**
@@ -31,12 +34,14 @@ import type { BillingContext, LlmService } from "@/ports";
  */
 export interface ExecutionScope {
   readonly billing: BillingContext;
-  /** The run this scope serves. Bound per tool call by the guard; a tool that needs per-run state (the sandbox folder) reads it here. */
+  /** The run this scope serves: set by the launcher (`runGraphWithScope`) and bound per tool call by the guard. A tool that needs per-run state (the sandbox folder) reads it here; every run write records it as the run (task.0133). */
   readonly runId?: string;
   /** Exact host-selected model, including its connection, for scheduled follow-up work. */
   readonly modelRef?: ModelRef;
   /** The acting agent principal's user id (agent_principals.user_id). Bound per tool call by the guard. */
   readonly principalId?: string;
+  /** The run record's kind (`graph_runs.run_kind`), host-set when the record names one. Absent when the record is missing or unreadable: the write then carries no `Run:` line. */
+  readonly runKind?: WriteRunKind;
   /** The authenticated caller this run serves (human or bearer agent). Absent for a run with no caller; never the system principal. */
   readonly subjectUserId?: string;
   /** Chat-only temporary tech debt — browser disconnect, not durable cancellation. */
@@ -53,6 +58,17 @@ export interface ExecutionScope {
  */
 export function scopeUserId(scope: ExecutionScope): string | undefined {
   return scope.subjectUserId ?? scope.principalId;
+}
+
+/**
+ * The actor of a write made inside a run: the run's own acting principal. Fails closed when the scope names none
+ * (never falls back to the subject: a run with no principal writes nothing).
+ */
+export function actingPrincipal(scope: ExecutionScope): string {
+  if (!scope.principalId) {
+    throw new Error("write denied: the run has no acting principal");
+  }
+  return scope.principalId;
 }
 
 const executionScopeStorage = new AsyncLocalStorage<ExecutionScope>();

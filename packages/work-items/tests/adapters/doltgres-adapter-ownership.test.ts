@@ -107,7 +107,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
     const { adapter, queries } = adapterWithQueries();
     await adapter.create(
       { type: "task", title: "owned", status: "needs_triage" },
-      "principal-1"
+      { actor: "principal-1" }
     );
 
     const insert = queries.find((query) =>
@@ -121,7 +121,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
     const { adapter, queries } = adapterWithQueries();
     await adapter.patch(
       { reason: "test change", id: toWorkItemId(row.id), set: { title: "renamed" } },
-      "principal-1"
+      { actor: "principal-1" }
     );
 
     const update = queries.find((query) =>
@@ -140,7 +140,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
     await expect(
       adapter.patch(
         { reason: "test change", id: toWorkItemId(row.id), set: { title: "renamed by new principal" } },
-        "principal-2"
+        { actor: "principal-2" }
       )
     ).resolves.toMatchObject({ id: row.id });
 
@@ -156,7 +156,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
     const { adapter, queries } = adapterWithQueries();
 
     await expect(
-      adapter.patch({ reason: "test change", id: toWorkItemId(row.id), set: { title: "x" } }, "  ")
+      adapter.patch({ reason: "test change", id: toWorkItemId(row.id), set: { title: "x" } }, { actor: "  " })
     ).rejects.toMatchObject({ name: "WorkItemAuthorizationError" });
     expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
       false
@@ -179,7 +179,7 @@ describe("unadopted rows (NULL creator) stay mutable", () => {
     await expect(
       adapter.patch(
         { reason: "test change", id: toWorkItemId(row.id), set: { title: "renamed" } },
-        "principal-1"
+        { actor: "principal-1" }
       )
     ).resolves.toMatchObject({ id: row.id, title: "renamed" });
   });
@@ -187,7 +187,7 @@ describe("unadopted rows (NULL creator) stay mutable", () => {
   it("rejects hard-delete even for an unadopted row", async () => {
     const { adapter } = adapterWithUnadoptedRow();
     await expect(
-      adapter.delete(toWorkItemId(row.id), "principal-1")
+      adapter.delete(toWorkItemId(row.id), { actor: "principal-1" })
     ).rejects.toMatchObject({ name: "WorkItemDeletionRetiredError" });
   });
 
@@ -195,7 +195,7 @@ describe("unadopted rows (NULL creator) stay mutable", () => {
     const { adapter } = adapterWithUnadoptedRow();
     const patched = await adapter.patch(
       { reason: "test change", id: toWorkItemId(row.id), set: { title: "renamed" } },
-      "principal-2"
+      { actor: "principal-2" }
     );
     expect(patched.title).toBe("renamed");
   });

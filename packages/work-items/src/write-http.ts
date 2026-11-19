@@ -16,6 +16,7 @@
  * @public
  */
 
+import type { WriteAttribution, WriteRunKind } from "./attribution.js";
 import { workItemWriteErrorResponse } from "./write-errors.js";
 
 export const WORK_ITEM_WRITE_EVENTS = {
@@ -34,6 +35,11 @@ export interface WorkItemWriteEvent {
   readonly workItemId?: string;
   readonly node?: string;
   readonly citeCount?: number;
+  /** Who acted, who asked, which run (task.0133, hub activity-attribution): the host-built attribution of the write, ids only. A route write has the actor alone. */
+  readonly actor?: string;
+  readonly requestedBy?: string;
+  readonly runId?: string;
+  readonly runKind?: WriteRunKind;
   /** A refused stage move: the stages and the missing artifact or fact. */
   readonly from?: string;
   readonly to?: string;
@@ -60,6 +66,8 @@ interface WriteDeps<T, R> {
   readonly parse: Parse<T>;
   /** The node's store write, as the session actor. */
   readonly write: (input: T) => Promise<R>;
+  /** The host-built attribution of this write (the session's caller for a route): its ids ride every terminal event, success and refused. */
+  readonly attribution: WriteAttribution;
   /** The success body (the node's output codec). */
   readonly toBody: (result: R) => unknown;
   /** Node-only errors; anything still unknown is rethrown. */
@@ -67,6 +75,13 @@ interface WriteDeps<T, R> {
 }
 
 const text = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
+
+/** The attribution's ids as event fields: the actor, then the requester and the run only when the write has them. */
+const attributionEventFields = (attribution: WriteAttribution): Partial<WorkItemWriteEvent> => ({
+  actor: attribution.actor,
+  ...(attribution.requestedBy !== undefined ? { requestedBy: attribution.requestedBy } : {}),
+  ...(attribution.run ? { runId: attribution.run.id, runKind: attribution.run.kind } : {}),
+});
 
 async function handleWrite<T, R>(
   kind: "create" | "patch",
@@ -86,6 +101,7 @@ async function handleWrite<T, R>(
       status,
       errorCode,
       ...(pathId !== undefined ? { workItemId: pathId } : {}),
+      ...attributionEventFields(deps.attribution),
       ...extra,
     },
   });
@@ -117,6 +133,7 @@ async function handleWrite<T, R>(
         outcome: "success",
         status,
         ...(pathId !== undefined ? { workItemId: pathId } : {}),
+        ...attributionEventFields(deps.attribution),
         ...successFields(parsed.data, result),
       },
     };

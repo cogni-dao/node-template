@@ -9,8 +9,8 @@
  *   - PORTS_ARE_AUTHORITY: All operations delegate to WorkItemQueryPort/WorkItemCommandPort
  *   - STATUS_GATES_ARE_THE_STORE'S (task.0122): a status write is `patch`; the Doltgres store runs the one gate predicate, so this capability has no separate transition (`core__work_item_transition` is removed)
  *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096, mirrors cogni): when `backlogWriter` is wired, `patch`
- *     goes through the Doltgres `patch` attributed to `backlogWriter.principalId`; the store's own
- *     authority applies unchanged. A principal callback resolves the authenticated run actor at invocation
+ *     goes through the Doltgres `patch` attributed to `backlogWriter.attribution()`; the store's own
+ *     authority applies unchanged. The callback builds the run's attribution (acting principal, requester, run) at invocation
  *     time, never at singleton construction. Without it, `patch` stays on the markdown ports.
  *   - PATCH_REASON_AND_CITES (task.0086): the required `reason` and the optional `cites` are forwarded to the Doltgres store, the one enforcer;
  *     the markdown fallback (development only) has no history and ignores both, though the tool schema still requires a reason.
@@ -40,6 +40,7 @@ import type {
   WorkItemQueryPort,
   WorkItemStatus,
   WorkItemType,
+  WriteAttribution,
 } from "@cogni/work-items";
 import type {
   EnvelopeDegradedEvent,
@@ -83,7 +84,7 @@ export interface WorkItemCapabilityDeps {
   readonly backlogReader?: Pick<WorkItemQueryPort, "list">;
   /**
    * PATCH_ON_THE_LIVE_BACKLOG: the node's Doltgres work-item store. When set, `patch`
-   * writes there as `principalId` (with caller compare-and-set) instead of the markdown ports.
+   * writes there with the run's `attribution` (with caller compare-and-set) instead of the markdown ports.
    */
   /** Reads the metrics a single item moves; absent means no metrics service (every move reads `unknown`). */
   readonly moveReadings?: MoveReadingPort | undefined;
@@ -93,20 +94,23 @@ export interface WorkItemCapabilityDeps {
   readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
   /**
    * ARTIFACTS_ARE_THE_ROUTES (task.0122): `recordArtifact` is the `POST /api/v1/work/items/{id}/artifacts` handler, called with the
-   * run's principal (resolved at invocation, never at construction). `deps` is read at call time because the artifact store is
+   * run's attribution (resolved at invocation, never at construction). `deps` is read at call time because the artifact store is
    * built after this capability; undefined means this node serves no artifacts (a 503, nothing written).
    */
   readonly artifacts?: {
     readonly deps: () => WorkItemArtifactDeps | undefined;
-    readonly principalId: () => string;
-    /** The one terminal record of the call, the same one the route logs (no body, no row, no url). */
-    readonly log?: (log: ArtifactLog) => void;
+    readonly attribution: () => WriteAttribution;
+    /** The one terminal record of the call, the same one the route logs (no body, no row, no url), with the attribution when one was built (task.0133). */
+    readonly log?: (log: ArtifactLog, attribution?: WriteAttribution) => void;
   };
   /** The item's history pages for `read` with `includeHistory` (story.0058); read at call time, like `artifacts`. */
   readonly history?: () => Pick<WorkItemHistoryStore, "historyPage"> | undefined;
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
-    readonly principalId: string | (() => string);
+    /** Host-built at invocation: the run's acting principal, its requester and the run (task.0133). */
+    readonly attribution: () => WriteAttribution;
+    /** One terminal refusal when the attribution could not be built (a run with no acting principal): nothing was written. */
+    readonly attributionDenied?: (event: { workItemId: string; error: unknown }) => void;
   };
 }
 
@@ -216,10 +220,25 @@ export function createWorkItemCapability(
       async recordArtifact(input: { id: string; body: unknown }) {
         const artifacts = deps.artifacts as NonNullable<typeof deps.artifacts>;
         const stores = artifacts.deps();
+        let attribution: WriteAttribution;
+        try {
+          attribution = artifacts.attribution();
+        } catch (error) {
+          // Fail closed, and say so in the same terminal event a refusal always uses.
+          artifacts.log?.({
+            event: "work.items.artifact_refused",
+            status: 403,
+            outcome: "refused",
+            workItemId: input.id,
+            errorCode: "attribution_denied",
+            errorName: error instanceof Error ? error.name : "unknown",
+          });
+          throw error;
+        }
         const result = stores
-          ? await recordWorkItemArtifact(stores, input.id, artifacts.principalId(), input.body)
+          ? await recordWorkItemArtifact(stores, input.id, attribution, input.body)
           : artifactsNotConfigured(input.id, "write");
-        artifacts.log?.(result.log);
+        artifacts.log?.(result.log, attribution);
         return { status: result.status, body: result.body };
       },
     }),
@@ -236,6 +255,14 @@ export function createWorkItemCapability(
       }
       const writer = deps.backlogWriter;
       if (writer) {
+        let attribution: WriteAttribution;
+        try {
+          attribution = writer.attribution();
+        } catch (error) {
+          // Fail closed, and say so in the same terminal event a refused patch always uses.
+          writer.attributionDenied?.({ workItemId: input.id, error });
+          throw error;
+        }
         try {
           const updated = await writer.store.patch(
             toWorkItemsPatchInput({
@@ -245,9 +272,7 @@ export function createWorkItemCapability(
               cites: input.cites,
               set: input.set,
             }),
-            typeof writer.principalId === "function"
-              ? writer.principalId()
-              : writer.principalId,
+            attribution,
           );
           return toWorkItemInfo(updated);
         } catch (e) {

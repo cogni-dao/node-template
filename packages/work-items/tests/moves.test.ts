@@ -167,10 +167,10 @@ describe("reader-first store gate", () => {
     });
     const moves = [{ metricId: "items-no-inline-history", direction: null }];
     await expect(
-      adapter.create({ type: "task", title: "t", node: "shared", moves } as never, "principal"),
+      adapter.create({ type: "task", title: "t", node: "shared", moves } as never, { actor: "principal" }),
     ).rejects.toMatchObject({ code: "moves_invalid" });
     await expect(
-      adapter.patch({ id: "task.1", reason: "test gate", set: { moves } } as never, "principal"),
+      adapter.patch({ id: "task.1", reason: "test gate", set: { moves } } as never, { actor: "principal" }),
     ).rejects.toMatchObject({ code: "moves_invalid" });
     expect(sql).not.toHaveBeenCalled();
   });

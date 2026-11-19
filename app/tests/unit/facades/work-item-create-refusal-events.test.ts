@@ -53,7 +53,7 @@ describe("POST /api/v1/work/items refusals", () => {
     const res = await post({ type: "task", title: "skip triage", status: "needs_implement" });
     expect(res.status).toBe(400);
     expect(refusals()).toEqual([
-      { event: "work.items.create_refused", routeId: "work.items.create", outcome: "refused", status: 400, errorCode: "invalid_input" },
+      { event: "work.items.create_refused", routeId: "work.items.create", outcome: "refused", status: 400, errorCode: "invalid_input", actor: "principal-1" },
     ]);
     expect(create).not.toHaveBeenCalled();
   });
@@ -103,7 +103,7 @@ describe("POST /api/v1/work/items refusals", () => {
       .map(([fields]) => fields as Record<string, unknown>)
       .filter((fields) => fields.event === "work.items.create_success");
     expect(successes).toEqual([
-      { event: "work.items.create_success", routeId: "work.items.create", outcome: "success", status: 201, workItemId: "task.0001", node: "shared" },
+      { event: "work.items.create_success", routeId: "work.items.create", outcome: "success", status: 201, workItemId: "task.0001", actor: "principal-1", node: "shared" },
     ]);
     expect(refusals()).toEqual([]);
   });

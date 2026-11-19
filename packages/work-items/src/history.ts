@@ -16,6 +16,7 @@
  * @public
  */
 
+import { type WriteRunKind, WRITE_RUN_KINDS } from "./attribution.js";
 import {
   CITE_COMMIT_PATTERN,
   CITE_CONTRIBUTION_PATTERN,
@@ -106,6 +107,10 @@ export interface HistoryEntry {
   readonly commit: string;
   readonly at: string;
   readonly actor: string | null;
+  /** The node run's subject, from the `Requested-by:` commit line; absent for a write that no run made. */
+  readonly requestedBy?: string | undefined;
+  /** The run that wrote it, from the `Run:` commit line; absent for a direct write. */
+  readonly run?: { readonly id: string; readonly kind: WriteRunKind } | undefined;
   readonly reason: string | null;
   readonly cites: HistoryCite[];
   readonly changed: string[];
@@ -164,12 +169,17 @@ export interface ShapeHistoryOptions {
     reason: string | null;
     actor: string | null;
     cites?: HistoryCite[];
+    requestedBy?: string | undefined;
+    run?: { readonly id: string; readonly kind: WriteRunKind } | undefined;
   };
 }
 
+const RUN_LINE = new RegExp(`^Run: (\\S+) (${WRITE_RUN_KINDS.join("|")})$`);
+
 /**
  * Work-item commit: first line `work-items: <op> by actor:<p>`, optional
- * `Reason: <r>` line, optional last `Cites: id@commit, id@contrib-x:commit`
+ * `Reason: <r>` line, optional `Requested-by: <subject>` and `Run: <id> <kind>`
+ * lines (a node run's write), optional last `Cites: id@commit, id@contrib-x:commit`
  * line. Each line matches from its start, and a reason or cite holds no line
  * break, so neither can forge another line.
  */
@@ -177,16 +187,27 @@ export function parseWorkItemCommitMessage(message: string | null): {
   reason: string | null;
   actor: string | null;
   cites: HistoryCite[];
+  requestedBy?: string;
+  run?: { id: string; kind: WriteRunKind };
 } {
   if (!message) return { reason: null, actor: null, cites: [] };
   const [first = "", ...rest] = message.split("\n");
   const actor = /by actor:([^ ]+)$/.exec(first)?.[1] ?? null;
   const reasonLine = rest.find((line) => line.startsWith("Reason: "));
   const citesLine = rest.find((line) => line.startsWith("Cites: "));
+  const requestedLine = rest.find((line) => line.startsWith("Requested-by: "));
+  const requestedBy = requestedLine?.slice("Requested-by: ".length);
+  const runMatch = rest
+    .map((line) => RUN_LINE.exec(line))
+    .find((match) => match !== null);
   return {
     reason: reasonLine ? reasonLine.slice(8) : null,
     actor,
     cites: citesLine ? parseCitesTrailer(citesLine.slice(7)) : [],
+    ...(requestedBy ? { requestedBy } : {}),
+    ...(runMatch
+      ? { run: { id: runMatch[1] as string, kind: runMatch[2] as WriteRunKind } }
+      : {}),
   };
 }
 
@@ -291,12 +312,14 @@ export function shapeHistory(
       diff[column] = { before: b.value, after: a.value, truncated: b.truncated || a.truncated };
     }
     if (changed.length === 0) continue;
-    const { reason, actor, cites } = options.reasonAndActor(row);
+    const { reason, actor, cites, requestedBy, run } = options.reasonAndActor(row);
     entries.push({
       version: options.version(row),
       commit: row.to_commit,
       at: iso(row.to_commit_date),
       actor,
+      ...(requestedBy ? { requestedBy } : {}),
+      ...(run ? { run } : {}),
       reason,
       cites: cites ?? [],
       changed,

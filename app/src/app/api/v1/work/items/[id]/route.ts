@@ -35,6 +35,7 @@ import {
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { routeAttribution } from "@/bootstrap/write-attribution";
 import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
@@ -123,10 +124,12 @@ export const PATCH = wrapRouteHandlerWithLogging<{
 
     const { id } = await context.params;
     // The package owns parse, refusals and the one terminal event (bug.0063); this route keeps auth, the actor and node errors.
+    const attribution = routeAttribution(sessionUser.id);
     const result = await handleWorkItemPatch(id, {
       readJson: () => request.json(),
       parse: (body) => workItemsPatchOperation.input.safeParse(body),
-      write: (input) => patchWorkItem(input, { id: sessionUser.id }),
+      write: (input) => patchWorkItem(input, { id: sessionUser.id }, attribution),
+      attribution,
       toBody: (patched) => workItemsPatchOperation.output.parse(patched),
       mapNodeError: (e) => {
         if (e instanceof WorkItemNotFoundError) return { status: 404, errorCode: "not_found", body: { error: e.message } };

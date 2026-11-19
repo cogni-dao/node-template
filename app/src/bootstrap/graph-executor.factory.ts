@@ -45,6 +45,7 @@ import {
 } from "@cogni/langgraph-graphs";
 import { createMemoryPersistence } from "@cogni/langgraph-graphs/inproc";
 import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
+import type { WriteRunKind } from "@cogni/work-items";
 import { trace } from "@opentelemetry/api";
 import {
   type CompletionStreamFn,
@@ -157,6 +158,8 @@ export function createScopedGraphExecutor(params: {
   readonly broker?: ConnectionBrokerPort;
   readonly resolver: ModelProviderResolverPort;
   readonly actorId: string;
+  /** The run record's kind (`graph_runs.run_kind`), read by the host that started the run; undefined when no record names one. */
+  readonly runKind: WriteRunKind | undefined;
 }): GraphExecutorPort {
   const container = getContainer();
 
@@ -272,6 +275,7 @@ export function createScopedGraphExecutor(params: {
             billing: params.billing,
             llmService,
             usageSource: provider.usageSource,
+            runKind: params.runKind,
             ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
           });
 
@@ -293,6 +297,7 @@ export function createScopedGraphExecutor(params: {
         billing: params.billing,
         llmService,
         usageSource: provider.usageSource,
+        runKind: params.runKind,
         ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       });
     },
@@ -315,6 +320,8 @@ export function runGraphWithScope(params: {
   readonly billing: BillingContext;
   readonly llmService: LlmService;
   readonly usageSource: SourceSystem;
+  /** The run record's kind, host-set. The scope carries it with the request's run id; without it a write carries no `Run:` line. */
+  readonly runKind?: WriteRunKind | undefined;
   readonly abortSignal?: AbortSignal;
 }): GraphRunResult {
   const { executor, req, ctx, billing, llmService, usageSource } = params;
@@ -324,6 +331,8 @@ export function runGraphWithScope(params: {
       modelRef: req.modelRef,
       llmService,
       usageSource,
+      runId: req.runId,
+      ...(params.runKind ? { runKind: params.runKind } : {}),
       // THREE_IDENTITIES: the authenticated caller is the subject, bearer agents included. The system
       // principal never acts as a subject; a run with no caller has none.
       ...(ctx?.actorUserId && ctx.actorUserId !== COGNI_SYSTEM_PRINCIPAL_USER_ID

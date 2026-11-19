@@ -42,6 +42,8 @@ export const EVENT_NAMES = {
 	// The success twins: one terminal event per accepted create or patch (route or agent tool), ids and counts only.
 	WORK_ITEMS_CREATE_SUCCESS: "work.items.create_success",
 	WORK_ITEMS_PATCH_SUCCESS: "work.items.patch_success",
+	// A node run wrote with no run record to name (the record was missing, had no kind, or could not be read; task.0133): the write still happens as the principal, with no Run line. One warn per such write, with runId when known.
+	WORK_ITEMS_ATTRIBUTION_RUN_MISSING: "work.items.attribution_run_missing",
 	// The work-items store's own signals (task.0122): a stage that ran slow or failed (a stage that was fast is a debug line, never info), the status gate's PR read failing, a retired flag written.
 	ADAPTER_WORK_ITEMS_STAGE_START: "adapter.work_items.stage_start",
 	ADAPTER_WORK_ITEMS_STAGE_COMPLETE: "adapter.work_items.stage_complete",

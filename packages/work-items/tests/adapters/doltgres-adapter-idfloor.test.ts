@@ -68,7 +68,7 @@ describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
       readClient: independentReadPool(sql),
     }).create(
       { type: "bug", title: "first bug on a brand-new node" },
-      "actor:test"
+      { actor: "actor:test" }
     );
 
     // A node booting an empty store has no pre-API corpus to clear, so the
@@ -81,7 +81,7 @@ describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
     const created = await new DoltgresWorkItemAdapter(sql, {
       readClient: independentReadPool(sql),
       idFloor: OPERATOR_ID_FLOOR,
-    }).create({ type: "task", title: "operator task" }, "actor:test");
+    }).create({ type: "task", title: "operator task" }, { actor: "actor:test" });
 
     expect(created.id).toBe("task.5000");
   });
@@ -93,7 +93,7 @@ describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
       readClient: independentReadPool(sql),
     });
 
-    expect((await adapter.create({ type: "bug", title: "b" }, "a")).id).toBe(
+    expect((await adapter.create({ type: "bug", title: "b" }, { actor: "a" })).id).toBe(
       "bug.0008"
     );
   });
@@ -103,7 +103,7 @@ describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
     const { sql, queries } = makeFakeSql([]);
     const created = await new DoltgresWorkItemAdapter(sql, {
       readClient: independentReadPool(sql),
-    }).create({ type: "task", title: "t" }, "a");
+    }).create({ type: "task", title: "t" }, { actor: "a" });
 
     expect(created.id).toBe("task.0001");
     expect(

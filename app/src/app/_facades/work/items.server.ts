@@ -35,6 +35,7 @@ import type {
   WorkBoardColumnPages,
   WorkItemLease,
   WorkSummaryReadOptions,
+  WriteAttribution,
 } from "@cogni/work-items";
 import {
   composeItemEnvelope,
@@ -53,6 +54,7 @@ import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { createItemRefPorts } from "@/bootstrap/capabilities/work-item-refs";
 import { getContainer } from "@/bootstrap/container";
+import { routeAttribution } from "@/bootstrap/write-attribution";
 import { toHttpWorkItem } from "../read-envelopes.server";
 
 /**
@@ -411,16 +413,18 @@ export async function getWorkItem(id: string, options?: WorkItemReadOptions): Pr
   return mdItem ? withItemEnvelope(toDto(mdItem), options) : null;
 }
 
+/** `attribution` is the route's one host-built value (`routeAttribution(caller)`): the same object the route's terminal event names, so the record and the log cannot disagree. */
 export async function createWorkItem(
   input: ContractCreateInput,
   sessionUser: WorkItemActor,
+  attribution: WriteAttribution,
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.priority, sessionUser);
   const container = getContainer();
   try {
     const created = await container.doltgresWorkItems.create(
       toWorkItemsCreateInput(input),
-      sessionUser.id,
+      attribution,
     );
     return await withMoveReadings(toDto(created));
   } catch (e) {
@@ -431,13 +435,14 @@ export async function createWorkItem(
 export async function patchWorkItem(
   input: ContractPatchInput,
   sessionUser: WorkItemActor,
+  attribution: WriteAttribution,
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.set.priority, sessionUser);
   const container = getContainer();
   try {
     const patched = await container.doltgresWorkItems.patch(
       toWorkItemsPatchInput(input),
-      sessionUser.id,
+      attribution,
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return await withMoveReadings(toDto(patched));
@@ -449,7 +454,7 @@ export async function patchWorkItem(
 export async function deleteWorkItem(id: string, sessionUser: { id: string }): Promise<boolean> {
   const container = getContainer();
   try {
-    return await container.doltgresWorkItems.delete(toWorkItemId(id), sessionUser.id);
+    return await container.doltgresWorkItems.delete(toWorkItemId(id), routeAttribution(sessionUser.id));
   } catch (e) {
     rethrowBackendError(e);
   }

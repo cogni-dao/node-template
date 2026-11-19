@@ -114,7 +114,7 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
       // As in production: connect_timeout (10 s) settles inside the grace (15 s).
     }, { settleGraceMs: 200 });
 
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
       code: "work_items_native_capacity_held",
     });
     await eventually(() => adapter.writerHealth().state === "available");
@@ -132,7 +132,7 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
         effectsPossible: false,
       })
     );
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(/not found/);
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toThrow(/not found/);
     expect(generations).toHaveLength(1);
     expect(queries.some((query) => /INSERT|UPDATE|DELETE/.test(query))).toBe(false);
   });
@@ -148,12 +148,12 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
       { queryTimeoutMs: 50 }
     );
 
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toThrow(
       /connection failed before any write/
     );
     expect(adapter.writerHealth()).toEqual({ state: "available" });
     expect(named("writer_held")).toHaveLength(0);
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(/not found/);
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toThrow(/not found/);
   });
 
   it("an outcome-unknown lock request holds, refuses, then settles by fencing", async () => {
@@ -163,7 +163,7 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
         : undefined
     , { settleBaseMs: 40, settleMaxMs: 40 });
 
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
       code: "work_items_native_capacity_held",
     });
     const held = adapter.writerHealth();
@@ -173,7 +173,7 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
       reason: "outcome_unknown",
       stage: "lock.try",
     });
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
       code: "work_items_native_capacity_held",
     });
     expect(named("writer_refused")).toHaveLength(1);
@@ -189,7 +189,7 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
     // The fresh session won the lock and swept op branches before admitting writes.
     expect(queries).toContain("pool-2:SELECT name, hash FROM dolt.branches");
     expect(adapter.writerHealth()).toEqual({ state: "available" });
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(/not found/);
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toThrow(/not found/);
     expect(queries.some((query) => /INSERT|UPDATE|DELETE/.test(query))).toBe(false);
   });
 
@@ -205,14 +205,14 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
       return undefined;
     });
 
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
       code: "work_items_native_capacity_held",
     });
     await eventually(() => named("writer_recovered").length > 0);
     const outcomes = named("writer_settle_attempt").map((fields) => fields.outcome);
     expect(outcomes[0]).toBe("lock_contended");
     expect(outcomes.at(-1)).toBe("recovered");
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(/not found/);
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toThrow(/not found/);
   });
 
   it("refuses every write while settlement runs, even after the held execution unwinds", async () => {
@@ -230,7 +230,7 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
       return undefined;
     });
 
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
       code: "work_items_native_capacity_held",
     });
     // The hung execution unwinds as soon as its retired pool ends.
@@ -240,14 +240,14 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
 
     expect(adapter.writerHealth()).toMatchObject({ state: "held", settling: true });
     const before = queries.length;
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
       code: "work_items_native_capacity_held",
     });
     expect(queries.length).toBe(before);
 
     releaseProbe?.();
     await eventually(() => named("writer_recovered").length > 0);
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(/not found/);
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toThrow(/not found/);
   });
 
   it("logs one refusal line per window, with a count, during a long hold", async () => {
@@ -258,11 +258,11 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
           : undefined,
       { settleBaseMs: 10_000, settleMaxMs: 10_000 }
     );
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
       code: "work_items_native_capacity_held",
     });
     for (let attempt = 0; attempt < 5; attempt++)
-      await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+      await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
         code: "work_items_native_capacity_held",
       });
     expect(named("writer_refused")).toEqual([
@@ -280,7 +280,7 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
         : undefined
     );
 
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toMatchObject({
       code: "work_items_native_capacity_held",
     });
     await eventually(() => named("writer_recovered").length > 0);
@@ -295,6 +295,6 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
       expect.objectContaining({ reason: "retired_generation_ignored" })
     );
     expect(adapter.writerHealth()).toEqual({ state: "available" });
-    await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(/not found/);
+    await expect(adapter.patch(probe(), { actor: "principal-1" })).rejects.toThrow(/not found/);
   });
 });
