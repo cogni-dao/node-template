@@ -13,6 +13,7 @@
  *     with a retry). A 401, 403 or 404 is `hidden` (a signed-out or non-admin caller sees nothing); a 503, any other status, a network error and a malformed body are `unavailable` on a first load.
  *     A later failure keeps an already-ready view (a 503 still shows the error line).
  *   - STALE_RESPONSE_GUARD: each load takes a sequence number; only the newest response is applied.
+ *   - FAILURE_IN_ITS_ROW: a failed click is ONE short line in that row's own slot, in the destructive tone ("Couldn't save.", "Not allowed."), with the HTTP status only as its title.
  *   - ONE_CLICK_ONE_ACTION: while one row's action is in flight every other action is ignored. A grant sends one fresh `Idempotency-Key` per click, so a double click grants once.
  *   - HUMAN_SURFACE_TOKENLESS: no token, key or id is shown. The copy is minimal (a few words per line).
  * Side-effects: IO (fetch)
@@ -24,6 +25,8 @@
 
 import type { ConnectedOrgView } from "@cogni/agent-grants";
 import { useCallback, useEffect, useRef, useState } from "react";
+
+import { failureText, type RowFailure } from "./format.js";
 
 export interface ConnectedOrgsEndpoints {
   /** The list route (GET `?limit=&after=`), such as `/api/v1/admin/connected-orgs`. The action routes are `{list}/{orgUserId}/allowance`, `.../suspension` and `.../seq-reset` (POST). */
@@ -45,8 +48,8 @@ export interface UseConnectedOrgs {
   readonly state: ConnectedOrgsState;
   /** The `orgUserId` whose action is in flight, else null. */
   readonly busy: string | null;
-  /** A one-line message after a failed click; cleared by the next click. */
-  readonly error: string | null;
+  /** A failed click, shown in that row's own slot (a short line; the HTTP status only as its title); cleared by the next click. `rowId` is the org user id, or empty for the page's own "More" read. */
+  readonly error: RowFailure | null;
   readonly reload: () => Promise<void>;
   /** Appends the next page. */
   readonly more: () => Promise<void>;
@@ -58,7 +61,7 @@ export interface UseConnectedOrgs {
 
 export const CONNECTED_ORGS_PAGE_SIZE = 50;
 export const CONNECTED_ORGS_UNAVAILABLE_COPY = "Couldn't load.";
-export const CONNECTED_ORGS_ACTION_FAILED_COPY = "Didn't go through.";
+export const CONNECTED_ORGS_ACTION_FAILED_COPY = "Couldn't save.";
 export const CONNECTED_ORGS_BAD_AMOUNT_COPY = "Enter a number.";
 
 function isPage(value: unknown): value is ConnectedOrgsPage {
@@ -90,7 +93,7 @@ export function useConnectedOrgs(endpoints: ConnectedOrgsEndpoints): UseConnecte
   const { list } = endpoints;
   const [state, setState] = useState<ConnectedOrgsState>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<RowFailure | null>(null);
   const sequence = useRef(0);
   /** The cursor each loaded page started from, in order: `null` is the first page. */
   const starts = useRef<Array<string | null>>([null]);
@@ -121,7 +124,7 @@ export function useConnectedOrgs(endpoints: ConnectedOrgsEndpoints): UseConnecte
     if (state.status !== "ready" || state.page.nextAfter === null) return;
     const after = state.page.nextAfter;
     const read = await readPage(list, after);
-    if (read.kind !== "page") return setError(CONNECTED_ORGS_UNAVAILABLE_COPY);
+    if (read.kind !== "page") return setError({ rowId: "", text: CONNECTED_ORGS_UNAVAILABLE_COPY, code: null });
     starts.current = [...starts.current, after];
     setState((prev) => (prev.status === "ready" ? { status: "ready", page: { orgs: [...prev.page.orgs, ...read.page.orgs], nextAfter: read.page.nextAfter } } : prev));
   }, [list, state]);
@@ -134,10 +137,11 @@ export function useConnectedOrgs(endpoints: ConnectedOrgsEndpoints): UseConnecte
       setError(null);
       let ok = false;
       try {
-        ok = (await run()).ok;
-        if (!ok) setError(CONNECTED_ORGS_ACTION_FAILED_COPY);
+        const res = await run();
+        ok = res.ok;
+        if (!ok) setError({ rowId: orgUserId, text: failureText(res.status, CONNECTED_ORGS_ACTION_FAILED_COPY), code: res.status });
       } catch {
-        setError(CONNECTED_ORGS_ACTION_FAILED_COPY);
+        setError({ rowId: orgUserId, text: CONNECTED_ORGS_ACTION_FAILED_COPY, code: null });
       }
       // Whatever happened, read every loaded page back from the server.
       await reload();
@@ -167,7 +171,7 @@ export function useConnectedOrgs(endpoints: ConnectedOrgsEndpoints): UseConnecte
     },
     grant: async (org, credits) => {
       if (!Number.isSafeInteger(credits) || credits < 1) {
-        setError(CONNECTED_ORGS_BAD_AMOUNT_COPY);
+        setError({ rowId: org.orgUserId, text: CONNECTED_ORGS_BAD_AMOUNT_COPY, code: null });
         return false;
       }
       return act(org.orgUserId, () => post(org, "allowance", { credits }, { "idempotency-key": crypto.randomUUID() }));

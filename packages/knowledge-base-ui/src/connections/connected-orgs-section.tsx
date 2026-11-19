@@ -6,7 +6,7 @@
  * Purpose: Helps a provider admin decide how much more each connected node may spend. The "Connected nodes" list (story.0038, connect from home). One item = name (the node's name when its
  *   `trusted_homes` entry names one, else its host), a short status badge (Connected, Off, Suspended), ONE number (the allowance left, "500 cr"; tapping it shows used and cap) and ONE inline action:
  *   "Add credits" (a number and a button, one compact control). Suspend or Resume and the rare Reset seq live in the row's ⋯ menu.
- * Scope: Presentation over `useConnectedOrgs`. Same heading, rule and divider style as `AgentAccessSection`. Words are kept to the minimum: no subtitle, no explanations.
+ * Scope: Presentation over `useConnectedOrgs`. Same heading, rule and divider style as `AgentAccessSection`. Words are kept to the minimum: no subtitle, no explanations. A failed click is ONE short destructive line under that row's own controls ("Couldn't save.", "Not allowed."), the HTTP status only as its title.
  * Invariants:
  *   - FIVE_STATES: loading (a skeleton that mirrors the items), empty ("No nodes yet."), sparse, dense (a "More" button pages) and error ("Couldn't load." and Retry). A 401, 403 or 404 renders nothing.
  *   - MOBILE_FIRST: at 360px each item is stacked (name, badge and number, then full-width controls of at least 44px); from `md:` everything sits on one line. No horizontal scroll.
@@ -92,11 +92,6 @@ export function ConnectedOrgsSection({ endpoints, className }: ConnectedOrgsSect
 
       {state.status === "ready" && (
         <div className="py-2">
-          {error && (
-            <p className="pb-2 text-destructive text-sm" role="alert">
-              {error}
-            </p>
-          )}
           {state.page.orgs.length === 0 ? (
             <p className="py-2 text-muted-foreground text-sm">No nodes yet.</p>
           ) : (
@@ -145,40 +140,47 @@ export function ConnectedOrgsSection({ endpoints, className }: ConnectedOrgsSect
                         <span className="sr-only" role="status">Saving</span>
                       </>
                     ) : (
-                      <div className="flex min-w-0 items-center gap-2">
-                        <div className="flex min-w-0 flex-1 md:flex-none">
-                          <Input
-                            type="number"
-                            inputMode="numeric"
-                            min={1}
-                            step={1}
-                            className={cn(TOUCH, "min-w-0 flex-1 rounded-r-none tabular-nums md:w-24 md:flex-none")}
-                            placeholder="500"
-                            aria-label={`Credits to add for ${title}`}
-                            value={amounts[org.orgUserId] ?? ""}
-                            onChange={(event) => setAmounts((prev) => ({ ...prev, [org.orgUserId]: event.target.value }))}
-                          />
-                          <Button type="button" size="sm" className={cn(TOUCH, "shrink-0 rounded-l-none")} onClick={() => void grantFor(org)}>
-                            Add credits
-                          </Button>
-                        </div>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button type="button" size="sm" variant="ghost" className={cn(TOUCH, "w-11 shrink-0 px-0 md:w-8")} aria-label={`More for ${title}`}>
-                              <MoreHorizontal aria-hidden="true" />
+                      <div className="flex min-w-0 flex-col gap-1">
+                          <div className="flex min-w-0 items-center gap-2">
+                          <div className="flex min-w-0 flex-1 md:flex-none">
+                            <Input
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              step={1}
+                              className={cn(TOUCH, "min-w-0 flex-1 rounded-r-none tabular-nums md:w-24 md:flex-none")}
+                              placeholder="500"
+                              aria-label={`Credits to add for ${title}`}
+                              value={amounts[org.orgUserId] ?? ""}
+                              onChange={(event) => setAmounts((prev) => ({ ...prev, [org.orgUserId]: event.target.value }))}
+                            />
+                            <Button type="button" size="sm" className={cn(TOUCH, "shrink-0 rounded-l-none")} onClick={() => void grantFor(org)}>
+                              Add credits
                             </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onSelect={() => void suspend(org)}>{org.status === "suspended" ? "Resume" : "Suspend"}</DropdownMenuItem>
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                if (window.confirm("Reset seq to 1?")) void resetSeq(org);
-                              }}
-                            >
-                              Reset seq
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                          </div>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button type="button" size="sm" variant="ghost" className={cn(TOUCH, "w-11 shrink-0 px-0 md:w-8")} aria-label={`More for ${title}`}>
+                                <MoreHorizontal aria-hidden="true" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onSelect={() => void suspend(org)}>{org.status === "suspended" ? "Resume" : "Suspend"}</DropdownMenuItem>
+                              <DropdownMenuItem
+                                onSelect={() => {
+                                  if (window.confirm("Reset seq to 1?")) void resetSeq(org);
+                                }}
+                              >
+                                Reset seq
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                          </div>
+                          {error?.rowId === org.orgUserId && (
+                            <p className="text-destructive text-xs md:text-right" role="alert" title={error.code === null ? undefined : String(error.code)}>
+                              {error.text}
+                            </p>
+                          )}
                       </div>
                     )}
                   </li>
@@ -187,9 +189,12 @@ export function ConnectedOrgsSection({ endpoints, className }: ConnectedOrgsSect
             </ul>
           )}
           {state.page.nextAfter && (
-            <Button type="button" variant="outline" size="sm" className="mt-3 h-11 w-full md:h-8 md:w-auto" onClick={() => void more()}>
-              More
-            </Button>
+            <div className="mt-3 flex items-center gap-3">
+              <Button type="button" variant="outline" size="sm" className="h-11 w-full md:h-8 md:w-auto" onClick={() => void more()}>
+                More
+              </Button>
+              {error?.rowId === "" && <p className="text-destructive text-xs" role="alert">{error.text}</p>}
+            </div>
           )}
         </div>
       )}

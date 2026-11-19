@@ -4,7 +4,8 @@
 /**
  * Module: `@cogni/knowledge-base-ui/connections/connections-section`
  * Purpose: Helps a customer admin decide which other node this node may spend on, and how much. The "Connections" list (story.0038, connect from home). One item = name (the target's alias), a short
- *   status badge (Connected or Off), ONE number (the stored cap, "500 cr", only when connected) and ONE inline action: "Connect" (a cap number and a button, one compact control). Disconnect lives in
+ *   status badge (Connected or Off), ONE number (the stored cap, "500 cr", only when connected) and ONE inline action: "Connect" (a cap input with its "cr" unit inside the field, and a button, one compact
+ *   control; the input is named "Cap"). A failed click is ONE short destructive line under that row's own input ("Couldn't connect.", "Not allowed.", "Out of sync. Try again."), the HTTP status only as its title. Disconnect lives in
  *   the row's ⋯ menu. The provider's offer is a small info icon with the text in a popover, never in the row.
  * Scope: Presentation over `useConnections`. Same heading, rule and divider style as `AgentAccessSection`. Words are kept to the minimum: no subtitle, no origin line, no explanations.
  * Invariants:
@@ -27,7 +28,7 @@ import { useState } from "react";
 import { cn } from "../cn.js";
 import { Button } from "../ui/button.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
-import { Input } from "../ui/input.js";
+import { SuffixInput } from "../ui/input.js";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.js";
 import { Skeleton } from "../ui/skeleton.js";
 import { formatCredits } from "./format.js";
@@ -52,7 +53,7 @@ function ItemSkeleton() {
 }
 
 export function ConnectionsSection({ endpoints, className }: ConnectionsSectionProps) {
-  const { state, busy, answer, reload, connect, disconnect } = useConnections(endpoints);
+  const { state, busy, failure, reload, connect, disconnect } = useConnections(endpoints);
   const [caps, setCaps] = useState<Readonly<Record<string, string>>>({});
 
   if (state.status === "hidden") return null;
@@ -87,11 +88,6 @@ export function ConnectionsSection({ endpoints, className }: ConnectionsSectionP
           {!state.view.signer && (
             <p className="pb-2 text-destructive text-sm" role="alert">
               {NO_SIGNER_COPY}
-            </p>
-          )}
-          {answer && (
-            <p className="pb-2 text-foreground text-sm" role="status">
-              {answer}
             </p>
           )}
           {state.view.targets.length === 0 ? (
@@ -130,34 +126,43 @@ export function ConnectionsSection({ endpoints, className }: ConnectionsSectionP
                           <span className="sr-only" role="status">Saving</span>
                         </>
                       ) : (
-                        <div className="flex min-w-0 items-center gap-2">
-                          <div className="flex min-w-0 flex-1 md:flex-none">
-                            <Input
-                              type="number"
-                              inputMode="numeric"
-                              min={1}
-                              step={1}
-                              className={cn(TOUCH, "min-w-0 flex-1 rounded-r-none tabular-nums md:w-24 md:flex-none")}
-                              placeholder="500"
-                              aria-label={`Cap for ${target.alias}`}
-                              value={caps[target.alias] ?? ""}
-                              onChange={(event) => setCaps((prev) => ({ ...prev, [target.alias]: event.target.value }))}
-                            />
-                            <Button type="button" size="sm" className={cn(TOUCH, "shrink-0 rounded-l-none")} onClick={() => void connect(target.alias, Number(caps[target.alias] ?? ""))}>
-                              Connect
-                            </Button>
+                        <div className="flex min-w-0 flex-col gap-1">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <div className="flex min-w-0 flex-1 md:flex-none">
+                              <SuffixInput
+                                type="number"
+                                inputMode="numeric"
+                                min={1}
+                                step={1}
+                                suffix="cr"
+                                className="min-w-0 flex-1 md:w-28 md:flex-none"
+                                inputClassName={cn(TOUCH, "rounded-r-none tabular-nums")}
+                                placeholder="Cap"
+                                aria-label="Cap"
+                                value={caps[target.alias] ?? ""}
+                                onChange={(event) => setCaps((prev) => ({ ...prev, [target.alias]: event.target.value }))}
+                              />
+                              <Button type="button" size="sm" className={cn(TOUCH, "shrink-0 rounded-l-none")} onClick={() => void connect(target.alias, Number(caps[target.alias] ?? ""))}>
+                                Connect
+                              </Button>
+                            </div>
+                            {connected && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button type="button" size="sm" variant="ghost" className={cn(TOUCH, "w-11 shrink-0 px-0 md:w-8")} aria-label={`More for ${target.alias}`}>
+                                    <MoreHorizontal aria-hidden="true" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem onSelect={() => void disconnect(target.alias)}>Disconnect</DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                           </div>
-                          {connected && (
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button type="button" size="sm" variant="ghost" className={cn(TOUCH, "w-11 shrink-0 px-0 md:w-8")} aria-label={`More for ${target.alias}`}>
-                                  <MoreHorizontal aria-hidden="true" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onSelect={() => void disconnect(target.alias)}>Disconnect</DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
+                          {failure?.rowId === target.alias && (
+                            <p className="text-destructive text-xs" role="alert" title={failure.code === null ? undefined : String(failure.code)}>
+                              {failure.text}
+                            </p>
                           )}
                         </div>
                       ))}

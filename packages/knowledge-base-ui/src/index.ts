@@ -75,7 +75,7 @@ export {
 } from "./connections/use-connected-orgs.js";
 export { ConnectionsSection, type ConnectionsSectionProps } from "./connections/connections-section.js";
 export {
-  answerLine as connectionAnswerLine,
+  describeFailure as describeConnectionFailure,
   type ConnectionsEndpoints,
   type ConnectionsState,
   type ConnectionsView,

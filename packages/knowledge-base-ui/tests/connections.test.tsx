@@ -6,7 +6,7 @@ import type { ConnectedOrgView, OutboundTargetView } from "@cogni/agent-grants";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { ConnectedOrgsSection, ConnectionsSection } from "../src/index.js";
+import { ConnectedOrgsSection, ConnectionsSection, describeConnectionFailure } from "../src/index.js";
 
 const fake = (status: number, body: unknown) => ({ status, ok: status >= 200 && status < 300, json: async () => body }) as unknown as Response;
 const json = (status: number, body: unknown) => Promise.resolve(fake(status, body));
@@ -181,7 +181,11 @@ describe("ConnectedOrgsSection (provider) controls", () => {
     await user.type(input, "1.5");
     await user.click(screen.getByRole("button", { name: "Add credits" }));
     await flush();
-    expect(screen.getByRole("alert")).toHaveTextContent("Enter a number.");
+    // The failure sits in the row's own slot, under the controls: a short destructive line.
+    const bad = screen.getByRole("alert");
+    expect(bad).toHaveTextContent("Enter a number.");
+    expect(bad.closest("li")).toContainElement(input);
+    expect(bad.className).toContain("text-destructive");
     expect(posts()).toHaveLength(0);
 
     await user.clear(input);
@@ -224,17 +228,27 @@ describe("ConnectedOrgsSection (provider) controls", () => {
     confirm.mockRestore();
   });
 
-  it("a failed click shows one short line and still re-reads", async () => {
+  it("a failed click is ONE short destructive line in that row's own slot, never a raw status: 500 is \"Couldn't save.\", 401 and 403 are \"Not allowed.\"; the status is only a title; it still re-reads", async () => {
     const user = userEvent.setup();
-    fetchMock.mockImplementation((_url: string, init?: RequestInit) => (init?.method === "POST" ? json(500, {}) : json(200, { orgs: [org(1)], nextAfter: null })));
+    let status = 500;
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => (init?.method === "POST" ? json(status, {}) : json(200, { orgs: [org(1), org(2)], nextAfter: null })));
     render(<ConnectedOrgsSection endpoints={ORGS} />);
     await flush();
-    await user.click(screen.getByRole("spinbutton", { name: "Credits to add for node1.example.org" }));
-    await user.keyboard("5");
-    await user.click(screen.getByRole("button", { name: "Add credits" }));
-    await flush();
-    expect(screen.getByRole("alert")).toHaveTextContent("Didn't go through.");
-    expect(gets()).toHaveLength(2);
+    for (const [code, text] of [[500, "Couldn't save."], [403, "Not allowed."], [401, "Not allowed."], [404, "Couldn't save."], [409, "Couldn't save."]] as const) {
+      status = code;
+      await user.click(screen.getByRole("spinbutton", { name: "Credits to add for node1.example.org" }));
+      await user.keyboard("5");
+      await user.click(screen.getAllByRole("button", { name: "Add credits" })[0] as HTMLElement);
+      await flush();
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent(text);
+      expect(alert).toHaveAttribute("title", String(code));
+      expect(alert.textContent).not.toMatch(/\d{3}/);
+      // Only the failed row carries it.
+      expect(alert.closest("li")).toHaveTextContent("node1.example.org");
+      expect(alert.closest("li")).not.toHaveTextContent("node2.example.org");
+    }
+    expect(gets().length).toBeGreaterThanOrEqual(6);
     expect(controlNames()).toContain("Add credits");
   });
 });
@@ -298,6 +312,7 @@ describe("ConnectionsSection (customer) states", () => {
     expect(screen.getByText("2,500 cr")).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/Shared AI|example\.org|Spending/);
     expect(screen.getAllByRole("button", { name: "Connect" })).toHaveLength(14);
+    expect(screen.getAllByRole("spinbutton", { name: "Cap" })).toHaveLength(14);
     expect(screen.getAllByRole("button", { name: "Connect" })[0]?.className).toMatch(/h-11/);
     expect(screen.getAllByRole("listitem")[0]?.className).toContain("flex-col");
   });
@@ -322,10 +337,15 @@ describe("ConnectionsSection (customer) controls", () => {
     ready([target()]);
     render(<ConnectionsSection endpoints={CONNECTIONS} />);
     await flush();
-    const input = screen.getByRole("spinbutton", { name: "Cap for prov" });
-    expect(input).toHaveAttribute("placeholder", "500");
+    const input = screen.getByRole("spinbutton", { name: "Cap" });
+    expect(input).toHaveAttribute("placeholder", "Cap");
+    // The unit is inside the field, at its trailing edge, and the field keeps its 44px height on a phone.
+    expect(input.parentElement).toHaveTextContent("cr");
+    expect(input.parentElement?.querySelector("[aria-hidden='true']")).toHaveTextContent("cr");
+    expect(input.className).toMatch(/h-11/);
     await user.click(screen.getByRole("button", { name: "Connect" }));
-    expect(screen.getByRole("status")).toHaveTextContent("Enter a number.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a number.");
+    expect(screen.getByRole("alert").closest("li")).toContainElement(input);
     expect(posts()).toHaveLength(0);
 
     await user.type(input, "1000");
@@ -333,11 +353,13 @@ describe("ConnectionsSection (customer) controls", () => {
     await flush();
     expect(posts()[0]?.[0]).toBe("/api/v1/admin/connections");
     expect(JSON.parse(posts()[0]?.[1].body as string)).toEqual({ act: "connect", alias: "prov", cap: 1000 });
-    expect(screen.getByRole("status")).toHaveTextContent("prov: connected");
+    // A success is the row's new badge and number, not a line of text above the row.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
     expect(gets()).toHaveLength(2);
   });
 
-  it("Disconnect is in the ⋯ menu, only when connected; a refusal shows its plain code, and an unreachable provider shows one word and STILL re-reads", async () => {
+  it("Disconnect is in the ⋯ menu, only when connected; an out-of-sync refusal and an unreachable provider each show one short line in the row, and it STILL re-reads", async () => {
     const user = userEvent.setup();
     let mode: "refuse" | "unreachable" = "refuse";
     ready([target({ status: "connected", cap: 5 })], true, () =>
@@ -350,13 +372,18 @@ describe("ConnectionsSection (customer) controls", () => {
     await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
     await flush();
     expect(JSON.parse(posts()[0]?.[1].body as string)).toEqual({ act: "disconnect", alias: "prov" });
-    expect(screen.getByRole("status")).toHaveTextContent("prov: stale seq");
+    const sync = screen.getByRole("alert");
+    expect(sync).toHaveTextContent("Out of sync. Try again.");
+    expect(sync).toHaveAttribute("title", "409");
+    expect(sync.className).toContain("text-destructive");
+    expect(sync.closest("li")).toHaveTextContent("prov");
     mode = "unreachable";
     fetchMock.mockClear();
     await user.click(screen.getByRole("button", { name: "More for prov" }));
     await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
     await flush();
-    expect(screen.getByRole("status")).toHaveTextContent("prov: unreachable");
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't connect.");
+    expect(screen.getByRole("alert")).toHaveAttribute("title", "502");
     expect(gets()).toHaveLength(1);
   });
 
@@ -382,13 +409,32 @@ describe("ConnectionsSection (customer) controls", () => {
     ready([target(), target({ alias: "b", origin: "https://b.example.org" })], true, () => new Promise<Response>((resolve) => (release = resolve)));
     render(<ConnectionsSection endpoints={CONNECTIONS} />);
     await flush();
-    await user.type(screen.getByRole("spinbutton", { name: "Cap for prov" }), "10");
-    await user.type(screen.getByRole("spinbutton", { name: "Cap for b" }), "10");
+    const [first, second] = screen.getAllByRole("spinbutton", { name: "Cap" }) as HTMLElement[];
+    await user.type(first as HTMLElement, "10");
+    await user.type(second as HTMLElement, "10");
     await user.click(screen.getAllByRole("button", { name: "Connect" })[0] as HTMLElement);
     expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Saving");
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await user.click(screen.getAllByRole("button", { name: "Connect" })[0] as HTMLElement);
     expect(posts()).toHaveLength(1);
     release(fake(200, { status: "connected", httpStatus: 200, error: null }));
     await flush();
+  });
+});
+
+describe("the customer's failure words (never a raw status)", () => {
+  it("maps 401 and 403 to Not allowed., a 409 stale_seq or seq_jump to Out of sync. Try again., and anything else to Couldn't connect.; the status is returned only for a title", () => {
+    expect(describeConnectionFailure({ status: "connected" }, 200)).toBeNull();
+    expect(describeConnectionFailure({ status: "disconnected" }, 200)).toBeNull();
+    expect(describeConnectionFailure({ status: null, error: "invalid_token", httpStatus: 401 }, 200)).toEqual({ text: "Not allowed.", code: 401 });
+    expect(describeConnectionFailure({ status: null, error: "x", httpStatus: 403 }, 200)).toEqual({ text: "Not allowed.", code: 403 });
+    expect(describeConnectionFailure({ error: "forbidden" }, 403)).toEqual({ text: "Not allowed.", code: 403 });
+    expect(describeConnectionFailure({ status: null, error: "stale_seq", httpStatus: 409 }, 200)).toEqual({ text: "Out of sync. Try again.", code: 409 });
+    expect(describeConnectionFailure({ status: null, error: "seq_jump", httpStatus: 409 }, 200)).toEqual({ text: "Out of sync. Try again.", code: 409 });
+    expect(describeConnectionFailure({ status: null, error: "other", httpStatus: 409 }, 200)).toEqual({ text: "Couldn't connect.", code: 409 });
+    expect(describeConnectionFailure({ status: null, error: "invalid_claims", httpStatus: 400 }, 200)).toEqual({ text: "Couldn't connect.", code: 400 });
+    expect(describeConnectionFailure({ error: "unknown_alias" }, 404)).toEqual({ text: "Couldn't connect.", code: 404 });
+    expect(describeConnectionFailure({ error: "target_unreachable" }, 502)).toEqual({ text: "Couldn't connect.", code: 502 });
+    expect(describeConnectionFailure(null, 500)).toEqual({ text: "Couldn't connect.", code: 500 });
+    expect(describeConnectionFailure({ error: "signer_unavailable" }, 503)).toEqual({ text: "No signing key.", code: 503 });
   });
 });
