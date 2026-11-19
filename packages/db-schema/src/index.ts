@@ -12,6 +12,7 @@
  */
 
 export * from "./agent-authority";
+export * from "./outbound-connections";
 export * from "./knowledge-read-daily";
 export * from "./ai";
 export * from "./ai-threads";

@@ -17,6 +17,7 @@
  */
 
 import { AgentRolesError } from "@cogni/agent-grants";
+import { NODE_CONNECT_SERVICE } from "@cogni/agent-grants/service-auth";
 import { serviceEnrollmentOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
@@ -58,6 +59,8 @@ export const POST = wrapPublicRoute(
         if (assertion.code === "jwks_unavailable") return json({ error: "authz_unavailable" }, 503);
         return json({ error: "invalid_token" }, 401);
       }
+      // `node-connect` only signs connects (POST /api/v1/public/agent/service-connections): it is never a run principal and never asks for a grant.
+      if (assertion.service === NODE_CONNECT_SERVICE) return json({ error: "invalid_token" }, 401);
       const outcome = await container.agentAuthority.requestServiceAccess(assertion, parsed.data.scope);
       return json(
         serviceEnrollmentOperation.output.parse({ status: outcome.state }),

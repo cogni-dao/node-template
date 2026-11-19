@@ -16,9 +16,11 @@ import {
 	FileSignature,
 	KeyRound,
 	Layers,
+	Network,
 	PieChart,
 	ShieldCheck,
 	Sparkles,
+	Unplug,
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactElement } from "react";
@@ -46,6 +48,22 @@ const GOVERNANCE_VIEWS = [
 		title: "Ownership",
 		description: "Aggregated attribution shares across claimants.",
 		icon: PieChart,
+	},
+] as const;
+
+/** Connect from home (story.0038): this node as a customer of other nodes, and other nodes as this node's customers. */
+const NODE_VIEWS = [
+	{
+		href: "/admin/connections",
+		title: "Connections",
+		description: "Nodes this node's AI may use, with a spend limit.",
+		icon: Unplug,
+	},
+	{
+		href: "/admin/connected-orgs",
+		title: "Connected nodes",
+		description: "Nodes that use this node, and what they used.",
+		icon: Network,
 	},
 ] as const;
 
@@ -182,6 +200,34 @@ export default async function AdminIndexPage(): Promise<ReactElement> {
 						</CardContent>
 					</Card>
 				</Link>
+			</section>
+
+			<section className="space-y-3">
+				<h2 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
+					Nodes
+				</h2>
+				<div className="grid gap-3 sm:grid-cols-2">
+					{NODE_VIEWS.map((item) => (
+						<Link key={item.href} href={item.href} className="group block">
+							<Card className="h-full transition hover:border-primary/50 hover:shadow-md">
+								<CardContent className="flex items-start gap-4 p-5">
+									<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+										<item.icon className="h-5 w-5 text-primary" />
+									</div>
+									<div className="min-w-0 flex-1 space-y-1">
+										<div className="flex items-center justify-between gap-2">
+											<h3 className="font-semibold">{item.title}</h3>
+											<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-1 group-hover:text-primary" />
+										</div>
+										<p className="text-muted-foreground text-sm">
+											{item.description}
+										</p>
+									</div>
+								</CardContent>
+							</Card>
+						</Link>
+					))}
+				</div>
 			</section>
 
 			<p className="text-muted-foreground text-xs">

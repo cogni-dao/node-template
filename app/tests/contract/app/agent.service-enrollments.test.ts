@@ -78,6 +78,12 @@ describe("POST /api/v1/public/agent/service-enrollments", () => {
     expect(fake.requestServiceAccess).not.toHaveBeenCalled();
   });
 
+  it("a node-connect assertion never asks for a grant: it only signs connects, so it is 401 and no principal is made", async () => {
+    fake.verify.mockResolvedValue({ ...verified, service: "node-connect", clientId: "https://cognidao.org#node-connect", scope: "knowledge:read" });
+    expect((await call({ scope: "knowledge:read" })).status).toBe(401);
+    expect(fake.requestServiceAccess).not.toHaveBeenCalled();
+  });
+
   it("a bad body is 400 before any verification", async () => {
     expect((await call({ scope: "not a scope" })).status).toBe(400);
     expect((await call({})).status).toBe(400);

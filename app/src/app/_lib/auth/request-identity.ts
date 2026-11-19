@@ -48,6 +48,7 @@ import {
   type VerifyResult,
   verifyBearer,
 } from "@cogni/agent-grants/credentials";
+import { NODE_CONNECT_SERVICE } from "@cogni/agent-grants/service-auth";
 import type { SessionUser } from "@cogni/node-shared";
 import { headers } from "next/headers";
 import { ServiceAuthUnavailableError } from "@/bootstrap/service-auth-error";
@@ -134,11 +135,16 @@ const serviceIdentityByRequest = new WeakMap<object, Promise<SessionUser | null>
 async function resolveServiceIdentity(token: string): Promise<SessionUser | null> {
   const { getContainer } = await import("@/bootstrap/container");
   const container = getContainer();
-  const result = await container.serviceAuth.verify(token);
+  // A replay-store failure (logged by `serviceAuth.verify`) decided nothing: 503, never a pass and never a 401.
+  const result = await container.serviceAuth.verify(token).catch(() => {
+    throw new ServiceAuthUnavailableError();
+  });
   if (!result.ok) {
     if (result.code === "jwks_unavailable") throw new ServiceAuthUnavailableError();
     return null;
   }
+  // `node-connect` only signs connects: it is never a run principal, so as a bearer it names nobody.
+  if (result.service === NODE_CONNECT_SERVICE) return null;
   const userId = await container.agentAuthority.servicePrincipalOf(result);
   if (!userId) return null;
   return { id: userId, walletAddress: null, displayName: `${result.service}@${new URL(result.issuer).host}`, avatarColor: null, via: "bearer" };

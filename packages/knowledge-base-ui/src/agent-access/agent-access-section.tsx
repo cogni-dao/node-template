@@ -32,8 +32,9 @@
 
 import type { AccessSection, NodeAiPermissionView } from "@cogni/agent-grants";
 
-import { cn } from "../cn.js";
+import { Badge } from "../ui/badge.js";
 import { Skeleton } from "../ui/skeleton.js";
+import { Switch } from "../ui/switch.js";
 import { HIGHLIGHT_CLASS, HIGHLIGHT_DOM_ID, useScrollToHighlight } from "./highlight.js";
 import {
   type AgentAccessEndpoints,
@@ -169,9 +170,7 @@ export function AgentAccessSection({ endpoints, mode = "admin", token = null, cl
                               // binding (when there is one) sits beside it, so an outside "General assistant" is never
                               // mistaken for this node's AI.
                               <>
-                                <span className="mr-2 rounded border border-foreground/40 px-1 font-medium text-xs">
-                                  outside
-                                </span>
+                                <Badge className="mr-2">outside</Badge>
                                 <span>&ldquo;{row.who}&rdquo;</span>
                                 <div className="text-muted-foreground text-xs">
                                   {row.hint ?? "No linked account"}
@@ -234,33 +233,5 @@ export function AgentAccessSection({ endpoints, mode = "admin", token = null, cl
         </div>
       )}
     </section>
-  );
-}
-
-/** A small switch. `locked` ignores clicks while another row saves; it never dims the switch. */
-function Switch(props: { on: boolean; label: string; locked: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={props.on}
-      aria-label={props.label}
-      aria-disabled={props.locked || undefined}
-      onClick={() => {
-        if (!props.locked) props.onToggle();
-      }}
-      className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-        props.on ? "bg-primary" : "bg-input"
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className={cn(
-          "pointer-events-none block h-4 w-4 rounded-full bg-background shadow transition-transform",
-          props.on ? "translate-x-4" : "translate-x-0.5"
-        )}
-      />
-    </button>
   );
 }

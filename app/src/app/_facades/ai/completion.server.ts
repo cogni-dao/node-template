@@ -414,6 +414,10 @@ export async function completionStream(
     },
     { subjectUserId: input.sessionUser.id, own: ownAccount }
   );
+  // CONNECT_FROM_HOME (story.0038): a run billed to a connected customer's record is admitted only while its allowance is left AND the customer's cap is not reached, read live on
+  // every run; otherwise it is refused with a plain code (`connection_cap_reached`, `connection_allowance_empty`, `connection_suspended`, `connection_disconnected`). An ordinary
+  // payer (the caller's own account) never reaches this read.
+  if (billingAccount.id !== ownAccount.id) await container.connections.assertAdmits(billingAccount.id);
   aiChatPhaseDurationMs.observe(
     { phase: "billing_resolve" },
     performance.now() - billingStartMs

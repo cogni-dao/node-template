@@ -14,6 +14,7 @@
  * @internal
  */
 
+import type { ConnectionRefusal } from "@cogni/agent-grants";
 import type { AiExecutionErrorCode } from "@cogni/ai-core";
 
 // Chat route uses 402 (Payment Required) for insufficient credits.
@@ -85,6 +86,30 @@ const OPENAI_FALLBACK = {
   message: "The server encountered an internal error.",
   type: "server_error",
 };
+
+// Connect from home (story.0038): a run billed to a connected customer's record is refused with a plain code. An allowance that is spent or a cap that is reached is a payment
+// problem (402); a Suspend or a Disconnect is a refusal of the account itself (403). Both name the code, never a balance.
+const CONNECTION_REFUSAL_STATUS: Record<ConnectionRefusal, number> = {
+  connection_cap_reached: 402,
+  connection_allowance_empty: 402,
+  connection_suspended: 403,
+  connection_disconnected: 403,
+};
+
+/** HTTP status for a connection refusal on the chat route's JSON errors. */
+export function connectionRefusalToHttpStatus(code: ConnectionRefusal): number {
+  return CONNECTION_REFUSAL_STATUS[code] ?? 403;
+}
+
+/** OpenAI-compatible error fields for a connection refusal on the completions route; `code` is the plain refusal code. */
+export function connectionRefusalToOpenAiError(code: ConnectionRefusal): { status: number; message: string; type: string; code: ConnectionRefusal } {
+  return {
+    status: connectionRefusalToHttpStatus(code),
+    message: "This account cannot pay for the request right now.",
+    type: "insufficient_quota",
+    code,
+  };
+}
 
 /**
  * Map execution error code to HTTP status for JSON error responses.

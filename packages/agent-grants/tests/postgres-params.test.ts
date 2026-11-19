@@ -8,7 +8,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createPostgresAgentGrantsStore, createPostgresPayerBindingStore, type SqlTag } from "../src";
+import { createPostgresAgentGrantsStore, createPostgresConnectionStore, createPostgresOutboundConnectionStore, createPostgresPayerBindingStore, type SqlTag } from "../src";
+import { createPostgresReplayStore } from "../src/service-auth";
 
 const refusesDates = (seen: unknown[][]): SqlTag =>
   ((strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -58,15 +59,25 @@ describe("the Postgres store passes no JS Date as a parameter", () => {
     expect(seen.flat().some((v) => v instanceof Date)).toBe(false);
   });
 
-  it("the payer binding store takes no Date either", async () => {
+  it("the payer binding, connection and replay stores take no Date either", async () => {
     const seen: unknown[][] = [];
-    const store = createPostgresPayerBindingStore(refusesDates(seen));
-    await store.openFor("s");
-    await store.get("b");
-    await store.payerFor("s");
-    await store.request({ subjectUserId: "s", billingAccountId: "a", maxPendingPerAccount: 20 });
-    await store.approve({ id: "b", approvedBy: "o" });
-    await store.close({ id: "b", closedBy: "o" });
+    const tag = refusesDates(seen);
+    await createPostgresPayerBindingStore(tag).payerFor("s");
+    const connections = createPostgresConnectionStore(tag);
+    await connections.get("o");
+    await connections.standingOf("a");
+    await connections.list({ limit: 5, after: null });
+    await connections.setSuspended("o", true);
+    await connections.bindService({ issuer: "https://home.example", subjectUserId: "s" });
+    const outbound = createPostgresOutboundConnectionStore(tag);
+    await outbound.reserveSeq("https://prov.example");
+    await outbound.states(["https://prov.example"]);
+    await outbound.accept({ origin: "https://prov.example", status: "connected", cap: 5, reservedSeq: 1 });
+    await outbound.liftSeq("https://prov.example", 9);
+    await outbound.alignSeq("https://prov.example", 3);
+    // The replay store hands the expiry over as an ISO string.
+    await createPostgresReplayStore(tag).seen("jti-1", new Date("2026-11-18T00:05:00.000Z"));
+    expect(seen.flat()).toContain("2026-11-18T00:05:00.000Z");
     expect(seen.flat().some((v) => v instanceof Date)).toBe(false);
   });
 });

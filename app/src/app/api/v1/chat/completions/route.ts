@@ -15,6 +15,7 @@
  * @public
  */
 
+import { isConnectionRefusedError } from "@cogni/agent-grants";
 import { isAiExecutionError } from "@cogni/ai-core";
 import {
   type ChatCompletionChunk,
@@ -29,7 +30,10 @@ import {
   CompletionIdempotencyConflictError,
   toOpenAiFinishReason,
 } from "@/app/_facades/ai/completion.server";
-import { executionErrorToOpenAiError } from "@/app/_facades/ai/execution-error-mapper";
+import {
+  connectionRefusalToOpenAiError,
+  executionErrorToOpenAiError,
+} from "@/app/_facades/ai/execution-error-mapper";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { isAccountsFeatureError } from "@/features/accounts/public";
@@ -173,6 +177,13 @@ function handleRouteError(
       "invalid_request_error",
       400
     );
+  }
+
+  // Connect from home (story.0038): a run billed to a connected customer's record was refused by the connection gate; `code` is the plain refusal code.
+  if (isConnectionRefusedError(error)) {
+    logRequestWarn(ctx.log, error, error.code.toUpperCase());
+    const refused = connectionRefusalToOpenAiError(error.code);
+    return openAiError(refused.message, refused.type, refused.status, refused.code);
   }
 
   // Execution errors from Temporal+Redis boundary (serialization-safe error codes)

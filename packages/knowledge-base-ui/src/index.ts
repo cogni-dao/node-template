@@ -64,6 +64,25 @@ export {
   type UseAgentAccess,
   type UseAgentAccessOptions,
 } from "./agent-access/use-agent-access.js";
+export { ConnectedOrgsSection, type ConnectedOrgsSectionProps } from "./connections/connected-orgs-section.js";
+export type { Money } from "./connections/format.js";
+export {
+  CONNECTED_ORGS_PAGE_SIZE,
+  type ConnectedOrgsEndpoints,
+  type ConnectedOrgsPage,
+  type ConnectedOrgsState,
+  useConnectedOrgs,
+  type UseConnectedOrgs,
+} from "./connections/use-connected-orgs.js";
+export { ConnectionsSection, type ConnectionsSectionProps } from "./connections/connections-section.js";
+export {
+  describeFailure as describeConnectionFailure,
+  type ConnectionsEndpoints,
+  type ConnectionsState,
+  type ConnectionsView,
+  useConnections,
+  type UseConnections,
+} from "./connections/use-connections.js";
 export {
   APPROVAL_FRAGMENT_PARAM,
   APPROVAL_PAGES,

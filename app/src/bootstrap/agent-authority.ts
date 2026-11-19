@@ -31,13 +31,10 @@ import {
   type AuthzEvent,
   AgentRolesError,
   createPostgresAgentGrantsStore,
+  createPostgresConnectionStore,
   createPostgresPayerBindingStore,
   buildNodeAiView,
-  decidePayerBinding,
-  ownersForBinding,
   payerFor,
-  requestPayerBinding,
-  revokePayerBinding,
   type GuardDeps,
   type GrantResource,
   denyRequest,
@@ -63,7 +60,7 @@ import {
   type WithStore,
   writeExternalPrincipal,
 } from "@cogni/agent-grants";
-import { canonicalRepoRef, ensureOrg, type OrgOwners, type OrgSource } from "@cogni/agent-grants/orgs";
+import type { OrgOwners } from "@cogni/agent-grants/orgs";
 import {
   findServicePrincipal,
   requestServiceAccess,
@@ -127,16 +124,7 @@ export interface AgentToolAuthority {
   ): Promise<{ changed: boolean }>;
   /** The person turns a live ACCOUNT row Off by id, or dismisses a waiting ask by its token (with `accountId`, for an org account the person co-owns). */
   turnMineOff(me: ApprovalCaller, input: { rowId: string } | { token: string; accountId?: string | undefined }): Promise<{ changed: boolean }>;
-  /**
-   * PAYER_IS_AUTHORIZED: a subject (any principal) asks to be billed to `billingAccountId`. Grants nothing. Throws AgentRolesError (`principal_not_found`,
-   * `not_allowed` when a live binding must be turned Off first, `too_many_requests`).
-   */
-  requestPayerBinding(subjectUserId: string, billingAccountId: string): Promise<{ id: string; state: "pending" | "live"; created: boolean }>;
-  /** An owner of the account (an org's owners through the owner source) turns a pending binding On (`approve`) or dismisses it. */
-  decidePayerBinding(me: ApprovalCaller, id: string, approve: boolean): Promise<{ changed: boolean }>;
-  /** An owner of the account turns a binding Off. The subject's next run falls back to its own account. */
-  revokePayerBinding(me: ApprovalCaller, id: string): Promise<{ changed: boolean }>;
-  /** The account a live binding names for this subject, or null. Read on every call, never cached, so Off refuses the next run. */
+  /** The account a live payer row names for this subject, or null. Read on every call, never cached, so a closed row refuses the next run. */
   payerFor(subjectUserId: string): Promise<string | null>;
   /**
    * True when `name` matches (case, spacing and look-alike forms ignored) any user's name or any of this node's AI slugs. Used at
@@ -150,11 +138,6 @@ export interface AgentToolAuthority {
   registerAgent(input: { userId: string; name: string }): Promise<void>;
   /** `org` for an org's user, `agent` for any other `agent_principals` row, else `human` (KIND_IS_THE_ROW). */
   principalKind(userId: string): Promise<PrincipalKind>;
-  /**
-   * The org for an owner source, created if absent (idempotent, one transaction): its users row, its `org` principal and one ordinary billing account. Grants
-   * nothing (REGISTRATION_GRANTS_NOTHING). Throws `InvalidOrgSourceError` for a source that is not a canonical repo.
-   */
-  ensureOrg(source: OrgSource): Promise<{ userId: string; billingAccountId: string }>;
   /** The principal of a verified service assertion, or null until that service has asked (a call before the ask is a 401). */
   servicePrincipalOf(assertion: Pick<VerifiedServiceAssertion, "issuer" | "service">): Promise<string | null>;
   /**
@@ -439,66 +422,6 @@ export function createAgentToolAuthority(deps: {
         );
       return { changed: result.changed };
     },
-    async requestPayerBinding(subjectUserId, billingAccountId) {
-      const outcome = await deps.sql.begin((tx) =>
-        requestPayerBinding(createPostgresPayerBindingStore(tx), { subjectUserId, billingAccountId })
-      );
-      return { id: outcome.id, state: outcome.state, created: outcome.created };
-    },
-    async decidePayerBinding(me, id, approve) {
-      // OWNERS_READ_BEFORE_THE_TRANSACTION: the org's owners (a GitHub read) are read before `begin`, so no database connection waits on it.
-      const owners = await ownersForBinding(
-        createPostgresPayerBindingStore(deps.sql),
-        createPostgresAgentGrantsStore(deps.sql),
-        deps.owners,
-        id
-      );
-      const result = await deps.sql.begin((tx) =>
-        decidePayerBinding(createPostgresPayerBindingStore(tx), createPostgresAgentGrantsStore(tx), {
-          me,
-          id,
-          approve,
-          owners,
-        })
-      );
-      if (result.decided)
-        deps.log.info(
-          {
-            event: approve ? EVENT_NAMES.PAYER_BOUND : EVENT_NAMES.PAYER_REVOKED,
-            subject: result.subjectUserId,
-            billingAccountId: result.billingAccountId,
-            ...(approve ? { approvedBy: me.userId } : { revokedBy: me.userId }),
-          },
-          approve ? EVENT_NAMES.PAYER_BOUND : EVENT_NAMES.PAYER_REVOKED
-        );
-      return { changed: result.decided };
-    },
-    async revokePayerBinding(me, id) {
-      const owners = await ownersForBinding(
-        createPostgresPayerBindingStore(deps.sql),
-        createPostgresAgentGrantsStore(deps.sql),
-        deps.owners,
-        id
-      );
-      const result = await deps.sql.begin((tx) =>
-        revokePayerBinding(createPostgresPayerBindingStore(tx), createPostgresAgentGrantsStore(tx), {
-          me,
-          id,
-          owners,
-        })
-      );
-      if (result.revoked)
-        deps.log.info(
-          {
-            event: EVENT_NAMES.PAYER_REVOKED,
-            subject: result.subjectUserId,
-            billingAccountId: result.billingAccountId,
-            revokedBy: me.userId,
-          },
-          EVENT_NAMES.PAYER_REVOKED
-        );
-      return { changed: result.revoked };
-    },
     payerFor: (subjectUserId) => payerFor(createPostgresPayerBindingStore(deps.sql), subjectUserId),
     async nameTaken(name) {
       const key = agentNameKey(name);
@@ -521,18 +444,10 @@ export function createAgentToolAuthority(deps: {
       });
     },
     principalKind: (userId) => principalKindOf(deps.sql, userId),
-    async ensureOrg(source) {
-      const org = await deps.sql.begin((tx) => ensureOrg(tx, source));
-      deps.log.info(
-        { event: EVENT_NAMES.ORG_ENSURED, orgUserId: org.userId, sourceRef: canonicalRepoRef(source.ref, source.path) ?? source.ref },
-        EVENT_NAMES.ORG_ENSURED
-      );
-      return org;
-    },
     servicePrincipalOf: (assertion) => findServicePrincipal(deps.sql, assertion),
     async requestServiceAccess(assertion, scope) {
-      const { userId, outcome } = await deps.sql.begin((tx) =>
-        requestServiceAccess({
+      const { userId, outcome } = await deps.sql.begin(async (tx) => {
+        const asked = await requestServiceAccess({
           tx,
           store: createPostgresAgentGrantsStore(tx),
           assertion,
@@ -540,8 +455,11 @@ export function createAgentToolAuthority(deps: {
           declaredScopes,
           askableScopes,
           scopeKinds,
-        })
-      );
+        });
+        // ONE_RECORD_PER_ISSUER: a service that asks AFTER its issuer connected is bound to the issuer's record too (a no-op when the issuer has no record).
+        await createPostgresConnectionStore(tx).bindService({ issuer: assertion.issuer, subjectUserId: asked.userId });
+        return asked;
+      });
       if (outcome.created)
         deps.log.info(
           {

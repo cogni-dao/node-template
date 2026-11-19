@@ -25,14 +25,35 @@ const load = (environment: string | undefined, read: (file: string) => string = 
   loadServiceLinksConfig({ environment, repoRoot, log: log as never, read });
 
 describe("the shipped .cogni/service-links.yaml", () => {
-  it("candidate-a trusts toks5-test's node-ai and may call toks5; production has none", () => {
+  it("candidate-a trusts toks5-test's node-ai and node-connect (with its node id) and may call toks5 (with its offer text); the operator's git-review is trusted on both; production has no targets", () => {
     expect(load("candidate-a")).toEqual({
       trustedHomes: [
-        { issuer: "https://toks5-test.cognidao.org", jwksUri: "https://toks5-test.cognidao.org/.well-known/jwks.json", services: ["node-ai"] },
+        {
+          issuer: "https://toks5-test.cognidao.org",
+          jwksUri: "https://toks5-test.cognidao.org/.well-known/jwks.json",
+          services: ["node-ai", "node-connect"],
+          nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1",
+          name: "toks5",
+        },
+        // The operator's git-review (test.cognidao.org); no kid is pinned.
+        { issuer: "https://test.cognidao.org", jwksUri: "https://test.cognidao.org/.well-known/jwks.json", services: ["git-review"], name: "operator" },
       ],
-      targets: [{ alias: "toks5", nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1", origin: "https://toks5-test.cognidao.org" }],
+      targets: [
+        {
+          alias: "toks5",
+          nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1",
+          origin: "https://toks5-test.cognidao.org",
+          offer: "AI runs on toks5, charged to this node's account there, up to your limit. Reads are free.",
+        },
+      ],
     });
-    expect(load("production")).toEqual({ trustedHomes: [], targets: [] });
+    expect(load("production")).toEqual({
+      trustedHomes: [{ issuer: "https://cognidao.org", jwksUri: "https://cognidao.org/.well-known/jwks.json", services: ["git-review"], name: "operator" }],
+      targets: [],
+    });
+    // The operator's git-review may read, never connect: node-connect is on no operator entry.
+    for (const env of ["candidate-a", "production"])
+      for (const home of load(env).trustedHomes.filter((h) => !h.issuer.includes("toks5"))) expect(home.services).toEqual(["git-review"]);
   });
 
   it("an environment with no key, a missing environment name and a missing repo root are none", () => {

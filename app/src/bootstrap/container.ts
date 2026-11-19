@@ -153,6 +153,8 @@ import {
 	NODE_LOCAL_TOOL_BUNDLE,
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
+import { type ConnectSender, createConnectSender, createPostgresOutboundConnectionStore } from "@cogni/agent-grants";
+import { type Connections, createConnections } from "@/bootstrap/connections";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
@@ -311,6 +313,10 @@ export interface Container {
 	serviceAuth: ServiceAuth;
 	/** Calling other nodes as this node's AI (story.0038 phase 2): the remote-knowledge capability and the outbound ask. Targets come only from .cogni/service-links.yaml. */
 	serviceLinks: ServiceLinks;
+	/** Connect from home, PROVIDER side (story.0038, agent-grants 0.10.0): apply a customer's signed connect, list, suspend, grant an allowance, and the run gate. */
+	connections: Connections;
+	/** Connect from home, CUSTOMER side: this node's own connection state per configured target, and the signed connect or disconnect it sends. */
+	serviceConnections: ConnectSender;
 	/** ADMIN_ACTS_IN_ADMIN: the only door for node-admin writes; callable only with an `AdminSession` minted in `(admin)/`. */
 	nodeAdminPort: NodeAdminPort;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
@@ -1239,6 +1245,24 @@ function createContainer(): Container {
 		log,
 	});
 
+	const connections = createConnections({
+		sql: agentSql,
+		trustedHomes: serviceLinksConfig.trustedHomes,
+		accounts: serviceAccountService,
+		log,
+	});
+	// Customer side of connect from home: the sender is the package's (agent-grants 0.10.0); this node only hands it its targets, signer and outbound table.
+	const serviceConnections = createConnectSender({
+		targets: serviceLinksConfig.targets,
+		signer: () => serviceAuth.getSigner(),
+		store: createPostgresOutboundConnectionStore(agentSql),
+		onSent: ({ alias, act, outcome, httpStatus, status }) =>
+			log[outcome === "unreachable" ? "warn" : "info"](
+				{ event: EVENT_NAMES.CONNECTION_SENT, alias, act, outcome, ...(httpStatus !== undefined ? { httpStatus } : {}), ...(status !== undefined ? { status } : {}) },
+				EVENT_NAMES.CONNECTION_SENT,
+			),
+	});
+
 	const agentAuthority = createAgentToolAuthority({
 		// Service role: agent_roles / agent_principals are deny-all for the app role.
 		sql: agentSql,
@@ -1292,7 +1316,9 @@ function createContainer(): Container {
 		agentAuthority,
 		serviceAuth,
 		serviceLinks,
-		nodeAdminPort: createNodeAdminPort(agentAuthority),
+		connections,
+		serviceConnections,
+		nodeAdminPort: createNodeAdminPort(agentAuthority, { connections, outbound: serviceConnections }),
 		knowledgeStorePort,
 		knowledgeReadCounter,
 		goalMetrics,

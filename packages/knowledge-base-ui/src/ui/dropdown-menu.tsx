@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/ui/dropdown-menu`
- * Purpose: Minimal shadcn dropdown menu (root, trigger, content, checkbox item) on the `radix-ui` peer for the board column picker (task.0044).
+ * Purpose: Minimal shadcn dropdown menu (root, trigger, content, checkbox item, item) on the `radix-ui` peer for the board column picker (task.0044) and the connected nodes row menu (story.0038).
  * Scope: Markup and classes match the node kit's shadcn dropdown menu for the parts the board uses.
  * Invariants: Content renders in a portal; checkbox items are always controlled.
  * Side-effects: none
@@ -63,3 +63,18 @@ export const DropdownMenuCheckboxItem = forwardRef<
   </DropdownMenuPrimitive.CheckboxItem>
 ));
 DropdownMenuCheckboxItem.displayName = "DropdownMenuCheckboxItem";
+
+export const DropdownMenuItem = forwardRef<
+  ComponentRef<typeof DropdownMenuPrimitive.Item>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.Item
+    ref={ref}
+    className={cn(
+      "relative flex min-h-8 cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      className,
+    )}
+    {...props}
+  />
+));
+DropdownMenuItem.displayName = "DropdownMenuItem";

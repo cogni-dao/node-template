@@ -20,13 +20,17 @@
  * @public
  */
 
+import { isCanonicalHttpsOrigin } from "./origin";
 import type { SqlTag } from "./postgres";
 
 /**
- * Where an org's owners come from. `ref` is the repo's canonical https GitHub URL; the default branch is read. `path` is where the repo-spec lives in that repo
- * (default `.cogni/repo-spec.yaml`; a monorepo node uses `nodes/<node>/.cogni/repo-spec.yaml`), so two nodes of one repo are two orgs.
+ * Where an org's owners come from. Two kinds:
+ * - `repo-spec`: `ref` is the repo's canonical https GitHub URL; the default branch is read. `path` is where the repo-spec lives in that repo
+ *   (default `.cogni/repo-spec.yaml`; a monorepo node uses `nodes/<node>/.cogni/repo-spec.yaml`), so two nodes of one repo are two orgs.
+ * - `issuer` (0.10.0, connect from home): `ref` is a signing issuer's canonical https origin. The org is a CUSTOMER NODE's record on a provider, keyed by the issuer a trusted
+ *   home signs as; it has no owners (its decisions are signed claims and the provider admin's own actions), so `owners()` for it always throws `issuer_has_no_owners`.
  */
-export type OrgSource = { kind: "repo-spec"; ref: string; path?: string | undefined };
+export type OrgSource = { kind: "repo-spec"; ref: string; path?: string | undefined } | { kind: "issuer"; ref: string };
 
 /** Where a repo-spec lives when the source names no path. */
 export const DEFAULT_REPO_SPEC_PATH = ".cogni/repo-spec.yaml";
@@ -103,6 +107,7 @@ function splitRepoKey(key: string): { ref: string; path: string } {
 
 /** The org source a stored (kind, canonical key) pair names; a default-path source carries no `path`. Null for an unknown kind or an unusable key. */
 export function orgSourceFromKey(kind: string | null, key: string | null): OrgSource | null {
+  if (kind === "issuer") return key && isCanonicalHttpsOrigin(key) ? { kind, ref: key } : null;
   if (kind !== "repo-spec" || !key) return null;
   const { ref, path } = splitRepoKey(key);
   const canonical = canonicalRepoRef(ref, path);
@@ -183,6 +188,19 @@ export function createRepoSpecOwnerSource(deps: RepoSpecOwnerSourceDeps): OwnerS
         });
       inflight.set(ref, pending);
       return pending;
+    },
+  };
+}
+
+/**
+ * The `issuer` owner source: an issuer-keyed org (a customer node's record on this provider) has NO owners, so every read throws `OwnerSourceUnavailableError("issuer_has_no_owners")`
+ * (fail closed: no decision over such an account can pass `canApprove` through an owner list, and none ever reads one from the customer).
+ */
+export function createIssuerOwnerSource(): OwnerSource {
+  return {
+    kind: "issuer",
+    async owners() {
+      throw new OwnerSourceUnavailableError("issuer_has_no_owners");
     },
   };
 }
@@ -277,9 +295,19 @@ const str = (value: unknown): string | null => (typeof value === "string" ? valu
  * serialized with a transaction advisory lock, so two callers cannot create two orgs. Grants nothing.
  */
 export async function ensureOrg(tx: SqlTag, source: OrgSource): Promise<{ userId: string; billingAccountId: string }> {
-  if (source.kind !== "repo-spec") throw new InvalidOrgSourceError("unknown owner source kind");
-  const ref = canonicalRepoRef(source.ref, source.path);
-  if (!ref) throw new InvalidOrgSourceError("ref must be a canonical https github repo url and path a relative .cogni/repo-spec.yaml path");
+  let ref: string | null;
+  let displayName: string;
+  if (source.kind === "repo-spec") {
+    ref = canonicalRepoRef(source.ref, source.path);
+    if (!ref) throw new InvalidOrgSourceError("ref must be a canonical https github repo url and path a relative .cogni/repo-spec.yaml path");
+    displayName = `org:${ref.slice("https://github.com/".length)}`;
+  } else if (source.kind === "issuer") {
+    ref = isCanonicalHttpsOrigin(source.ref) ? source.ref : null;
+    if (!ref) throw new InvalidOrgSourceError("an issuer ref must be a canonical https origin");
+    displayName = `org:${new URL(ref).host}`;
+  } else {
+    throw new InvalidOrgSourceError("unknown owner source kind");
+  }
   const lockKey = `org:${source.kind}:${ref}`;
   await tx`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
   const found = await tx`
@@ -288,7 +316,7 @@ export async function ensureOrg(tx: SqlTag, source: OrgSource): Promise<{ userId
   let userId = str(found[0]?.user_id);
   if (!userId) {
     userId = crypto.randomUUID();
-    await tx`INSERT INTO users (id, name) VALUES (${userId}, ${`org:${ref.slice("https://github.com/".length)}`})`;
+    await tx`INSERT INTO users (id, name) VALUES (${userId}, ${displayName})`;
     await tx`
       INSERT INTO agent_principals (kind, user_id, owner_source_kind, owner_source_ref)
       VALUES ('org', ${userId}, ${source.kind}, ${ref})`;

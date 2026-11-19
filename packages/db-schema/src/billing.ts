@@ -108,6 +108,12 @@ export const creditLedger = pgTable(
     revenueShareRefUnique: uniqueIndex("credit_ledger_revenue_share_ref_unique")
       .on(table.reference)
       .where(sql`${table.reason} = 'platform_revenue_share'`),
+    /** Idempotency guard for a provider admin's allowance grant to a connected org (story.0038): one ledger row per grant reference */
+    connectionAllowanceRefUnique: uniqueIndex(
+      "credit_ledger_connection_allowance_ref_unique"
+    )
+      .on(table.reference)
+      .where(sql`${table.reason} = 'connection_allowance'`),
   })
 ).enableRLS();
 
@@ -169,6 +175,11 @@ export const chargeReceipts = pgTable(
     aggregationIdx: index("charge_receipts_aggregation_idx").on(
       table.billingAccountId,
       table.createdAt
+    ),
+    // Connect from home (story.0038): the run gate sums an account's charged credits on every run billed to a connected org. (account, credits) makes that sum an index-only scan.
+    chargedSumIdx: index("charge_receipts_account_charged_idx").on(
+      table.billingAccountId,
+      table.chargedCredits
     ),
     // Index for pagination: Filter by account + order by createdAt DESC, id DESC
     paginationIdx: index("charge_receipts_pagination_idx").on(

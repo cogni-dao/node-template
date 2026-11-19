@@ -201,6 +201,16 @@ describe("resolveRequestIdentity — service assertion bearer (story.0038)", () 
     expect(mockVerify).toHaveBeenCalledTimes(1);
   });
 
+  it("a node-connect assertion names nobody as a bearer (it only signs connects), and a replay-store failure is an outage, not a 401", async () => {
+    mockVerify.mockResolvedValue({ ...verified, service: "node-connect", clientId: "https://cognidao.org#node-connect", scope: "connection:write", claims: { act: "connect", cap: 1, seq: 1 } });
+    mockPrincipalOf.mockResolvedValue("svc-user");
+    expect(await resolveRequestIdentity()).toBeNull();
+    expect(mockPrincipalOf).not.toHaveBeenCalled();
+    mockHeaders.mockResolvedValue(headersFromRecord({ authorization: `Bearer ${JWT}` }));
+    mockVerify.mockRejectedValue(new Error("replay store down"));
+    await expect(resolveRequestIdentity()).rejects.toMatchObject({ name: "ServiceAuthUnavailableError" });
+  });
+
   it("a signed agent key (cogni_ag_sk_v1_) never reaches the assertion verifier", async () => {
     mockHeaders.mockResolvedValue(headersFromRecord({ authorization: "Bearer cogni_ag_sk_v1_forged.sig" }));
     expect(await resolveRequestIdentity()).toBeNull();

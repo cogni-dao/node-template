@@ -8,18 +8,36 @@
 #   trusted_homes: homes whose signed service assertions this node accepts.
 #     issuer:    the home's canonical https origin.
 #     jwks_uri:  where its public keys are published (https).
-#     services:  the service slugs it may sign as.
+#     services:  the service slugs it may sign as. Include `node-ai` for its AI's asks and reads, and `node-connect` to let it connect
+#                from its own /admin/connections (a signed connect with a cap; this node then keeps one record for it, and its
+#                admin funds it on /admin/connected-orgs).
+#     node_id:   optional. The home's node id as THIS node's own list says it; shown on /admin/connected-orgs, never a trust input.
+#     name:      optional. The home's node name (such as toks5) as THIS node's own list says it; pages show it instead of the URL, never a trust input.
 #   targets: nodes this node's AI may read knowledge from and ask for access (the `node` argument of the knowledge tools).
 #     alias:     the name a tool uses (lowercase letters, digits, dashes).
 #     node_id:   the target's node id (becomes the assertion's audience).
 #     origin:    the target's canonical https origin.
+#     offer:     optional. Static text shown beside the target on /admin/connections (at most 280 characters); this node never asks the target for it.
 candidate-a:
   trusted_homes:
     - issuer: "https://toks5-test.cognidao.org"
       jwks_uri: "https://toks5-test.cognidao.org/.well-known/jwks.json"
-      services: ["node-ai"]
+      services: ["node-ai", "node-connect"]
+      node_id: "f66b260b-4633-41e2-8711-b7c1b8449cc1"
+      name: "toks5"
+    # The operator's git-review reads this node's hub as service `git-review`. No kid is pinned: the verifier picks the key by kid from the JWKS.
+    - issuer: "https://test.cognidao.org"
+      name: "operator"
+      jwks_uri: "https://test.cognidao.org/.well-known/jwks.json"
+      services: ["git-review"]
   targets:
     - alias: toks5
       node_id: "f66b260b-4633-41e2-8711-b7c1b8449cc1"
       origin: "https://toks5-test.cognidao.org"
-production: {}
+      offer: "AI runs on toks5, charged to this node's account there, up to your limit. Reads are free."
+production:
+  trusted_homes:
+    - issuer: "https://cognidao.org"
+      name: "operator"
+      jwks_uri: "https://cognidao.org/.well-known/jwks.json"
+      services: ["git-review"]

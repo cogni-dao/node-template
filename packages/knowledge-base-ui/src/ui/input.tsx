@@ -31,3 +31,19 @@ export const Input = forwardRef<HTMLInputElement, ComponentProps<"input">>(
   ),
 );
 Input.displayName = "Input";
+
+/**
+ * An input with a short unit INSIDE the field at its trailing edge (an adornment such as "cr"). The wrapper takes the layout (`className`: width, flex, rounding side); the input keeps its own
+ * height and text size and leaves room for the unit. The unit is decoration (`aria-hidden`): the input's own label names it.
+ */
+export const SuffixInput = forwardRef<HTMLInputElement, ComponentProps<"input"> & { readonly suffix: string; readonly inputClassName?: string }>(
+  ({ className, inputClassName, suffix, ...props }, ref) => (
+    <div className={cn("relative", className)}>
+      <Input ref={ref} className={cn("pr-9", inputClassName)} {...props} />
+      <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-muted-foreground text-xs">
+        {suffix}
+      </span>
+    </div>
+  ),
+);
+SuffixInput.displayName = "SuffixInput";

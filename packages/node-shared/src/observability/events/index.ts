@@ -83,12 +83,20 @@ export const EVENT_NAMES = {
 	SERVICE_AUTH_REJECTED: "service_auth.rejected",
 	/** The signing key could not be used (partly configured, unusable, or a public key that is not the private key's): reason only, never the key. */
 	SERVICE_AUTH_SIGNER_UNAVAILABLE: "service_auth.signer_unavailable",
-	/** An org was created or found for an owner source (story.0038): orgUserId, sourceRef. */
-	ORG_ENSURED: "org.ensured",
-	/** A payer binding was turned On by an owner of the account (story.0038): subject, billingAccountId, approvedBy. */
-	PAYER_BOUND: "payer.bound",
-	/** A payer binding ended, Off or dismissed (story.0038): subject, billingAccountId, revokedBy. */
-	PAYER_REVOKED: "payer.revoked",
+	/** A signed connect or disconnect from a trusted home was applied (story.0038, connect from home): issuer, act, cap, seq, orgUserId. Never the assertion. */
+	CONNECTION_APPLIED: "connection.applied",
+	/** A signed connect or disconnect was refused after verification (story.0038): issuer, code (`stale_seq`, `invalid_claims`, `wrong_service`, `wrong_scope`). */
+	CONNECTION_REFUSED: "connection.refused",
+	/** The provider admin Suspended or Resumed a connected org (story.0038): orgUserId, suspended, adminUserId. */
+	CONNECTION_SUSPENSION: "connection.suspension",
+	/** A free-credit grant to a connected org failed on the store (story.0038): orgUserId, error fields. */
+	CONNECTION_GRANT_FAILED: "connection.grant_failed",
+	/** The provider admin granted a connected org an allowance (story.0038): orgUserId, credits, applied, adminUserId. */
+	CONNECTION_ALLOWANCE_GRANTED: "connection.allowance_granted",
+	/** A run was refused by the connection gate (story.0038): billingAccountId, code (`connection_suspended`, `connection_disconnected`, `connection_allowance_empty`, `connection_cap_reached`). */
+	CONNECTION_RUN_REFUSED: "connection.run_refused",
+	/** This node signed and sent a connect or disconnect to a configured provider (story.0038): alias, act, httpStatus. Never a token. */
+	CONNECTION_SENT: "connection.sent",
 	/** A run was billed to a bound account instead of the caller's own (story.0038): subject, billingAccountId. */
 	PAYER_SELECTED: "payer.selected",
 	/** This node's AI asked a configured remote node for one permission (story.0038): alias, scope, httpStatus. Never a token. */
