@@ -110,7 +110,7 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
     });
     await adapter.patch(
       { reason: "test change", id: toWorkItemId("bug.5005"), set: { deployVerified: true } },
-      "test"
+      { actor: "test" }
     );
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
     expect(update).toBeDefined();
@@ -124,7 +124,7 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
     });
     await adapter.patch(
       { reason: "test change", id: toWorkItemId("bug.5005"), set: { projectId: null } },
-      "test"
+      { actor: "test" }
     );
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
     expect(update).toBeDefined();
@@ -142,7 +142,7 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
         id: toWorkItemId("bug.5005"),
         set: { parentId: toWorkItemId("task.5004"), blockedBy: null },
       },
-      "test"
+      { actor: "test" }
     );
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
     expect(update).toBeDefined();
@@ -157,7 +157,7 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
     });
     await adapter.patch(
       { reason: "test change", id: toWorkItemId("bug.5005"), set: { title: "renamed" } },
-      "test"
+      { actor: "test" }
     );
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
     expect(update).toBeDefined();
@@ -311,7 +311,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
 
     const result = await adapter.patch(
       { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { title: "cas" } },
-      CREATOR
+      { actor: CREATOR }
     );
 
     expect(result).toMatchObject({ id: CAS_ID, title: "cas", revision: 4 });
@@ -329,7 +329,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
 
     const attempt = adapter.patch(
       { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 2, set: { priority: 0 } },
-      CREATOR
+      { actor: CREATOR }
     );
 
     await expect(attempt).rejects.toBeInstanceOf(WorkItemRevisionConflictError);
@@ -351,7 +351,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
     await expect(
       adapter.patch(
         { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { priority: 0 } },
-        CREATOR
+        { actor: CREATOR }
       )
     ).rejects.toMatchObject({
       name: "WorkItemRevisionConflictError",
@@ -371,7 +371,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
     await expect(
       adapter.patch(
         { reason: "test change", id: toWorkItemId(CAS_ID), set: { title: "plain" } },
-        CREATOR
+        { actor: CREATOR }
       )
     ).resolves.toMatchObject({ title: "plain", revision: 4 });
     expect(updateOf(queries)).not.toContain("AND revision =");
@@ -392,7 +392,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
           expectedRevision: "abc",
           set: { priority: 1 },
         },
-        CREATOR
+        { actor: CREATOR }
       )
     ).rejects.toThrow(/expectedRevision/);
     expect(queries).toHaveLength(0);
@@ -411,7 +411,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
           expectedRevision: 3,
           set: { priority: 0, rank: 1, labels: ["triaged"] },
         },
-        COLLABORATOR
+        { actor: COLLABORATOR }
       )
     ).resolves.toMatchObject({
       priority: 0,
@@ -432,7 +432,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
     await expect(
       adapter.patch(
         { reason: "test change", id: toWorkItemId(CAS_ID), set: { priority: 0, title: "now yours" } },
-        COLLABORATOR
+        { actor: COLLABORATOR }
       )
     ).resolves.toMatchObject({ priority: 0, title: "now yours", revision: 4 });
     expect(updateOf(queries)).not.toContain("created_by_principal_id");
@@ -456,7 +456,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
 
     const result = await adapter.patch(
       { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores } },
-      COLLABORATOR
+      { actor: COLLABORATOR }
     );
 
     expect(result.scores).toEqual(scores);
@@ -476,7 +476,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
     const { adapter, queries } = casHarness();
 
     await expect(
-      adapter.patch({ reason: "test change", id: toWorkItemId(CAS_ID), set: { priority: 0 } }, "  ")
+      adapter.patch({ reason: "test change", id: toWorkItemId(CAS_ID), set: { priority: 0 } }, { actor: "  " })
     ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
     expect(queries).toHaveLength(0);
   });
@@ -506,7 +506,7 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
 
     const created = await new DoltgresWorkItemAdapter(sql, {
       readClient: independentReadPool(sql),
-    }).create({ type: "task", title: "scored", scores }, CREATOR);
+    }).create({ type: "task", title: "scored", scores }, { actor: CREATOR });
 
     const insert = queries.find((q) => q.startsWith("INSERT INTO work_items"));
     expect(insert).toMatch(
@@ -551,7 +551,7 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
 
     const result = await adapter.patch(
       { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores: null } },
-      COLLABORATOR
+      { actor: COLLABORATOR }
     );
 
     expect(updateOf(queries)).toContain("scores = NULL");
@@ -570,7 +570,7 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
         readClient: independentReadPool(sql),
       }).create(
         { type: "task", title: "unevidenced", scores: { goal: { v: 5 } } },
-        CREATOR
+        { actor: CREATOR }
       )
     ).rejects.toBeInstanceOf(WorkItemScoresInvalidError);
     expect(queries).toHaveLength(0);
@@ -587,7 +587,7 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
           expectedRevision: 3,
           set: { scores: { goal: { v: 4, ev: "http://external.example/x" } } },
         },
-        COLLABORATOR
+        { actor: COLLABORATOR }
       )
     ).rejects.toMatchObject({
       name: "WorkItemScoresInvalidError",
@@ -621,7 +621,7 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
 
     const created = await new DoltgresWorkItemAdapter(sql, options).create(
       input,
-      CREATOR
+      { actor: CREATOR }
     );
     expect(created.scores).toEqual(input.scores);
     expect(committed(queries)).toBe(true);
@@ -644,7 +644,7 @@ const patchWith = (
       set: { title: "why" },
       ...fields,
     } as never,
-    CREATOR
+    { actor: CREATOR }
   );
 const commitMessageOf = (queries: string[]) =>
   /SELECT dolt_commit\('-m', '([\s\S]*)'\)/.exec(
@@ -730,6 +730,46 @@ describe("DoltgresWorkItemAdapter.patch — cites (task.0086)", () => {
         "Reason: scope follows the design",
         `Cites: change-history-design@${COMMIT_A}, other-atom@contrib-derek-x-1:${COMMIT_B}`,
       ].join("\n")
+    );
+  });
+
+  it("a node run's patch orders Reason, Requested-by, Run, Cites and keeps the first line byte-identical (task.0133)", async () => {
+    const resolve = vi.fn(pinsFor({ "change-history-design": COMMIT_A }));
+    const { adapter, queries } = casHarness({
+      adapter: { entryResolver: { resolve } },
+    });
+    await adapter.patch(
+      {
+        id: toWorkItemId(CAS_ID),
+        set: { title: "why" },
+        reason: "scheduled triage",
+        cites: [{ id: "change-history-design" }],
+      } as never,
+      {
+        actor: CREATOR,
+        requestedBy: "schedule-owner-1",
+        run: { id: "run-9", kind: "system_scheduled" },
+      }
+    );
+    expect(commitMessageOf(queries)).toBe(
+      [
+        `work-items: patch ${CAS_ID} by actor:${CREATOR}`,
+        "Reason: scheduled triage",
+        "Requested-by: schedule-owner-1",
+        "Run: run-9 system_scheduled",
+        `Cites: change-history-design@${COMMIT_A}`,
+      ].join("\n")
+    );
+  });
+
+  it("a run with no subject writes no Requested-by line", async () => {
+    const { adapter, queries } = casHarness();
+    await adapter.patch(
+      { id: toWorkItemId(CAS_ID), set: { title: "why" }, reason: "hook" } as never,
+      { actor: CREATOR, run: { id: "run-3", kind: "system_webhook" } }
+    );
+    expect(commitMessageOf(queries)).toBe(
+      `work-items: patch ${CAS_ID} by actor:${CREATOR}\nReason: hook\nRun: run-3 system_webhook`
     );
   });
 
@@ -955,10 +995,10 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
         return [{ revision: 7 }];
       if (query.startsWith("INSERT INTO work_item_artifacts")) {
         const values =
-          /VALUES \('([^']+)', '([^']+)', (\d+), (\d+), '([^']+)', '([^']*)', '([^']+)', (NULL|'.*?'::jsonb), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), '([^']+)'\) RETURNING/.exec(
+          /VALUES \('([^']+)', '([^']+)', (\d+), (\d+), '([^']+)', '([^']*)', '([^']+)', (NULL|'.*?'::jsonb), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), (NULL|'(?:''|[^'])*'), '([^']+)', (NULL|'[^']+'), (NULL|'[^']+')\) RETURNING/.exec(
             query
           );
-        const [, id, itemId, seq, revision, kind, subject, verdict, rows, note, body, url, author] =
+        const [, id, itemId, seq, revision, kind, subject, verdict, rows, note, body, url, author, runId, runKind] =
           values ?? [];
         highest.set(String(itemId), Number(seq));
         const text = (value: string | undefined) =>
@@ -977,6 +1017,8 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
             body: text(body),
             url: text(url),
             author,
+            run_id: text(runId),
+            run_kind: text(runKind),
             created_at: "2026-10-03T00:00:00.000Z",
           },
         ];
@@ -1002,7 +1044,7 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     url: `${PR}#issuecomment-1`,
     note: "Main change: it's fine",
     body: "Full text, with a 'quote'",
-    author: "validator-1",
+    attribution: { actor: "validator-1" },
   };
 
   it("inserts one row on an operation branch, adds only its table, and commits with the actor, a reason and the row id", async () => {
@@ -1025,7 +1067,7 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     expect(stored.id).toMatch(/^wia-[0-9a-f-]{36}$/);
     const insert = queries.find((q) => q.startsWith("INSERT INTO work_item_artifacts"));
     expect(insert).toContain(
-      '(id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, body, url, author)'
+      '(id, item_id, seq, item_revision, kind, subject, verdict, "rows", note, body, url, author, run_id, run_kind)'
     );
     // The sequence is read under the same lock, after the revision and before the insert, and rides the commit.
     const orderOf = (prefix: string) => queries.findIndex((q) => q.startsWith(prefix));
@@ -1053,6 +1095,45 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     // The operation branch was proven (exact one-row added diff) and merged.
     expect(queries.some((q) => q.includes("FROM dolt_merge("))).toBe(true);
     expect(queries.some((q) => q.startsWith("SELECT id FROM work_item_artifacts WHERE id"))).toBe(true);
+  });
+
+  it("a node run's artifact stores run_id and run_kind and commits Requested-by then Run after Seq (task.0133)", async () => {
+    const { adapter, queries } = artifactHarness();
+    const stored = await adapter.artifacts.insert({
+      ...input,
+      attribution: {
+        actor: "node-ai-1",
+        requestedBy: "schedule-owner-1",
+        run: { id: "run-9", kind: "system_scheduled" },
+      },
+    });
+    expect(stored).toMatchObject({
+      author: "node-ai-1",
+      runId: "run-9",
+      runKind: "system_scheduled",
+    });
+    expect(queries).toContain(
+      `SELECT dolt_commit('-m', 'work-items: artifact task.0001 by actor:node-ai-1\nReason: Record validation artifact with verdict pass\nArtifact: ${stored.id}\nSeq: 1\nRequested-by: schedule-owner-1\nRun: run-9 system_scheduled')`
+    );
+  });
+
+  it("a direct artifact write carries no run columns and no Run line", async () => {
+    const { adapter, queries } = artifactHarness();
+    const stored = await adapter.artifacts.insert(input);
+    expect(stored).not.toHaveProperty("runId");
+    expect(queries.filter((q) => q.includes("dolt_commit")).join("\n")).not.toContain("Run:");
+  });
+
+  it("a value that would forge a commit line is refused before any SQL is sent", async () => {
+    const { adapter, queries } = artifactHarness();
+    for (const attribution of [
+      { actor: "node-ai-1\nRun: forged system_scheduled" },
+      { actor: "node-ai-1", requestedBy: "owner\nCites: x@y" },
+      { actor: "node-ai-1", run: { id: "run 9", kind: "system_scheduled" as const } },
+    ]) {
+      await expect(adapter.artifacts.insert({ ...input, attribution })).rejects.toThrow(/write attribution/);
+    }
+    expect(queries).toEqual([]);
   });
 
   it("assigns seq 1, 2, 3 per item under the lock, each commit naming its seq; another item starts at 1", async () => {
@@ -1096,7 +1177,7 @@ describe("DoltgresWorkItemAdapter.artifacts (task.0028)", () => {
     await expect(
       adapter.artifacts.insert({ ...input, kind: "approval" as never })
     ).rejects.toThrow(/Unknown artifact kind/);
-    await expect(adapter.artifacts.insert({ ...input, author: "" })).rejects.toThrow();
+    await expect(adapter.artifacts.insert({ ...input, attribution: { actor: "" } })).rejects.toThrow();
     expect(branchCreated(queries)).toBe(false);
     expect(committed(queries)).toBe(false);
   });

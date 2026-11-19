@@ -157,7 +157,7 @@ describe("createWorkItemCapability", () => {
         get: vi.fn(),
       } as unknown as WorkItemQueryPort,
       workItemCommand: command as unknown as WorkItemCommandPort,
-      backlogWriter: { store, principalId: "system" },
+      backlogWriter: { store, attribution: () => ({ actor: "system" }) },
     });
     expect(
       (
@@ -176,7 +176,7 @@ describe("createWorkItemCapability", () => {
         reason: "test change",
         set: { rank: 2 },
       },
-      "system"
+      { actor: "system" }
     );
     const lost = cap.patch({
       id: "task.5001",
@@ -207,13 +207,13 @@ describe("createWorkItemCapability", () => {
     const cap = createWorkItemCapability({
       workItemQuery: { list: vi.fn(), get: vi.fn() } as unknown as WorkItemQueryPort,
       workItemCommand: { patch: vi.fn() } as unknown as WorkItemCommandPort,
-      backlogWriter: { store, principalId: "system" },
+      backlogWriter: { store, attribution: () => ({ actor: "system" }) },
     });
     const cites = [{ id: "change-history-design" }];
     await cap.patch({ id: "task.5001", reason: "scope follows the design", cites, set: { rank: 2 } });
     expect(store.patch).toHaveBeenLastCalledWith(
       { id: "task.5001", reason: "scope follows the design", cites, set: { rank: 2 } },
-      "system"
+      { actor: "system" }
     );
   });
 
@@ -258,7 +258,7 @@ describe("createWorkItemCapability", () => {
       backlogReader: {
         list: vi.fn().mockResolvedValue({ ...empty, items: [row] }),
       } as unknown as Pick<WorkItemQueryPort, "list">,
-      backlogWriter: { store, principalId: () => actor },
+      backlogWriter: { store, attribution: () => ({ actor }) },
     });
     expect(
       (await cap.patch({ reason: "test change", id: row.id, expectedRevision: 7, set: { scores } }))
@@ -266,13 +266,13 @@ describe("createWorkItemCapability", () => {
     ).toEqual(scores);
     expect(store.patch).toHaveBeenLastCalledWith(
       { id: row.id, expectedRevision: 7, reason: "test change", set: { scores } },
-      "authenticated-user-a"
+      { actor: "authenticated-user-a" }
     );
     actor = "scheduled-grant-user-b";
     await cap.patch({ reason: "test change", id: row.id, set: { scores } });
     expect(store.patch).toHaveBeenLastCalledWith(
       { id: row.id, reason: "test change", set: { scores } },
-      "scheduled-grant-user-b"
+      { actor: "scheduled-grant-user-b" }
     );
     const readback = (await cap.query({ ids: [row.id] }))[0];
     expect(readback?.scores).toEqual(scores);
@@ -286,7 +286,7 @@ describe("createWorkItemCapability", () => {
       workItemCommand: {} as WorkItemCommandPort,
       backlogWriter: {
         store,
-        principalId: () => {
+        attribution: () => {
           throw new Error("authenticated run actorUserId is required");
         },
       },
@@ -446,7 +446,7 @@ describe("recordArtifact (task.0122)", () => {
     const cap = createWorkItemCapability({
       ...ports,
       artifacts: {
-        principalId: () => "agent-principal",
+        attribution: () => ({ actor: "agent-principal" }),
         deps: () => ({
           items: { get: async () => ({ revision: 3 }) },
           artifacts: {
@@ -462,7 +462,7 @@ describe("recordArtifact (task.0122)", () => {
     });
     const result = await cap.recordArtifact?.({ id: "task.5001", body });
     expect(result?.status).toBe(201);
-    expect(stored).toEqual([expect.objectContaining({ itemId: "task.5001", kind: "triage", author: "agent-principal" })]);
+    expect(stored).toEqual([expect.objectContaining({ itemId: "task.5001", kind: "triage", attribution: { actor: "agent-principal" } })]);
     expect(result?.body).toMatchObject({ artifact: { id: "wia-1", kind: "triage" } });
   });
 
@@ -471,7 +471,7 @@ describe("recordArtifact (task.0122)", () => {
     const cap = createWorkItemCapability({
       ...ports,
       artifacts: {
-        principalId: () => "agent-principal",
+        attribution: () => ({ actor: "agent-principal" }),
         log,
         deps: () => ({ items: { get: async () => null }, artifacts: {} }) as never,
       },
@@ -490,7 +490,7 @@ describe("recordArtifact (task.0122)", () => {
   it("answers 503 and writes nothing when this node serves no artifacts", async () => {
     const cap = createWorkItemCapability({
       ...ports,
-      artifacts: { principalId: () => "agent-principal", deps: () => undefined },
+      artifacts: { attribution: () => ({ actor: "agent-principal" }), deps: () => undefined },
     });
     const result = await cap.recordArtifact?.({ id: "task.5001", body });
     expect(result).toMatchObject({ status: 503, body: { errorCode: "artifacts_unavailable" } });
@@ -500,7 +500,7 @@ describe("recordArtifact (task.0122)", () => {
     const cap = createWorkItemCapability({
       ...ports,
       artifacts: {
-        principalId: () => {
+        attribution: () => {
           throw new Error("a run subject or agent principal is required");
         },
         deps: () => ({ items: { get: async () => ({ revision: 3 }) }, artifacts: {} }) as never,

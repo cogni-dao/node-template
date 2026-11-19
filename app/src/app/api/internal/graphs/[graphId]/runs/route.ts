@@ -625,6 +625,23 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         accountService,
       });
 
+    // The run record names the run's kind (user_immediate, system_scheduled, system_webhook); every run write records it (task.0133).
+    // An unreadable ledger never fails the run: its writes simply carry no `Run:` line.
+    let ledgerRun: Awaited<
+      ReturnType<typeof container.graphRunRepository.getRunByRunId>
+    > = null;
+    try {
+      ledgerRun = await container.graphRunRepository.getRunByRunId(
+        SYSTEM_ACTOR,
+        runId
+      );
+    } catch (err) {
+      log.warn(
+        { runId, err },
+        "Run record unreadable; the run's writes carry no run kind"
+      );
+    }
+
     const executionController = new AbortController();
     const executionTimer = setTimeout(
       () => executionController.abort(new AiExecutionError("timeout")),
@@ -655,6 +672,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       },
       resolver: container.providerResolver,
       actorId: actorUserId,
+      runKind: ledgerRun?.runKind ?? undefined,
       ...(container.connectionBroker
         ? { broker: container.connectionBroker }
         : {}),
@@ -675,9 +693,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // Forward responseFormat if provided (enables structuredOutput in GraphRunResult).
     const responseFormat = resolveResponseFormat(input);
 
-    const ledgerRun = executionGrantId
-      ? await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, runId)
-      : null;
     const unattended = ledgerRun?.runKind === "system_scheduled" &&
       ledgerRun.triggerSource === "temporal_schedule" &&
       ledgerRun.graphId === graphId && ledgerRun.triggerRef !== null &&

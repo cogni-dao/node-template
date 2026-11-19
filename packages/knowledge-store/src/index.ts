@@ -337,3 +337,9 @@ export {
 export { toKnowledgeRow } from "./domain/schemas.js";
 
 export * from "./contracts.js";
+export {
+  attributedCommitMessage,
+  CommitTextInvalidError,
+  WRITE_RUN_KINDS,
+  WriteAttributionInvalidError,
+} from "./attribution.js";

@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 
+import { WRITE_RUN_KINDS } from "./attribution.js";
 import { CHANGE_REASON_REQUIRED_MESSAGE, checkChangeReason } from "./history.js";
 
 /**
@@ -42,6 +43,10 @@ export const HistoryEntrySchema = z.object({
   commit: z.string(),
   at: z.string(),
   actor: z.string().nullable(),
+  /** The node run's subject (`Requested-by:`); absent for a write no run made. */
+  requestedBy: z.string().optional(),
+  /** The run that wrote it (`Run:`); absent for a direct write. */
+  run: z.object({ id: z.string(), kind: z.enum(WRITE_RUN_KINDS) }).optional(),
   reason: z.string().nullable(),
   cites: z.array(
     z.object({
@@ -84,7 +89,7 @@ export const workItemsHistoryOperation = {
   id: "work.items.history.v1",
   summary: "Read a work item's history",
   description:
-    "Returns the item's versions, newest first, each with its change reason, the atoms it cited (pinned to commits), actor and changed fields. The reason and cites are the PATCH `reason` and `cites`, stored in Dolt history. With `view=refs`: one page of 20 versions without `diff` and `nextCursor`; send it back as `cursor` for older versions.",
+    "Returns the item's versions, newest first, each with its change reason, the atoms it cited (pinned to commits), actor, the requester and run when a node run wrote it, and changed fields. The reason and cites are the PATCH `reason` and `cites`, stored in Dolt history. With `view=refs`: one page of 20 versions without `diff` and `nextCursor`; send it back as `cursor` for older versions.",
   input: z.object({ id: z.string(), view: z.literal("refs").optional(), cursor: z.string().optional() }),
   output: z.union([HistoryOutputSchema, HistoryRefsPageSchema]),
 } as const;

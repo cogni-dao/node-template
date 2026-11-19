@@ -86,7 +86,13 @@ export {
   type RunPayerDeps,
   selectRunPayer,
 } from "./payer";
-export { type PrincipalKind, principalKindOf, writeExternalPrincipal } from "./principals";
+export {
+  classifyPrincipal,
+  type PrincipalClass,
+  type PrincipalKind,
+  principalKindOf,
+  writeExternalPrincipal,
+} from "./principals";
 export {
   AgentRolesError,
   type AskOutcome,

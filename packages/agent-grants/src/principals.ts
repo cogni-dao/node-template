@@ -27,3 +27,27 @@ export async function principalKindOf(sql: SqlTag, userId: string): Promise<Prin
   if (rows.length === 0) return "human";
   return rows[0]?.kind === "org" ? "org" : "agent";
 }
+
+/** What an actor recorded on a write is: this node's AI, an outside AI, a signed-in person, the node's own system principal, or unknown. */
+export type PrincipalClass = "internal" | "external" | "human" | "system" | "unclassified";
+
+/**
+ * The one classifier of a write's actor (hub activity-attribution, task.0133). Kind is never stored on a write; it is read here.
+ * `system` is a user id the host names as one of the node's own system principals (`cogni_system`, and the DAO approver principal
+ * where one is seeded). Otherwise the `agent_principals` row decides internal or external (an org row is `unclassified`); a user with no
+ * principal row is `human` only when a `users` row exists; an id with neither is `unclassified`.
+ */
+export async function classifyPrincipal(
+  sql: SqlTag,
+  userId: string,
+  systemUserIds: readonly string[]
+): Promise<PrincipalClass> {
+  if (systemUserIds.includes(userId)) return "system";
+  const principals = await sql`SELECT kind FROM agent_principals WHERE user_id = ${userId} LIMIT 1`;
+  const kind = (principals[0] as { kind?: unknown } | undefined)?.kind;
+  if (kind === "internal" || kind === "external") return kind;
+  // Any other principal row (an org) is not an AI, a person or the node itself: it never acts, so it is not classified.
+  if (kind !== undefined) return "unclassified";
+  const users = await sql`SELECT 1 AS present FROM users WHERE id = ${userId} LIMIT 1`;
+  return users.length > 0 ? "human" : "unclassified";
+}

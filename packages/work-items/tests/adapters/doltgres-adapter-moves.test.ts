@@ -153,7 +153,7 @@ const patch = (
   adapter: DoltgresWorkItemAdapter,
   set: Record<string, unknown>,
   reason = "this moves the metric"
-) => adapter.patch({ id: toWorkItemId(ID), reason, set } as never, PRINCIPAL);
+) => adapter.patch({ id: toWorkItemId(ID), reason, set } as never, { actor: PRINCIPAL });
 const setMoves = (adapter: DoltgresWorkItemAdapter, moves: unknown) =>
   patch(adapter, { moves });
 
@@ -438,7 +438,7 @@ describe("DoltgresWorkItemAdapter.patch — moves (story.0033)", () => {
     const create = (adapter: DoltgresWorkItemAdapter, moves?: unknown) =>
       adapter.create(
         { type: "task", title: "filed with a metric", ...(moves !== undefined && { moves }) } as never,
-        PRINCIPAL
+        { actor: PRINCIPAL }
       );
     const insert = (queries: string[]) =>
       queries.find((q) => q.startsWith("INSERT INTO work_items"));

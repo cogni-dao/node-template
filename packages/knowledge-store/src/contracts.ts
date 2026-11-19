@@ -12,6 +12,10 @@
 
 import { z } from "zod";
 
+import type { WriteAttribution } from "./attribution.js";
+
+export type { WriteAttribution, WriteRunKind } from "./attribution.js";
+
 export const KnowledgeRowSchema = z.object({
 	id: z.string(),
 	domain: z.string(),
@@ -252,19 +256,39 @@ export interface GetChainResult {
  */
 export interface EdoCapability {
   /** File a hypothesis row with evaluate_at + N evidence_for edges + commit. */
-  hypothesize(params: HypothesizeParams): Promise<KnowledgeEntry>;
+  hypothesize(
+    params: HypothesizeParams,
+    attribution: WriteAttribution
+  ): Promise<KnowledgeEntry>;
   /** File a decision row + 1 derives_from edge + commit. */
-  decide(params: DecideParams): Promise<KnowledgeEntry>;
+  decide(
+    params: DecideParams,
+    attribution: WriteAttribution
+  ): Promise<KnowledgeEntry>;
   /**
    * File an outcome row + 1 validates/invalidates edge + recompute confidence +
    * commit. Idempotent on already-resolved hypotheses.
    */
-  recordOutcome(params: RecordOutcomeParams): Promise<RecordOutcomeResult>;
+  recordOutcome(
+    params: RecordOutcomeParams,
+    attribution: WriteAttribution
+  ): Promise<RecordOutcomeResult>;
   /**
    * Walk the citation DAG from `rootId`. Read-only; surfaces the EDO chain
    * (hypothesis → decision → outcome + evidence/validates/invalidates edges)
    * for human and agent rendering. See `https://node-template.cognidao.org/knowledge/edo-loop-contract`.
    */
+  getChain(params: GetChainParams): Promise<GetChainResult>;
+}
+
+/**
+ * The capability as a tool sees it: the host has already bound the run's attribution to each write (task.0133),
+ * so a tool never names or builds one.
+ */
+export interface EdoToolCapability {
+  hypothesize(params: HypothesizeParams): Promise<KnowledgeEntry>;
+  decide(params: DecideParams): Promise<KnowledgeEntry>;
+  recordOutcome(params: RecordOutcomeParams): Promise<RecordOutcomeResult>;
   getChain(params: GetChainParams): Promise<GetChainResult>;
 }
 
@@ -277,6 +301,14 @@ export const HistoryEntrySchema = z.object({
   commit: z.string(),
   at: z.string(),
   actor: z.string().nullable(),
+  /** Same optional fields as the work-items shape (ONE_HISTORY_SHAPE); a node run's requester and run. */
+  requestedBy: z.string().optional(),
+  run: z
+    .object({
+      id: z.string(),
+      kind: z.enum(["user_immediate", "system_scheduled", "system_webhook"]),
+    })
+    .optional(),
   reason: z.string().nullable(),
   /** Always `[]` on knowledge: the shape is the work-items one so both planes serve one contract (task.0086). */
   cites: z.array(

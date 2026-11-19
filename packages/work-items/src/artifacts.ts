@@ -12,7 +12,7 @@
  *   - REFS_NEVER_CARRY_BODY (story.0058): a ref holds no `rows`, `body` or `author`; `view=refs` pages 20 by `seq`, and
  *     without `view` the list answers as before.
  *   - ONE_ARTIFACT_OF_THIS_ITEM: `readWorkItemArtifact` returns an artifact only through its own item; another item's id is 404.
- *   - AUTHOR_IS_STAMPED: the caller never names the author; the handler stamps the authenticated principal.
+ *   - AUTHOR_IS_STAMPED: the caller never names the author; the handler stamps the host-built attribution's actor, and a node run's id and kind (task.0133).
  *   - AUTHOR_IS_AUDIT_ONLY: the stored `author` is a record for audit. No server check compares it with the subject's author (an
  *     inbox's principal, who set `pr`, who moved a story); fresh-context review is a rule in the review skills, and the move
  *     predicate never reads authorship.
@@ -31,6 +31,7 @@
 
 import { z } from "zod";
 
+import { type WriteAttribution, WRITE_RUN_KINDS } from "./attribution.js";
 import { CITE_COMMIT_PATTERN, CITE_CONTRIBUTION_PATTERN } from "./cites.js";
 import { toWorkItemId, type WorkItemId } from "./types.js";
 import { workItemWriteErrorResponse } from "./write-errors.js";
@@ -296,7 +297,11 @@ export const WorkItemArtifactSchema = z.object({
   /** The full review, when no PR comment holds it. The list and the write answer carry it; the item read does not. */
   body: z.string().optional(),
   url: z.string().optional(),
+  /** The actor (hub activity-attribution): who wrote the verdict. It credits nothing. */
   author: z.string(),
+  /** The node run that wrote it, when one did; absent for a direct write. */
+  runId: z.string().optional(),
+  runKind: z.enum(WRITE_RUN_KINDS).optional(),
   createdAt: z.string(),
 });
 export type WorkItemArtifact = z.infer<typeof WorkItemArtifactSchema>;
@@ -352,7 +357,15 @@ export type WorkItemArtifactRead = z.infer<typeof WorkItemArtifactReadSchema>;
 
 /** A ref of one stored artifact (`passGrade` derived). */
 export function toArtifactRef(artifact: WorkItemArtifact): WorkItemArtifactRef {
-  const { rows: _rows, body: _body, author: _author, itemId: _itemId, ...ref } = withPassGrade(artifact);
+  const {
+    rows: _rows,
+    body: _body,
+    author: _author,
+    itemId: _itemId,
+    runId: _runId,
+    runKind: _runKind,
+    ...ref
+  } = withPassGrade(artifact);
   return ref;
 }
 
@@ -373,7 +386,10 @@ export function scorecardMarkdown(rows: readonly ScorecardRow[]): string {
   return lines.join("\n");
 }
 
-/** The row a store inserts. `author` is the stamped principal; the store stamps `itemRevision` inside its writer lock. */
+/**
+ * The row a store inserts. `attribution` is host-built: its actor is stamped as the `author`, its run (when a node run wrote it)
+ * as `run_id` and `run_kind`, and its requester and run land on the commit. The store stamps `itemRevision` inside its writer lock.
+ */
 export interface NewWorkItemArtifact {
   readonly itemId: string;
   readonly kind: ArtifactKind;
@@ -383,7 +399,7 @@ export interface NewWorkItemArtifact {
   readonly note?: string | undefined;
   readonly body?: string | undefined;
   readonly url?: string | undefined;
-  readonly author: string;
+  readonly attribution: WriteAttribution;
 }
 
 /** Insert-only storage. There is no update and no delete. */
@@ -449,7 +465,9 @@ export type ArtifactErrorCode =
   | "invalid_input"
   | "not_found"
   | "artifacts_unavailable"
-  | "work_item_write_outcome_unknown";
+  | "work_item_write_outcome_unknown"
+  /** The host could not build the write's attribution (a run with no acting principal): refused before any write (task.0133). Logged, never a response body. */
+  | "attribution_denied";
 
 /** One terminal log record per call: counts and codes, never a body, a row or a url. */
 export interface ArtifactLog {
@@ -457,7 +475,7 @@ export interface ArtifactLog {
     | "work.items.artifact_recorded"
     | "work.items.artifact_refused"
     | "work.items.artifacts_read";
-  readonly status: 200 | 201 | 400 | 404 | 409 | 503;
+  readonly status: 200 | 201 | 400 | 403 | 404 | 409 | 503;
   readonly outcome: "success" | "refused" | "error";
   readonly workItemId: string;
   readonly kind?: ArtifactKind;
@@ -610,13 +628,13 @@ export function isOwnOrigin(origin: string, own: string | undefined): boolean {
 }
 
 /**
- * Records one artifact on item `itemId` as `principalId` (stamped as the audit `author`). The caller's body is parsed and the
+ * Records one artifact on item `itemId` as `attribution.actor` (stamped as the audit `author`). The caller's body is parsed and the
  * subject must belong to the item (a build subject to this hub's own origin). Recording never changes the item's status.
  */
 export async function recordWorkItemArtifact(
   deps: WorkItemArtifactDeps,
   itemId: string,
-  principalId: string,
+  attribution: WriteAttribution,
   body: unknown
 ): Promise<ArtifactResult> {
   const parsed = WorkItemArtifactInputSchema.safeParse(body);
@@ -670,7 +688,7 @@ export async function recordWorkItemArtifact(
         ...(input.note !== undefined ? { note: input.note } : {}),
         ...(input.body !== undefined ? { body: input.body } : {}),
         ...(input.url !== undefined ? { url: input.url } : {}),
-        author: principalId,
+        attribution,
       })
     );
     return {

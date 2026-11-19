@@ -14,6 +14,7 @@
  */
 
 import type { WorkItemArtifactStore } from "./artifacts.js";
+import type { WriteAttribution } from "./attribution.js";
 import type { CiteRef } from "./cites.js";
 import type { WorkItemSummary } from "./contracts.js";
 import type { HistoryEntry, HistoryPage } from "./history.js";
@@ -98,9 +99,10 @@ export interface WorkItemsPort {
     perColumn: number,
     options?: { readonly signal?: AbortSignal },
   ): Promise<WorkBoardColumnPages>;
-  create(input: WorkItemsCreateInput, principalId: string): Promise<WorkItem>;
-  patch(input: WorkItemsPatchInput, principalId: string): Promise<WorkItem>;
-  delete(id: WorkItemId, principalId: string): Promise<boolean>;
+  /** Every write takes the host-built attribution: the actor, and a node run's requester and run (task.0133). */
+  create(input: WorkItemsCreateInput, attribution: WriteAttribution): Promise<WorkItem>;
+  patch(input: WorkItemsPatchInput, attribution: WriteAttribution): Promise<WorkItem>;
+  delete(id: WorkItemId, attribution: WriteAttribution): Promise<boolean>;
   /** Versions of one item, newest first, with their change reasons (task.0052). */
   history?(id: WorkItemId): Promise<HistoryEntry[]>;
   /** One page of versions, newest first, older than `cursor` (story.0058); a foreign cursor throws `HistoryCursorUnknownError`. */

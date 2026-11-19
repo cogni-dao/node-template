@@ -13,6 +13,7 @@
  * @public
  */
 
+import type { WriteAttribution } from "../attribution.js";
 import type { CitationType, Knowledge } from "../domain/schemas.js";
 
 /**
@@ -68,6 +69,8 @@ export interface ResolutionInput {
   sourceRef?: string | null;
   /** Optional node identifier ("operator", "poly-cron", etc.). */
   sourceNode?: string | null;
+  /** Who resolved it, host-built (task.0133): the commit's first line names the actor. */
+  attribution: WriteAttribution;
 }
 
 /**

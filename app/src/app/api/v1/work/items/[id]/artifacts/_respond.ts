@@ -11,9 +11,10 @@
  * @internal
  */
 
-import type { ArtifactResult } from "@cogni/work-items";
+import type { ArtifactResult, WriteAttribution } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
+import { attributionFields } from "@/bootstrap/write-attribution";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 const EVENT_BY_LOG = {
@@ -30,13 +31,15 @@ export function respond(
     readonly routeId: string;
   },
   startedAt: number,
-  { status, body, log }: ArtifactResult
+  { status, body, log }: ArtifactResult,
+  attribution?: WriteAttribution
 ): NextResponse {
   const { event, errorName, ...fields } = log;
   logEvent(ctx.log, EVENT_BY_LOG[event], {
     reqId: ctx.reqId,
     routeId: ctx.routeId,
     ...fields,
+    ...(attribution ? attributionFields(attribution) : {}),
     ...(errorName !== undefined ? { errorName } : {}),
     durationMs: Date.now() - startedAt,
   });
