@@ -15,6 +15,7 @@ export default defineConfig({
 		"src/schema.ts",
 		"src/sources.ts",
 		"src/no-inline-history.ts",
+		"src/usage.ts",
 	],
 	format: ["esm"],
 	splitting: true,

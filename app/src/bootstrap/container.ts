@@ -13,6 +13,11 @@
  */
 
 import type { ToolSourcePort } from "@cogni/ai-core";
+import {
+	CitePairRecorder,
+	KnowledgeReadCounter as PostgresKnowledgeReadCounter,
+	type UsageLogEvent,
+} from "@cogni-dao/metrics/usage";
 import type {
 	EdoCapability,
 	KnowledgeCapability,
@@ -128,8 +133,6 @@ import {
 import { mcpServersToCodexConfig } from "@/adapters/server/ai/codex/codex-mcp-config";
 import { findExecutionScope } from "@/adapters/server/ai/execution-scope";
 import { withReadCounting } from "@/adapters/server/knowledge-usage/counting-knowledge-capability";
-import { PostgresKnowledgeReadCounter } from "@/adapters/server/knowledge-usage/knowledge-read-counter.adapter";
-import { PostgresCitePairRecorder } from "@/adapters/server/knowledge-usage/cite-pair-recorder.adapter";
 import {
 	CodexModelProvider,
 	OpenAiCompatibleModelProvider,
@@ -240,7 +243,7 @@ import {
 	getStewardWalletConfig,
 } from "@/shared/config";
 import { serverEnv } from "@/shared/env/server-env";
-import { makeLogger } from "@/shared/observability";
+import { logEvent, makeLogger } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
 
@@ -719,10 +722,10 @@ function createContainer(): Container {
 
 	// Service DB (BYPASSRLS) for worker adapters
 	const serviceDb = getServiceDb();
-	const knowledgeReadCounter = new PostgresKnowledgeReadCounter(
-		serviceDb,
-		log.child({ component: "KnowledgeReadCounter" }),
-	);
+	// story.0061: the shared usage writers log through this node's registered events.
+	const usageLog = log.child({ component: "KnowledgeUsage" });
+	const logUsage = ({ event, ...fields }: UsageLogEvent) => logEvent(usageLog, event, fields);
+	const knowledgeReadCounter = new PostgresKnowledgeReadCounter(serviceDb.$client, logUsage);
 	const flushReadCounts = () => {
 		void knowledgeReadCounter.flush();
 	};
@@ -920,10 +923,7 @@ function createContainer(): Container {
 		// story.0061: a successful patch also records the (atom, item) pairs it cites; the route and the agent tool share
 		// this patch, and the record never fails or delays it.
 		{
-			const citePairs = new PostgresCitePairRecorder(
-				serviceDb,
-				log.child({ component: "CitePairRecorder" }),
-			);
+			const citePairs = new CitePairRecorder(serviceDb.$client, logUsage);
 			const leased = doltgresWorkItems;
 			doltgresWorkItems = {
 				...leased,

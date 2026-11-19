@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/metrics",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -49,6 +49,11 @@
       "types": "./dist/no-inline-history.d.ts",
       "import": "./dist/no-inline-history.js",
       "default": "./dist/no-inline-history.js"
+    },
+    "./usage": {
+      "types": "./dist/usage.d.ts",
+      "import": "./dist/usage.js",
+      "default": "./dist/usage.js"
     }
   },
   "types": "./dist/index.d.ts",
