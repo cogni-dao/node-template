@@ -48,6 +48,8 @@ describe("readWorkItemHistory", () => {
       outcome: "success",
       versionCount: 2,
       reasonCount: 1,
+      // The store sets no kind; the host's classifier adds it (task.0133), so a bare store counts none.
+      actorKinds: {},
     });
   });
 

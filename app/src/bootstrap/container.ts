@@ -188,6 +188,7 @@ import {
 } from "@/bootstrap/node-admin-gate";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 import { bindEdoToolCapability } from "@/bootstrap/write-attribution";
+import { withHistoryActorKinds } from "@/bootstrap/history-actor-kind";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
 	startGovernanceSyncOnBoot,
@@ -895,6 +896,17 @@ function createContainer(): Container {
 				...(env.APP_BASE_URL ? { hubOrigin: new URL(env.APP_BASE_URL).origin } : {}),
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log }),
+		);
+		// task.0133: every history read names each version's actor kind through the one classifier; `agentAuthority`
+		// is assigned below and read only at call time.
+		doltgresWorkItems = withHistoryActorKinds(
+			doltgresWorkItems,
+			(userId) => agentAuthority.principalClass(userId),
+			(error) =>
+				log.warn(
+					{ event: EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KIND_UNAVAILABLE, errorName: (error as Error | undefined)?.name },
+					EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KIND_UNAVAILABLE,
+				),
 		);
 		// task.0028: artifacts go through the work-items writer path. The artifact records its author for audit; no
 		// server check compares it with the subject's author.

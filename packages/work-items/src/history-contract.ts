@@ -6,7 +6,8 @@
  * Purpose: Zod wire schemas for change reasons and one work item's row history (task.0052, story.0023).
  * Scope: Schemas and types only. No I/O, no store access.
  * Invariants:
- *   - ONE_HISTORY_SHAPE: `@cogni-dao/knowledge-store/contracts` declares the same item shape.
+ *   - ONE_HISTORY_SHAPE: `@cogni-dao/knowledge-store/contracts` declares the same item shape. `actorKind` is the one read-time field on top of it: the host adds it to work-item history only, and the knowledge copy does not declare it.
+ *   - KIND_IS_NEVER_STORED (task.0133, hub activity-attribution): `actorKind` is computed by the host's one classifier when history is read; no commit, row or artifact records it.
  *   - REASON_REQUIRED: `ChangeReasonSchema` applies the `checkChangeReason` rule the adapter applies (line breaks become spaces, then 1-240 chars, at most 25 words, no NUL); a missing reason says what to send.
  *   - NOTE_NOT_BODY: the reason comes from Dolt history, never from the row.
  *   - BOUNDED_READ: newest first, at most 50 versions; values over 4 KB are truncated and flagged.
@@ -18,7 +19,7 @@
 import { z } from "zod";
 
 import { WRITE_RUN_KINDS } from "./attribution.js";
-import { CHANGE_REASON_REQUIRED_MESSAGE, checkChangeReason } from "./history.js";
+import { CHANGE_REASON_REQUIRED_MESSAGE, checkChangeReason, HISTORY_ACTOR_KINDS } from "./history.js";
 
 /**
  * The change reason every work-item patch carries (task.0086). The adapter turns
@@ -43,6 +44,8 @@ export const HistoryEntrySchema = z.object({
   commit: z.string(),
   at: z.string(),
   actor: z.string().nullable(),
+  /** The actor's kind, read from its principal and user rows when the history is read; absent when `actor` is null or the classifier could not answer. */
+  actorKind: z.enum(HISTORY_ACTOR_KINDS).optional(),
   /** The node run's subject (`Requested-by:`); absent for a write no run made. */
   requestedBy: z.string().optional(),
   /** The run that wrote it (`Run:`); absent for a direct write. */
@@ -89,7 +92,7 @@ export const workItemsHistoryOperation = {
   id: "work.items.history.v1",
   summary: "Read a work item's history",
   description:
-    "Returns the item's versions, newest first, each with its change reason, the atoms it cited (pinned to commits), actor, the requester and run when a node run wrote it, and changed fields. The reason and cites are the PATCH `reason` and `cites`, stored in Dolt history. With `view=refs`: one page of 20 versions without `diff` and `nextCursor`; send it back as `cursor` for older versions.",
+    "Returns the item's versions, newest first, each with its change reason, the atoms it cited (pinned to commits), actor and its kind (internal, external, human, system or unclassified; absent when the actor is unknown), the requester and run when a node run wrote it, and changed fields. The reason and cites are the PATCH `reason` and `cites`, stored in Dolt history. With `view=refs`: one page of 20 versions without `diff` and `nextCursor`; send it back as `cursor` for older versions.",
   input: z.object({ id: z.string(), view: z.literal("refs").optional(), cursor: z.string().optional() }),
   output: z.union([HistoryOutputSchema, HistoryRefsPageSchema]),
 } as const;

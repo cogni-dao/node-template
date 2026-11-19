@@ -49,6 +49,15 @@ export function toHistoryRef(entry: HistoryEntry): HistoryRef {
   return { ...ref, cites: [...ref.cites], changed: [...ref.changed] };
 }
 
+/** Counts of versions by their actor's kind; a version with no kind counts under none. Counts only, no ids. */
+function countActorKinds(entries: readonly { readonly actorKind?: string | undefined }[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const entry of entries) {
+    if (entry.actorKind !== undefined) counts[entry.actorKind] = (counts[entry.actorKind] ?? 0) + 1;
+  }
+  return counts;
+}
+
 /** The first refs page of an item's history (or the page older than `cursor`). */
 export async function readHistoryRefsPage(
   store: Required<Pick<WorkItemHistoryStore, "historyPage">>,
@@ -65,6 +74,8 @@ export interface HistoryReadLog {
   readonly outcome: "success" | "refused" | "error";
   readonly versionCount?: number;
   readonly reasonCount?: number;
+  /** Counts of the returned versions by actor kind (task.0133); counts only, never ids. */
+  readonly actorKinds?: Readonly<Record<string, number>>;
   readonly errorCode?: "not_found" | "history_unavailable" | "invalid_input";
   /** Set on a failed read so the route may warn with the error class. */
   readonly errorName?: string;
@@ -151,6 +162,7 @@ export async function readWorkItemHistory(
           outcome: "success",
           versionCount: page.refs.length,
           reasonCount: page.refs.filter((v) => v.reason !== null).length,
+          actorKinds: countActorKinds(page.refs),
         },
       };
     }
@@ -165,6 +177,7 @@ export async function readWorkItemHistory(
         outcome: "success",
         versionCount: items.length,
         reasonCount: items.filter((v) => v.reason !== null).length,
+        actorKinds: countActorKinds(items),
       },
     };
   } catch (error) {
