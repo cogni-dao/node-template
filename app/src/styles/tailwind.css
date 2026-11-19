@@ -6,6 +6,7 @@
  * Node identity: the brand hue, in both themes. This file is node_local and fork-sync never
  * overwrites it. Everything else (neutrals, status, chrome, mappings) comes from system.css.
  * Change the hue (217 here) in both blocks; keep each pair's contrast floor per ui-token-system.
+ * Every variable set in :root must also be set in .dark, or the light value leaks into dark.
  */
 @layer base {
   :root {
@@ -33,5 +34,7 @@
     --sidebar-primary: 217 91% 65%;
     --sidebar-primary-foreground: 240 10% 3.9%;
     --sidebar-ring: 217 91% 65%;
+    --sidebar-accent: 225 6% 13.7%;
+    --sidebar-accent-foreground: 220 9% 93.5%;
   }
 }
