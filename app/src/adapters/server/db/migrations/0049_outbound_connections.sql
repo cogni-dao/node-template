@@ -10,8 +10,9 @@ CREATE TABLE "outbound_connections" (
 );
 --> statement-breakpoint
 ALTER TABLE "outbound_connections" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
-CREATE UNIQUE INDEX "credit_ledger_connection_allowance_ref_unique" ON "credit_ledger" USING btree ("reference") WHERE "credit_ledger"."reason" = 'connection_allowance';--> statement-breakpoint
+CREATE UNIQUE INDEX "credit_ledger_connection_allowance_ref_unique" ON "credit_ledger" USING btree ("reference") WHERE "credit_ledger"."reason" = 'connection_allowance';
+--> statement-breakpoint
 
--- Hand-written below: FORCE RLS is outside Drizzle's DDL scope (same as 0039 / 0041 / 0046 / 0047).
+-- Hand-written below: FORCE RLS is outside Drizzle's DDL scope (same as 0039 / 0041 / 0046 / 0048).
 -- outbound_connections has NO policy: ENABLE + FORCE = deny-all for the app role. Only the BYPASSRLS service role reads or writes it.
 ALTER TABLE "outbound_connections" FORCE ROW LEVEL SECURITY;

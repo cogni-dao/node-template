@@ -128,6 +128,9 @@ import {
 	ProviderResolver,
 } from "@/adapters/server/ai/catalog";
 import { mcpServersToCodexConfig } from "@/adapters/server/ai/codex/codex-mcp-config";
+import { findExecutionScope } from "@/adapters/server/ai/execution-scope";
+import { withReadCounting } from "@/adapters/server/knowledge-usage/counting-knowledge-capability";
+import { PostgresKnowledgeReadCounter } from "@/adapters/server/knowledge-usage/knowledge-read-counter.adapter";
 import {
 	CodexModelProvider,
 	OpenAiCompatibleModelProvider,
@@ -215,6 +218,7 @@ import type {
 	ThreadPersistencePort,
 	TreasuryReadPort,
 	TreasurySettlementPort,
+	KnowledgeReadCounter,
 } from "@/ports";
 import type {
 	ExecutionGrantUserPort,
@@ -317,6 +321,8 @@ export interface Container {
 	nodeAdminPort: NodeAdminPort;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
 	knowledgeStorePort: KnowledgeStorePort | undefined;
+	/** Write-time daily counters of agent atom reads (story.0061): batched, never blocks or fails the caller. */
+	knowledgeReadCounter: KnowledgeReadCounter;
 	/** EDO hypothesis-loop capability for the langgraph tool bindings AND the bearer-auth REST routes under /api/v1/edo. Always present (stubs throw when DOLTGRES_URL is unset). */
 	edoCapability: EdoCapability;
 	/** Thread persistence scoped to a user (RLS enforced) */
@@ -715,6 +721,15 @@ function createContainer(): Container {
 
 	// Service DB (BYPASSRLS) for worker adapters
 	const serviceDb = getServiceDb();
+	const knowledgeReadCounter = new PostgresKnowledgeReadCounter(
+		serviceDb,
+		log.child({ component: "KnowledgeReadCounter" }),
+	);
+	const flushReadCounts = () => {
+		void knowledgeReadCounter.flush();
+	};
+	process.on("SIGTERM", flushReadCounts);
+	process.on("SIGINT", flushReadCounts);
 	const paymentAttemptServiceRepository =
 		new ServiceDrizzlePaymentAttemptRepository(serviceDb);
 
@@ -1011,6 +1026,12 @@ function createContainer(): Container {
 					}),
 				);
 			};
+
+		// After the listActiveGoals reassignment, so the spread keeps it (story.0061).
+		knowledgeCapability = withReadCounting(knowledgeCapability, knowledgeReadCounter, () => {
+			const scope = findExecutionScope();
+			return scope ? { principalId: scope.principalId } : undefined;
+		});
 
 		const edoResolver = new DoltgresEdoResolverAdapter({
 			sql: doltClient,
@@ -1359,6 +1380,7 @@ function createContainer(): Container {
 		serviceConnections,
 		nodeAdminPort: createNodeAdminPort(agentAuthority, { connections, outbound: serviceConnections }),
 		knowledgeStorePort,
+		knowledgeReadCounter,
 		goalMetrics,
 		goalProgress,
 		edoCapability,

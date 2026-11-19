@@ -1,5 +1,5 @@
 {
-  "id": "687f8409-fe0f-449f-bcdc-8203ac79c2f1",
+  "id": "ff8d1c9f-acb7-4344-a1a4-31e369f73352",
   "prevId": "91560568-fb3a-4554-aa76-3f2a281bec96",
   "version": "7",
   "dialect": "postgresql",
@@ -564,147 +564,6 @@
       },
       "isRLSEnabled": true
     },
-    "public.org_connections": {
-      "name": "org_connections",
-      "schema": "",
-      "columns": {
-        "org_user_id": {
-          "name": "org_user_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "billing_account_id": {
-          "name": "billing_account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "issuer": {
-          "name": "issuer",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "suspended": {
-          "name": "suspended",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "cap": {
-          "name": "cap",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "seq": {
-          "name": "seq",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "org_connections_issuer_unique": {
-          "name": "org_connections_issuer_unique",
-          "columns": [
-            {
-              "expression": "issuer",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_connections_billing_account_unique": {
-          "name": "org_connections_billing_account_unique",
-          "columns": [
-            {
-              "expression": "billing_account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "org_connections_org_user_id_users_id_fk": {
-          "name": "org_connections_org_user_id_users_id_fk",
-          "tableFrom": "org_connections",
-          "tableTo": "users",
-          "columnsFrom": [
-            "org_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "org_connections_billing_account_id_billing_accounts_id_fk": {
-          "name": "org_connections_billing_account_id_billing_accounts_id_fk",
-          "tableFrom": "org_connections",
-          "tableTo": "billing_accounts",
-          "columnsFrom": [
-            "billing_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "org_connections_status_canonical": {
-          "name": "org_connections_status_canonical",
-          "value": "\"org_connections\".\"status\" IN ('connected','disconnected')"
-        },
-        "org_connections_cap_nonnegative": {
-          "name": "org_connections_cap_nonnegative",
-          "value": "\"org_connections\".\"cap\" >= 0"
-        },
-        "org_connections_seq_positive": {
-          "name": "org_connections_seq_positive",
-          "value": "\"org_connections\".\"seq\" >= 1"
-        }
-      },
-      "isRLSEnabled": true
-    },
     "public.payer_bindings": {
       "name": "payer_bindings",
       "schema": "",
@@ -860,47 +719,6 @@
           "value": "(\"payer_bindings\".\"approved_by\" IS NULL) = (\"payer_bindings\".\"approved_at\" IS NULL)"
         }
       },
-      "isRLSEnabled": true
-    },
-    "public.service_assertion_jtis": {
-      "name": "service_assertion_jtis",
-      "schema": "",
-      "columns": {
-        "jti": {
-          "name": "jti",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "service_assertion_jtis_expires_idx": {
-          "name": "service_assertion_jtis_expires_idx",
-          "columns": [
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
       "isRLSEnabled": true
     },
     "public.ai_threads": {
@@ -5434,6 +5252,79 @@
         "user_bindings_provider_check": {
           "name": "user_bindings_provider_check",
           "value": "\"user_bindings\".\"provider\" IN ('wallet', 'discord', 'github', 'google')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.knowledge_read_daily": {
+      "name": "knowledge_read_daily",
+      "schema": "",
+      "columns": {
+        "day": {
+          "name": "day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "atom_id": {
+          "name": "atom_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "principal_id": {
+          "name": "principal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "principal_class": {
+          "name": "principal_class",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ok_count": {
+          "name": "ok_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "fail_count": {
+          "name": "fail_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "knowledge_read_daily_day_atom_id_principal_id_principal_class_pk": {
+          "name": "knowledge_read_daily_day_atom_id_principal_id_principal_class_pk",
+          "columns": [
+            "day",
+            "atom_id",
+            "principal_id",
+            "principal_class"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "knowledge_read_daily_principal_class_check": {
+          "name": "knowledge_read_daily_principal_class_check",
+          "value": "\"knowledge_read_daily\".\"principal_class\" IN ('internal_run', 'external_agent')"
         }
       },
       "isRLSEnabled": true

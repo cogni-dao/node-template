@@ -1,6 +1,6 @@
 {
-  "id": "ce105fde-9b9f-45ab-94ba-13ffe247c879",
-  "prevId": "687f8409-fe0f-449f-bcdc-8203ac79c2f1",
+  "id": "b94cce61-7532-4de8-a8c8-86081ef8e88d",
+  "prevId": "ff8d1c9f-acb7-4344-a1a4-31e369f73352",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4294,22 +4294,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "credit_ledger_connection_allowance_ref_unique": {
-          "name": "credit_ledger_connection_allowance_ref_unique",
-          "columns": [
-            {
-              "expression": "reference",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"credit_ledger\".\"reason\" = 'connection_allowance'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -5454,33 +5438,47 @@
       },
       "isRLSEnabled": true
     },
-    "public.outbound_connections": {
-      "name": "outbound_connections",
+    "public.knowledge_read_daily": {
+      "name": "knowledge_read_daily",
       "schema": "",
       "columns": {
-        "target_origin": {
-          "name": "target_origin",
+        "day": {
+          "name": "day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "atom_id": {
+          "name": "atom_id",
           "type": "text",
-          "primaryKey": true,
+          "primaryKey": false,
           "notNull": true
         },
-        "status": {
-          "name": "status",
+        "principal_id": {
+          "name": "principal_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "cap": {
-          "name": "cap",
-          "type": "bigint",
+        "principal_class": {
+          "name": "principal_class",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "seq": {
-          "name": "seq",
-          "type": "bigint",
+        "ok_count": {
+          "name": "ok_count",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": 0
+        },
+        "fail_count": {
+          "name": "fail_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "updated_at": {
           "name": "updated_at",
@@ -5492,21 +5490,23 @@
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
+      "compositePrimaryKeys": {
+        "knowledge_read_daily_day_atom_id_principal_id_principal_class_pk": {
+          "name": "knowledge_read_daily_day_atom_id_principal_id_principal_class_pk",
+          "columns": [
+            "day",
+            "atom_id",
+            "principal_id",
+            "principal_class"
+          ]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "outbound_connections_status_canonical": {
-          "name": "outbound_connections_status_canonical",
-          "value": "\"outbound_connections\".\"status\" IN ('connected','disconnected')"
-        },
-        "outbound_connections_cap_nonnegative": {
-          "name": "outbound_connections_cap_nonnegative",
-          "value": "\"outbound_connections\".\"cap\" >= 0"
-        },
-        "outbound_connections_seq_nonnegative": {
-          "name": "outbound_connections_seq_nonnegative",
-          "value": "\"outbound_connections\".\"seq\" >= 0"
+        "knowledge_read_daily_principal_class_check": {
+          "name": "knowledge_read_daily_principal_class_check",
+          "value": "\"knowledge_read_daily\".\"principal_class\" IN ('internal_run', 'external_agent')"
         }
       },
       "isRLSEnabled": true

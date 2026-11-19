@@ -1,6 +1,6 @@
 {
-  "id": "85ac9cd1-ec2b-4e9d-83db-988b9c5d7c59",
-  "prevId": "ce105fde-9b9f-45ab-94ba-13ffe247c879",
+  "id": "f5f3b05d-7374-4984-87cb-fa21718b476b",
+  "prevId": "b94cce61-7532-4de8-a8c8-86081ef8e88d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4044,27 +4044,6 @@
           "method": "btree",
           "with": {}
         },
-        "charge_receipts_account_charged_idx": {
-          "name": "charge_receipts_account_charged_idx",
-          "columns": [
-            {
-              "expression": "billing_account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "charged_credits",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "charge_receipts_pagination_idx": {
           "name": "charge_receipts_pagination_idx",
           "columns": [
@@ -5528,6 +5507,79 @@
         "outbound_connections_seq_nonnegative": {
           "name": "outbound_connections_seq_nonnegative",
           "value": "\"outbound_connections\".\"seq\" >= 0"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.knowledge_read_daily": {
+      "name": "knowledge_read_daily",
+      "schema": "",
+      "columns": {
+        "day": {
+          "name": "day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "atom_id": {
+          "name": "atom_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "principal_id": {
+          "name": "principal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "principal_class": {
+          "name": "principal_class",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ok_count": {
+          "name": "ok_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "fail_count": {
+          "name": "fail_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "knowledge_read_daily_day_atom_id_principal_id_principal_class_pk": {
+          "name": "knowledge_read_daily_day_atom_id_principal_id_principal_class_pk",
+          "columns": [
+            "day",
+            "atom_id",
+            "principal_id",
+            "principal_class"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "knowledge_read_daily_principal_class_check": {
+          "name": "knowledge_read_daily_principal_class_check",
+          "value": "\"knowledge_read_daily\".\"principal_class\" IN ('internal_run', 'external_agent')"
         }
       },
       "isRLSEnabled": true

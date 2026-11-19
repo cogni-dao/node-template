@@ -56,6 +56,9 @@ export const EVENT_NAMES = {
 	KNOWLEDGE_HISTORY_READ: "knowledge.history_read",
 	// Whole-graph read (task.0059): one terminal event per read, counts and bytes only.
 	KNOWLEDGE_GRAPH_READ: "knowledge.graph_read",
+	// Agent atom read counters (story.0061): one line per flush with key and read counts; a drop or a failed flush with its count. Never ids.
+	KNOWLEDGE_READ_COUNTS_FLUSHED: "knowledge.read_counts_flushed",
+	KNOWLEDGE_READ_COUNT_WRITE_FAILED: "knowledge.read_count_write_failed",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",
 	AI_LLM_CALL: "ai.llm_call",
