@@ -22,14 +22,15 @@ const SRC = resolve(__dirname, "../../../src");
 const read = (rel: string) => readFileSync(resolve(SRC, rel), "utf8");
 
 describe("connect from home pages", () => {
-  it("each page sits under the (admin) group, keeps the AI access page's layout, and mounts the package's section with this node's endpoints only", () => {
+  it("each page sits under the (admin) group, keeps the AI access page's container and carries no subtitle, and mounts the package's section with this node's endpoints only", () => {
     for (const [dir, mount, section, endpoints] of [
       ["connections", "Connections.mount.tsx", "ConnectionsSection", "CONNECTIONS_ENDPOINTS"],
       ["connected-orgs", "ConnectedOrgs.mount.tsx", "ConnectedOrgsSection", "CONNECTED_ORGS_ENDPOINTS"],
     ] as const) {
       const page = read(`app/(admin)/admin/${dir}/page.tsx`);
       expect(page).toContain('<PageContainer maxWidth="2xl">');
-      expect(page).toContain('className="max-w-prose text-muted-foreground"');
+      // CEO: humans do not want to read. No subtitle or description sentence under the header: the page is the section.
+      expect(page).not.toMatch(/<p[\s>]/);
       const view = read(`app/(admin)/admin/${dir}/${mount}`);
       expect(view).toContain(`import { ${section} } from "@cogni/knowledge-base-ui";`);
       expect(view).toContain(`<${section} endpoints={${endpoints}} />`);

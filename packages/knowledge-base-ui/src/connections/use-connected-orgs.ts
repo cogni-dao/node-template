@@ -3,17 +3,18 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/connections/use-connected-orgs`
- * Purpose: The data hook behind the provider's "Connected orgs" table (story.0038, connect from home): loads the bounded, paged list, and runs the four row actions (Suspend or Resume, Grant
+ * Purpose: The data hook behind the provider's "Connected nodes" list (story.0038, connect from home): loads the bounded, paged list, and runs the four row actions (Suspend or Resume, Grant
  *   allowance, Reset seq). The node owns the routes and their auth; this hook only knows the list route and the three `{id}/...` action routes under it.
  * Scope: Plain `fetch` with `cache: "no-store"` and the browser session only (never an Authorization header); no react-query, no kept copy beyond component state.
  * Invariants:
  *   - BOUNDED_PAGED: every read asks `limit=PAGE_SIZE` (50) and, after the first page, `after=<the previous nextAfter>`; a page never holds more than the server's bound.
  *   - KEEPS_LOADED_PAGES: an action reloads EVERY page the admin has loaded (it re-reads each cursor in order), so a click never collapses the table back to its first page.
- *   - NON_ADMIN_SEES_NOTHING: only a confirmed well-formed page is `ready` and only a confirmed 503 is `unavailable`; loading, 401, 403, 404, any other status, a network error and a malformed body
- *     are `hidden`. A later failure keeps an already-ready view.
+ *   - FIVE_STATES: `loading` (the section shows a skeleton that mirrors the rows), `ready` with no rows (empty), a few rows (sparse), many rows with paging (dense), and `unavailable` (an error line
+ *     with a retry). A 401, 403 or 404 is `hidden` (a signed-out or non-admin caller sees nothing); a 503, any other status, a network error and a malformed body are `unavailable` on a first load.
+ *     A later failure keeps an already-ready view (a 503 still shows the error line).
  *   - STALE_RESPONSE_GUARD: each load takes a sequence number; only the newest response is applied.
  *   - ONE_CLICK_ONE_ACTION: while one row's action is in flight every other action is ignored. A grant sends one fresh `Idempotency-Key` per click, so a double click grants once.
- *   - HUMAN_SURFACE_TOKENLESS: no token, key or id is shown.
+ *   - HUMAN_SURFACE_TOKENLESS: no token, key or id is shown. The copy is minimal (a few words per line).
  * Side-effects: IO (fetch)
  * Links: https://node-template.cognidao.org/knowledge/node-relationships-design
  * @internal
@@ -56,21 +57,26 @@ export interface UseConnectedOrgs {
 }
 
 export const CONNECTED_ORGS_PAGE_SIZE = 50;
-export const CONNECTED_ORGS_UNAVAILABLE_COPY = "Can't load connected orgs right now. Try again.";
-export const CONNECTED_ORGS_ACTION_FAILED_COPY = "That did not go through. Try again.";
-export const CONNECTED_ORGS_BAD_AMOUNT_COPY = "Enter a whole number of credits.";
+export const CONNECTED_ORGS_UNAVAILABLE_COPY = "Couldn't load.";
+export const CONNECTED_ORGS_ACTION_FAILED_COPY = "Didn't go through.";
+export const CONNECTED_ORGS_BAD_AMOUNT_COPY = "Enter a number.";
 
 function isPage(value: unknown): value is ConnectedOrgsPage {
   const v = value as { orgs?: unknown; nextAfter?: unknown } | null;
   return !!v && Array.isArray(v.orgs) && (v.nextAfter === null || typeof v.nextAfter === "string");
 }
 
-type PageRead = { readonly kind: "page"; readonly page: ConnectedOrgsPage } | { readonly kind: "unavailable" } | { readonly kind: "failed" };
+type PageRead =
+  | { readonly kind: "page"; readonly page: ConnectedOrgsPage }
+  | { readonly kind: "denied" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "failed" };
 
 async function readPage(list: string, after: string | null): Promise<PageRead> {
   try {
     const query = `limit=${CONNECTED_ORGS_PAGE_SIZE}${after === null ? "" : `&after=${encodeURIComponent(after)}`}`;
     const res = await fetch(`${list}?${query}`, { cache: "no-store" });
+    if (res.status === 401 || res.status === 403 || res.status === 404) return { kind: "denied" };
     if (res.status === 503) return { kind: "unavailable" };
     if (!res.ok) return { kind: "failed" };
     const body: unknown = await res.json();
@@ -97,8 +103,9 @@ export function useConnectedOrgs(endpoints: ConnectedOrgsEndpoints): UseConnecte
     for (const after of starts.current) {
       const read = await readPage(list, after);
       if (mine !== sequence.current) return;
+      if (read.kind === "denied") return setState({ status: "hidden" });
       if (read.kind === "unavailable") return setState({ status: "unavailable" });
-      if (read.kind === "failed") return setState((prev) => (prev.status === "ready" ? prev : { status: "hidden" }));
+      if (read.kind === "failed") return setState((prev) => (prev.status === "ready" ? prev : { status: "unavailable" }));
       orgs.push(...read.page.orgs);
       nextAfter = read.page.nextAfter;
     }
