@@ -3,15 +3,22 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/connections/format`
- * Purpose: Helps a human read an amount at a glance: credits are always a short number with their unit ("500 cr").
+ * Purpose: Helps a human read an amount at a glance: money is always dollars. The node owns the credits-to-dollars rate and injects it as `Money`, so this
+ *   package never copies the rate.
  * Scope: Pure.
  * Side-effects: none
  * @internal
  */
 
-/** A short amount with its unit: "500 cr", "2,500 cr". */
-export function formatCredits(n: number): string {
-  return `${n.toLocaleString()} cr`;
+/**
+ * The node's money conversion, injected by the page (the node's payments module owns the rate). Amounts on the wire stay integer credits; people see and type
+ * dollars only.
+ */
+export interface Money {
+  /** Credits as dollars for display, such as "$5.00". */
+  readonly format: (credits: number) => string;
+  /** Typed dollars (such as 5 or 0.5) as whole credits, or null when the text is not a positive amount. */
+  readonly toCredits: (dollars: number) => number | null;
 }
 
 /** A URL's host, or the raw text when it is not a URL. */

@@ -66,8 +66,6 @@ export interface NodeAdminPort {
     session: AdminSession,
     input: { orgUserId: string; credits: number; key: string }
   ): Promise<{ allowance: number; applied: boolean } | null>;
-  /** PROVIDER: puts a connected org's stored `seq` back to 1 (a record whose seq a stolen key pushed up). False when the org has no record. */
-  resetConnectedOrgSeq(session: AdminSession, orgUserId: string): Promise<boolean>;
   /** CUSTOMER: the configured providers with this node's own state; `signer` is false when this node has no signing key. */
   listOutboundConnections(session: AdminSession): Promise<{ signer: boolean; targets: OutboundTarget[] }>;
   /** CUSTOMER: signs and sends one connect (with a cap) or disconnect to a configured provider and returns the provider's answer. */

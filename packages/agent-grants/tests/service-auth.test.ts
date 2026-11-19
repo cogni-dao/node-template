@@ -19,6 +19,7 @@ import {
   parseLinkTargets,
   parseTrustedHomes,
   requestServiceAccess,
+  serviceDisplayName,
   servicePrincipalId,
   type TrustedHome,
   type VerifiedServiceAssertion,
@@ -283,6 +284,17 @@ describe("parseTrustedHomes", () => {
     expect(parseTrustedHomes(undefined)).toEqual([]);
     expect(parseTrustedHomes("not a list")).toEqual([]);
     expect(parseTrustedHomes({ issuer: "x" })).toEqual([]);
+  });
+
+  it("keeps a plain home name (a page label) and drops a name with odd characters; a name never changes trust", () => {
+    expect(parseTrustedHomes([{ ...entry, name: "operator" }])).toEqual([{ ...good, name: "operator" }]);
+    expect(parseTrustedHomes([{ ...entry, name: "<b>x</b>" }, { ...entry, name: 7 }, { ...entry, name: "a".repeat(41) }])).toEqual([good, good, good]);
+  });
+
+  it("names a service principal for people, never in an email-like form", () => {
+    expect(serviceDisplayName({ issuer: "https://toks5-test.cognidao.org", service: "node-ai", homeName: "toks5" })).toBe("toks5 AI");
+    expect(serviceDisplayName({ issuer: "https://cognidao.org", service: "git-review", homeName: "operator" })).toBe("operator git-review");
+    expect(serviceDisplayName({ issuer: "https://toks5-test.cognidao.org", service: "node-ai" })).toBe("node-ai · toks5-test.cognidao.org");
   });
 
   it("keeps only the services that match the slug pattern", () => {

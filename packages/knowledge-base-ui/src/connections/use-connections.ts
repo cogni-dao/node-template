@@ -58,7 +58,7 @@ export interface UseConnections {
 
 export const CONNECTIONS_UNAVAILABLE_COPY = "Couldn't load.";
 export const NO_SIGNER_COPY = "No signing key.";
-export const BAD_CAP_COPY = "Enter a number.";
+export const BAD_CAP_COPY = "Set a limit.";
 export const CONNECT_FAILED_COPY = "Couldn't connect.";
 
 function isView(value: unknown): value is ConnectionsView {

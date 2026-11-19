@@ -44,10 +44,8 @@ export interface Connections {
   list(input: { limit?: number | undefined; after?: string | null | undefined }): Promise<{ orgs: ConnectedOrgView[]; nextAfter: string | null }>;
   /** Suspend or Resume. False when the org user has no record. */
   setSuspended(orgUserId: string, suspended: boolean): Promise<boolean>;
-  /** Puts the record's stored `seq` back to 1. False when the org user has no record. */
-  resetSeq(orgUserId: string): Promise<boolean>;
   /** One ledger row on the record's billing account; null when the org user has no record. `applied` is false when `key` was already applied. */
-  grantAllowance(input: { orgUserId: string; credits: number; key: string }): Promise<{ allowance: number; applied: boolean } | null>;
+  grantAllowance(input: { orgUserId: string; credits: number; key: string; adminUserId: string }): Promise<{ allowance: number; applied: boolean } | null>;
   /** Throws `ConnectionRefusedError` when a run billed to `billingAccountId` is refused; returns for an ordinary payer or a record that admits it. */
   assertAdmits(billingAccountId: string): Promise<void>;
 }
@@ -97,8 +95,8 @@ export function createConnections(deps: {
       const page = rows.slice(0, bounded);
       return {
         orgs: page.map((row) => {
-          const nodeId = homeOf(row.issuer)?.nodeId;
-          return { ...viewOf(row), ...(nodeId ? { nodeId } : {}) };
+          const home = homeOf(row.issuer);
+          return { ...viewOf(row), ...(home?.nodeId ? { nodeId: home.nodeId } : {}), ...(home?.name ? { name: home.name } : {}) };
         }),
         nextAfter: rows.length > bounded ? (page[page.length - 1]?.issuer ?? null) : null,
       };
@@ -106,9 +104,7 @@ export function createConnections(deps: {
 
     setSuspended: (orgUserId, suspended) => store().setSuspended(orgUserId, suspended),
 
-    resetSeq: (orgUserId) => store().resetSeq(orgUserId),
-
-    async grantAllowance({ orgUserId, credits, key }) {
+    async grantAllowance({ orgUserId, credits, key, adminUserId }) {
       const record = await store().get(orgUserId);
       if (!record) return null;
       const reference = `${orgUserId}:${key}`;
@@ -121,13 +117,14 @@ export function createConnections(deps: {
           amount: credits,
           reason: CONNECTION_ALLOWANCE_REASON,
           reference,
-          metadata: { orgUserId, issuer: record.issuer },
+          // A prototype comp grant: free credits from this node's admin, not a payment. The admin is on the row so every grant is audited.
+          metadata: { source: "admin_grant", adminUserId, orgUserId, issuer: record.issuer },
         });
         return { allowance: newBalance, applied: true };
       } catch (error) {
         // Two requests with the same key raced: the partial unique index let exactly one through.
         if (isUniqueViolation(error)) return { allowance: await balance(), applied: false };
-        deps.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "admin.connected-orgs.allowance", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
+        deps.log.error({ event: EVENT_NAMES.CONNECTION_GRANT_FAILED, orgUserId, ...failureFields(error) }, EVENT_NAMES.CONNECTION_GRANT_FAILED);
         throw error;
       }
     },

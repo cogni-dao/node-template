@@ -81,12 +81,6 @@ export function memoryConnectionStore(): ConnectionStore & {
       row.record = { ...row.record, suspended };
       return true;
     },
-    async resetSeq(orgUserId) {
-      const row = rows.get(orgUserId);
-      if (!row) return false;
-      row.record = { ...row.record, seq: 1 };
-      return true;
-    },
     async bindService({ issuer, subjectUserId }) {
       const row = byIssuer(issuer);
       if (!row) return false;

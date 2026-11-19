@@ -20,7 +20,6 @@ const fake = vi.hoisted(() => ({
   listConnectedOrgs: vi.fn(),
   setConnectedOrgSuspended: vi.fn(),
   grantConnectionAllowance: vi.fn(),
-  resetConnectedOrgSeq: vi.fn(),
   listOutboundConnections: vi.fn(),
   actOutboundConnection: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -41,7 +40,6 @@ vi.mock("@/bootstrap/container", () => ({
       listConnectedOrgs: fake.listConnectedOrgs,
       setConnectedOrgSuspended: fake.setConnectedOrgSuspended,
       grantConnectionAllowance: fake.grantConnectionAllowance,
-      resetConnectedOrgSeq: fake.resetConnectedOrgSeq,
       listOutboundConnections: fake.listOutboundConnections,
       actOutboundConnection: fake.actOutboundConnection,
     },
@@ -49,7 +47,6 @@ vi.mock("@/bootstrap/container", () => ({
 }));
 
 import { POST as allowance } from "@/app/api/v1/admin/connected-orgs/[orgUserId]/allowance/route";
-import { POST as seqReset } from "@/app/api/v1/admin/connected-orgs/[orgUserId]/seq-reset/route";
 import { POST as suspension } from "@/app/api/v1/admin/connected-orgs/[orgUserId]/suspension/route";
 import { GET as listOrgs } from "@/app/api/v1/admin/connected-orgs/route";
 import { GET as listConnections, POST as act } from "@/app/api/v1/admin/connections/route";
@@ -70,7 +67,6 @@ beforeEach(() => {
   fake.adminCheck.mockResolvedValue("allow");
   fake.listConnectedOrgs.mockResolvedValue(orgsPage);
   fake.setConnectedOrgSuspended.mockResolvedValue(true);
-  fake.resetConnectedOrgSeq.mockResolvedValue(true);
   fake.grantConnectionAllowance.mockResolvedValue({ allowance: 750, applied: true });
   fake.listOutboundConnections.mockResolvedValue(targets);
   fake.actOutboundConnection.mockResolvedValue({
@@ -89,7 +85,6 @@ const calls: Array<{ name: string; run: () => Promise<NextResponse>; ports: Arra
   { name: "GET /connected-orgs", run: () => get(listOrgs), ports: [fake.listConnectedOrgs] },
   { name: "POST /connected-orgs/{id}/allowance", run: () => post(allowance, { credits: 100 }, {}, ctx()), ports: [fake.grantConnectionAllowance] },
   { name: "POST /connected-orgs/{id}/suspension", run: () => post(suspension, { suspended: true }, {}, ctx()), ports: [fake.setConnectedOrgSuspended] },
-  { name: "POST /connected-orgs/{id}/seq-reset", run: () => post(seqReset, undefined, {}, ctx()), ports: [fake.resetConnectedOrgSeq] },
   { name: "GET /connections", run: () => get(listConnections), ports: [fake.listOutboundConnections] },
   { name: "POST /connections", run: () => post(act, { act: "connect", alias: "prov", cap: 100 }), ports: [fake.actOutboundConnection] },
 ];
@@ -153,7 +148,7 @@ describe("provider: /api/v1/admin/connected-orgs", () => {
   });
 
   it("the allowance route refuses a bad body or key before any write, and an unknown org is 404", async () => {
-    for (const body of [{}, { credits: 0 }, { credits: -5 }, { credits: 1.5 }, { credits: "9" }, { credits: Number.MAX_SAFE_INTEGER + 2 }])
+    for (const body of [{}, { credits: 0 }, { credits: -5 }, { credits: 1.5 }, { credits: "9" }, { credits: Number.MAX_SAFE_INTEGER + 2 }, { credits: 1_000_000_001 }])
       expect((await post(allowance, body, {}, ctx())).status, JSON.stringify(body)).toBe(400);
     expect((await post(allowance, { credits: 5 }, { "idempotency-key": "has space" }, ctx())).status).toBe(400);
     expect((await post(allowance, { credits: 5 }, {}, ctx("bad id!"))).status).toBe(404);
@@ -175,19 +170,6 @@ describe("provider: /api/v1/admin/connected-orgs", () => {
     fake.setConnectedOrgSuspended.mockResolvedValue(false);
     expect((await post(suspension, { suspended: true }, {}, ctx())).status).toBe(404);
     expect((await post(suspension, { suspended: "yes" }, {}, ctx())).status).toBe(400);
-  });
-});
-
-describe("provider: seq reset", () => {
-  it("puts the record's seq back through the port with the minted session; an unknown org is 404; a bad id is 404", async () => {
-    const res = await post(seqReset, undefined, {}, ctx());
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ orgUserId: ORG, seq: 1 });
-    expect(fake.resetConnectedOrgSeq).toHaveBeenCalledWith(expect.objectContaining({ userId: "admin-1" }), ORG);
-    expect(fake.log.info).toHaveBeenCalledWith(expect.objectContaining({ event: "connection.seq_reset", orgUserId: ORG, adminUserId: "admin-1" }), "connection.seq_reset");
-    fake.resetConnectedOrgSeq.mockResolvedValue(false);
-    expect((await post(seqReset, undefined, {}, ctx())).status).toBe(404);
-    expect((await post(seqReset, undefined, {}, ctx("bad id!"))).status).toBe(404);
   });
 });
 

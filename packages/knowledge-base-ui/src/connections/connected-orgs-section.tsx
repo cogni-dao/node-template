@@ -3,18 +3,17 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/connections/connected-orgs-section`
- * Purpose: Helps a provider admin decide how much more each connected node may spend. The "Connected nodes" list (story.0038, connect from home). One item = name (always the node's host, never an
- *   id), a short status badge (Connected, Off, Suspended), ONE number (the allowance left, "500 cr"; tapping it shows used, cap and the node id when its `trusted_homes` entry names one) and ONE inline
- *   action: "Add credits" (a number and a button, one compact control). Suspend or Resume and the rare Reset seq (after one short dialog) live in the row's ⋯ menu.
- * Scope: Presentation over `useConnectedOrgs`. Same heading, rule and divider style as `AgentAccessSection`. Words are kept to the minimum: no subtitle, no explanations. A failed click is ONE short
- *   destructive line under that row's own controls ("Couldn't save.", "Not allowed."), the HTTP status only as its title.
+ * Purpose: Helps a provider admin see which other nodes are customers, what they used, and keep each one On or Off. The "Connected nodes" table (story.0038,
+ *   connect from home). Columns Node · Used · Left · On, the same table, heading and switch as the AI access table.
+ * Scope: Presentation over `useConnectedOrgs`. Money is dollars through the injected `Money`. Words are kept to the minimum: no subtitle, no explanations.
  * Invariants:
- *   - FIVE_STATES: loading (a skeleton that mirrors the items), empty ("No nodes yet."), sparse, dense (a "More" button pages) and error ("Couldn't load." and Retry). A 401, 403 or 404 renders nothing.
- *   - MOBILE_FIRST: at 360px each item is stacked (name, badge and number, then full-width controls of at least 44px); from `md:` everything sits on one line. No horizontal scroll.
- *   - ROW_STAYS: a click in flight keeps the row and DISABLES its controls (other rows' clicks are ignored); when the action finishes focus returns to the row's ⋯ trigger, so a keyboard user is never dropped.
- *   - RESET_IS_A_DIALOG: Reset seq opens a Radix AlertDialog with one sentence ("Reset seq to 1?") and Cancel and Reset buttons; Cancel and Escape do nothing.
- *   - TARGETS: every control is at least 24px; the primary mobile actions are 44px. Tokens only: semantic colours, no raw palette, no inline style, no magic size.
- *   - No filters and no extra controls.
+ *   - NAME_FIRST: a node is its name from the provider's own `trusted_homes` entry, with its host as a small second line; the host alone only when no name is configured.
+ *   - ONE_SWITCH: On is the provider's own switch (Off = suspended; the customer cannot turn it back On). A customer that disconnected shows a "Disconnected" badge.
+ *   - FREE_CREDITS_ARE_SECONDARY: the only money action is a small "+" beside Left that opens "Free credits" (a dollar input and Add). It is a prototype comp grant,
+ *     never a payment; the customer funding its own account is not built.
+ *   - FIVE_STATES: loading (a skeleton), empty ("No nodes yet."), sparse, dense (a "More" button pages) and error ("Couldn't load." and Retry). A 401, 403 or 404 renders nothing.
+ *   - ROW_STAYS: a click in flight keeps the row and shows a skeleton in its switch cell; other rows' clicks are ignored.
+ *   - TARGETS: every control is at least 24px. Tokens only. No filters and no extra controls.
  * Side-effects: IO (through the hook)
  * Links: https://node-template.cognidao.org/knowledge/frontend-development, https://node-template.cognidao.org/knowledge/node-relationships-design
  * @public
@@ -23,66 +22,46 @@
 "use client";
 
 import type { ConnectedOrgView } from "@cogni/agent-grants";
-import { MoreHorizontal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Plus } from "lucide-react";
+import { useState } from "react";
 
-import { cn } from "../cn.js";
-import { RelativeTime } from "../relative-time.js";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogTitle } from "../ui/alert-dialog.js";
+import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
 import { Input } from "../ui/input.js";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.js";
 import { Skeleton } from "../ui/skeleton.js";
-import { formatCredits, hostOf } from "./format.js";
-import { CONNECTED_ORGS_UNAVAILABLE_COPY, type ConnectedOrgsEndpoints, useConnectedOrgs } from "./use-connected-orgs.js";
+import { Switch } from "../ui/switch.js";
+import { hostOf, type Money } from "./format.js";
+import { CONNECTED_ORGS_BAD_AMOUNT_COPY, CONNECTED_ORGS_UNAVAILABLE_COPY, type ConnectedOrgsEndpoints, useConnectedOrgs } from "./use-connected-orgs.js";
 
 export interface ConnectedOrgsSectionProps {
   readonly endpoints: ConnectedOrgsEndpoints;
+  /** The node's credits-to-dollars conversion. */
+  readonly money: Money;
   readonly className?: string;
 }
 
-const STATUS_LABEL: Record<ConnectedOrgView["status"], string> = { connected: "Connected", suspended: "Suspended", disconnected: "Off" };
+const nameOf = (org: ConnectedOrgView): string => org.name ?? hostOf(org.issuer);
 
-/** Full-width 44px on a phone, compact from `md:`. */
-const TOUCH = "h-11 md:h-8";
-
-/** The loading state: the same structure as an item, so the first paint does not shift. */
-function ItemSkeleton() {
-  return (
-    <li className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
-      <Skeleton className="h-5 w-48" />
-      <Skeleton className="h-11 w-full md:h-8 md:w-64" />
-    </li>
-  );
-}
-
-export function ConnectedOrgsSection({ endpoints, className }: ConnectedOrgsSectionProps) {
-  const { state, busy, error, reload, more, suspend, grant, resetSeq } = useConnectedOrgs(endpoints);
+export function ConnectedOrgsSection({ endpoints, money, className }: ConnectedOrgsSectionProps) {
+  const { state, busy, error, reload, more, suspend, grant } = useConnectedOrgs(endpoints);
   const [amounts, setAmounts] = useState<Readonly<Record<string, string>>>({});
-  const [resetting, setResetting] = useState<ConnectedOrgView | null>(null);
-  /** Each row's ⋯ trigger: focus goes back to it when an action finishes. */
-  const triggers = useRef(new Map<string, HTMLElement | null>());
-  const wasBusy = useRef<string | null>(null);
-  /** The row whose Reset seq dialog is open (kept after it closes, so focus can go back to its trigger). */
-  const resetRow = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (busy !== null) {
-      wasBusy.current = busy;
-      return;
-    }
-    if (wasBusy.current !== null) {
-      triggers.current.get(wasBusy.current)?.focus();
-      wasBusy.current = null;
-    }
-  }, [busy]);
+  const [open, setOpen] = useState<string | null>(null);
+  const [badAmount, setBadAmount] = useState<string | null>(null);
 
   if (state.status === "hidden") return null;
 
-  const grantFor = async (org: ConnectedOrgView): Promise<void> => {
-    const ok = await grant(org, Number(amounts[org.orgUserId] ?? ""));
-    if (ok) setAmounts((prev) => ({ ...prev, [org.orgUserId]: "" }));
+  const add = async (org: ConnectedOrgView): Promise<void> => {
+    const credits = money.toCredits(Number(amounts[org.orgUserId] ?? ""));
+    if (credits === null) {
+      setBadAmount(org.orgUserId);
+      return;
+    }
+    setBadAmount(null);
+    if (await grant(org, credits)) {
+      setAmounts((prev) => ({ ...prev, [org.orgUserId]: "" }));
+      setOpen(null);
+    }
   };
 
   return (
@@ -95,20 +74,19 @@ export function ConnectedOrgsSection({ endpoints, className }: ConnectedOrgsSect
       </div>
 
       {state.status === "loading" && (
-        <ul className="divide-y divide-border" aria-busy="true" aria-label="Loading">
-          <ItemSkeleton />
-          <ItemSkeleton />
-          <ItemSkeleton />
-        </ul>
+        <div className="space-y-3 py-3" aria-busy="true" aria-label="Loading">
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-5 w-full" />
+        </div>
       )}
 
       {state.status === "unavailable" && (
-        <div className="flex items-center gap-3 py-3" role="alert">
-          <p className="text-destructive text-sm">{CONNECTED_ORGS_UNAVAILABLE_COPY}</p>
-          <Button type="button" size="sm" variant="outline" onClick={() => void reload()}>
+        <p className="flex items-center gap-3 py-3 text-destructive text-sm" role="alert">
+          {CONNECTED_ORGS_UNAVAILABLE_COPY}
+          <button type="button" className="text-foreground underline" onClick={() => void reload()}>
             Retry
-          </Button>
-        </div>
+          </button>
+        </p>
       )}
 
       {state.status === "ready" && (
@@ -116,126 +94,111 @@ export function ConnectedOrgsSection({ endpoints, className }: ConnectedOrgsSect
           {state.page.orgs.length === 0 ? (
             <p className="py-2 text-muted-foreground text-sm">No nodes yet.</p>
           ) : (
-            <ul className="divide-y divide-border">
-              {state.page.orgs.map((org) => {
-                const saving = busy === org.orgUserId;
-                const title = hostOf(org.issuer);
-                return (
-                  <li key={org.orgUserId} aria-busy={saving || undefined} className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
-                    <div className="flex min-w-0 items-center justify-between gap-3 md:justify-start">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="min-w-0 truncate font-mono text-foreground">{title}</span>
-                        <span
-                          className={cn(
-                            "shrink-0 rounded border px-1 font-medium text-xs",
-                            org.status === "suspended" ? "border-destructive text-destructive" : "border-foreground/40 text-foreground"
-                          )}
-                        >
-                          {STATUS_LABEL[org.status]}
-                        </span>
-                      </div>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button type="button" size="sm" variant="ghost" className="shrink-0 tabular-nums" aria-label={`Allowance ${formatCredits(org.allowance)} for ${title}. Show usage`}>
-                            {formatCredits(org.allowance)}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent align="end" className="w-auto text-sm">
-                          <dl className="space-y-1 tabular-nums">
-                            <div className="flex justify-between gap-6">
-                              <dt className="text-muted-foreground">Used</dt>
-                              <dd className="text-foreground">{formatCredits(org.debits)}</dd>
-                            </div>
-                            <div className="flex justify-between gap-6">
-                              <dt className="text-muted-foreground">Cap</dt>
-                              <dd className="text-foreground">{formatCredits(org.cap)}</dd>
-                            </div>
-                            {org.lastCallAt && (
-                              <div className="flex justify-between gap-6">
-                                <dt className="text-muted-foreground">Last call</dt>
-                                <dd className="text-foreground">
-                                  <RelativeTime iso={org.lastCallAt} className="text-foreground" />
-                                </dd>
-                              </div>
-                            )}
-                            {org.nodeId && (
-                              <div className="flex justify-between gap-6">
-                                <dt className="text-muted-foreground">Node</dt>
-                                <dd className="min-w-0 truncate font-mono text-foreground">{org.nodeId}</dd>
-                              </div>
-                            )}
-                          </dl>
-                        </PopoverContent>
-                      </Popover>
-                    </div>
-
-                    <div className="flex min-w-0 flex-col gap-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <div className="flex min-w-0 flex-1 md:flex-none">
-                          <Input
-                            type="number"
-                            inputMode="numeric"
-                            min={1}
-                            step={1}
-                            disabled={saving}
-                            className={cn(TOUCH, "min-w-0 flex-1 rounded-r-none tabular-nums md:w-24 md:flex-none")}
-                            placeholder="500"
-                            aria-label={`Credits to add for ${title}`}
-                            value={amounts[org.orgUserId] ?? ""}
-                            onChange={(event) => setAmounts((prev) => ({ ...prev, [org.orgUserId]: event.target.value }))}
-                          />
-                          <Button type="button" size="sm" disabled={saving} className={cn(TOUCH, "shrink-0 rounded-l-none")} onClick={() => void grantFor(org)}>
-                            Add credits
-                          </Button>
+            <table className="w-full text-left text-sm">
+              <thead className="text-muted-foreground text-xs">
+                <tr>
+                  <th scope="col" className="py-1 pr-3 font-medium">Node</th>
+                  <th scope="col" className="py-1 pr-3 text-right font-medium">Used</th>
+                  <th scope="col" className="py-1 pr-3 text-right font-medium">Left</th>
+                  <th scope="col" className="w-12 py-1 text-right font-medium">On</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {state.page.orgs.map((org) => {
+                  const name = nameOf(org);
+                  const saving = busy === org.orgUserId;
+                  return (
+                    <tr key={org.orgUserId} aria-busy={saving || undefined}>
+                      <td className="max-w-0 py-2 pr-3 align-top">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate font-medium text-foreground">{name}</span>
+                          {org.status === "disconnected" && <Badge>Disconnected</Badge>}
                         </div>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              ref={(el) => {
-                                triggers.current.set(org.orgUserId, el);
-                              }}
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              disabled={saving}
-                              className={cn(TOUCH, "w-11 shrink-0 px-0 md:w-8")}
-                              aria-label={`More for ${title}`}
-                            >
-                              <MoreHorizontal aria-hidden="true" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onSelect={() => void suspend(org)}>{org.status === "suspended" ? "Resume" : "Suspend"}</DropdownMenuItem>
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                resetRow.current = org.orgUserId;
-                                setResetting(org);
-                              }}
-                            >
-                              Reset seq
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                      {saving && (
-                        <span className="sr-only" role="status">
-                          Saving
+                        {org.name && <div className="truncate text-muted-foreground text-xs">{hostOf(org.issuer)}</div>}
+                        {error?.rowId === org.orgUserId && (
+                          <p className="text-destructive text-xs" role="alert" title={error.code === null ? undefined : String(error.code)}>
+                            {error.text}
+                          </p>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap py-2 pr-3 text-right align-top tabular-nums">
+                        <div className="text-foreground">{money.format(org.debits)}</div>
+                        <div className="text-muted-foreground text-xs">of {money.format(org.cap)}</div>
+                      </td>
+                      <td className="whitespace-nowrap py-2 pr-3 text-right align-top tabular-nums">
+                        <span className="inline-flex items-center gap-1">
+                          <span className="text-foreground">{money.format(Math.max(0, org.allowance))}</span>
+                          <Popover
+                            open={open === org.orgUserId}
+                            onOpenChange={(next) => {
+                              setOpen(next ? org.orgUserId : null);
+                              setBadAmount(null);
+                            }}
+                          >
+                            <PopoverTrigger asChild>
+                              <Button type="button" size="sm" variant="ghost" className="h-6 w-6 px-0" disabled={busy !== null} aria-label={`Free credits for ${name}`}>
+                                <Plus aria-hidden="true" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent align="end" className="w-60 space-y-2 text-sm">
+                              <form
+                                className="space-y-2"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  void add(org);
+                                }}
+                              >
+                                <label htmlFor={`free-${org.orgUserId}`} className="font-medium text-foreground">
+                                  Free credits
+                                </label>
+                                <div className="flex gap-2">
+                                  <Input
+                                    id={`free-${org.orgUserId}`}
+                                    type="number"
+                                    inputMode="decimal"
+                                    min={0.01}
+                                    step={0.01}
+                                    placeholder="$5"
+                                    disabled={saving}
+                                    className="h-8 tabular-nums"
+                                    value={amounts[org.orgUserId] ?? ""}
+                                    onChange={(event) => setAmounts((prev) => ({ ...prev, [org.orgUserId]: event.target.value }))}
+                                  />
+                                  <Button type="submit" size="sm" className="h-8" disabled={saving}>
+                                    Add
+                                  </Button>
+                                </div>
+                                {badAmount === org.orgUserId && (
+                                  <p className="text-destructive text-xs" role="alert">
+                                    {CONNECTED_ORGS_BAD_AMOUNT_COPY}
+                                  </p>
+                                )}
+                              </form>
+                            </PopoverContent>
+                          </Popover>
                         </span>
-                      )}
-                      {error?.rowId === org.orgUserId && (
-                        <p className="text-destructive text-xs md:text-right" role="alert" title={error.code === null ? undefined : String(error.code)}>
-                          {error.text}
-                        </p>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                      </td>
+                      <td className="h-10 py-2 text-right align-top">
+                        {saving ? (
+                          <>
+                            <Skeleton className="ml-auto h-5 w-9 rounded-full" />
+                            <span className="sr-only" role="status">
+                              Saving
+                            </span>
+                          </>
+                        ) : (
+                          <Switch on={org.status !== "suspended"} label={`${name}: On`} locked={busy !== null} onToggle={() => void suspend(org)} />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
           {state.page.nextAfter && (
             <div className="mt-3 flex items-center gap-3">
-              <Button type="button" variant="outline" size="sm" className="h-11 w-full md:h-8 md:w-auto" onClick={() => void more()}>
+              <Button type="button" variant="outline" size="sm" onClick={() => void more()}>
                 More
               </Button>
               {error?.rowId === "" && (
@@ -247,36 +210,6 @@ export function ConnectedOrgsSection({ endpoints, className }: ConnectedOrgsSect
           )}
         </div>
       )}
-
-      <AlertDialog open={resetting !== null} onOpenChange={(open) => !open && setResetting(null)}>
-        <AlertDialogContent
-          onCloseAutoFocus={(event) => {
-            // Focus goes back to the row's ⋯ trigger (Radix would look for the menu item that is gone).
-            event.preventDefault();
-            if (resetRow.current) triggers.current.get(resetRow.current)?.focus();
-          }}
-        >
-          <AlertDialogTitle>Reset seq to 1?</AlertDialogTitle>
-          <div className="flex flex-col-reverse gap-2 md:flex-row md:justify-end">
-            <AlertDialogCancel asChild>
-              <Button type="button" variant="outline" className={cn(TOUCH, "w-full md:w-auto")}>
-                Cancel
-              </Button>
-            </AlertDialogCancel>
-            <AlertDialogAction asChild>
-              <Button
-                type="button"
-                className={cn(TOUCH, "w-full md:w-auto")}
-                onClick={() => {
-                  if (resetting) void resetSeq(resetting);
-                }}
-              >
-                Reset
-              </Button>
-            </AlertDialogAction>
-          </div>
-        </AlertDialogContent>
-      </AlertDialog>
     </section>
   );
 }

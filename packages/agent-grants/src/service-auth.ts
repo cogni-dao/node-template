@@ -313,6 +313,8 @@ export interface TrustedHome {
   readonly services: readonly string[];
   /** The home's node id as the PROVIDER's own list says it (optional `node_id` in `trusted_homes`); a label for the provider's page, never a trust input. */
   readonly nodeId?: string;
+  /** The home's node name as the PROVIDER's own list says it (optional `name` in `trusted_homes`, such as `toks5`); a label for pages, never a trust input. */
+  readonly name?: string;
 }
 
 export type ServiceAssertionRefusal =
@@ -335,6 +337,8 @@ export interface VerifiedServiceAssertion {
   readonly jti: string;
   /** The signed extra claims (primitives under non-registered names), verified with the rest. Empty for an ordinary call. */
   readonly claims: Readonly<Record<string, string | number | boolean>>;
+  /** The home's name from the VERIFIER's own trusted-homes list (never from the token), when that entry names one. A label only. */
+  readonly homeName?: string;
 }
 
 /**
@@ -362,7 +366,7 @@ export interface ServiceAssertionVerifier {
 export function parseTrustedHomes(raw: unknown): TrustedHome[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((entry): TrustedHome[] => {
-    const e = entry as { issuer?: unknown; jwks_uri?: unknown; services?: unknown; node_id?: unknown } | null;
+    const e = entry as { issuer?: unknown; jwks_uri?: unknown; services?: unknown; node_id?: unknown; name?: unknown } | null;
     if (!e || typeof e.issuer !== "string" || !isCanonicalHttpsOrigin(e.issuer) || typeof e.jwks_uri !== "string" || !Array.isArray(e.services)) return [];
     try {
       if (new URL(e.jwks_uri).protocol !== "https:") return [];
@@ -371,7 +375,8 @@ export function parseTrustedHomes(raw: unknown): TrustedHome[] {
     }
     const services = e.services.filter((s): s is string => typeof s === "string" && SERVICE_SLUG.test(s));
     const nodeId = typeof e.node_id === "string" && LINK_NODE_ID.test(e.node_id) ? e.node_id : undefined;
-    return [{ issuer: e.issuer, jwksUri: e.jwks_uri, services, ...(nodeId ? { nodeId } : {}) }];
+    const name = typeof e.name === "string" && HOME_NAME.test(e.name) ? e.name : undefined;
+    return [{ issuer: e.issuer, jwksUri: e.jwks_uri, services, ...(nodeId ? { nodeId } : {}), ...(name ? { name } : {}) }];
   });
 }
 
@@ -390,6 +395,8 @@ export const MAX_OFFER_CHARS = 280;
 /** The alias a tool may name. */
 export const LINK_ALIAS = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const LINK_NODE_ID = /^[A-Za-z0-9._-]{1,100}$/;
+/** A home's display name: short, plain characters only. */
+const HOME_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
 
 /**
  * The link targets from a parsed list (`[{ alias, node_id, origin, offer? }]`, the shape of a node's `.cogni/service-links.yaml`), or `[]` when it is missing or not a list. Strict per
@@ -573,7 +580,7 @@ export function createServiceAssertionVerifier(opts: {
         if (RESERVED_CLAIMS.has(name)) continue;
         if (CLAIM_NAME.test(name) && (typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isSafeInteger(value)))) extra[name] = value;
       }
-      return { ok: true, issuer: iss, service: sub, clientId, scope, jti, claims: extra };
+      return { ok: true, issuer: iss, service: sub, clientId, scope, jti, claims: extra, ...(home.name ? { homeName: home.name } : {}) };
     },
   };
 }
@@ -595,18 +602,22 @@ export async function servicePrincipalId(input: { issuer: string; service: strin
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-const serviceDisplayName = (input: { issuer: string; service: string }): string => `${input.service}@${new URL(input.issuer).host}`;
+/** `toks5 AI` for a named home's `node-ai`, `toks5 git-review` for its other services, else `node-ai · toks5-test.cognidao.org` (never an email-like form). */
+export const serviceDisplayName = (input: { issuer: string; service: string; homeName?: string | undefined }): string =>
+  input.homeName ? (input.service === "node-ai" ? `${input.homeName} AI` : `${input.homeName} ${input.service}`) : `${input.service} · ${new URL(input.issuer).host}`;
 
 /**
  * Create or find the one external principal for (issuer, service): its own `users` row and an `external` `agent_principals` row. No credential rows.
  * Idempotent and safe under concurrency (the id is derived). `tx` is a service-role connection.
  */
-export async function ensureServicePrincipal(tx: SqlTag, input: { issuer: string; service: string }): Promise<string> {
+export async function ensureServicePrincipal(tx: SqlTag, input: { issuer: string; service: string; homeName?: string | undefined }): Promise<string> {
   if (!isCanonicalHttpsOrigin(input.issuer) || !SERVICE_SLUG.test(input.service)) throw new TypeError("issuer and service must be canonical");
   // `node-connect` only signs connects: it is never a run principal, so it never asks for a grant and never holds a payer row.
   if (input.service === NODE_CONNECT_SERVICE) throw new TypeError("node-connect is not a principal");
   const userId = await servicePrincipalId(input);
-  await tx`INSERT INTO users (id, name) VALUES (${userId}, ${serviceDisplayName(input)}) ON CONFLICT (id) DO NOTHING`;
+  // The name is derived, never chosen by the caller, so a later ask refreshes it (a home that gained a `name`).
+  const name = serviceDisplayName(input);
+  await tx`INSERT INTO users (id, name) VALUES (${userId}, ${name}) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name WHERE users.name IS DISTINCT FROM EXCLUDED.name`;
   await writeExternalPrincipal(tx, userId);
   return userId;
 }
@@ -633,7 +644,7 @@ export async function requestServiceAccess(input: {
   scopeKinds?: Readonly<Record<string, ScopeKind>>;
 }): Promise<{ userId: string; outcome: AskOutcome }> {
   if (!input.assertion.scope.split(" ").includes(input.scope)) throw new AgentRolesError("invalid_scope", "scope is not in the signed assertion");
-  const userId = await ensureServicePrincipal(input.tx, { issuer: input.assertion.issuer, service: input.assertion.service });
+  const userId = await ensureServicePrincipal(input.tx, { issuer: input.assertion.issuer, service: input.assertion.service, homeName: input.assertion.homeName });
   const outcome = await requestAccess(input.store, {
     principalUserId: userId,
     scope: input.scope,

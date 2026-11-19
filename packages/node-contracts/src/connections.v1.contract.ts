@@ -6,7 +6,7 @@
  * Purpose: Zod contracts for connect from home (story.0038, `@cogni-dao/agent-grants` 0.10.0). Four routes, two sides:
  *   - Provider, public: POST /api/v1/public/agent/service-connections. A customer node signs `act`, `cap` and `seq` as an assertion of service `node-connect`; the provider answers
  *     with the record's resulting status, cap and seq.
- *   - Provider, admin: GET /api/v1/admin/connected-orgs (bounded, paged), POST /api/v1/admin/connected-orgs/{orgUserId}/allowance, .../suspension and .../seq-reset.
+ *   - Provider, admin: GET /api/v1/admin/connected-orgs (bounded, paged), POST /api/v1/admin/connected-orgs/{orgUserId}/allowance and .../suspension.
  *   - Customer, admin: GET and POST /api/v1/admin/connections (the node's own targets and the signed connect or disconnect it sends).
  * Scope: Bodies and outputs only. The caller on every admin route is the one admin check (a session or a bearer); the connect route's caller is its signed assertion, never its body.
  * Invariants: CONTRACTS_ARE_TRUTH. CREDITS_ARE_INTEGERS: every amount is an integer count of credits (10,000,000 per USD). A refusal carries a plain error code.
@@ -40,6 +40,8 @@ const connectedOrg = z.object({
   issuer: z.string().url(),
   /** The customer's node id, only when the provider's own `trusted_homes` entry names one. */
   nodeId: z.string().optional(),
+  /** The customer's node name (such as `toks5`), only when the provider's own `trusted_homes` entry names one; pages fall back to the issuer's host. */
+  name: z.string().optional(),
   /** `suspended` wins over `connected` and `disconnected`. */
   status: z.enum(CONNECTED_ORG_STATUSES),
   /** Credits the provider granted that are left (the balance of the record's billing account). */
@@ -66,10 +68,13 @@ export const connectedOrgsListOperation = {
   }),
 } as const;
 
+/** The most one free-credit grant may add: $100 at 10,000,000 credits per USD. A prototype comp grant, never a payment. */
+export const MAX_GRANT_CREDITS = 1_000_000_000;
+
 export const connectedOrgAllowanceOperation = {
   id: "admin.connected-orgs.allowance.v1",
-  /** `credits` is added to the record's balance as ONE ledger row (reason `connection_allowance`). `Idempotency-Key` (a header) makes a retry add nothing. */
-  input: z.object({ credits: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }),
+  /** FREE credits (a comp grant; no payment exists yet) added to the record's balance as ONE ledger row (reason `connection_allowance`, metadata `source: admin_grant` and the admin's id). `Idempotency-Key` (a header) makes a retry add nothing. */
+  input: z.object({ credits: z.number().int().min(1).max(MAX_GRANT_CREDITS) }),
   output: z.object({
     orgUserId: z.string(),
     /** The record's balance after the grant. */
@@ -84,12 +89,6 @@ export const connectedOrgSuspensionOperation = {
   /** `suspended: true` is Suspend (sticky: a connect never clears it); `false` is Resume. */
   input: z.object({ suspended: z.boolean() }),
   output: z.object({ orgUserId: z.string(), suspended: z.boolean() }),
-} as const;
-
-export const connectedOrgSeqResetOperation = {
-  id: "admin.connected-orgs.seq-reset.v1",
-  /** Puts the record's stored `seq` back to 1 (a record a stolen key pushed up). No body. */
-  output: z.object({ orgUserId: z.string(), seq: z.literal(1) }),
 } as const;
 
 const outboundTarget = z.object({

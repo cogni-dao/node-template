@@ -3,18 +3,17 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/connections/connections-section`
- * Purpose: Helps a customer admin decide which other node this node may spend on, and how much. The "Connections" list (story.0038, connect from home). One item = name (the target's alias), a short
- *   status badge (Connected or Off), ONE number (the stored cap, "500 cr", only when connected) and ONE inline action: "Connect" (a cap input with its "cr" unit inside the field, and a button, one compact
- *   control; the input is named "Cap"). A failed click is ONE short destructive line under that row's own input ("Couldn't connect.", "Not allowed.", "Out of sync. Try again."), the HTTP status only as its title. Disconnect lives in
- *   the row's ⋯ menu. The provider's offer is a small info icon with the text in a popover, never in the row.
- * Scope: Presentation over `useConnections`. Same heading, rule and divider style as `AgentAccessSection`. Words are kept to the minimum: no subtitle, no origin line, no explanations.
+ * Purpose: Helps a customer admin decide which other nodes this node's AI may spend on, and how much. The "Connections" table (story.0038, connect from home).
+ *   Columns Node · Limit · On, the same table, heading and switch as the AI access table. The limit is this node's spend control, in dollars.
+ * Scope: Presentation over `useConnections`. Money is dollars through the injected `Money`. Words are kept to the minimum: the provider's offer is a small info
+ *   icon with its text in a popover, never in the row.
  * Invariants:
- *   - FIVE_STATES: loading (a skeleton that mirrors the items), empty ("No nodes yet."), sparse, dense and error ("Couldn't load." and Retry). A 401, 403 or 404 renders nothing.
- *   - NO_SIGNER_IS_A_STATE: a node with no signing key shows one short line ("No signing key.") and offers no controls; names, status and the offer icon still show.
- *   - MOBILE_FIRST: at 360px each item is stacked (name, badge and number, then a full-width input and 44px button); controls are never dropped at any width. No horizontal scroll.
- *   - ROW_STAYS: a click in flight keeps the row and DISABLES its controls (other rows' clicks are ignored); when the action finishes focus returns to the row's ⋯ trigger, or to its Connect button when it has no menu.
- *   - TARGETS: every control is at least 24px; the primary mobile actions are 44px. Tokens only: semantic colours, no raw palette, no inline style, no magic size.
- *   - No filters and no extra controls.
+ *   - ON_IS_CONNECT: turning a row On sends one signed connect with the typed limit; turning it Off sends a disconnect. A row that is On shows its limit as text;
+ *     to change it, turn the row Off and On again with a new limit.
+ *   - NO_SIGNER_IS_A_STATE: a node with no signing key shows one short line ("No signing key.") and its switches are locked.
+ *   - FIVE_STATES: loading (a skeleton), empty ("No nodes yet."), sparse, dense and error ("Couldn't load." and Retry). A 401, 403 or 404 renders nothing.
+ *   - ROW_STAYS: a click in flight keeps the row and shows a skeleton in its switch cell; a failure is ONE short destructive line under the row's name.
+ *   - TARGETS: every control is at least 24px. Tokens only. No filters and no extra controls.
  * Side-effects: IO (through the hook)
  * Links: https://node-template.cognidao.org/knowledge/frontend-development, https://node-template.cognidao.org/knowledge/node-relationships-design
  * @public
@@ -22,53 +21,27 @@
 
 "use client";
 
-import { Info, MoreHorizontal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Info } from "lucide-react";
+import { useState } from "react";
 
-import { cn } from "../cn.js";
 import { Button } from "../ui/button.js";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
-import { SuffixInput } from "../ui/input.js";
+import { Input } from "../ui/input.js";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.js";
 import { Skeleton } from "../ui/skeleton.js";
-import { formatCredits } from "./format.js";
+import { Switch } from "../ui/switch.js";
+import { hostOf, type Money } from "./format.js";
 import { CONNECTIONS_UNAVAILABLE_COPY, type ConnectionsEndpoints, NO_SIGNER_COPY, useConnections } from "./use-connections.js";
 
 export interface ConnectionsSectionProps {
   readonly endpoints: ConnectionsEndpoints;
+  /** The node's credits-to-dollars conversion. */
+  readonly money: Money;
   readonly className?: string;
 }
 
-/** Full-width 44px on a phone, compact from `md:`. */
-const TOUCH = "h-11 md:h-8";
-
-/** The loading state: the same structure as an item, so the first paint does not shift. */
-function ItemSkeleton() {
-  return (
-    <li className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
-      <Skeleton className="h-5 w-40" />
-      <Skeleton className="h-11 w-full md:h-8 md:w-64" />
-    </li>
-  );
-}
-
-export function ConnectionsSection({ endpoints, className }: ConnectionsSectionProps) {
+export function ConnectionsSection({ endpoints, money, className }: ConnectionsSectionProps) {
   const { state, busy, failure, reload, connect, disconnect } = useConnections(endpoints);
-  const [caps, setCaps] = useState<Readonly<Record<string, string>>>({});
-  /** Each row's ⋯ trigger when it has one, else its Connect button: focus goes back to it when an action finishes. */
-  const anchors = useRef(new Map<string, HTMLElement | null>());
-  const wasBusy = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (busy !== null) {
-      wasBusy.current = busy;
-      return;
-    }
-    if (wasBusy.current !== null) {
-      anchors.current.get(wasBusy.current)?.focus();
-      wasBusy.current = null;
-    }
-  }, [busy]);
+  const [limits, setLimits] = useState<Readonly<Record<string, string>>>({});
 
   if (state.status === "hidden") return null;
 
@@ -82,19 +55,19 @@ export function ConnectionsSection({ endpoints, className }: ConnectionsSectionP
       </div>
 
       {state.status === "loading" && (
-        <ul className="divide-y divide-border" aria-busy="true" aria-label="Loading">
-          <ItemSkeleton />
-          <ItemSkeleton />
-        </ul>
+        <div className="space-y-3 py-3" aria-busy="true" aria-label="Loading">
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-5 w-full" />
+        </div>
       )}
 
       {state.status === "unavailable" && (
-        <div className="flex items-center gap-3 py-3" role="alert">
-          <p className="text-destructive text-sm">{CONNECTIONS_UNAVAILABLE_COPY}</p>
-          <Button type="button" size="sm" variant="outline" onClick={() => void reload()}>
+        <p className="flex items-center gap-3 py-3 text-destructive text-sm" role="alert">
+          {CONNECTIONS_UNAVAILABLE_COPY}
+          <button type="button" className="text-foreground underline" onClick={() => void reload()}>
             Retry
-          </Button>
-        </div>
+          </button>
+        </p>
       )}
 
       {state.status === "ready" && (
@@ -107,102 +80,86 @@ export function ConnectionsSection({ endpoints, className }: ConnectionsSectionP
           {state.view.targets.length === 0 ? (
             <p className="py-2 text-muted-foreground text-sm">No nodes yet.</p>
           ) : (
-            <ul className="divide-y divide-border">
-              {state.view.targets.map((target) => {
-                const saving = busy === target.alias;
-                const connected = target.status === "connected";
-                return (
-                  <li key={target.alias} aria-busy={saving || undefined} className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
-                    <div className="flex min-w-0 items-center justify-between gap-3 md:justify-start">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="min-w-0 truncate font-mono text-foreground">{target.alias}</span>
-                        <span className="shrink-0 rounded border border-foreground/40 px-1 font-medium text-foreground text-xs">{connected ? "Connected" : "Off"}</span>
-                        {target.offer && (
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <Button type="button" size="sm" variant="ghost" className="w-8 shrink-0 px-0" aria-label={`Offer from ${target.alias}`}>
-                                <Info aria-hidden="true" />
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent align="start" className="w-64 text-sm">
-                              {target.offer}
-                            </PopoverContent>
-                          </Popover>
+            <table className="w-full text-left text-sm">
+              <thead className="text-muted-foreground text-xs">
+                <tr>
+                  <th scope="col" className="py-1 pr-3 font-medium">Node</th>
+                  <th scope="col" className="py-1 pr-3 text-right font-medium">Limit</th>
+                  <th scope="col" className="w-12 py-1 text-right font-medium">On</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {state.view.targets.map((target) => {
+                  const saving = busy === target.alias;
+                  const on = target.status === "connected";
+                  const locked = busy !== null || !state.view.signer;
+                  return (
+                    <tr key={target.alias} aria-busy={saving || undefined}>
+                      <td className="max-w-0 py-2 pr-3 align-top">
+                        <div className="flex min-w-0 items-center gap-1">
+                          <span className="truncate font-medium text-foreground">{target.alias}</span>
+                          {target.offer && (
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <Button type="button" size="sm" variant="ghost" className="h-6 w-6 shrink-0 px-0" aria-label={`Offer from ${target.alias}`}>
+                                  <Info aria-hidden="true" />
+                                </Button>
+                              </PopoverTrigger>
+                              <PopoverContent align="start" className="w-64 text-sm">
+                                {target.offer}
+                              </PopoverContent>
+                            </Popover>
+                          )}
+                        </div>
+                        <div className="truncate text-muted-foreground text-xs">{hostOf(target.origin)}</div>
+                        {failure?.rowId === target.alias && (
+                          <p className="text-destructive text-xs" role="alert" title={failure.code === null ? undefined : String(failure.code)}>
+                            {failure.text}
+                          </p>
                         )}
-                      </div>
-                      {connected && target.cap !== null && <span className="shrink-0 text-foreground text-sm tabular-nums">{formatCredits(target.cap)}</span>}
-                    </div>
-
-                    {state.view.signer && (
-                        <div className="flex min-w-0 flex-col gap-1">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <div className="flex min-w-0 flex-1 md:flex-none">
-                              <SuffixInput
-                                type="number"
-                                inputMode="numeric"
-                                min={1}
-                                step={1}
-                                suffix="cr"
-                                disabled={saving}
-                                className="min-w-0 flex-1 md:w-28 md:flex-none"
-                                inputClassName={cn(TOUCH, "rounded-r-none tabular-nums")}
-                                placeholder="Cap"
-                                aria-label={`Cap for ${target.alias}`}
-                                value={caps[target.alias] ?? ""}
-                                onChange={(event) => setCaps((prev) => ({ ...prev, [target.alias]: event.target.value }))}
-                              />
-                              <Button
-                                ref={(el) => {
-                                  if (!connected) anchors.current.set(target.alias, el);
-                                }}
-                                type="button"
-                                size="sm"
-                                disabled={saving}
-                                className={cn(TOUCH, "shrink-0 rounded-l-none")}
-                                onClick={() => void connect(target.alias, Number(caps[target.alias] ?? ""))}
-                              >
-                                Connect
-                              </Button>
-                            </div>
-                            {connected && (
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    ref={(el) => {
-                                      if (connected) anchors.current.set(target.alias, el);
-                                    }}
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    disabled={saving}
-                                    className={cn(TOUCH, "w-11 shrink-0 px-0 md:w-8")}
-                                    aria-label={`More for ${target.alias}`}
-                                  >
-                                    <MoreHorizontal aria-hidden="true" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem onSelect={() => void disconnect(target.alias)}>Disconnect</DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            )}
-                          </div>
-                          {saving && (
+                      </td>
+                      <td className="whitespace-nowrap py-2 pr-3 text-right align-top tabular-nums">
+                        {on && target.cap !== null ? (
+                          <span className="text-foreground">{money.format(target.cap)}</span>
+                        ) : (
+                          <Input
+                            type="number"
+                            inputMode="decimal"
+                            min={0.01}
+                            step={0.01}
+                            placeholder="$5"
+                            disabled={saving || !state.view.signer}
+                            className="ml-auto h-8 w-24 text-right tabular-nums"
+                            aria-label={`Limit in dollars for ${target.alias}`}
+                            value={limits[target.alias] ?? ""}
+                            onChange={(event) => setLimits((prev) => ({ ...prev, [target.alias]: event.target.value }))}
+                          />
+                        )}
+                      </td>
+                      <td className="h-10 py-2 text-right align-top">
+                        {saving ? (
+                          <>
+                            <Skeleton className="ml-auto h-5 w-9 rounded-full" />
                             <span className="sr-only" role="status">
                               Saving
                             </span>
-                          )}
-                          {failure?.rowId === target.alias && (
-                            <p className="text-destructive text-xs" role="alert" title={failure.code === null ? undefined : String(failure.code)}>
-                              {failure.text}
-                            </p>
-                          )}
-                        </div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
+                          </>
+                        ) : (
+                          <Switch
+                            on={on}
+                            label={`${target.alias}: On`}
+                            locked={locked}
+                            onToggle={() =>
+                              void (on ? disconnect(target.alias) : connect(target.alias, money.toCredits(Number(limits[target.alias] ?? "")) ?? 0))
+                            }
+                          />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
         </div>
       )}

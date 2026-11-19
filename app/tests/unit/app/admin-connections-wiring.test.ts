@@ -48,7 +48,6 @@ describe("connect from home pages", () => {
       `app${CONNECTED_ORGS_PATH}/route.ts`,
       `app${CONNECTED_ORGS_PATH}/[orgUserId]/allowance/route.ts`,
       `app${CONNECTED_ORGS_PATH}/[orgUserId]/suspension/route.ts`,
-      `app${CONNECTED_ORGS_PATH}/[orgUserId]/seq-reset/route.ts`,
       `app${CONNECTIONS_PATH}/route.ts`,
     ];
     for (const rel of routes) {

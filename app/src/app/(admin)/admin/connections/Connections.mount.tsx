@@ -16,8 +16,9 @@
 import { ConnectionsSection } from "@cogni/knowledge-base-ui";
 import type { ReactElement } from "react";
 
+import { CONNECTION_MONEY } from "../connection-money";
 import { CONNECTIONS_ENDPOINTS } from "./connections-endpoints";
 
 export function ConnectionsMount(): ReactElement {
-	return <ConnectionsSection endpoints={CONNECTIONS_ENDPOINTS} />;
+	return <ConnectionsSection endpoints={CONNECTIONS_ENDPOINTS} money={CONNECTION_MONEY} />;
 }

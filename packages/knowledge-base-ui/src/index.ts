@@ -65,6 +65,7 @@ export {
   type UseAgentAccessOptions,
 } from "./agent-access/use-agent-access.js";
 export { ConnectedOrgsSection, type ConnectedOrgsSectionProps } from "./connections/connected-orgs-section.js";
+export type { Money } from "./connections/format.js";
 export {
   CONNECTED_ORGS_PAGE_SIZE,
   type ConnectedOrgsEndpoints,

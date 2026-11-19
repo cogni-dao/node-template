@@ -41,7 +41,6 @@ const MODE_NONE_SELF_AUTHENTICATED: Readonly<Record<string, string>> = {
   "agent.mine.on": "human plane: refuseNonSession() then the signed-in person",
   "agent.mine.off": "human plane: refuseNonSession() then the signed-in person",
   "admin.connected-orgs.allowance": "requireAdminSession(): the one admin check, for a session or a bearer (the provider grants a connected org an allowance: one credit-ledger row)",
-  "admin.connected-orgs.seq-reset": "requireAdminSession(): the one admin check, for a session or a bearer (the provider puts a connected org's stored seq back to 1)",
   "admin.connected-orgs.suspension": "requireAdminSession(): the one admin check, for a session or a bearer (the provider Suspends or Resumes a connected org)",
   "admin.connections.act": "requireAdminSession(): the one admin check, for a session or a bearer (this node signs and sends one connect or disconnect to a configured provider)",
   "v1/public/agent/service-enrollments/route.ts#POST": "verifies the caller's signed service assertion (RFC 7523) against a trusted home's published keys, then writes one pending ask for that service principal; it grants nothing",

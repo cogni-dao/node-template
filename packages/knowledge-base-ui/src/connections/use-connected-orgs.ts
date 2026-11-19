@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/knowledge-base-ui/connections/use-connected-orgs`
  * Purpose: The data hook behind the provider's "Connected nodes" list (story.0038, connect from home): loads the bounded, paged list, and runs the four row actions (Suspend or Resume, Grant
- *   allowance, Reset seq). The node owns the routes and their auth; this hook only knows the list route and the three `{id}/...` action routes under it.
+ *   allowance). The node owns the routes and their auth; this hook only knows the list route and the three `{id}/...` action routes under it.
  * Scope: Plain `fetch` with `cache: "no-store"` and the browser session only (never an Authorization header); no react-query, no kept copy beyond component state.
  * Invariants:
  *   - BOUNDED_PAGED: every read asks `limit=PAGE_SIZE` (50) and, after the first page, `after=<the previous nextAfter>`; a page never holds more than the server's bound.
@@ -29,7 +29,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { failureText, type RowFailure } from "./format.js";
 
 export interface ConnectedOrgsEndpoints {
-  /** The list route (GET `?limit=&after=`), such as `/api/v1/admin/connected-orgs`. The action routes are `{list}/{orgUserId}/allowance`, `.../suspension` and `.../seq-reset` (POST). */
+  /** The list route (GET `?limit=&after=`), such as `/api/v1/admin/connected-orgs`. The action routes are `{list}/{orgUserId}/allowance` and `.../suspension` (POST). */
   readonly list: string;
 }
 
@@ -56,13 +56,12 @@ export interface UseConnectedOrgs {
   readonly suspend: (org: ConnectedOrgView) => Promise<void>;
   /** Grants `credits` (a whole number of at least 1). Returns true when it went through. */
   readonly grant: (org: ConnectedOrgView, credits: number) => Promise<boolean>;
-  readonly resetSeq: (org: ConnectedOrgView) => Promise<void>;
 }
 
 export const CONNECTED_ORGS_PAGE_SIZE = 50;
 export const CONNECTED_ORGS_UNAVAILABLE_COPY = "Couldn't load.";
 export const CONNECTED_ORGS_ACTION_FAILED_COPY = "Couldn't save.";
-export const CONNECTED_ORGS_BAD_AMOUNT_COPY = "Enter a number.";
+export const CONNECTED_ORGS_BAD_AMOUNT_COPY = "Enter up to $100.";
 
 function isPage(value: unknown): value is ConnectedOrgsPage {
   const v = value as { orgs?: unknown; nextAfter?: unknown } | null;
@@ -175,9 +174,6 @@ export function useConnectedOrgs(endpoints: ConnectedOrgsEndpoints): UseConnecte
         return false;
       }
       return act(org.orgUserId, () => post(org, "allowance", { credits }, { "idempotency-key": crypto.randomUUID() }));
-    },
-    resetSeq: async (org) => {
-      await act(org.orgUserId, () => post(org, "seq-reset"));
     },
   };
 }

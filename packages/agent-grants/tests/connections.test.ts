@@ -84,10 +84,6 @@ describe("applyConnection", () => {
     if (!first.ok) throw new Error("connect failed");
     expect(await applyConnection(store, { assertion: connect(1000, 2 * MAX_SEQ_STEP + 1), services: SERVICES })).toEqual({ ok: false, code: "seq_jump", seq: MAX_SEQ_STEP });
     expect(await applyConnection(store, { assertion: connect(1000, 2 * MAX_SEQ_STEP), services: SERVICES })).toMatchObject({ ok: true });
-    // A bricked record: the admin resets the stored seq, and the customer's next seq lands.
-    expect(await store.resetSeq(first.record.orgUserId)).toBe(true);
-    expect(await applyConnection(store, { assertion: connect(1000, 2), services: SERVICES })).toMatchObject({ ok: true, record: { seq: 2, cap: 1000 } });
-    expect(await store.resetSeq("nobody")).toBe(false);
   });
 
   it("refuses a seq at or below the stored one and changes nothing (CONNECT_IS_ORDERED)", async () => {

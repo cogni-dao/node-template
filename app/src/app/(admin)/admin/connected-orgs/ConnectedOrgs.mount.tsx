@@ -16,8 +16,9 @@
 import { ConnectedOrgsSection } from "@cogni/knowledge-base-ui";
 import type { ReactElement } from "react";
 
+import { CONNECTION_MONEY } from "../connection-money";
 import { CONNECTED_ORGS_ENDPOINTS } from "./connected-orgs-endpoints";
 
 export function ConnectedOrgsMount(): ReactElement {
-	return <ConnectedOrgsSection endpoints={CONNECTED_ORGS_ENDPOINTS} />;
+	return <ConnectedOrgsSection endpoints={CONNECTED_ORGS_ENDPOINTS} money={CONNECTION_MONEY} />;
 }

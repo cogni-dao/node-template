@@ -46,8 +46,7 @@ export function createNodeAdminPort(
     // Connect from home (story.0038). The session is the proof the one admin check ran; the decisions are the package's (the record's seq order, sticky Suspend, the gate).
     listConnectedOrgs: (_session, input) => connect.connections.list(input),
     setConnectedOrgSuspended: (_session, { orgUserId, suspended }) => connect.connections.setSuspended(orgUserId, suspended),
-    grantConnectionAllowance: (_session, input) => connect.connections.grantAllowance(input),
-    resetConnectedOrgSeq: (_session, orgUserId) => connect.connections.resetSeq(orgUserId),
+    grantConnectionAllowance: (session, input) => connect.connections.grantAllowance({ ...input, adminUserId: session.userId }),
     listOutboundConnections: () => connect.outbound.list(),
     actOutboundConnection: (_session, input) => connect.outbound.act(input),
   };

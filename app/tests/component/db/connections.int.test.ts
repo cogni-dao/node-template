@@ -208,21 +208,16 @@ describe("connect from home (real Postgres)", () => {
     expect(await sql`SELECT 1 FROM payer_bindings WHERE billing_account_id = ${account} AND revoked_at IS NULL`).toHaveLength(2);
   });
 
-  it("a seq more than MAX_SEQ_STEP above the stored one is refused (nothing created on a first connect), and the admin's reset puts the stored seq back to 1", async () => {
+  it("a seq more than MAX_SEQ_STEP above the stored one is refused (nothing created on a first connect)", async () => {
     const c = await customer();
     expect(await c.send(await c.sign({ act: "connect", cap: 1, seq: MAX_SEQ_STEP + 1 }))).toMatchObject({ verified: true, outcome: { ok: false, code: "seq_jump" } });
     expect(await row(c.issuer)).toBeUndefined();
     await c.send(await c.sign({ act: "connect", cap: 1000, seq: 5 }));
     expect(await c.send(await c.sign({ act: "connect", cap: 1000, seq: 5 + MAX_SEQ_STEP + 1 }))).toMatchObject({ verified: true, outcome: { ok: false, code: "seq_jump", seq: 5 } });
     expect(await c.send(await c.sign({ act: "connect", cap: 1000, seq: 5 + MAX_SEQ_STEP }))).toMatchObject({ verified: true, outcome: { ok: true } });
-    const record = await row(c.issuer);
-    expect(await createPostgresConnectionStore(sql as unknown as SqlTag).resetSeq(record?.org_user_id as string)).toBe(true);
-    expect(await row(c.issuer)).toMatchObject({ seq: "1", cap: "1000", status: "connected" });
-    expect(await c.send(await c.sign({ act: "connect", cap: 2000, seq: 2 }))).toMatchObject({ verified: true, outcome: { ok: true, record: { seq: 2, cap: 2000 } } });
-    expect(await createPostgresConnectionStore(sql as unknown as SqlTag).resetSeq(randomUUID())).toBe(false);
   });
 
-  it("after the provider's admin resets the record to 1, a customer whose local seq is above 1M fails ONE click (seq_jump) and then connects", async () => {
+  it("a customer whose local seq is more than 1M above the provider's fails ONE click (seq_jump), aligns to the provider's seq and then connects", async () => {
     const c = await customer();
     const origin = `https://provider-${randomUUID()}.example.org`;
     const outbound = createPostgresOutboundConnectionStore(sql as unknown as SqlTag);
@@ -245,16 +240,13 @@ describe("connect from home (real Postgres)", () => {
     // The provider holds this customer at seq 5; the customer's local table is far ahead (a long-lived node).
     await c.send(await c.sign({ act: "connect", cap: 1000, seq: 5 }));
     await sql`INSERT INTO outbound_connections (target_origin, status, cap, seq) VALUES (${origin}, 'disconnected', 0, ${2 * MAX_SEQ_STEP})`;
-    // The provider admin resets the record: stored seq 1.
-    const record = await row(c.issuer);
-    expect(await createPostgresConnectionStore(sql as unknown as SqlTag).resetSeq(record?.org_user_id as string)).toBe(true);
 
-    // One click fails: 2,000,001 is more than 1,000,000 above 1. The answer carries the stored seq and the customer aligns to it.
+    // One click fails: 2,000,001 is more than 1,000,000 above 5. The answer carries the stored seq and the customer aligns to it.
     expect(await sender.act({ alias: "prov", act: "connect", cap: 700 })).toMatchObject({ ok: true, httpStatus: 409, status: null, error: "seq_jump", target: { status: "not_connected" } });
-    expect((await outbound.states([origin])).get(origin)?.seq).toBe(1);
-    // The next click lands (seq 2) and the provider's record carries the new cap.
+    expect((await outbound.states([origin])).get(origin)?.seq).toBe(5);
+    // The next click lands (seq 6) and the provider's record carries the new cap.
     expect(await sender.act({ alias: "prov", act: "connect", cap: 700 })).toMatchObject({ ok: true, httpStatus: 200, status: "connected", target: { status: "connected", cap: 700 } });
-    expect(await row(c.issuer)).toMatchObject({ seq: "2", cap: "700", status: "connected" });
+    expect(await row(c.issuer)).toMatchObject({ seq: "6", cap: "700", status: "connected" });
   });
 
   it("this node's own outbound state: seq rises across instances, a stale-guarded accept does not overwrite a newer one, and a lift never lowers", async () => {

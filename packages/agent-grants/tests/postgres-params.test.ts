@@ -69,7 +69,6 @@ describe("the Postgres store passes no JS Date as a parameter", () => {
     await connections.list({ limit: 5, after: null });
     await connections.setSuspended("o", true);
     await connections.bindService({ issuer: "https://home.example", subjectUserId: "s" });
-    await connections.resetSeq("o");
     const outbound = createPostgresOutboundConnectionStore(tag);
     await outbound.reserveSeq("https://prov.example");
     await outbound.states(["https://prov.example"]);

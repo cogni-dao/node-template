@@ -19,7 +19,7 @@
  *     record, so the ordinary `payerFor` / `selectRunPayer` path bills it. A connect NEVER creates a principal: a connected customer's AI still gets 401, asks, and waits on `/admin/ai-access`;
  *     a service that asks later is bound by `bindService` in the ask's own transaction.
  *   - SEQ_STEP_IS_BOUNDED: a `seq` more than `MAX_SEQ_STEP` above the stored one (or above it on a first connect) is refused (`seq_jump`), so a stolen key cannot burn the whole integer line; the
- *     provider admin's `resetSeq` puts the record back to 1.
+ *     customer's sender aligns to the provider's seq on `seq_jump`, so no admin reset exists.
  *   - ALLOWANCE_BOUNDS_COST: `decideConnection` admits a run only while `balance > 0` AND `debits < cap`; the allowance is the credit balance of the record's billing account (the provider's
  *     own grant); the cap can only lower that. A new connect replaces the cap and keeps the cumulative debits (the sum of the account's charge receipts).
  *   - A refusal is a plain code: `connection_suspended`, `connection_disconnected`, `connection_allowance_empty`, `connection_cap_reached`.
@@ -102,6 +102,8 @@ export interface ConnectionView {
 /** A connected org as the provider's page shows it: the view plus the customer's node id when the provider's own `trusted_homes` entry names one. */
 export interface ConnectedOrgView extends ConnectionView {
   readonly nodeId?: string;
+  /** The customer's node name from the provider's own `trusted_homes` entry (a label only). */
+  readonly name?: string;
 }
 
 export const viewOf = (row: ConnectionStanding): ConnectionView => ({
@@ -157,8 +159,6 @@ export interface ConnectionStore {
   list(input: { limit: number; after: string | null }): Promise<ConnectionStanding[]>;
   /** The provider admin's Suspend or Resume. False when the org user has no record. */
   setSuspended(orgUserId: string, suspended: boolean): Promise<boolean>;
-  /** The provider admin's reset of the stored `seq` to 1 (a record whose seq a stolen key pushed up). Nothing else changes. False when the org user has no record. */
-  resetSeq(orgUserId: string): Promise<boolean>;
   /** Bind one service principal of `issuer` to its record (used when a service asks after the connect). False when the issuer has no record. */
   bindService(input: { issuer: string; subjectUserId: string }): Promise<boolean>;
 }
@@ -299,10 +299,6 @@ export function createPostgresConnectionStore(sql: SqlTag): ConnectionStore {
     async setSuspended(orgUserId, suspended) {
       const rows = await sql`
         UPDATE org_connections SET suspended = ${suspended}, updated_at = now() WHERE org_user_id = ${orgUserId} RETURNING org_user_id`;
-      return rows.length > 0;
-    },
-    async resetSeq(orgUserId) {
-      const rows = await sql`UPDATE org_connections SET seq = 1, updated_at = now() WHERE org_user_id = ${orgUserId} RETURNING org_user_id`;
       return rows.length > 0;
     },
     async bindService({ issuer, subjectUserId }) {
