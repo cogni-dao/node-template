@@ -32,7 +32,7 @@ const LIGHT_TOKEN_BLOCK = `:root {
   --secondary: 210 29% 97%;
   --secondary-foreground: 213 13% 14%;
   --muted: 210 23% 95%;
-  --muted-foreground: 211 11% 39%;
+  --muted-foreground: 213 14% 33%;
   --accent: 210 23% 95%;
   --accent-foreground: 213 13% 14%;
   --destructive: 356 71% 43%;

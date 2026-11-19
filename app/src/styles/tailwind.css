@@ -36,7 +36,7 @@
   --color-info: hsl(var(--info));
   --color-invert: hsl(var(--invert));
   --color-invert-foreground: hsl(var(--invert-foreground));
-  --color-logo-tile: hsl(var(--logo-tile));
+  --color-done: hsl(var(--done));
   --color-syntax-property: hsl(var(--syntax-property));
   --color-syntax-operator: hsl(var(--syntax-operator));
   --color-syntax-punctuation: hsl(var(--syntax-punctuation));
@@ -142,7 +142,7 @@
     --secondary: 210 29% 97%; /* #f6f8fa */
     --secondary-foreground: 213 13% 14%;
     --muted: 210 23% 95%; /* #eff2f5: a tint that still shows at /30 */
-    --muted-foreground: 211 11% 39%; /* fg muted #59636e, 6.1:1 */
+    --muted-foreground: 213 14% 33%; /* secondary text, 8:1; lighter greys read as disabled */
     --accent: 210 23% 95%; /* hover */
     --accent-foreground: 213 13% 14%;
     --destructive: 356 71% 43%;
@@ -174,13 +174,12 @@
     --danger: 356 71% 43%;
     --warning: 40 100% 25%;
     --success: 137 66% 26%;
-    --info: 261 60% 53%;
+    --info: 212 92% 40%; /* Primer accent blue, darkened */
+    --done: 261 60% 53%; /* Primer done purple, darkened */
     --invert: 213 13% 14%;
     --invert-foreground: 0 0% 100%;
-    /* The neon brand mark needs a dark backing on light surfaces. */
-    --logo-tile: 216 28% 7%;
 
-    /* Sidebar: the muted surface, one step off the canvas */
+    /* Chrome (sidebar + top bar): the muted surface, one step off the canvas */
     --sidebar: 210 29% 97%;
     --sidebar-foreground: 213 13% 14%;
     --sidebar-primary: 217 91% 45%;
@@ -235,13 +234,13 @@
     --danger: 3 93% 66%; /* #f85149, lifted to 4.8:1 on muted */
     --warning: 41 72% 48%; /* #d29922 */
     --success: 128 49% 49%; /* #3fb950 */
-    --info: 262 90% 73%; /* #ab7df8 */
+    --info: 214 93% 62%; /* #4493f8 */
+    --done: 262 90% 73%; /* #ab7df8 */
     --invert: 214 12% 27%;
     --invert-foreground: 210 67% 96.5%;
-    --logo-tile: 216 28% 7%;
 
-    /* Sidebar: the canvas, separated by its border */
-    --sidebar: 216 28% 7%;
+    /* Chrome (sidebar + top bar): Primer inset #010409, darker than the canvas */
+    --sidebar: 218 80% 2%;
     --sidebar-foreground: 210 67% 96.5%;
     --sidebar-primary: 217 91% 65%;
     --sidebar-primary-foreground: 216 28% 7%;

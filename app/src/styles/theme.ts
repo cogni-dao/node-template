@@ -39,7 +39,7 @@ export const colorKeys = [
   "info",
   "invert",
   "invert-foreground",
-  "logo-tile",
+  "done",
   "syntax-property",
   "syntax-operator",
   "syntax-punctuation",
