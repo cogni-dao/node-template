@@ -129,6 +129,7 @@ import { mcpServersToCodexConfig } from "@/adapters/server/ai/codex/codex-mcp-co
 import { findExecutionScope } from "@/adapters/server/ai/execution-scope";
 import { withReadCounting } from "@/adapters/server/knowledge-usage/counting-knowledge-capability";
 import { PostgresKnowledgeReadCounter } from "@/adapters/server/knowledge-usage/knowledge-read-counter.adapter";
+import { PostgresCitePairRecorder } from "@/adapters/server/knowledge-usage/cite-pair-recorder.adapter";
 import {
 	CodexModelProvider,
 	OpenAiCompatibleModelProvider,
@@ -916,6 +917,25 @@ function createContainer(): Container {
 				);
 			},
 		);
+		// story.0061: a successful patch also records the (atom, item) pairs it cites; the route and the agent tool share
+		// this patch, and the record never fails or delays it.
+		{
+			const citePairs = new PostgresCitePairRecorder(
+				serviceDb,
+				log.child({ component: "CitePairRecorder" }),
+			);
+			const leased = doltgresWorkItems;
+			doltgresWorkItems = {
+				...leased,
+				async patch(input, principalId) {
+					const item = await leased.patch(input, principalId);
+					if (input.cites?.length) {
+						citePairs.record(item.id, item.revision, input.cites.map((cite) => cite.id));
+					}
+					return item;
+				},
+			};
+		}
 		// task.0028: artifacts go through the work-items writer path. The artifact records its author for audit; no
 		// server check compares it with the subject's author.
 		workItemArtifacts = doltgresWorkItems.artifacts

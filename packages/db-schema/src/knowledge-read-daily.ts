@@ -52,3 +52,20 @@ export const knowledgeReadDaily = pgTable(
 		),
 	],
 ).enableRLS();
+
+/**
+ * Write-time (atom, work item) pairs from work-item PATCH `cites` (story.0061): the link from a heavily read atom
+ * to the items that used it. One row per pair, inserted once (ON CONFLICT DO NOTHING), so rows grow with distinct
+ * pairs, never with patches. Same access rule as knowledge_read_daily: service role only, FORCE in the migration.
+ */
+export const knowledgeCitePairs = pgTable(
+	"knowledge_cite_pairs",
+	{
+		atomId: text("atom_id").notNull(),
+		workItemId: text("work_item_id").notNull(),
+		/** The item revision the first cite of this atom produced; review verdicts are ordered against it. */
+		firstItemRevision: integer("first_item_revision").notNull(),
+		firstAt: timestamp("first_at", { withTimezone: true }).notNull().defaultNow(),
+	},
+	(table) => [primaryKey({ columns: [table.atomId, table.workItemId] })],
+).enableRLS();

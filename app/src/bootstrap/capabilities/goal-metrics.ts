@@ -17,6 +17,10 @@ import {
 	readValidatedByAuthor,
 } from "@/adapters/server/metrics/ledger.source";
 import {
+	KNOWLEDGE_READ_MEASURES,
+	readKnowledgeReads,
+} from "@/adapters/server/metrics/knowledge-reads.source";
+import {
 	RUN_CALLER_CLASSES,
 	readRunsByCaller,
 } from "@/adapters/server/metrics/runs.source";
@@ -57,6 +61,42 @@ function createRunsCountCalculator(observationsSql: Sql): MetricCalculator {
 			const parsed = runsParams.parse(params);
 			return ctx.read((signal) =>
 				readRunsByCaller(observationsSql, parsed, ctx.window, signal),
+			);
+		},
+	};
+}
+
+const knowledgeReadParams = z.strictObject({
+	measure: z.enum(KNOWLEDGE_READ_MEASURES),
+});
+
+/**
+ * Node-local calculator over this node's write-time read counters: the read-miss KPI and its unit guardrail.
+ * Design: https://node-template.cognidao.org/knowledge/knowledge-usage-telemetry
+ */
+function createKnowledgeUsageCalculator(observationsSql: Sql): MetricCalculator {
+	return {
+		id: "knowledge.usage@1",
+		// The reading is the last full UTC day before the window end, a pure function of that end.
+		historicalWindows: true,
+		unit: "ratio",
+		unitFor: (params) =>
+			knowledgeReadParams.parse(params).measure === "miss_share" ? "ratio" : "units",
+		display: "progress",
+		displayFor: (params) =>
+			knowledgeReadParams.parse(params).measure === "miss_share" ? "progress" : "volume",
+		windowSeconds: () => 86400,
+		paramsSchema: knowledgeReadParams,
+		budget: {
+			timeoutMs: 15000,
+			maxSourceCalls: 1,
+			maxRows: 1,
+			maxResponseBytes: 65536,
+		},
+		compute: async (params, ctx) => {
+			const parsed = knowledgeReadParams.parse(params);
+			return ctx.read((signal) =>
+				readKnowledgeReads(observationsSql, parsed, ctx.window, signal),
 			);
 		},
 	};
@@ -119,6 +159,7 @@ export function createGoalMetrics(deps: {
 		node: getNodeId(),
 		nodeCalculators: [
 			createRunsCountCalculator(deps.observationsSql),
+			createKnowledgeUsageCalculator(deps.observationsSql),
 			createValidatedByAuthorCalculator(deps.knowledgeSql, deps.observationsSql),
 		],
 	});
