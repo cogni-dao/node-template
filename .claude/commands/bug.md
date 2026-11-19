@@ -8,7 +8,7 @@ You file a bug as a `bug` work item via the Cogni API. Investigate first, file s
 
 1. Read the suspect code (or grep for it).
 2. Identify root cause if possible — or narrow to a suspect file:line.
-3. Note any spec invariants violated.
+3. Note any design invariants violated; name that design atom in `specRefs` as `knowledge:<atom-id>`.
 
 No bugs filed on assumptions. If you can't point at code yet, run `/research` instead.
 
@@ -23,7 +23,7 @@ curl -X POST https://cognidao.org/api/v1/work/items \
     "node": "<node>",
     "title": "<one-line symptom>",
     "priority": 1,
-    "specRefs": ["<spec-id-if-violated>"],
+    "specRefs": ["knowledge:<design-atom-id-if-violated>"],
     "summary": "OBSERVED: <what happens, with file:line>\nEXPECTED: <what should happen>\nREPRO: <steps>\nIMPACT: <who/severity>",
     "outcome": "Success is when <human|AI> can <do the broken thing without seeing the failure>.",
     "moves": [{"metricId": "<metric-id>", "direction": "<up|down>"}]

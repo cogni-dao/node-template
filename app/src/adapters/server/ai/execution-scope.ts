@@ -31,6 +31,8 @@ import type { BillingContext, LlmService } from "@/ports";
  */
 export interface ExecutionScope {
   readonly billing: BillingContext;
+  /** The run this scope serves. Bound per tool call by the guard; a tool that needs per-run state (the sandbox folder) reads it here. */
+  readonly runId?: string;
   /** Exact host-selected model, including its connection, for scheduled follow-up work. */
   readonly modelRef?: ModelRef;
   /** The acting agent principal's user id (agent_principals.user_id). Bound per tool call by the guard. */
@@ -66,6 +68,11 @@ export function getExecutionScope(): ExecutionScope {
     );
   }
   return scope;
+}
+
+/** The current execution scope, or undefined outside runInScope. For observers that must never throw (story.0061). */
+export function findExecutionScope(): ExecutionScope | undefined {
+  return executionScopeStorage.getStore();
 }
 
 /**

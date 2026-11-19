@@ -21,3 +21,20 @@ The store needs a BYPASSRLS (service role) connection: the table has no policy, 
 2. Append the hand-written part (everything after the line `Hand-written below`): the table privilege, `agent_has_scope()` (SECURITY INVOKER, no PUBLIC execute) and one delegated select policy per table that holds an account's data. Drizzle cannot emit them.
 3. Keep `agent_roles_live_unique` and the old `ON CONFLICT` targets (EXPAND-ONLY). The contract migration (task.5484) replaces them.
 4. Run `db:check`. The journal `when` must be greater than every earlier entry. Run `runGrantConformance` over the node's real SQL store, and check row-level security as the real app role (owner, live grant, foreign, expired, revoked: 0 rows).
+
+# agent_principals_orgs migration template
+
+`agent_principals_orgs.sql` is the shape a node applies for orgs (`@cogni-dao/agent-grants` 0.8.0, `./orgs`). node-template keeps it as `0045_agent_principals_orgs.sql`. It is plain SQL that drizzle-kit emits, so a node can mirror it exactly:
+
+1. Add the two nullable columns `owner_source_kind` and `owner_source_ref`, the CHECK `agent_principals_org_has_owner_source`, the widened kind CHECK `('internal','external','org')` and the unique partial index `agent_principals_org_source_unique` (one org per owner source, `WHERE kind = 'org'`) to the node's own `agentPrincipals` schema, then run the node's `db:generate`. Never copy a snapshot.
+2. Existing rows are untouched (both columns are null; only an `org` row must carry them).
+3. Run `db:check`. The journal `when` must be greater than every earlier entry.
+
+# payer_bindings migration template
+
+`payer_bindings.sql` is the shape a node applies for payer bindings (`@cogni-dao/agent-grants`, story.0038 phase 2, `createPostgresPayerBindingStore`). node-template keeps it as `0046_payer_bindings.sql`. Do not copy it blind into a fork:
+
+1. Add the `payerBindings` table (the columns, the unique partial index `payer_bindings_open_per_subject` on `subject_user_id WHERE revoked_at IS NULL`, the account index and the two CHECKs) to the node's own schema package, then run the node's `db:generate`. drizzle-kit writes the DDL and the snapshot against the node's own prior snapshot. Never copy a snapshot.
+2. Append the hand-written part (everything after the line `Hand-written below`): `FORCE ROW LEVEL SECURITY`. The table has no policy, so the app role sees nothing.
+3. The store needs a BYPASSRLS (service role) connection, like `agent_roles`.
+4. Run `db:check`. The journal `when` must be greater than every earlier entry.

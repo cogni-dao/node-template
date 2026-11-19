@@ -34,6 +34,7 @@ import {
   createContributionService,
   defaultCanMergeKnowledge,
   EmptyKnowledgePatchError,
+  GOVERNING_ENTRY_TYPES,
   HypothesisMissingEvaluateAtError,
   KnowledgeContributionEditSchema,
   NodeAdminRequiredError,
@@ -301,7 +302,7 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
       expect(actual).toEqual(await fake.listGoverningIndex());
       expect(digest(actual)).toBe(digest(expected));
       expect(actual.some((r) => r.id === "gov-old-rule")).toBe(true);
-      expect(new Set(actual.map((r) => r.entryType)).size).toBe(7);
+      expect(new Set(actual.map((r) => r.entryType)).size).toBe(GOVERNING_ENTRY_TYPES.length);
       expect(
         actual.some((r) =>
           ["gov-blank", "gov-null", "gov-retired", "gov-evidence"].includes(

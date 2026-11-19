@@ -22,6 +22,7 @@ import { bearerWriteRefusal } from "@cogni/agent-grants";
 import {
   CredentialRateLimitedError,
   CredentialStoreUnavailableError,
+  credentialDenialHttp,
   credentialErrorHttp,
   isRevocableKey,
   storeFailureFields,
@@ -30,6 +31,7 @@ import {
 import type { SessionUser } from "@cogni/node-shared";
 import { type NextRequest, NextResponse } from "next/server";
 import type { Container } from "@/bootstrap/container";
+import { ServiceAuthUnavailableError } from "@/bootstrap/service-auth-error";
 import { withRootSpan } from "@/bootstrap/otel";
 import {
   createRequestContext,
@@ -250,7 +252,11 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
 
         try {
           if (sessionError !== undefined) {
-            const refusal = credentialErrorHttp(sessionError);
+            // An unreachable home key set is 503, never 401 (the caller did nothing wrong).
+            const refusal =
+              sessionError instanceof ServiceAuthUnavailableError
+                ? credentialDenialHttp("unavailable")
+                : credentialErrorHttp(sessionError);
             if (!refusal) throw sessionError;
             logCredentialRefusal(ctx.log, sessionError, options.routeId);
             responseStatus = refusal.status;

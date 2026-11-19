@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createPostgresAgentGrantsStore, type SqlTag } from "../src";
+import { createPostgresAgentGrantsStore, createPostgresPayerBindingStore, type SqlTag } from "../src";
 
 const refusesDates = (seen: unknown[][]): SqlTag =>
   ((strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -51,6 +51,22 @@ describe("the Postgres store passes no JS Date as a parameter", () => {
     await store.denyAccountByLink({ linkHash: "h", deniedBy: "a" });
     await store.insertAccountRole({ principalUserId: "p", scope: "s", approvedBy: "a" });
     await store.revokeAccountRole({ rowId: "r", ownerUserId: "o" });
+    await store.accountRoleOf?.("r");
+    await store.approveAccountByLinkOnOrg?.({ linkHash: "h", approvedBy: "a", accountId: "acct" });
+    await store.denyAccountByLinkOnOrg?.({ linkHash: "h", deniedBy: "a", accountId: "acct" });
+    await store.revokeAccountRoleOnOrg?.({ rowId: "r", accountId: "acct" });
+    expect(seen.flat().some((v) => v instanceof Date)).toBe(false);
+  });
+
+  it("the payer binding store takes no Date either", async () => {
+    const seen: unknown[][] = [];
+    const store = createPostgresPayerBindingStore(refusesDates(seen));
+    await store.openFor("s");
+    await store.get("b");
+    await store.payerFor("s");
+    await store.request({ subjectUserId: "s", billingAccountId: "a", maxPendingPerAccount: 20 });
+    await store.approve({ id: "b", approvedBy: "o" });
+    await store.close({ id: "b", closedBy: "o" });
     expect(seen.flat().some((v) => v instanceof Date)).toBe(false);
   });
 });

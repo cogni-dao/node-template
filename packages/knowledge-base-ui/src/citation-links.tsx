@@ -103,6 +103,7 @@ export function CitationRow({
   slug,
   href,
   hoverTitle,
+  icon,
   Link,
 }: {
   readonly direction: "out" | "in";
@@ -112,6 +113,8 @@ export function CitationRow({
   readonly slug: string;
   readonly href: string;
   readonly hoverTitle?: string | null | undefined;
+  /** What the row links to (a PR, a design), drawn where the direction arrow goes; a row with an icon is not an edge. */
+  readonly icon?: ReactNode;
   readonly Link: CitationLinkComponent;
 }): ReactElement {
   const arrow = ARROW[direction];
@@ -120,11 +123,11 @@ export function CitationRow({
       href={href}
       entityId={slug}
       title={hoverTitle?.trim() || slug}
-      aria-label={`${arrow.label} ${relation} ${slug}`}
+      aria-label={icon ? `${relation} ${slug}` : `${arrow.label} ${relation} ${slug}`}
       className="-mx-1.5 flex min-h-8 min-w-0 items-center gap-2 rounded-md px-1.5 py-1 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <span className="w-3 shrink-0 text-center text-muted-foreground text-sm">
-        {arrow.glyph}
+      <span aria-hidden={icon ? true : undefined} className="flex w-3.5 shrink-0 justify-center text-muted-foreground text-sm">
+        {icon ?? arrow.glyph}
       </span>
       <span
         className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1"

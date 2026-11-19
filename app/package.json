@@ -48,6 +48,7 @@
     "@cogni/node-ui-kit": "workspace:*",
     "@cogni/operator-wallet": "workspace:*",
     "@cogni/repo-spec": "workspace:*",
+    "@cogni/sandbox": "workspace:@cogni-dao/sandbox@*",
     "@cogni/scheduler-core": "workspace:*",
     "@cogni/substrate-health": "workspace:@cogni-dao/substrate-health@*",
     "@cogni/work-items": "workspace:@cogni-dao/work-items@*",

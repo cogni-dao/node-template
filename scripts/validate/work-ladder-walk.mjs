@@ -176,6 +176,8 @@ async function walkCode(pr) {
 	await patch("needs_design -> needs_design_review", X, "needs_design_review", OK, MUST);
 	await patch("design_review -> implement without an approve", X, "needs_implement", unmet("design_review"));
 	await artifact("design_review artifact (approve)", X, review);
+	await patch("design_review -> implement without a design link", X, "needs_implement", unmet("design_link"));
+	await step("link the design (knowledge:<id>)", "PATCH", `/work/items/${X}`, { reason: "ladder walk", set: { specRefs: [`knowledge:synthetic-ladder-walk-${stamp}`] } }, OK, MUST);
 	await patch("design_review -> needs_implement", X, "needs_implement", OK, MUST);
 
 	// A design-route item may move back to a design stage, and the approve it held no longer stands (task.0122).

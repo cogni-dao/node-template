@@ -55,6 +55,10 @@ export type {
   RepoSearchHit,
   RepoSearchParams,
   RepoSearchResult,
+  SandboxShellCapability,
+  SandboxShellErrorCode,
+  SandboxShellParams,
+  SandboxShellResult,
   ScheduleCapability,
   ScheduleCreateParams,
   ScheduleInfo,
@@ -74,6 +78,20 @@ export type {
   WorkItemQueryPage,
   WorkItemQueryParams,
 } from "./capabilities";
+export {
+  ACCESS_REQUESTED_MESSAGE,
+  createRemoteKnowledgeTransport,
+  REMOTE_ALIAS_PATTERN,
+  REMOTE_ASK_INTERVAL_MS,
+  REMOTE_ENROLLMENT_PATH,
+  REMOTE_KNOWLEDGE_SCOPE,
+  REMOTE_KNOWLEDGE_SERVICE,
+  RemoteKnowledgeError,
+  readBodyCapped,
+  redactSecretShapes,
+  type RemoteKnowledgeCapability,
+  type RemoteKnowledgeTarget,
+} from "./remote-knowledge";
 // Capabilities
 export {
   CONFIDENCE,
@@ -95,6 +113,7 @@ export {
   TOOL_CATALOG,
   VCS_TOOL_BUNDLE,
   type ToolCatalog,
+  withoutRemoteNodeArgument,
 } from "./catalog";
 // Runtime adapter
 export {
@@ -309,6 +328,19 @@ export {
   scheduleListContract,
   scheduleListStubImplementation,
 } from "./tools/schedule-list";
+export {
+  createSandboxShellImplementation,
+  SANDBOX_SHELL_NAME,
+  type SandboxShellDeps,
+  type SandboxShellInput,
+  SandboxShellInputSchema,
+  type SandboxShellOutput,
+  SandboxShellOutputSchema,
+  type SandboxShellRedacted,
+  sandboxShellBoundTool,
+  sandboxShellContract,
+  sandboxShellUnavailableImplementation,
+} from "./tools/sandbox-shell";
 export {
   createScheduleManageImplementation,
   SCHEDULE_MANAGE_NAME,

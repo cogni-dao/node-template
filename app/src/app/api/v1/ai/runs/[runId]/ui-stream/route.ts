@@ -17,6 +17,7 @@ import type { UIMessageChunk } from "ai";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { startStreamHeartbeat } from "@/app/_lib/ai/stream-heartbeat";
 import { UiMessageEventMapper } from "@/app/_lib/ai/ui-message-event-mapper";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -84,30 +85,34 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
     const uiStream = createUIMessageStream({
       execute: async ({ writer }) => {
         const mapper = new UiMessageEventMapper(writer, textPartId);
+        const stopHeartbeat = startStreamHeartbeat(writer);
+        try {
+          const writeCursor = (cursor: string) => {
+            writer.write({
+              type: "data-run-cursor",
+              data: { cursor },
+              transient: true,
+            } as UIMessageChunk);
+          };
 
-        const writeCursor = (cursor: string) => {
-          writer.write({
-            type: "data-run-cursor",
-            data: { cursor },
-            transient: true,
-          } as UIMessageChunk);
-        };
-
-        for await (const entry of container.runStream.subscribe(
-          runId,
-          request.signal,
-          cursor
-        )) {
-          const event = entry.event;
-          const mapping = mapper.consume(event);
-          if (event.type === "done") {
-            mapper.finish(event.finishReason);
-            writeCursor(entry.id);
-          } else if (mapping !== "buffered") {
-            writeCursor(entry.id);
+          for await (const entry of container.runStream.subscribe(
+            runId,
+            request.signal,
+            cursor
+          )) {
+            const event = entry.event;
+            const mapping = mapper.consume(event);
+            if (event.type === "done") {
+              mapper.finish(event.finishReason);
+              writeCursor(entry.id);
+            } else if (mapping !== "buffered") {
+              writeCursor(entry.id);
+            }
           }
+          mapper.close();
+        } finally {
+          stopHeartbeat();
         }
-        mapper.close();
       },
     });
 

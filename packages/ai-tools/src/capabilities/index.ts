@@ -61,6 +61,13 @@ export type {
   RepoSearchResult,
 } from "./repo";
 export { makeRepoCitation, REPO_CITATION_REGEX } from "./repo";
+// Sandbox shell capability
+export type {
+  SandboxShellCapability,
+  SandboxShellErrorCode,
+  SandboxShellParams,
+  SandboxShellResult,
+} from "./sandbox";
 // Schedule management capability
 export type {
   ScheduleCapability,

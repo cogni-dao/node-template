@@ -97,7 +97,7 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const input =
         parsed.data.token !== undefined
-          ? { token: parsed.data.token }
+          ? { token: parsed.data.token, accountId: parsed.data.accountId }
           : {
               principalUserId: parsed.data.principalUserId as string,
               scope: parsed.data.scope as string,
@@ -127,7 +127,9 @@ export const DELETE = wrapRouteHandlerWithLogging(
     try {
       const result = await getContainer().agentAuthority.turnMineOff(
         person.me,
-        parsed.data.rowId !== undefined ? { rowId: parsed.data.rowId } : { token: parsed.data.token as string }
+        parsed.data.rowId !== undefined
+          ? { rowId: parsed.data.rowId }
+          : { token: parsed.data.token as string, accountId: parsed.data.accountId }
       );
       return json(agentMineOffOperation.output.parse(result));
     } catch (error) {

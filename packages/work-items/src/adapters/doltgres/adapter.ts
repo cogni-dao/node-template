@@ -794,6 +794,7 @@ const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   moves: "moves",
   labels: "labels",
   specRefs: "spec_refs",
+  externalRefs: "external_refs",
   branch: "branch",
   pr: "pr",
   reviewer: "reviewer",
@@ -4362,6 +4363,7 @@ export class DoltgresWorkItemAdapter
       labels: set.labels ?? stored.labels,
       scores: set.scores !== undefined ? set.scores : (stored.scores ?? null),
       moves: set.moves !== undefined ? set.moves : (stored.moves ?? []),
+      specRefs: set.specRefs ?? stored.specRefs,
       statusRevision: Number(current.status_revision ?? 0),
     };
   }

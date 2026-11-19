@@ -22,6 +22,8 @@
  * @public
  */
 
+import { ownsAccountOrOrg } from "./approval";
+import type { OrgOwners } from "./orgs";
 import type {
   AccountAccess,
   AdminCheck,
@@ -129,11 +131,14 @@ export interface AuthorizeAccountInput {
   readonly via: "bearer" | "session";
   readonly scope: string;
   readonly accountId: string;
+  /** Owner sources (0.8.0). With them, an account owned by an org is also `owner` to each of the org's owners; a failed owner read throws (the route says 503). */
+  readonly owners?: OrgOwners | undefined;
 }
 
 /**
  * The ONE answer for a read of one account's data on a route: `owner` (the caller owns the account), `delegated` (a bearer agent holds a live
- * account row for this scope and this exact account), or null. A null is a non-disclosing 404: foreign, expired, revoked, wrong-scope and
+ * account row for this scope and this exact account), or null. The order is the owner user, then the live grant row, then (only when `owners` is given) the
+ * owners of an org that owns the account: a live grant never waits on the owner read, so a GitHub outage stops no delegated call. A null is a non-disclosing 404: foreign, expired, revoked, wrong-scope and
  * missing accounts are indistinguishable. A store failure throws (the route says 503), never allows.
  */
 export async function authorizeAccount(
@@ -146,5 +151,5 @@ export async function authorizeAccount(
     (await store.hasLiveAccountGrant(input.callerUserId, input.scope, input.accountId))
   )
     return "delegated";
-  return null;
+  return (await ownsAccountOrOrg(store, input.callerUserId, input.accountId, input.owners)) ? "owner" : null;
 }

@@ -32,7 +32,7 @@ describe("requires guard", () => {
     expect(contractsMissingRequires(contracts)).toEqual([]);
   });
 
-  it("covers exactly the eleven state-changing tools", () => {
+  it("covers exactly the twelve state-changing tools", () => {
     expect(
       contracts
         .filter((c) => c.effect !== "read_only")
@@ -45,6 +45,7 @@ describe("requires guard", () => {
         "core__edo_record_outcome",
         "core__knowledge_write",
         "core__metric_compute",
+        "core__sandbox_shell",
         "core__schedule_manage",
         "core__vcs_create_branch",
         "core__vcs_flight_candidate",
@@ -80,6 +81,7 @@ describe("requires guard", () => {
     expect(by.core__schedule_manage).toMatchObject({ scope: "schedule:manage", kind: "own", subject: "member" });
     expect(by.core__edo_decide?.scope).toBe("edo:write");
     expect(by.core__vcs_merge_pr?.subject).toBe("admin");
+    expect(by.core__sandbox_shell).toMatchObject({ scope: "sandbox:exec", kind: "node", subject: "member" });
   });
 
   it("gives every requires a plain-language label, with no scope string, id, path, tool name or the word job", () => {

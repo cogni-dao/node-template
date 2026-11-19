@@ -211,6 +211,19 @@ export const serverSchema = z.object({
   DOLTHUB_OAUTH_CLIENT_ID: optionalString,
   DOLTHUB_OAUTH_CLIENT_SECRET: optionalString,
 
+  // Remote sandbox workspace (services/sandbox, isolated lease) - Optional.
+  // SANDBOX_EXECD_TOKEN: shared execd access token; the sandbox refuses to start without a
+  // >=32-char value. SANDBOX_BASE_URL: override for local dev; otherwise the origin is
+  // derived from APP_BASE_URL (node-template-test.* -> node-template-sandbox-test.*).
+  SANDBOX_EXECD_TOKEN: z.preprocess(
+    emptyToUndefined,
+    z.string().min(32).optional()
+  ),
+  SANDBOX_BASE_URL: optionalUrl.refine(
+    (url) => !url || url.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(url),
+    { message: "SANDBOX_BASE_URL must be https (http only for localhost)" }
+  ),
+
   // Tavily Web Search - Optional
   // Required for research graph web search capability
   TAVILY_API_KEY: optionalString,
@@ -279,6 +292,12 @@ export const serverSchema = z.object({
   // BYO-AI: AEAD encryption key for connections table (hex-encoded 32 bytes)
   // Optional — BYO-AI features disabled when not set.
   CONNECTIONS_ENCRYPTION_KEY: optionalString,
+
+  // Service assertions (story.0038): this node signs short-lived assertions as a home with an Ed25519 key derived from this 32-byte hex seed (the operator generates it).
+  // Optional: unset = no jwks route and no outbound signer. The homes it trusts and the nodes its AI calls are Git config (.cogni/service-links.yaml), not env.
+  SERVICE_ASSERTION_SIGNING_SEED: optionalString,
+  // Optional GitHub token: sent as a bearer on the repo-spec read for org owners, to lift the unauthenticated rate limit.
+  GITHUB_READ_TOKEN: optionalString,
 
   // PostHog product analytics — required
   // See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/posthog-setup.md for setup

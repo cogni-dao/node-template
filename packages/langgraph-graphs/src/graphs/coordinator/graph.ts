@@ -1,4 +1,4 @@
-import { ACCOUNT_CREDITS_READ_NAME, SCHEDULE_LIST_NAME, SCHEDULE_MANAGE_NAME } from "@cogni/ai-tools";
+import { ACCOUNT_CREDITS_READ_NAME, SANDBOX_SHELL_NAME, SCHEDULE_LIST_NAME, SCHEDULE_MANAGE_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
 import { COGNI_TOOL_IDS } from "../cogni/tools";
 import type { CreateReactAgentGraphOptions } from "../types";
@@ -20,6 +20,7 @@ export const COORDINATOR_TOOL_IDS: readonly string[] = [
 	ACCOUNT_CREDITS_READ_NAME,
 	SCHEDULE_LIST_NAME,
 	SCHEDULE_MANAGE_NAME,
+	SANDBOX_SHELL_NAME,
 ];
 
 /**

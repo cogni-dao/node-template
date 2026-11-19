@@ -16,6 +16,10 @@
  *   - V1_SUPERSEDED: once the verified v1 identity's user holds a CONFIRMED revocable credential (revoked or not), the request is refused with
  *     `V1SupersededError` (401 `v1_superseded`). Revoking the revocable key therefore cannot revive a leaked signed key. One store read per v1 request.
  *   - REVOCABLE_STORE_OUTAGE_IS_503: a store failure throws `CredentialStoreUnavailableError` (the route wrapper answers 503), never null (401).
+ *   - SERVICE_ASSERTION_BEARER (story.0038): a bearer that is a compact JWT (not a `cogni_ag_sk_` key) is a service assertion from a trusted home. A verified
+ *     assertion whose service has asked (it has a principal) is that principal with `via: "bearer"`; every other outcome is null (401) except an unreachable key
+ *     set (`ServiceAuthUnavailableError`, 503). The grant row, never the assertion, decides what it may do. A `jti` is single-use, so the verdict is memoised per
+ *     request (the headers object) and one request never replays itself.
  *   - REVOCABLE_ACTIVE_ONLY: the generic resolver admits only an `active` revocable key. A pending or renew_only key reaches only the
  *     credential routes that opt in through `verifyRevocableKey`.
  *   - VIA_IS_LOGGING_AND_WRITE_GATE: the resolved identity carries `via: "bearer" | "session"`. It is for logging and the DENY_BY_DEFAULT
@@ -46,6 +50,7 @@ import {
 } from "@cogni/agent-grants/credentials";
 import type { SessionUser } from "@cogni/node-shared";
 import { headers } from "next/headers";
+import { ServiceAuthUnavailableError } from "@/bootstrap/service-auth-error";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { serverEnv } from "@/shared/env/server";
 
@@ -120,6 +125,25 @@ export function issueAgentApiKey(input: {
   return `${TOKEN_PREFIX}${payloadB64}.${signPayload(payloadB64)}`;
 }
 
+/** A compact JWT: three base64url segments. A signed agent key (`cogni_ag_sk_v1_`) has two and its own prefix. */
+const COMPACT_JWT = /^[A-Za-z0-9_-]{4,2048}\.[A-Za-z0-9_-]{4,2048}\.[A-Za-z0-9_-]{4,512}$/;
+
+/** One verdict per request: a service assertion's `jti` is single-use, so asking twice in one request must not look like a replay. */
+const serviceIdentityByRequest = new WeakMap<object, Promise<SessionUser | null>>();
+
+async function resolveServiceIdentity(token: string): Promise<SessionUser | null> {
+  const { getContainer } = await import("@/bootstrap/container");
+  const container = getContainer();
+  const result = await container.serviceAuth.verify(token);
+  if (!result.ok) {
+    if (result.code === "jwks_unavailable") throw new ServiceAuthUnavailableError();
+    return null;
+  }
+  const userId = await container.agentAuthority.servicePrincipalOf(result);
+  if (!userId) return null;
+  return { id: userId, walletAddress: null, displayName: `${result.service}@${new URL(result.issuer).host}`, avatarColor: null, via: "bearer" };
+}
+
 function isSameOrigin(origin: string | null, host: string | null): boolean {
   if (!origin || !host) return true;
   try {
@@ -177,6 +201,14 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
       if (verified.reason === "unavailable") throw new CredentialStoreUnavailableError(verified.cause);
       if (verified.reason === "rate_limited") throw new CredentialRateLimitedError();
       return null;
+    }
+    if (!bearer.startsWith(TOKEN_PREFIX) && COMPACT_JWT.test(bearer)) {
+      let verdict = serviceIdentityByRequest.get(h);
+      if (!verdict) {
+        verdict = resolveServiceIdentity(bearer);
+        serviceIdentityByRequest.set(h, verdict);
+      }
+      return verdict;
     }
     const payload = parseAgentToken(bearer);
     if (!payload) return null;

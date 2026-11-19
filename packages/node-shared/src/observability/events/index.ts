@@ -56,6 +56,9 @@ export const EVENT_NAMES = {
 	KNOWLEDGE_HISTORY_READ: "knowledge.history_read",
 	// Whole-graph read (task.0059): one terminal event per read, counts and bytes only.
 	KNOWLEDGE_GRAPH_READ: "knowledge.graph_read",
+	// Agent atom read counters (story.0061): one line per flush with key and read counts; a drop or a failed flush with its count. Never ids.
+	KNOWLEDGE_READ_COUNTS_FLUSHED: "knowledge.read_counts_flushed",
+	KNOWLEDGE_READ_COUNT_WRITE_FAILED: "knowledge.read_count_write_failed",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",
 	AI_LLM_CALL: "ai.llm_call",
@@ -72,6 +75,24 @@ export const EVENT_NAMES = {
 	AGENT_ROLE_REQUESTED: "agent_role.requested",
 	/** A DAO admin dismissed a pending ask: principalUserId, scope, deniedBy. */
 	AGENT_ROLE_DENIED: "agent_role.denied",
+	/** A service assertion verified (story.0038): issuer, service. Never the token. */
+	SERVICE_AUTH_VERIFIED: "service_auth.verified",
+	/** A service assertion was refused (story.0038): code, and issuer and service when the claims named them. Never the token. */
+	SERVICE_AUTH_REJECTED: "service_auth.rejected",
+	/** The signing key could not be used (partly configured, unusable, or a public key that is not the private key's): reason only, never the key. */
+	SERVICE_AUTH_SIGNER_UNAVAILABLE: "service_auth.signer_unavailable",
+	/** An org was created or found for an owner source (story.0038): orgUserId, sourceRef. */
+	ORG_ENSURED: "org.ensured",
+	/** A payer binding was turned On by an owner of the account (story.0038): subject, billingAccountId, approvedBy. */
+	PAYER_BOUND: "payer.bound",
+	/** A payer binding ended, Off or dismissed (story.0038): subject, billingAccountId, revokedBy. */
+	PAYER_REVOKED: "payer.revoked",
+	/** A run was billed to a bound account instead of the caller's own (story.0038): subject, billingAccountId. */
+	PAYER_SELECTED: "payer.selected",
+	/** This node's AI asked a configured remote node for one permission (story.0038): alias, scope, httpStatus. Never a token. */
+	SERVICE_LINK_ASKED: "service_link.asked",
+	/** A remote knowledge read was signed and sent (story.0038): alias, op, outcome. Never a token or a body. */
+	REMOTE_KNOWLEDGE_READ: "remote_knowledge.read",
 	/** revocable agent keys (task.0070): upgraded / rotated (a pending key issued), confirmed, revoked, refused. Carry userId and credentialId, never a key or hash. */
 	AGENT_CREDENTIAL_UPGRADED: "agent.credential.upgraded",
 	AGENT_CREDENTIAL_ROTATED: "agent.credential.rotated",

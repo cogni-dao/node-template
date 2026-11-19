@@ -164,6 +164,21 @@ export {
   WorkItemPatchStatusSchema,
   WorkItemScoresInputSchema,
 } from "./patch-contract.js";
+export {
+  handleWorkItemCreate,
+  handleWorkItemPatch,
+  type NodeWriteRefusal,
+  WORK_ITEM_WRITE_EVENTS,
+  type WorkItemWriteEvent,
+  type WorkItemWriteResult,
+} from "./write-http.js";
+export {
+  ExternalRefsInputSchema,
+  parseSpecRef,
+  SPEC_REF_MESSAGE,
+  SPEC_REF_PREFIX,
+  SpecRefsInputSchema,
+} from "./spec-refs.js";
 export type {
   HistoryReadLog,
   HistoryReadQuery,
