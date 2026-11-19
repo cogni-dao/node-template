@@ -184,8 +184,9 @@ export async function getAnalyticsSummary(
   ]);
 
   // Apply k-anonymity suppression to summary stats
-  const totalRequests = extractScalar(totalRequestsResult);
-  const totalTokens = extractScalar(totalTokensResult);
+  // increase() extrapolates, so a counter total is fractional; the contract counts whole requests and tokens.
+  const totalRequests = roundCount(extractScalar(totalRequestsResult));
+  const totalTokens = roundCount(extractScalar(totalTokensResult));
   const errorRate = extractScalar(errorRateResult);
 
   // Check if total requests meet k-threshold
@@ -235,6 +236,11 @@ export async function getAnalyticsSummary(
       },
     },
   };
+}
+
+/** A counter total as a whole count (null stays null). */
+function roundCount(value: number | null): number | null {
+  return value === null ? null : Math.round(value);
 }
 
 /**
