@@ -15,6 +15,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildEpochActivityView,
+  EPOCH_PAGE_MAX_LIMIT,
   type EpochReadStore,
   listEpochsView,
   persistSelectionUpdates,
@@ -159,6 +160,21 @@ describe("buildEpochActivityView", () => {
         offset: 0,
       })
     ).toBeNull();
+  });
+});
+
+describe("page clamp", () => {
+  it("never asks the store for more than EPOCH_PAGE_MAX_LIMIT rows", async () => {
+    const listEpochsPage = vi.fn(async () => ({ epochs: [], total: 0 }));
+    await listEpochsView({ listEpochsPage }, NODE, {
+      limit: 10_000,
+      offset: -5,
+    });
+    expect(listEpochsPage).toHaveBeenCalledWith(
+      NODE,
+      { limit: EPOCH_PAGE_MAX_LIMIT, offset: 0 },
+      undefined
+    );
   });
 });
 

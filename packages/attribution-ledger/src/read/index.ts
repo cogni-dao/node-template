@@ -21,6 +21,7 @@ export {
 } from "./dto";
 export {
   buildEpochActivityView,
+  EPOCH_PAGE_MAX_LIMIT,
   type EpochActivityEvent,
   type EpochActivityResult,
   type EpochActivityView,

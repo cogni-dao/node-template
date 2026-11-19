@@ -41,10 +41,25 @@ export type SelectionUserIdWriter = Pick<
   "updateSelectionUserId"
 >;
 
-/** One page request. */
+/** One page request. The views clamp `limit` to 1..EPOCH_PAGE_MAX_LIMIT and `offset` to >= 0. */
 export interface EpochPage {
   readonly limit: number;
   readonly offset: number;
+}
+
+/** The largest page any epoch view reads, whatever the caller asks for. */
+export const EPOCH_PAGE_MAX_LIMIT = 200;
+
+function clampPage(page: EpochPage): EpochPage {
+  const limit = Math.trunc(page.limit);
+  const offset = Math.trunc(page.offset);
+  return {
+    limit: Math.min(
+      Math.max(Number.isFinite(limit) ? limit : 1, 1),
+      EPOCH_PAGE_MAX_LIMIT
+    ),
+    offset: Math.max(Number.isFinite(offset) ? offset : 0, 0),
+  };
 }
 
 /** A GitHub identity resolved at read time whose selection row still has no user. */
@@ -83,7 +98,11 @@ export async function listEpochsView(
   page: EpochPage,
   filter?: Parameters<EpochReadStore["listEpochsPage"]>[2]
 ): Promise<{ epochs: ReturnType<typeof toEpochDto>[]; total: number }> {
-  const { epochs, total } = await store.listEpochsPage(nodeId, page, filter);
+  const { epochs, total } = await store.listEpochsPage(
+    nodeId,
+    clampPage(page),
+    filter
+  );
   return { epochs: epochs.map(toEpochDto), total };
 }
 
@@ -105,7 +124,7 @@ export async function buildEpochActivityView(
     nodeId,
     epochId,
     { periodStart: epoch.periodStart, periodEnd: epoch.periodEnd },
-    page
+    clampPage(page)
   );
   const selections =
     receipts.length > 0

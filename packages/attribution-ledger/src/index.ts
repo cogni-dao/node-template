@@ -199,6 +199,7 @@ export { createValidatedAttributionStore } from "./validated-store";
 // Epoch read views + wire mappers (story.0076)
 export {
   buildEpochActivityView,
+  EPOCH_PAGE_MAX_LIMIT,
   type EpochActivityEvent,
   type EpochActivityResult,
   type EpochActivityView,
