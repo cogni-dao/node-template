@@ -122,6 +122,8 @@ export {
 // Store port interface + types
 export type {
   AttributionEpoch,
+  EpochPageReader,
+  ReadPage,
   AttributionEvaluation,
   AttributionPoolComponent,
   AttributionSelection,
@@ -193,3 +195,23 @@ export {
 
 // Validated store wrapper
 export { createValidatedAttributionStore } from "./validated-store";
+
+// Epoch read views + wire mappers (story.0076)
+export {
+  buildEpochActivityView,
+  type EpochActivityEvent,
+  type EpochActivityResult,
+  type EpochActivityView,
+  type EpochPage,
+  type EpochReadStore,
+  listEpochsView,
+  type PendingSelectionUpdate,
+  persistSelectionUpdates,
+  type SelectionUserIdWriter,
+  toEpochDto,
+  toIngestionReceiptDto,
+  toPoolComponentDto,
+  toSelectionDto,
+  toStatementDto,
+  toUserProjectionDto,
+} from "./read";

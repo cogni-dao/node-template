@@ -1,7 +1,12 @@
 {
-  "name": "@cogni/attribution-ledger",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@cogni-dao/attribution",
+  "version": "0.1.0",
+  "license": "LicenseRef-PolyForm-Shield-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cogni-dao/node-template.git",
+    "directory": "packages/attribution-ledger"
+  },
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -23,15 +28,18 @@
   },
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
     "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/index.js')){console.error('ERROR: dist/index.js missing'); process.exit(1)}\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.0.9"
   }
 }

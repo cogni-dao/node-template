@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@cogni/ai-core": "workspace:*",
-    "@cogni/attribution-ledger": "workspace:*"
+    "@cogni/attribution-ledger": "workspace:@cogni-dao/attribution@*"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

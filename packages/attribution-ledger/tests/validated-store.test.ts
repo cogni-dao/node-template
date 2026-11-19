@@ -13,7 +13,7 @@
  * @internal
  */
 
-import type { AttributionStore } from "@cogni/attribution-ledger";
+import type { AttributionStore } from "../src/index";
 import { describe, expect, it } from "vitest";
 import { createValidatedAttributionStore } from "../src/validated-store";
 

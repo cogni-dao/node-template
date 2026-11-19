@@ -11,10 +11,10 @@
  * @public
  */
 
+import { listEpochsView } from "@cogni/attribution-ledger";
 import { listEpochsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { toEpochDto } from "@/app/api/v1/public/attribution/_lib/attribution-dto";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeId } from "@/shared/config";
@@ -34,15 +34,11 @@ export const GET = wrapRouteHandlerWithLogging(
       offset: url.searchParams.get("offset") ?? undefined,
     });
 
-    const store = getContainer().attributionStore;
-    const allEpochs = await store.listEpochs(getNodeId());
-    const page = allEpochs.slice(offset, offset + limit);
-
-    return NextResponse.json(
-      listEpochsOperation.output.parse({
-        epochs: page.map(toEpochDto),
-        total: allEpochs.length,
-      })
+    const view = await listEpochsView(
+      getContainer().attributionStore,
+      getNodeId(),
+      { limit, offset }
     );
+    return NextResponse.json(listEpochsOperation.output.parse(view));
   }
 );

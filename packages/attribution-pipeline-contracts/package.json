@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cogni/attribution-ledger": "workspace:*",
+    "@cogni/attribution-ledger": "workspace:@cogni-dao/attribution@*",
     "zod": "^4.1.12"
   },
   "devDependencies": {
