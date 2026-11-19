@@ -16,6 +16,7 @@ import { defineConfig } from "tsup";
 export const tsupConfig = defineConfig({
   entry: ["src/index.ts", "src/epoch-window.ts", "src/allocation.ts"],
   format: ["esm"],
+  splitting: true, // one shared chunk keeps typed-error identity across entrypoints
   dts: false, // tsc -b emits per-file declarations; tsup handles JS only
   clean: false, // preserve .d.ts files from tsc -b (incremental builds)
   sourcemap: true,

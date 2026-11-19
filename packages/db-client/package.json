@@ -28,7 +28,7 @@
   "dependencies": {
     "@cogni/ai-core": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
-    "@cogni/attribution-ledger": "workspace:*",
+    "@cogni/attribution-ledger": "workspace:@cogni-dao/attribution@*",
     "@cogni/db-schema": "workspace:*",
     "@cogni/ids": "workspace:*",
     "@cogni/scheduler-core": "workspace:*",

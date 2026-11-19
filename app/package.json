@@ -25,7 +25,7 @@
     "@cogni/ai-tools": "workspace:@cogni-dao/ai-tools@*",
     "@cogni/aragon-osx": "workspace:*",
     "@cogni/attribution-collect": "workspace:*",
-    "@cogni/attribution-ledger": "workspace:*",
+    "@cogni/attribution-ledger": "workspace:@cogni-dao/attribution@*",
     "@cogni/attribution-pipeline-plugins": "workspace:*",
     "@cogni/cogni-contracts": "workspace:*",
     "@cogni/db-client": "workspace:*",
