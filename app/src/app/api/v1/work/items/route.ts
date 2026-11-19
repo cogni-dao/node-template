@@ -20,7 +20,7 @@ import {
 import {
   normalizeWorkItemOrder,
   type WorkItemOrder,
-  workItemWriteErrorResponse,
+  handleWorkItemCreate,
 } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
@@ -199,75 +199,21 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
-    // Every refusal ends in ONE registered terminal event with its errorCode (task.0122): ids and codes, never the body.
-    const refuse = (
-      status: number,
-      errorCode: string,
-      body: unknown,
-    ): NextResponse => {
-      ctx.log.info(
-        {
-          event: EVENT_NAMES.WORK_ITEMS_CREATE_REFUSED,
-          routeId: "work.items.create",
-          outcome: "refused",
-          status,
-          errorCode,
-        },
-        EVENT_NAMES.WORK_ITEMS_CREATE_REFUSED,
-      );
-      return NextResponse.json(body, { status });
-    };
-
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return refuse(400, "invalid_json", { error: "invalid JSON body" });
-    }
-
-    const parseResult = workItemsCreateOperation.input.safeParse(body);
-    if (!parseResult.success) {
-      return refuse(400, "invalid_input", {
-        error: "invalid input",
-        issues: parseResult.error.issues,
-      });
-    }
-
-    try {
-      const created = await createWorkItem(parseResult.data, {
-        id: sessionUser.id,
-      });
-      ctx.log.info(
-        {
-          event: EVENT_NAMES.WORK_ITEMS_CREATE_SUCCESS,
-          routeId: "work.items.create",
-          outcome: "success",
-          status: 201,
-          workItemId: created.id,
-          node: created.node,
-        },
-        EVENT_NAMES.WORK_ITEMS_CREATE_SUCCESS,
-      );
-      return NextResponse.json(workItemsCreateOperation.output.parse(created), {
-        status: 201,
-      });
-    } catch (e) {
-      // The package owns every write-contract answer, including a `moves` failure (story.0033).
-      const mapped = workItemWriteErrorResponse(e, "create");
-      if (mapped) {
-        return refuse(mapped.status, mapped.errorCode, mapped.body);
-      }
-      if (e instanceof NodeAdminRequiredError) {
-        return refuse(e.status, e.errorCode, {
-          error: e.message,
-          errorCode: e.errorCode,
-          action: e.action,
-        });
-      }
-      if (e instanceof WorkItemsBackendNotReadyError) {
-        return refuse(503, "backend_unavailable", { error: e.message });
-      }
-      throw e;
-    }
+    // The package owns parse, refusals and the one terminal event (bug.0063); this route keeps auth, the actor and node errors.
+    const result = await handleWorkItemCreate({
+      readJson: () => request.json(),
+      parse: (body) => workItemsCreateOperation.input.safeParse(body),
+      write: (input) => createWorkItem(input, { id: sessionUser.id }),
+      toBody: (created) => workItemsCreateOperation.output.parse(created),
+      mapNodeError: (e) => {
+        if (e instanceof NodeAdminRequiredError)
+          return { status: e.status, errorCode: e.errorCode, body: { error: e.message, errorCode: e.errorCode, action: e.action } };
+        if (e instanceof WorkItemsBackendNotReadyError)
+          return { status: 503, errorCode: "backend_unavailable", body: { error: e.message } };
+        return undefined;
+      },
+    });
+    ctx.log.info(result.event, result.event.event);
+    return NextResponse.json(result.body, { status: result.status });
   },
 );

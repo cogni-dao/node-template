@@ -64,9 +64,9 @@ describe("work-item write parity with the package (task.0097)", () => {
     expect(existsSync(src("app/api/v1/work/items/_input-errors.ts"))).toBe(false);
   });
 
-  it("both write routes answer through workItemWriteErrorResponse", () => {
-    expect(read("app/api/v1/work/items/route.ts")).toContain('workItemWriteErrorResponse(e, "create")');
-    expect(read("app/api/v1/work/items/[id]/route.ts")).toContain('workItemWriteErrorResponse(e, "patch")');
+  it("both write routes answer through the package route core, which maps every write error (bug.0063)", () => {
+    expect(read("app/api/v1/work/items/route.ts")).toContain("handleWorkItemCreate(");
+    expect(read("app/api/v1/work/items/[id]/route.ts")).toContain("handleWorkItemPatch(");
   });
 
   it("the facade and the capability forward writes through the package builders", () => {
