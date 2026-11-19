@@ -930,7 +930,7 @@ function createContainer(): Container {
 				async patch(input, principalId) {
 					const item = await leased.patch(input, principalId);
 					if (input.cites?.length) {
-						citePairs.record(item.id, item.revision, input.cites.map((cite) => cite.id));
+						citePairs.record(item.id, item.revision, input.cites);
 					}
 					return item;
 				},

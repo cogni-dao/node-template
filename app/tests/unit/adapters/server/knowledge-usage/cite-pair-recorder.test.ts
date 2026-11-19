@@ -38,7 +38,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 describe("PostgresCitePairRecorder", () => {
   it("writes one row per distinct cited atom, pinned to the patch's revision", async () => {
     const { db, inserts } = fakeDb();
-    new PostgresCitePairRecorder(db, pino({ level: "silent" })).record("story.0061", "33", ["b", "a", "b"]);
+    new PostgresCitePairRecorder(db, pino({ level: "silent" })).record("story.0061", "33", [{ id: "b" }, { id: "a" }, { id: "b" }]);
     await settle();
     expect(inserts).toEqual([
       [
@@ -53,7 +53,7 @@ describe("PostgresCitePairRecorder", () => {
     const log = pino({ level: "silent" });
     const info = vi.spyOn(log, "info");
     const recorder = new PostgresCitePairRecorder(db, log);
-    expect(() => recorder.record("story.0061", "33", ["a"])).not.toThrow();
+    expect(() => recorder.record("story.0061", "33", [{ id: "a" }])).not.toThrow();
     await settle();
     await settle();
     expect(info).toHaveBeenCalledWith(

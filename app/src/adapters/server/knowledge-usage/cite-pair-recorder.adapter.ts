@@ -11,6 +11,7 @@
  * - NEVER_FAILS_THE_PATCH: `record()` is synchronous and never throws; the Doltgres commit already happened.
  * - BOUNDED_IN_FLIGHT: at most 4 inserts in flight, each with a 2 s statement timeout; a pair past that is dropped
  *   and logged.
+ * Notes: a failed insert is logged, never retried; an inbox-only atom is stored under its bare id.
  * Side-effects: IO (Postgres insert via the service role, structured logs)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-read-correctness
  * @internal
@@ -36,10 +37,10 @@ export class PostgresCitePairRecorder {
   ) {}
 
   /** `revision` is the item revision the patch produced; a non-integer revision records nothing. */
-  record(workItemId: string, revision: string | number, atomIds: readonly string[]): void {
+  record(workItemId: string, revision: string | number, cites: readonly { readonly id: string }[]): void {
     try {
       const firstItemRevision = Number(revision);
-      const ids = [...new Set(atomIds)].sort();
+      const ids = [...new Set(cites.map((cite) => cite.id))].sort();
       if (!Number.isInteger(firstItemRevision) || ids.length === 0) return;
       if (this.inFlight >= MAX_IN_FLIGHT) {
         this.fail("in_flight_cap", ids.length);

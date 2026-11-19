@@ -36,6 +36,8 @@ describe("readKnowledgeReads", () => {
     const sample = await readKnowledgeReads(sql, { measure: "miss_share" }, window, new AbortController().signal);
     expect(queries[0]?.params).toEqual([window.end]);
     expect(queries[0]?.text).toContain("GROUP BY k.principal_id, k.atom_id");
+    // A probing caller folds into sentinels; they count as units but are never ranked as fixable ids.
+    expect(queries[0]?.text.match(/NOT IN \('\*invalid\*', '\*overflow\*'\)/g)).toHaveLength(2);
     expect(sample).toMatchObject({ value: 0.25, unit: "ratio", complete: true });
     expect(sample.evidenceRefs).toContain("node:knowledge_read_daily:day=2026-11-19");
     expect(sample.evidenceRefs.join(" ")).toContain("dead-link=7/1p");

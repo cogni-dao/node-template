@@ -8,10 +8,16 @@
  * Invariants:
  * - LAST_FULL_DAY: the reading covers the last full UTC day before the window end, and names it in evidence.
  * - UNIT_IS_DISTINCT: a unit is one (principal, atom) for the day, summed across classes; retries count once.
+ * - SENTINELS_NOT_RANKED: `*invalid*` and `*overflow*` count as units but never appear in the top lists.
  * Links: https://node-template.cognidao.org/knowledge/knowledge-usage-telemetry
  */
 import type { MetricSample } from "@cogni-dao/metrics/contracts";
 import type { Sql } from "postgres";
+
+import {
+  INVALID_ATOM_KEY,
+  OVERFLOW_ATOM_KEY,
+} from "@/adapters/server/knowledge-usage/knowledge-read-counter.adapter";
 
 export const KNOWLEDGE_READ_MEASURES = ["miss_share", "read_units"] as const;
 export type KnowledgeReadMeasure = (typeof KNOWLEDGE_READ_MEASURES)[number];
@@ -36,7 +42,7 @@ function atomCounts(value: unknown): AtomCount[] {
 }
 
 /** One statement: the day's units, its miss units, and the top missed and top read atoms. */
-export const KNOWLEDGE_READS_SQL = `WITH d AS (SELECT (($1::timestamptz) - interval '1 day')::date AS day),
+export const KNOWLEDGE_READS_SQL = `WITH d AS (SELECT (($1::timestamptz AT TIME ZONE 'UTC') - interval '1 day')::date AS day),
 u AS (
   SELECT k.principal_id, k.atom_id, SUM(k.ok_count)::int AS ok, SUM(k.fail_count)::int AS fail
   FROM knowledge_read_daily k, d WHERE k.day = d.day
@@ -44,19 +50,21 @@ u AS (
 ),
 m AS (
   SELECT atom_id, SUM(fail)::int AS n, COUNT(*)::int AS principals FROM u
-  WHERE ok = 0 AND fail > 0 GROUP BY atom_id ORDER BY n DESC, principals DESC, atom_id LIMIT 10
+  WHERE ok = 0 AND fail > 0 AND atom_id NOT IN ('${INVALID_ATOM_KEY}', '${OVERFLOW_ATOM_KEY}')
+  GROUP BY atom_id ORDER BY n DESC, principals DESC, atom_id LIMIT 10
 ),
 r AS (
   SELECT atom_id, SUM(ok)::int AS n, COUNT(*)::int AS principals FROM u
-  WHERE ok > 0 GROUP BY atom_id ORDER BY n DESC, atom_id LIMIT 10
+  WHERE ok > 0 AND atom_id NOT IN ('${INVALID_ATOM_KEY}', '${OVERFLOW_ATOM_KEY}')
+  GROUP BY atom_id ORDER BY n DESC, atom_id LIMIT 10
 )
 SELECT (SELECT day FROM d)::text AS day, NOW() AS as_of,
   (SELECT COUNT(*) FROM u)::int AS units,
   (SELECT COUNT(*) FROM u WHERE ok = 0 AND fail > 0)::int AS miss_units,
   (SELECT COALESCE(SUM(ok + fail), 0) FROM u)::int AS reads,
   (SELECT COUNT(DISTINCT principal_id) FROM u)::int AS principals,
-  COALESCE((SELECT json_agg(m) FROM m), '[]'::json) AS top_misses,
-  COALESCE((SELECT json_agg(r) FROM r), '[]'::json) AS top_reads`;
+  COALESCE((SELECT json_agg(m ORDER BY m.n DESC, m.principals DESC, m.atom_id) FROM m), '[]'::json) AS top_misses,
+  COALESCE((SELECT json_agg(r ORDER BY r.n DESC, r.atom_id) FROM r), '[]'::json) AS top_reads`;
 
 export async function readKnowledgeReads(
   sql: Sql,
