@@ -13,7 +13,7 @@ import type { HistoryActorKind, HistoryEntry } from "@cogni/work-items";
 import { readWorkItemHistory } from "@cogni/work-items";
 import { describe, expect, it, vi } from "vitest";
 
-import { withHistoryActorKinds } from "@/bootstrap/history-actor-kind";
+import { CLASSIFY_TIMEOUT_MS, withHistoryActorKinds } from "@/bootstrap/history-actor-kind";
 
 const HUMAN = "211a49a5-f35c-4884-8cbf-78fb40a558db";
 const NODE_AI = "00000000-0000-4000-a000-0000000a0002";
@@ -84,6 +84,23 @@ describe("withHistoryActorKinds", () => {
     expect(items.map((v) => v.actorKind)).toEqual(["internal", undefined, "internal", "human", undefined]);
     expect(items[1]?.actor).toBe(OUTSIDE_AI);
     expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves the read without a kind when the classifier hangs past its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const onFailure = vi.fn();
+      const hung = new Promise<HistoryActorKind>(() => {});
+      const store = withHistoryActorKinds(fakeStore(), () => hung, onFailure);
+      const pending = readWorkItemHistory(store, "task.0001");
+      await vi.advanceTimersByTimeAsync(CLASSIFY_TIMEOUT_MS);
+      const full = await pending;
+      expect(full.status).toBe(200);
+      expect((full.body as { items: HistoryEntry[] }).items.every((v) => v.actorKind === undefined)).toBe(true);
+      expect(onFailure).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("passes every other store method through unchanged", async () => {

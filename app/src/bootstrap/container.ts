@@ -180,6 +180,7 @@ import {
 	createPrFactsPort,
 	resolveWorkItemsPrRepos,
 } from "@/bootstrap/capabilities/work-item-pr-facts";
+import { withHistoryActorKinds } from "@/bootstrap/history-actor-kind";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
 import {
@@ -188,7 +189,6 @@ import {
 } from "@/bootstrap/node-admin-gate";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 import { bindEdoToolCapability } from "@/bootstrap/write-attribution";
-import { withHistoryActorKinds } from "@/bootstrap/history-actor-kind";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
 	startGovernanceSyncOnBoot,

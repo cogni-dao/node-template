@@ -11,6 +11,7 @@
  *   - ONE_HISTORY_SHAPE: the route, the item envelope and `core__work_item_read` read the same wrapped store, so they agree.
  *   - KIND_NEVER_BLOCKS_A_READ: a classifier failure leaves that actor's versions without `actorKind` and logs one warning; the read succeeds.
  *   - ONE_CALL_PER_ACTOR: each read classifies each distinct actor once.
+ *   - BOUNDED_WAIT: a classifier answer slower than CLASSIFY_TIMEOUT_MS counts as a failure, so a slow service database never stalls a history read.
  * Side-effects: IO (classifier reads through the caller's port)
  * Links: hub activity-attribution, change-history-design, @cogni/agent-grants classifyPrincipal
  * @public
@@ -26,6 +27,21 @@ import type {
 /** Answers what kind of actor a user id is. */
 export type ClassifyActor = (userId: string) => Promise<HistoryActorKind>;
 
+/** How long one classifier answer may take before the version is served without a kind. */
+export const CLASSIFY_TIMEOUT_MS = 2_000;
+
+class ClassifyTimeoutError extends Error {
+  override name = "ClassifyTimeoutError";
+}
+
+function withinDeadline<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ClassifyTimeoutError(`classifier took over ${CLASSIFY_TIMEOUT_MS} ms`)), CLASSIFY_TIMEOUT_MS);
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
 /** Called once per actor the classifier could not answer for; ids are not logged. */
 export type ClassifyFailed = (error: unknown) => void;
 
@@ -39,7 +55,7 @@ async function withKinds(
   await Promise.all(
     actors.map(async (actor) => {
       try {
-        kinds.set(actor, await classify(actor));
+        kinds.set(actor, await withinDeadline(classify(actor)));
       } catch (error) {
         onFailure(error);
       }

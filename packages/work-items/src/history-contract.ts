@@ -6,7 +6,7 @@
  * Purpose: Zod wire schemas for change reasons and one work item's row history (task.0052, story.0023).
  * Scope: Schemas and types only. No I/O, no store access.
  * Invariants:
- *   - ONE_HISTORY_SHAPE: `@cogni-dao/knowledge-store/contracts` declares the same item shape. `actorKind` is the one read-time field on top of it: the host adds it to work-item history only, and the knowledge copy does not declare it.
+ *   - ONE_HISTORY_SHAPE: `@cogni-dao/knowledge-store/contracts` declares the same item shape. Both declare the optional read-time `actorKind`; the host sets it on work-item history only.
  *   - KIND_IS_NEVER_STORED (task.0133, hub activity-attribution): `actorKind` is computed by the host's one classifier when history is read; no commit, row or artifact records it.
  *   - REASON_REQUIRED: `ChangeReasonSchema` applies the `checkChangeReason` rule the adapter applies (line breaks become spaces, then 1-240 chars, at most 25 words, no NUL); a missing reason says what to send.
  *   - NOTE_NOT_BODY: the reason comes from Dolt history, never from the row.
