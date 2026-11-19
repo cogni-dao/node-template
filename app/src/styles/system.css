@@ -5,11 +5,11 @@
  * only the brand variables. Roles and contrast floors:
  * https://node-template.cognidao.org/knowledge/ui-token-system
  */
-@custom-variant dark (&:is(.dark *));
 @import "tw-animate-css";
 @import "@cogni/node-ui-kit/tailwind-source.css";
 @import "@cogni/knowledge-base-ui/tailwind-source.css";
 @import "@cogni/money-plane/tailwind-source.css";
+@custom-variant dark (&:is(.dark *));
 /* The shared FinanceReport ships as built JS; scan it so its utilities are emitted (Turbopack inlines the import above). */
 @source "../../node_modules/@cogni/money-plane/dist/react";
 
@@ -143,7 +143,7 @@
     --card-foreground: 213 13% 14%;
     --popover: 0 0% 100%;
     --popover-foreground: 213 13% 14%;
-    --primary: 217 91% 45%; /* brand hue 217 */
+    --primary: 217 91% 45%; /* fleet default; each node's tailwind.css overrides the brand variables */
     --primary-foreground: 0 0% 100%;
     --secondary: 210 29% 97%; /* #f6f8fa */
     --secondary-foreground: 213 13% 14%;
