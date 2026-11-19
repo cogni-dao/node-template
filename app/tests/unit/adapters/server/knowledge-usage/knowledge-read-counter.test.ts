@@ -51,7 +51,9 @@ const fixedNow = () => new Date("2026-11-18T12:00:00Z");
 describe("PostgresKnowledgeReadCounter", () => {
   it("folds any number of reads of one key into one row in one statement", async () => {
     const { db, statements } = fakeDb();
-    const counter = new PostgresKnowledgeReadCounter(db, pino({ level: "silent" }), fixedNow);
+    const log = pino({ level: "silent" });
+    const info = vi.spyOn(log, "info");
+    const counter = new PostgresKnowledgeReadCounter(db, log, fixedNow);
 
     for (let i = 0; i < 1_000; i += 1) counter.count(read("b"));
     for (let i = 0; i < 10; i += 1) counter.count(read("a", "fail"));
@@ -62,6 +64,15 @@ describe("PostgresKnowledgeReadCounter", () => {
       expect.objectContaining({ day: "2026-11-18", atomId: "a", okCount: 0, failCount: 10 }),
       expect.objectContaining({ day: "2026-11-18", atomId: "b", okCount: 1_000, failCount: 0 }),
     ]);
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "knowledge.read_counts_flushed",
+        keys: 2,
+        reads: 1_010,
+        byClass: { external_agent: { ok: 1_000, fail: 10 } },
+      }),
+      expect.anything()
+    );
   });
 
   it("bounds the keys a caller can create with invented missing ids", async () => {

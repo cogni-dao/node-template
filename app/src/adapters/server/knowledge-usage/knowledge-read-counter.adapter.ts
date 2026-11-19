@@ -98,6 +98,13 @@ export class PostgresKnowledgeReadCounter implements KnowledgeReadCounter {
       .map(([, row]) => row);
     this.pending = new Map();
     const reads = rows.reduce((sum, r) => sum + r.okCount + r.failCount, 0);
+    // Reads by class and outcome: the flush log's only breakdown, so a candidate probe can be checked without a DB read.
+    const byClass: Record<string, { ok: number; fail: number }> = {};
+    for (const r of rows) {
+      const c = (byClass[r.principalClass] ??= { ok: 0, fail: 0 });
+      c.ok += r.okCount;
+      c.fail += r.failCount;
+    }
     const reqId = `read-count-flush-${randomUUID()}`;
     try {
       await this.db.transaction(async (tx) => {
@@ -125,6 +132,7 @@ export class PostgresKnowledgeReadCounter implements KnowledgeReadCounter {
         reqId,
         keys: rows.length,
         reads,
+        byClass,
       });
     } catch (error) {
       this.restore(rows);
