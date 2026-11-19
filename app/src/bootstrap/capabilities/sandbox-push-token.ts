@@ -3,14 +3,12 @@
 
 /**
  * Module: `@bootstrap/capabilities/sandbox-push-token`
- * Purpose: Give each sandbox call a 1-hour GH_TOKEN for this node's own repo, through one port with two adapters.
- * Scope: Fleet adapter: asks the operator's POST /api/v1/vcs/push-token with the node AI's operator key; the operator
- *   mints from the fleet dev App. Sovereign adapter: mints locally from the node's own GitHub App. Caches the token.
+ * Purpose: Give each sandbox call a 1-hour GH_TOKEN for this node's own repo.
+ * Scope: Asks the operator's POST /api/v1/vcs/push-token with the node AI's operator key (role developer); the
+ *   operator mints from its App, narrowed to this repo and contents + pull_requests write. Caches the token.
  *   No GitHub key ever reaches the sandbox; only the minted token does.
  * Invariants:
- *   - ONE_REPO_ONLY: every token names one repo and only contents + pull_requests write (the operator enforces it for
- *     the fleet; the sovereign adapter mints only when its App has exactly one installation with exactly one repo).
- *   - SOVEREIGN_WINS: when the node holds its own App key, it never calls the operator.
+ *   - ONE_REPO_ONLY: the operator narrows every token to this node's repo and contents + pull_requests write.
  *   - WARN_NEVER_BLOCK: no key, or a failed mint, logs a warning and returns no env; the call still runs and only
  *     git push fails.
  *   - CACHE_UNTIL_NEAR_EXPIRY: one mint serves every call until 20 minutes before expiry, longer than any call (15 min).
@@ -21,8 +19,6 @@
  * @internal
  */
 
-import { createAppAuth } from "@octokit/auth-app";
-
 import type { ServerEnv } from "@/shared/env";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
@@ -31,17 +27,13 @@ const logger = makeLogger({ component: "SandboxPushToken" });
 const REFRESH_BEFORE_MS = 20 * 60_000;
 const FAILURE_BACKOFF_MS = 60_000;
 const MINT_TIMEOUT_MS = 15_000;
-const PUSH_PERMISSIONS = { contents: "write", pull_requests: "write" } as const;
 
 type CallEnv = Readonly<Record<string, string>>;
 type Minted = { token: string; expiresAt: string };
 /** One mint attempt: a token, or the error code to log. */
 type Mint = () => Promise<Minted | { errorCode: string }>;
 
-export type PushTokenEnv = Pick<
-  ServerEnv,
-  "GH_AI_APP_ID" | "GH_AI_APP_PRIVATE_KEY_BASE64" | "NODE_AI_OPERATOR_KEY" | "COGNI_OPERATOR_URL"
->;
+export type PushTokenEnv = Pick<ServerEnv, "NODE_AI_OPERATOR_KEY" | "COGNI_OPERATOR_URL">;
 
 /** Returns the per-call env provider for the sandbox: `{ GH_TOKEN }` when a token is available, else `{}`. */
 export function createSandboxPushTokenEnv(
@@ -101,18 +93,13 @@ function selectAdapter(
   env: PushTokenEnv,
   nodeSlug: string,
   fetchImpl: typeof fetch
-): { name: "sovereign" | "fleet"; mint: Mint } | null {
-  if (env.GH_AI_APP_ID && env.GH_AI_APP_PRIVATE_KEY_BASE64) {
-    return { name: "sovereign", mint: sovereignMint(env.GH_AI_APP_ID, env.GH_AI_APP_PRIVATE_KEY_BASE64, fetchImpl) };
-  }
-  if (env.NODE_AI_OPERATOR_KEY && env.COGNI_OPERATOR_URL) {
-    return { name: "fleet", mint: fleetMint(env.COGNI_OPERATOR_URL, env.NODE_AI_OPERATOR_KEY, nodeSlug, fetchImpl) };
-  }
-  return null;
+): { name: "operator"; mint: Mint } | null {
+  if (!env.NODE_AI_OPERATOR_KEY || !env.COGNI_OPERATOR_URL) return null;
+  return { name: "operator", mint: operatorMint(env.COGNI_OPERATOR_URL, env.NODE_AI_OPERATOR_KEY, nodeSlug, fetchImpl) };
 }
 
-/** Fleet: the operator mints from the fleet dev App after checking this principal may push to this node. */
-function fleetMint(operatorUrl: string, apiKey: string, nodeSlug: string, fetchImpl: typeof fetch): Mint {
+/** The operator mints from its App after checking this principal is a developer on this node. */
+function operatorMint(operatorUrl: string, apiKey: string, nodeSlug: string, fetchImpl: typeof fetch): Mint {
   return async () => {
     const res = await fetchImpl(`${operatorUrl}/api/v1/vcs/push-token`, {
       method: "POST",
@@ -125,42 +112,5 @@ function fleetMint(operatorUrl: string, apiKey: string, nodeSlug: string, fetchI
       return { errorCode: body.errorCode ?? `operator_${res.status}` };
     }
     return { token: body.token, expiresAt: body.expiresAt };
-  };
-}
-
-/** Sovereign: the node's own App, installed on exactly one repo, mints locally. */
-function sovereignMint(appId: string, keyBase64: string, fetchImpl: typeof fetch): Mint {
-  const auth = createAppAuth({
-    appId,
-    privateKey: Buffer.from(keyBase64, "base64").toString("utf-8"),
-  });
-  const gh = async (path: string, token: string): Promise<unknown> => {
-    const res = await fetchImpl(`https://api.github.com${path}`, {
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(MINT_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`github_${res.status}`);
-    return res.json();
-  };
-  return async () => {
-    const { token: jwt } = await auth({ type: "app" });
-    const installs = (await gh("/app/installations", jwt)) as Array<{ id: number }>;
-    const [install] = installs;
-    if (installs.length !== 1 || !install) return { errorCode: "not_one_installation" };
-    const listing = await auth({ type: "installation", installationId: install.id, permissions: { metadata: "read" } });
-    const { repositories } = (await gh("/installation/repositories", listing.token)) as {
-      repositories: Array<{ name: string }>;
-    };
-    const [repo] = repositories;
-    if (repositories.length !== 1 || !repo) return { errorCode: "not_one_repo" };
-    const minted = await auth({
-      type: "installation",
-      installationId: install.id,
-      repositoryNames: [repo.name],
-      permissions: { ...PUSH_PERMISSIONS },
-      // auth-app caches installation tokens for 59 min; refresh so a re-mint is truly fresh.
-      refresh: true,
-    });
-    return { token: minted.token, expiresAt: minted.expiresAt };
   };
 }

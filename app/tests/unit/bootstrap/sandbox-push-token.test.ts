@@ -3,9 +3,8 @@
 
 /**
  * Module: `@tests/unit/bootstrap/sandbox-push-token`
- * Purpose: Guards the defects of the sandbox push-token provider: a sovereign node that still calls the operator or
- *   gets auth-app's cached (stale) token, an operator outage that adds the mint timeout to every call or drops a
- *   still-valid token, and a token re-minted on every call.
+ * Purpose: Guards the defects of the sandbox push-token provider: an operator outage that adds the mint timeout to
+ *   every call or drops a still-valid token, and a token re-minted on every call.
  * Scope: Fake fetch and clock; no network.
  * Side-effects: none
  * Links: app/src/bootstrap/capabilities/sandbox-push-token.ts, https://node-template.cognidao.org/knowledge/node-ai-push-token
@@ -13,47 +12,16 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-const authCalls = vi.hoisted(() => vi.fn());
-vi.mock("@octokit/auth-app", () => ({
-  createAppAuth: () => async (opts: { type: string }) => {
-    authCalls(opts);
-    return opts.type === "app" ? { token: "jwt" } : { token: "ghs_self", expiresAt: "2026-01-01T01:00:00Z" };
-  },
-}));
-
 import { createSandboxPushTokenEnv } from "@/bootstrap/capabilities/sandbox-push-token";
 
 const T0 = Date.parse("2026-01-01T00:00:00Z");
 const fleet = {
   NODE_AI_OPERATOR_KEY: "op-key",
   COGNI_OPERATOR_URL: "https://operator.test",
-  GH_AI_APP_ID: undefined,
-  GH_AI_APP_PRIVATE_KEY_BASE64: undefined,
 };
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
 
 describe("createSandboxPushTokenEnv", () => {
-  it("a sovereign node mints from its own App and never calls the operator", async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
-      const u = String(url);
-      if (u.endsWith("/app/installations")) return json(200, [{ id: 7 }]);
-      if (u.endsWith("/installation/repositories")) return json(200, { repositories: [{ name: "node-x" }] });
-      return json(500, {});
-    });
-    const provider = createSandboxPushTokenEnv(
-      { ...fleet, GH_AI_APP_ID: "1", GH_AI_APP_PRIVATE_KEY_BASE64: Buffer.from("k").toString("base64") },
-      "node-x",
-      fetchImpl as typeof fetch,
-      () => T0
-    );
-
-    expect(await provider()).toEqual({ GH_TOKEN: "ghs_self" });
-    expect(fetchImpl.mock.calls.some(([u]) => String(u).includes("operator.test"))).toBe(false);
-    expect(authCalls).toHaveBeenCalledWith(
-      expect.objectContaining({ repositoryNames: ["node-x"], refresh: true, permissions: { contents: "write", pull_requests: "write" } })
-    );
-  });
-
   it("reuses one fleet token until 20 minutes before expiry, then mints again", async () => {
     let now = T0;
     const fetchImpl = vi.fn(async () => json(200, { token: "ghs_fleet", expiresAt: "2026-01-01T01:00:00Z" }));
