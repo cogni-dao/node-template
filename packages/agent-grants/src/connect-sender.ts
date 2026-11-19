@@ -11,7 +11,8 @@
  *   - ALIAS_FROM_SERVER_CONFIG: an alias that is not a configured target is refused before any signing or network call; the alias is never a URL.
  *   - NO_SIGNER_NO_CALL: without a signing key nothing is sent (`no_signer`) and no seq is taken.
  *   - SEQ_RISES_ACROSS_RESTARTS: the next `seq` is taken by ONE atomic store call BEFORE signing, so a restart, a second replica or a failed send never reuses one. A provider's `stale_seq` or
- *     `seq_jump` answer carries its stored seq and this node rises above it (`liftSeq`, a `GREATEST`), so one click later the connect lands.
+ *     `seq_jump` answer carries its stored seq: after `stale_seq` this node rises above it (`liftSeq`, a `GREATEST`); after `seq_jump` (the provider admin reset the record, so the provider's seq is
+ *     far BELOW ours) it aligns to it exactly (`alignSeq`), so one click later the connect lands in both cases.
  *   - STATE_IS_MY_OWN_ACT: status and cap are written only from a provider 200, and only while no newer send has reserved a higher seq (`accept` is guarded by the reserved seq), so a slow
  *     answer never overwrites a newer one. A refusal changes neither.
  *   - FIXED_POST: one POST to `{origin}/api/v1/public/agent/service-connections` on the configured origin only, https, no redirects, 10 s, 64 KiB cap, body `{}` (the signed claims are the request).
@@ -72,8 +73,10 @@ export interface OutboundConnectionStore {
   states(origins: readonly string[]): Promise<ReadonlyMap<string, OutboundState>>;
   /** Records the provider's acceptance, only while `reservedSeq` is still the stored seq or above it (a newer send has not overtaken it). */
   accept(input: { origin: string; status: "connected" | "disconnected"; cap: number; reservedSeq: number }): Promise<void>;
-  /** Raises the stored seq to at least `seq` (the provider's stored one). Never lowers it. */
+  /** Raises the stored seq to at least `seq` (the provider's stored one, after a `stale_seq`). Never lowers it. */
   liftSeq(origin: string, seq: number): Promise<void>;
+  /** Sets the stored seq to exactly `seq` (the provider's stored one, after a `seq_jump`): the provider's admin reset it, so this node's higher local seq would be refused forever. */
+  alignSeq(origin: string, seq: number): Promise<void>;
 }
 
 export interface ConnectSender {
@@ -185,8 +188,10 @@ export function createConnectSender(deps: {
           reservedSeq: reserved.seq,
         });
       } else if (response.status === 409 && (error === "stale_seq" || error === "seq_jump") && Number.isSafeInteger(answer.seq) && (answer.seq as number) >= 0) {
-        // The provider already holds a different seq (this node's table was reset or restored): rise above it, so the next click lands.
-        await deps.store.liftSeq(target.origin, answer.seq as number);
+        // STALE: the provider holds a higher seq (this node's table was reset or restored): rise above it, so the next click lands.
+        // JUMP: the provider holds a much LOWER seq (its admin reset the record): align to it exactly, or a local seq above the step bound is refused forever.
+        if (error === "seq_jump") await deps.store.alignSeq(target.origin, answer.seq as number);
+        else await deps.store.liftSeq(target.origin, answer.seq as number);
       }
       deps.onSent?.({ alias: target.alias, act: input.act, outcome: "answered", httpStatus: response.status, status });
       const states = await deps.store.states([target.origin]);
@@ -224,6 +229,9 @@ export function createPostgresOutboundConnectionStore(sql: SqlTag): OutboundConn
       await sql`
         UPDATE outbound_connections SET status = ${status}, cap = ${cap}, updated_at = now()
         WHERE target_origin = ${origin} AND seq <= ${reservedSeq}`;
+    },
+    async alignSeq(origin, seq) {
+      await sql`UPDATE outbound_connections SET seq = ${seq}, updated_at = now() WHERE target_origin = ${origin}`;
     },
     async liftSeq(origin, seq) {
       await sql`UPDATE outbound_connections SET seq = GREATEST(seq, ${seq}), updated_at = now() WHERE target_origin = ${origin}`;

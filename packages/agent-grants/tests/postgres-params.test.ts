@@ -75,6 +75,7 @@ describe("the Postgres store passes no JS Date as a parameter", () => {
     await outbound.states(["https://prov.example"]);
     await outbound.accept({ origin: "https://prov.example", status: "connected", cap: 5, reservedSeq: 1 });
     await outbound.liftSeq("https://prov.example", 9);
+    await outbound.alignSeq("https://prov.example", 3);
     // The replay store hands the expiry over as an ISO string.
     await createPostgresReplayStore(tag).seen("jti-1", new Date("2026-11-18T00:05:00.000Z"));
     expect(seen.flat()).toContain("2026-11-18T00:05:00.000Z");

@@ -38,6 +38,10 @@ function memoryOutbound(): OutboundConnectionStore & { rows: Map<string, Outboun
       const row = rows.get(origin);
       if (row) rows.set(origin, { ...row, seq: Math.max(row.seq, seq) });
     },
+    async alignSeq(origin, seq) {
+      const row = rows.get(origin);
+      if (row) rows.set(origin, { ...row, seq });
+    },
   };
 }
 
@@ -142,16 +146,20 @@ describe("connect sender (this node as a customer)", () => {
     expect(await build().act({ alias: "prov", act: "connect", cap: 5 })).toMatchObject({ httpStatus: 502, status: null, error: null });
   });
 
-  it("a stale_seq or seq_jump answer carries the provider's stored seq and this node rises above it, so the next click lands", async () => {
+  it("a stale_seq answer carries the provider's stored seq and this node rises above it; a seq_jump answer (the provider's admin reset it) aligns this node to it exactly, so the next click lands", async () => {
     provider.mockResolvedValue(json(409, { error: "stale_seq", seq: 7 }));
     expect(await build().act({ alias: "prov", act: "connect", cap: 5 })).toMatchObject({ httpStatus: 409, status: null, error: "stale_seq" });
     expect(store.rows.get(TARGET.origin)?.seq).toBe(7);
     provider.mockResolvedValue(json(200, { status: "connected", cap: 5, seq: 8 }));
     await build().act({ alias: "prov", act: "connect", cap: 5 });
     expect(await providerVerify(authorizationOf(1))).toMatchObject({ claims: { act: "connect", cap: 5, seq: 8 } });
+    // The provider's admin reset the record to 1 while this node's local seq is 9: a jump. Align to 3 (what it says), never stay above it.
     provider.mockResolvedValue(json(409, { error: "seq_jump", seq: 3 }));
     await build().act({ alias: "prov", act: "connect", cap: 5 });
-    expect(store.rows.get(TARGET.origin)?.seq).toBe(9);
+    expect(store.rows.get(TARGET.origin)?.seq).toBe(3);
+    provider.mockResolvedValue(json(200, { status: "connected", cap: 5, seq: 4 }));
+    await build().act({ alias: "prov", act: "connect", cap: 5 });
+    expect(await providerVerify(authorizationOf(3))).toMatchObject({ claims: { act: "connect", cap: 5, seq: 4 } });
   });
 
   it("the list shows each configured target with its offer from config, and this node's own status and cap", async () => {

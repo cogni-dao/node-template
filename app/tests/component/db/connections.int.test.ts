@@ -20,6 +20,7 @@ import {
   assertConnectionAdmits,
   CONNECT_SCOPE,
   type ConnectOutcome,
+  createConnectSender,
   createPostgresConnectionStore,
   createPostgresOutboundConnectionStore,
   createPostgresPayerBindingStore,
@@ -221,6 +222,41 @@ describe("connect from home (real Postgres)", () => {
     expect(await createPostgresConnectionStore(sql as unknown as SqlTag).resetSeq(randomUUID())).toBe(false);
   });
 
+  it("after the provider's admin resets the record to 1, a customer whose local seq is above 1M fails ONE click (seq_jump) and then connects", async () => {
+    const c = await customer();
+    const origin = `https://provider-${randomUUID()}.example.org`;
+    const outbound = createPostgresOutboundConnectionStore(sql as unknown as SqlTag);
+    // The provider side runs in-test: the real verifier, the durable replay store and the real connection store, answering as the route does.
+    const provider = (async (_url: string, init: RequestInit) => {
+      const token = String((init.headers as Record<string, string>).authorization).replace(/^Bearer /, "");
+      const sent = await c.send(token);
+      const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+      if (!sent.verified) return reply(401, { error: "invalid_token" });
+      if (sent.outcome.ok) return reply(200, { status: sent.outcome.record.status, cap: sent.outcome.record.cap, seq: sent.outcome.record.seq });
+      return reply(409, { error: sent.outcome.code, seq: sent.outcome.seq });
+    }) as unknown as typeof fetch;
+    const sender = createConnectSender({
+      targets: [{ alias: "prov", nodeId: NODE, origin }],
+      signer: async () => c.signer,
+      store: outbound,
+      fetchImpl: provider,
+    });
+
+    // The provider holds this customer at seq 5; the customer's local table is far ahead (a long-lived node).
+    await c.send(await c.sign({ act: "connect", cap: 1000, seq: 5 }));
+    await sql`INSERT INTO outbound_connections (target_origin, status, cap, seq) VALUES (${origin}, 'disconnected', 0, ${2 * MAX_SEQ_STEP})`;
+    // The provider admin resets the record: stored seq 1.
+    const record = await row(c.issuer);
+    expect(await createPostgresConnectionStore(sql as unknown as SqlTag).resetSeq(record?.org_user_id as string)).toBe(true);
+
+    // One click fails: 2,000,001 is more than 1,000,000 above 1. The answer carries the stored seq and the customer aligns to it.
+    expect(await sender.act({ alias: "prov", act: "connect", cap: 700 })).toMatchObject({ ok: true, httpStatus: 409, status: null, error: "seq_jump", target: { status: "not_connected" } });
+    expect((await outbound.states([origin])).get(origin)?.seq).toBe(1);
+    // The next click lands (seq 2) and the provider's record carries the new cap.
+    expect(await sender.act({ alias: "prov", act: "connect", cap: 700 })).toMatchObject({ ok: true, httpStatus: 200, status: "connected", target: { status: "connected", cap: 700 } });
+    expect(await row(c.issuer)).toMatchObject({ seq: "2", cap: "700", status: "connected" });
+  });
+
   it("this node's own outbound state: seq rises across instances, a stale-guarded accept does not overwrite a newer one, and a lift never lowers", async () => {
     const origin = `https://prov-${randomUUID()}.example.org`;
     const a = createPostgresOutboundConnectionStore(sql as unknown as SqlTag);
@@ -234,6 +270,8 @@ describe("connect from home (real Postgres)", () => {
     await a.liftSeq(origin, 40);
     await a.liftSeq(origin, 3);
     expect((await a.states([origin])).get(origin)?.seq).toBe(40);
+    await a.alignSeq(origin, 6);
+    expect((await a.states([origin])).get(origin)?.seq).toBe(6);
     expect((await a.states([`${origin}x`])).size).toBe(0);
   });
 
