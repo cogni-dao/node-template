@@ -17,7 +17,7 @@ import {
   type ReceiptClaimantsRecord,
   type ReceiptForWeighting,
   type ReceiptUnitWeight,
-} from "@cogni/attribution-ledger";
+} from "../src/index";
 import { describe, expect, it } from "vitest";
 import {
   applyReceiptWeightOverrides,

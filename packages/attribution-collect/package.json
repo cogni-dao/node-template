@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cogni/attribution-ledger": "workspace:*",
+    "@cogni/attribution-ledger": "workspace:@cogni-dao/attribution@*",
     "@cogni/attribution-pipeline-contracts": "workspace:*",
     "@cogni/attribution-pipeline-plugins": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",

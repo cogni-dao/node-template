@@ -11,9 +11,9 @@
  * @public
  */
 
+import { listEpochsView } from "@cogni/attribution-ledger";
 import { listEpochsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
-import { toEpochDto } from "@/app/api/v1/public/attribution/_lib/attribution-dto";
 import { getContainer } from "@/bootstrap/container";
 import { wrapPublicRoute } from "@/bootstrap/http";
 import { getNodeId } from "@/shared/config";
@@ -33,17 +33,13 @@ export const GET = wrapPublicRoute(
       offset: url.searchParams.get("offset") ?? undefined,
     });
 
-    const store = getContainer().attributionStore;
-    const allEpochs = await store.listEpochs(getNodeId());
     // PUBLIC_READS_FINALIZED_ONLY: only expose finalized epochs
-    const finalizedEpochs = allEpochs.filter((e) => e.status === "finalized");
-    const page = finalizedEpochs.slice(offset, offset + limit);
-
-    return NextResponse.json(
-      listEpochsOperation.output.parse({
-        epochs: page.map(toEpochDto),
-        total: finalizedEpochs.length,
-      })
+    const view = await listEpochsView(
+      getContainer().attributionStore,
+      getNodeId(),
+      { limit, offset },
+      { status: "finalized" }
     );
+    return NextResponse.json(listEpochsOperation.output.parse(view));
   }
 );

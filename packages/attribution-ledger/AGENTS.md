@@ -89,14 +89,14 @@ Pure domain logic for the attribution ledger — shared between the Next.js app 
 
 ## Responsibilities
 
-- This directory **does**: Define ledger domain types, port interface, compute deterministic attribution statement lines, compute allocation set/config/artifact hashes, versioned allocation algorithm dispatch, pool estimation, artifact envelope validation, enricher inputs hashing, validated store wrapper, define domain errors
-- This directory **does not**: Perform I/O, access databases, import from `src/` or `services/`, or ship concrete enricher plugin implementations
+- This directory **does**: Define ledger domain types, port interface, compute deterministic attribution statement lines, compute allocation set/config/artifact hashes, versioned allocation algorithm dispatch, pool estimation, artifact envelope validation, enricher inputs hashing, validated store wrapper, define domain errors, serve the bounded epoch read views and wire mappers (`src/read/`, published as `@cogni-dao/attribution`, story.0076)
+- This directory **does not**: Perform I/O other than calls on an injected store port, access databases, import from `src/` or `services/`, or ship concrete enricher plugin implementations
 
 ## Usage
 
 ```bash
-pnpm --filter @cogni/attribution-ledger typecheck
-pnpm --filter @cogni/attribution-ledger build
+pnpm --filter @cogni-dao/attribution typecheck
+pnpm --filter @cogni-dao/attribution build
 ```
 
 ## Standards

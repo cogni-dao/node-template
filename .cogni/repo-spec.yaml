@@ -49,7 +49,7 @@ activity_ledger:
   activity_sources:
     github:
       attribution_pipeline: cogni-v0.0
-      source_refs: ["Cogni-DAO/standalone-node"]
+      source_refs: ["cogni-dao/node-template"]
 
 payments:
   status: pending_activation

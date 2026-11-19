@@ -85,7 +85,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/attribution-collect
       '@cogni/attribution-ledger':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/attribution@*
         version: link:../packages/attribution-ledger
       '@cogni/attribution-pipeline-plugins':
         specifier: workspace:*
@@ -571,7 +571,7 @@ importers:
   packages/attribution-collect:
     dependencies:
       '@cogni/attribution-ledger':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/attribution@*
         version: link:../attribution-ledger
       '@cogni/attribution-pipeline-contracts':
         specifier: workspace:*
@@ -604,11 +604,14 @@ importers:
       typescript:
         specifier: ^5
         version: 5.9.3
+      vitest:
+        specifier: ^4.0.9
+        version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@22.19.19)(happy-dom@20.10.2(bufferutil@4.1.0)(utf-8-validate@5.0.10))(jsdom@27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))(vite@7.3.5(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/attribution-pipeline-contracts:
     dependencies:
       '@cogni/attribution-ledger':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/attribution@*
         version: link:../attribution-ledger
       zod:
         specifier: ^4.1.12
@@ -627,7 +630,7 @@ importers:
         specifier: workspace:*
         version: link:../aragon-osx
       '@cogni/attribution-ledger':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/attribution@*
         version: link:../attribution-ledger
       '@cogni/attribution-pipeline-contracts':
         specifier: workspace:*
@@ -673,7 +676,7 @@ importers:
         specifier: workspace:*
         version: link:../aragon-osx
       '@cogni/attribution-ledger':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/attribution@*
         version: link:../attribution-ledger
       '@cogni/db-schema':
         specifier: workspace:*
@@ -1135,7 +1138,7 @@ importers:
         specifier: workspace:*
         version: link:../ai-core
       '@cogni/attribution-ledger':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/attribution@*
         version: link:../attribution-ledger
     devDependencies:
       tsup:
