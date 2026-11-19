@@ -245,7 +245,7 @@ export const payerBindings = pgTable(
 ).enableRLS();
 
 /**
- * Connect from home (story.0038, 0.9.0): the provider's ONE live row per customer node, keyed by the org user the customer's signing issuer maps to (an `org` principal of source kind
+ * Connect from home (story.0038, 0.10.0): the provider's ONE live row per customer node, keyed by the org user the customer's signing issuer maps to (an `org` principal of source kind
  * `issuer`, with one ordinary billing account). `status` is the customer's own act (`connected` | `disconnected`, a tombstone); `suspended` is the provider admin's sticky Suspend and
  * no connect or disconnect writes it; `cap` is the customer's cap in integer credits; `seq` is the last signed seq applied (a connect at or below it is refused). The allowance is the
  * credit balance of `billing_account_id`; cumulative debits are the sum of its charge receipts. Sibling of `payer_bindings` (not extra columns on it): a payer row is one per SUBJECT
@@ -287,7 +287,7 @@ export const orgConnections = pgTable(
 ).enableRLS();
 
 /**
- * Durable replay memory for signed service assertions (story.0038, 0.9.0): one row per `jti` (prefixed by its issuer) until its assertion expires, then pruned. The `jti` is the primary
+ * Durable replay memory for signed service assertions (story.0038, 0.10.0): one row per `jti` (prefixed by its issuer) until its assertion expires, then pruned. The `jti` is the primary
  * key, so a replay is refused by every replica and after a restart. Service-role only: ENABLE + FORCE RLS and no policy (FORCE is added by hand in the migration).
  */
 export const serviceAssertionJtis = pgTable(

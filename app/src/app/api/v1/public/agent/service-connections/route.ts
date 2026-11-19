@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/public/agent/service-connections`
- * Purpose: PROVIDER side of connect from home (story.0038, agent-grants 0.9.0). A customer node's admin connects or disconnects from its own Admin page; its node signs ONE assertion as
+ * Purpose: PROVIDER side of connect from home (story.0038, agent-grants 0.10.0). A customer node's admin connects or disconnects from its own Admin page; its node signs ONE assertion as
  *   service `node-connect` whose claims carry `act` (`connect` | `disconnect`), `cap` (integer credits) and a rising `seq`, and posts it here with `Authorization: Bearer <assertion>`.
  *   This node verifies it against the trusted home's published keys, creates or reuses the issuer's ONE customer record, and writes its live state (status, cap, seq).
  * Scope: HTTP, the assertion check and delegation to `container.connections.apply`. No session (the public wrapper, `auth.mode: none`: the signed assertion is the credential). The body is

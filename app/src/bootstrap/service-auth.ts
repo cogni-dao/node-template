@@ -12,7 +12,7 @@
  *   - SIGNER_FAILS_LOUD: a malformed signing seed (not 64 hex characters) or an unusable origin is no signer plus one
  *     `service_auth.signer_unavailable` warning naming the reason, never a silent null and never the key.
  *   - APPROVERS_ONLY: owners are `activity_ledger.approvers` mapped to the users that bound those wallets (`user_bindings`, provider `wallet`, lowercase).
- *   - DURABLE_REPLAY (0.9.0): the replay store is the Postgres `service_assertion_jtis` table (unique `jti`, pruned after `exp`), so a replayed assertion is refused after a restart and by every
+ *   - DURABLE_REPLAY (0.10.0): the replay store is the Postgres `service_assertion_jtis` table (unique `jti`, pruned after `exp`), so a replayed assertion is refused after a restart and by every
  *     replica. A store failure rejects the check (the route answers 503); it is never a pass.
  * Side-effects: IO (HTTPS to GitHub, service-role reads)
  * Links: https://node-template.cognidao.org/knowledge/node-service-enrollment, https://node-template.cognidao.org/knowledge/node-relationships-design

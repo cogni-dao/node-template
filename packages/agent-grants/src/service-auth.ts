@@ -112,7 +112,7 @@ export interface ServiceAssertionRequest {
   /** The permissions the call uses, space separated, such as `knowledge:read`. */
   readonly scope: string;
   /**
-   * Extra signed claims (story.0038 0.9.0): primitive values under names that are not registered claims. They are covered by the signature, so a replayed or edited body changes
+   * Extra signed claims (story.0038 0.10.0): primitive values under names that are not registered claims. They are covered by the signature, so a replayed or edited body changes
    * nothing. The signed connect carries `act`, `cap` and `seq` here. A reserved name (`iss`, `sub`, `aud`, `client_id`, `scope`, `iat`, `exp`, `jti`, `nbf`) or a non-primitive value
    * throws `TypeError`.
    */

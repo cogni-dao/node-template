@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/connections`
- * Purpose: Connect from home (story.0038, 0.9.0). A customer node's admin connects from its own Admin page; its node signs ONE assertion as service `node-connect` whose claims carry
+ * Purpose: Connect from home (story.0038, 0.10.0). A customer node's admin connects from its own Admin page; its node signs ONE assertion as service `node-connect` whose claims carry
  *   `act` (`connect` | `disconnect`), `cap` (integer credits) and a rising `seq`. The provider keeps one thin customer record per signing issuer (an `org` principal of source kind `issuer`
  *   with one ordinary billing account) and one live row of connection state (`org_connections`: status, suspended, cap, seq). The provider's admin funds the record (an allowance, a
  *   credit-ledger row) and may suspend it. A run billed to the record is admitted only while the allowance is left AND the customer's cap is not reached.

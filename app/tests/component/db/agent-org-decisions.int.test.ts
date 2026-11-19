@@ -6,7 +6,7 @@
  * Purpose: Story.0038 phase 2 against real Postgres: an owner of an org approves, denies and revokes a grant row on the org's account through the real statements, a
  *   human-owned account keeps its own statements, and the payer row (migration 0046) keeps its real constraints (the one open row per subject, no self-approval, paired approval).
  * Scope: Every test runs in one transaction that is rolled back, so no row leaks to other tests.
- * Invariants: ORG_DECISION_SQL, PAYER_IS_AUTHORIZED, ONE_OPEN_BINDING_PER_SUBJECT, NO_SELF_APPROVAL, NEVER_CACHED (Off is read on the next call). The request/decide/revoke payer functions were removed in 0.9.0; a payer row is written only by a signed connect (connections.int.test.ts).
+ * Invariants: ORG_DECISION_SQL, PAYER_IS_AUTHORIZED, ONE_OPEN_BINDING_PER_SUBJECT, NO_SELF_APPROVAL, NEVER_CACHED (Off is read on the next call). The request/decide/revoke payer functions were removed in 0.10.0; a payer row is written only by a signed connect (connections.int.test.ts).
  * Side-effects: IO (testcontainers Postgres, rolled back)
  */
 

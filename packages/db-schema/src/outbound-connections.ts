@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/db-schema/outbound-connections`
- * Purpose: This node's OWN side of connect from home (story.0038, 0.9.0): what it last told each provider it is connected to, so the signed `seq` keeps rising across restarts.
+ * Purpose: This node's OWN side of connect from home (story.0038, 0.10.0): what it last told each provider it is connected to, so the signed `seq` keeps rising across restarts.
  * Scope: Schema only. One row per provider origin (a target of `.cogni/service-links.yaml`). Node-local: it is not part of the published agent-grants migration template.
  * Invariants:
  *   - SEQ_RISES_ACROSS_RESTARTS: `seq` is the last value this node signed; the next connect or disconnect takes `seq + 1` in one atomic update before it signs.

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@contracts/connections.v1`
- * Purpose: Zod contracts for connect from home (story.0038, `@cogni-dao/agent-grants` 0.9.0). Four routes, two sides:
+ * Purpose: Zod contracts for connect from home (story.0038, `@cogni-dao/agent-grants` 0.10.0). Four routes, two sides:
  *   - Provider, public: POST /api/v1/public/agent/service-connections. A customer node signs `act`, `cap` and `seq` as an assertion of service `node-connect`; the provider answers
  *     with the record's resulting status, cap and seq.
  *   - Provider, admin: GET /api/v1/admin/connected-orgs (bounded, paged), POST /api/v1/admin/connected-orgs/{orgUserId}/allowance, .../suspension and .../seq-reset.

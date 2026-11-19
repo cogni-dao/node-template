@@ -11,7 +11,7 @@
  *   - PAYER_IS_AUTHORIZED: `payerFor` answers only for a row with an approver and no revoke. The approver of a connection-written row is the issuer's own org user (the signed connect).
  *   - NEVER_CACHED: `payerFor` reads the table on every call, so a revoked row refuses the next run.
  *   - A subject is any principal: a human, an agent or a service principal minted from another node's signed assertion.
- *   - 0.9.0 removed the request, decide and revoke functions (`requestPayerBinding`, `decidePayerBinding`, `revokePayerBinding`, `ownersForBinding`) and the store methods behind them: no
+ *   - 0.10.0 removed the request, decide and revoke functions (`requestPayerBinding`, `decidePayerBinding`, `revokePayerBinding`, `ownersForBinding`) and the store methods behind them: no
  *     person approves a binding any more; the customer node's own signed connect does, and the provider's admin suspends it (`connections.ts`).
  * Side-effects: IO (store reads)
  * Links: https://node-template.cognidao.org/knowledge/node-relationships-design (PAYER_IS_AUTHORIZED), https://node-template.cognidao.org/knowledge/node-service-enrollment

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@bootstrap/connections`
- * Purpose: This node as a PROVIDER in connect from home (story.0038, `@cogni-dao/agent-grants` 0.9.0): apply a customer node's signed connect or disconnect, list the connected orgs,
+ * Purpose: This node as a PROVIDER in connect from home (story.0038, `@cogni-dao/agent-grants` 0.10.0): apply a customer node's signed connect or disconnect, list the connected orgs,
  *   Suspend or Resume one, grant one an allowance, and answer the run gate. Thin wiring: the decisions (seq order, sticky Suspend, the gate) are in the package.
  * Scope: Composition over the service-role client and the accounts adapter. No route logic, no admin check (the Admin area's mint runs first; callers hold an `AdminSession`).
  * Invariants:

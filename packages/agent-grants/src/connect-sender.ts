@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/connect-sender`
- * Purpose: The CUSTOMER side of connect from home (story.0038, 0.9.0), shared by every node: list the providers a node's `.cogni/service-links.yaml` names as targets with this node's own
+ * Purpose: The CUSTOMER side of connect from home (story.0038, 0.10.0), shared by every node: list the providers a node's `.cogni/service-links.yaml` names as targets with this node's own
  *   connection state (status and cap), and sign and send one connect or disconnect with this node's signer. The provider's answer comes back as it is.
  * Scope: Pure over three injected parts: the signer (`ServiceAssertionSigner`), an `OutboundConnectionStore` (the seq and the node's own state; a Postgres adapter is exported over a service-role
  *   tag) and `fetch`. No routes, no env, no logging (an `onSent` hook carries the facts a node logs). The caller (an admin route behind the one admin check) owns who may ask.

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/component/db/connections.int.test`
- * Purpose: Connect from home (story.0038, agent-grants 0.9.0, migration 0047) against real Postgres. The provider's side end to end below the route: a signed connect is verified by the
+ * Purpose: Connect from home (story.0038, agent-grants 0.10.0, migration 0048) against real Postgres. The provider's side end to end below the route: a signed connect is verified by the
  *   real verifier over the DURABLE replay store, applied by the real connection store, and gates a run by the real standing query.
  * Scope: Each test uses its own random issuer, so tests never share a record. The replay store and the connection store are rebuilt between "process A" and "process B" over the same database,
  *   which is what a restart or a second replica is.

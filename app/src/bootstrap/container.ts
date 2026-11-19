@@ -313,7 +313,7 @@ export interface Container {
 	serviceAuth: ServiceAuth;
 	/** Calling other nodes as this node's AI (story.0038 phase 2): the remote-knowledge capability and the outbound ask. Targets come only from .cogni/service-links.yaml. */
 	serviceLinks: ServiceLinks;
-	/** Connect from home, PROVIDER side (story.0038, agent-grants 0.9.0): apply a customer's signed connect, list, suspend, grant an allowance, and the run gate. */
+	/** Connect from home, PROVIDER side (story.0038, agent-grants 0.10.0): apply a customer's signed connect, list, suspend, grant an allowance, and the run gate. */
 	connections: Connections;
 	/** Connect from home, CUSTOMER side: this node's own connection state per configured target, and the signed connect or disconnect it sends. */
 	serviceConnections: ConnectSender;
@@ -1251,7 +1251,7 @@ function createContainer(): Container {
 		accounts: serviceAccountService,
 		log,
 	});
-	// Customer side of connect from home: the sender is the package's (agent-grants 0.9.0); this node only hands it its targets, signer and outbound table.
+	// Customer side of connect from home: the sender is the package's (agent-grants 0.10.0); this node only hands it its targets, signer and outbound table.
 	const serviceConnections = createConnectSender({
 		targets: serviceLinksConfig.targets,
 		signer: () => serviceAuth.getSigner(),

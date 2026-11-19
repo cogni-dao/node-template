@@ -27,7 +27,7 @@ import type { SqlTag } from "./postgres";
  * Where an org's owners come from. Two kinds:
  * - `repo-spec`: `ref` is the repo's canonical https GitHub URL; the default branch is read. `path` is where the repo-spec lives in that repo
  *   (default `.cogni/repo-spec.yaml`; a monorepo node uses `nodes/<node>/.cogni/repo-spec.yaml`), so two nodes of one repo are two orgs.
- * - `issuer` (0.9.0, connect from home): `ref` is a signing issuer's canonical https origin. The org is a CUSTOMER NODE's record on a provider, keyed by the issuer a trusted
+ * - `issuer` (0.10.0, connect from home): `ref` is a signing issuer's canonical https origin. The org is a CUSTOMER NODE's record on a provider, keyed by the issuer a trusted
  *   home signs as; it has no owners (its decisions are signed claims and the provider admin's own actions), so `owners()` for it always throws `issuer_has_no_owners`.
  */
 export type OrgSource = { kind: "repo-spec"; ref: string; path?: string | undefined } | { kind: "issuer"; ref: string };
