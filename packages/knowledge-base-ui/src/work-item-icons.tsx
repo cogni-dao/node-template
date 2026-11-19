@@ -43,7 +43,7 @@ const TYPE_ICON_MAP: Record<
   string,
   { icon: typeof Bug; colorClass: string; label: string }
 > = {
-  task: { icon: CheckSquare, colorClass: "text-done", label: "Task" },
+  task: { icon: CheckSquare, colorClass: "text-info", label: "Task" },
   bug: { icon: Bug, colorClass: "text-danger", label: "Bug" },
   story: { icon: BookOpen, colorClass: "text-primary", label: "Story" },
   spike: { icon: FlaskConical, colorClass: "text-warning", label: "Spike" },
@@ -120,7 +120,7 @@ const STATUS_ICON_MAP: Record<
   },
   needs_closeout: {
     icon: ClipboardCheck,
-    colorClass: "text-done",
+    colorClass: "text-info",
     label: "Needs closeout",
   },
   done: { icon: CheckCircle, colorClass: "text-success", label: "Done" },

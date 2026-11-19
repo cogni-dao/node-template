@@ -21,33 +21,33 @@
 // SOURCE: app/src/styles/system.css + tailwind.css (brand) `:root { ... }` (light mode).
 // Mirror here when the source block changes.
 const LIGHT_TOKEN_BLOCK = `:root {
-  --background: 0 0% 100%;
-  --foreground: 213 13% 14%;
+  --background: 240 10% 95.5%;
+  --foreground: 210 13% 12.5%;
   --card: 0 0% 100%;
-  --card-foreground: 213 13% 14%;
+  --card-foreground: 210 13% 12.5%;
   --popover: 0 0% 100%;
-  --popover-foreground: 213 13% 14%;
+  --popover-foreground: 210 13% 12.5%;
   --primary: 217 91% 45%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 210 29% 97%;
-  --secondary-foreground: 213 13% 14%;
-  --muted: 210 23% 95%;
-  --muted-foreground: 213 14% 33%;
-  --accent: 210 23% 95%;
-  --accent-foreground: 213 13% 14%;
-  --destructive: 356 71% 43%;
-  --border: 208 20% 85%;
-  --input: 213 10% 58%;
+  --secondary: 240 11% 94%;
+  --secondary-foreground: 210 13% 12.5%;
+  --muted: 240 10% 91.5%;
+  --muted-foreground: 222 8% 32%;
+  --accent: 240 10% 91.8%;
+  --accent-foreground: 210 13% 12.5%;
+  --destructive: 0 74% 42%;
+  --border: 240 10% 86.5%;
+  --input: 231 6% 57%;
   --ring: 217 91% 45%;
   --chart-1: 220 70% 50%;
   --chart-2: 160 60% 45%;
   --chart-3: 30 80% 55%;
   --chart-4: 280 65% 60%;
   --chart-5: 340 75% 55%;
-  --color-success: 137 66% 26%;
-  --color-warning: 40 100% 25%;
-  --color-danger: 356 71% 43%;
-  --radius: 0.75rem;
+  --color-success: 142 72% 29%;
+  --color-warning: 26 90% 37%;
+  --color-danger: 0 74% 42%;
+  --radius: 0.5rem;
   --font-sans: "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }`;
@@ -55,27 +55,27 @@ const LIGHT_TOKEN_BLOCK = `:root {
 // SOURCE: app/src/styles/system.css + tailwind.css (brand) `.dark { ... }`.
 // Applied when the parent app's resolved theme is "dark".
 const DARK_TOKEN_BLOCK = `.dark {
-  --background: 216 28% 7%;
-  --foreground: 210 67% 96.5%;
-  --card: 214 25% 11%;
-  --card-foreground: 210 67% 96.5%;
-  --popover: 214 25% 11%;
-  --popover-foreground: 210 67% 96.5%;
+  --background: 240 10% 3.9%;
+  --foreground: 220 9% 93.5%;
+  --card: 240 6% 7.1%;
+  --card-foreground: 220 9% 93.5%;
+  --popover: 240 6% 7.1%;
+  --popover-foreground: 220 9% 93.5%;
   --primary: 217 91% 65%;
   --primary-foreground: 216 28% 7%;
-  --secondary: 212 19% 16%;
-  --secondary-foreground: 210 67% 96.5%;
-  --muted: 212 19% 16%;
-  --muted-foreground: 214 8% 60%;
-  --accent: 218 17% 18%;
-  --accent-foreground: 210 67% 96.5%;
-  --destructive: 3 93% 66%;
-  --border: 214 12% 27%;
-  --input: 215 9% 44%;
+  --secondary: 225 6% 13.7%;
+  --secondary-foreground: 220 9% 93.5%;
+  --muted: 220 6% 10%;
+  --muted-foreground: 216 7% 71%;
+  --accent: 225 6% 13.7%;
+  --accent-foreground: 220 9% 93.5%;
+  --destructive: 0 84% 60%;
+  --border: 220 6% 18.4%;
+  --input: 212 8% 38%;
   --ring: 217 91% 65%;
-  --color-success: 128 49% 49%;
-  --color-warning: 41 72% 48%;
-  --color-danger: 3 93% 66%;
+  --color-success: 142 71% 45%;
+  --color-warning: 43 74% 66%;
+  --color-danger: 0 84% 60%;
 }`;
 
 const BASE_CSS = `*, *::before, *::after { box-sizing: border-box; }

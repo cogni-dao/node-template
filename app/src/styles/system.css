@@ -39,10 +39,8 @@
   --color-danger: hsl(var(--danger));
   --color-warning: hsl(var(--warning));
   --color-success: hsl(var(--success));
-  --color-info: hsl(var(--info));
   --color-invert: hsl(var(--invert));
   --color-invert-foreground: hsl(var(--invert-foreground));
-  --color-done: hsl(var(--done));
   --color-syntax-property: hsl(var(--syntax-property));
   --color-syntax-operator: hsl(var(--syntax-operator));
   --color-syntax-punctuation: hsl(var(--syntax-punctuation));
@@ -135,26 +133,27 @@
     --dropdown-lg: 10rem;
     --dropdown-xl: 12rem;
 
-    /* Neutrals and status follow GitHub Primer's functional colours. Roles and contrast
-       floors: https://node-template.cognidao.org/knowledge/ui-token-system */
-    --background: 0 0% 100%; /* canvas #ffffff */
-    --foreground: 213 13% 14%; /* fg default #1f2328 */
-    --card: 0 0% 100%;
-    --card-foreground: 213 13% 14%;
+    /* Neutrals follow Radix slate (light) and gray (dark), the shadcn/Vercel layering: a soft grey
+       canvas, white raised cards, chrome one step darker. Roles and floors:
+       https://node-template.cognidao.org/knowledge/ui-token-system */
+    --background: 240 10% 95.5%; /* canvas, soft grey, never pure white */
+    --foreground: 210 13% 12.5%; /* slate-12 #1c2024 */
+    --card: 0 0% 100%; /* raised: white on the grey canvas */
+    --card-foreground: 210 13% 12.5%;
     --popover: 0 0% 100%;
-    --popover-foreground: 213 13% 14%;
+    --popover-foreground: 210 13% 12.5%;
     --primary: 217 91% 45%; /* fleet default; each node's tailwind.css overrides the brand variables */
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 29% 97%; /* #f6f8fa */
-    --secondary-foreground: 213 13% 14%;
-    --muted: 210 23% 95%; /* #eff2f5: a tint that still shows at /30 */
-    --muted-foreground: 213 14% 33%; /* secondary text, 8:1; lighter greys read as disabled */
-    --accent: 210 23% 95%; /* hover */
-    --accent-foreground: 213 13% 14%;
-    --destructive: 356 71% 43%;
+    --secondary: 240 11% 94%;
+    --secondary-foreground: 210 13% 12.5%;
+    --muted: 240 10% 91.5%; /* wells and chips */
+    --muted-foreground: 222 8% 32%; /* secondary text, 7.5:1 on canvas */
+    --accent: 240 10% 91.8%; /* hover */
+    --accent-foreground: 210 13% 12.5%;
+    --destructive: 0 74% 42%;
     --destructive-foreground: 0 0% 100%;
-    --border: 208 20% 85%; /* #d1d9e0 */
-    --input: 213 10% 58%; /* control edge, 3.1:1 (WCAG 1.4.11) */
+    --border: 240 10% 86.5%; /* slate-6 */
+    --input: 231 6% 57%; /* control edge, 3:1 (WCAG 1.4.11) */
     --ring: 217 91% 45%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -175,48 +174,45 @@
     --accent-to: 217 91% 58%;
     --accent-glow: 217 91% 50%;
 
-    /* Status colours are text-grade: >=4.5:1 on canvas, muted and their own /15 tint.
-       Primer's success, attention, danger and done hues, one notch darker. */
-    --danger: 356 71% 43%;
-    --warning: 40 100% 25%;
-    --success: 137 66% 26%;
-    --info: 212 92% 40%; /* Primer accent blue, darkened */
-    --done: 261 60% 53%; /* Primer done purple, darkened */
+    /* Status: the dark theme's hues, darkened until text holds 4.5:1 on the light canvas. */
+    --danger: 0 74% 42%;
+    --warning: 26 90% 37%;
+    --success: 142 72% 29%;
     --invert: 213 13% 14%;
     --invert-foreground: 0 0% 100%;
 
-    /* Chrome (sidebar + top bar): the muted surface, one step off the canvas */
-    --sidebar: 210 29% 97%;
-    --sidebar-foreground: 213 13% 14%;
+    /* Chrome (sidebar + top bar): one step darker than the canvas */
+    --sidebar: 240 10% 92.5%;
+    --sidebar-foreground: 210 13% 12.5%;
     --sidebar-primary: 217 91% 45%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 210 18% 91%;
-    --sidebar-accent-foreground: 213 13% 14%;
-    --sidebar-border: 208 20% 85%;
+    --sidebar-accent: 240 9% 87%;
+    --sidebar-accent-foreground: 210 13% 12.5%;
+    --sidebar-border: 240 10% 86.5%;
     --sidebar-ring: 217 91% 45%;
 
     --radius: 0.5rem;
   }
 
   .dark {
-    --background: 216 28% 7%; /* canvas #0d1117, never pure black */
-    --foreground: 210 67% 96.5%; /* #f0f6fc */
-    --card: 214 25% 11%; /* #151b23: raised one step */
-    --card-foreground: 210 67% 96.5%;
-    --popover: 214 25% 11%;
-    --popover-foreground: 210 67% 96.5%;
+    --background: 240 10% 3.9%; /* canvas #09090b, between the black chrome and the cards */
+    --foreground: 220 9% 93.5%; /* gray-12 #edeef0 */
+    --card: 240 6% 7.1%; /* raised #111113 */
+    --card-foreground: 220 9% 93.5%;
+    --popover: 240 6% 7.1%;
+    --popover-foreground: 220 9% 93.5%;
     --primary: 217 91% 65%; /* link-grade on canvas, muted and hover; a bright fill takes canvas-dark text */
     --primary-foreground: 216 28% 7%;
-    --secondary: 212 19% 16%; /* #212830 */
-    --secondary-foreground: 210 67% 96.5%;
-    --muted: 212 19% 16%; /* one step off cards */
-    --muted-foreground: 214 8% 60%; /* #9198a1, 6.5:1 */
-    --accent: 218 17% 18%; /* hover #262c36 */
-    --accent-foreground: 210 67% 96.5%;
-    --destructive: 3 93% 66%; /* #f85149, lifted to 4.8:1 on muted */
-    --destructive-foreground: 216 28% 7%;
-    --border: 214 12% 27%; /* #3d444d */
-    --input: 215 9% 44%; /* control edge, 3.7:1 */
+    --secondary: 225 6% 13.7%;
+    --secondary-foreground: 220 9% 93.5%;
+    --muted: 220 6% 10%; /* wells and chips */
+    --muted-foreground: 216 7% 71%; /* gray-11 #b0b4ba, 9:1: readable even at /60 */
+    --accent: 225 6% 13.7%; /* hover */
+    --accent-foreground: 220 9% 93.5%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 0%;
+    --border: 220 6% 18.4%;
+    --input: 212 8% 38%; /* control edge, 3.2:1 */
     --ring: 217 91% 65%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -237,22 +233,21 @@
     --accent-to: 217 91% 62%;
     --accent-glow: 217 90% 60%;
 
-    --danger: 3 93% 66%; /* #f85149, lifted to 4.8:1 on muted */
-    --warning: 41 72% 48%; /* #d29922 */
-    --success: 128 49% 49%; /* #3fb950 */
-    --info: 214 93% 62%; /* #4493f8 */
-    --done: 262 90% 73%; /* #ab7df8 */
-    --invert: 214 12% 27%;
-    --invert-foreground: 210 67% 96.5%;
+    /* Status: the original accepted dark hues */
+    --danger: 0 84% 60%;
+    --warning: 43 74% 66%;
+    --success: 142 71% 45%;
+    --invert: 220 6% 18.4%;
+    --invert-foreground: 220 9% 93.5%;
 
-    /* Chrome (sidebar + top bar): Primer inset #010409, darker than the canvas */
-    --sidebar: 218 80% 2%;
-    --sidebar-foreground: 210 67% 96.5%;
+    /* Chrome (sidebar + top bar): black, darker than the canvas */
+    --sidebar: 0 0% 0%;
+    --sidebar-foreground: 220 9% 93.5%;
     --sidebar-primary: 217 91% 65%;
     --sidebar-primary-foreground: 216 28% 7%;
-    --sidebar-accent: 218 17% 18%;
-    --sidebar-accent-foreground: 210 67% 96.5%;
-    --sidebar-border: 214 12% 27%;
+    --sidebar-accent: 225 6% 13.7%;
+    --sidebar-accent-foreground: 220 9% 93.5%;
+    --sidebar-border: 220 6% 18.4%;
     --sidebar-ring: 217 91% 65%;
   }
 
