@@ -2,7 +2,7 @@
 # behind Caddy, services/sandbox) as its OWN lease, so a sandbox resize or re-mint never touches the app.
 # It is a worker: the operator gives it ONLY the catalog keys whose `workloads` names `sandbox`
 # (.cogni/secrets-catalog.yaml: SANDBOX_EXECD_TOKEN), never the app's database or auth secrets. GH_TOKEN is not a
-# lease secret: the app passes a 1-hour token, minted by the operator App, into each call.
+# lease secret: the app passes a 1-hour token, minted from the node's own GitHub App, into each call.
 # The app derives this origin from its own host (`node-template.cognidao.org` ->
 # `node-template-sandbox.cognidao.org`; candidate-a `node-template-sandbox-test`), so the sandbox keeps a
 # route on that host. Execd enforces the token on every request except /version and /readyz.

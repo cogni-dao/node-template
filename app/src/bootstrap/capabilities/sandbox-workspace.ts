@@ -11,8 +11,8 @@
  *   - DERIVED_HOST: origin = SANDBOX_BASE_URL override, else derived from APP_BASE_URL + node slug.
  *   - UNCONFIGURED_IS_NULL: missing token or underivable origin returns null (the tool answers `unavailable`), never a guess.
  *   - RUN_FROM_THE_SCOPE: the run id comes from the execution scope the tool guard binds, never from tool params.
- *   - PUSH_TOKEN_PER_CALL: each call gets a short-lived GH_TOKEN minted by the operator App; no GitHub credential
- *     lives in the sandbox lease (sandbox-push-token).
+ *   - PUSH_TOKEN_PER_CALL: each call gets a 1-hour GH_TOKEN minted from the node's own GitHub App; the App key
+ *     never reaches the sandbox lease (sandbox-push-token).
  * Side-effects: logs `adapter.sandbox.tick`
  * Links: packages/sandbox, services/sandbox/
  * @internal
@@ -60,7 +60,7 @@ export function createSandboxShellCapability(
     baseUrl,
     accessToken,
     runId: () => getExecutionScope().runId,
-    callEnv: createSandboxPushTokenEnv(env, nodeSlug),
+    callEnv: createSandboxPushTokenEnv(env),
     onTick: (report) => {
       if ("errorCode" in report) {
         logger.warn(

@@ -223,12 +223,10 @@ export const serverSchema = z.object({
     (url) => !url || url.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(url),
     { message: "SANDBOX_BASE_URL must be https (http only for localhost)" }
   ),
-  // The node AI's own operator principal (developer on this node). Optional: without it the sandbox
-  // runs and only git push fails. Its push token comes from the operator App (POST /vcs/push-token).
-  COGNI_OPERATOR_NODE_API_KEY: optionalString,
-  // The operator that governs this node's repo, declared per environment (no default: a test-org node must
-  // never reach the production operator by accident). Unset → no push token, a warning, and push fails.
-  COGNI_OPERATOR_URL: optionalUrl,
+  // The node AI's own GitHub App (installed on this node's repo only). The app mints a 1-hour push token per
+  // sandbox run; the key never enters the sandbox. Optional: without it the sandbox runs and only git push fails.
+  GH_AI_APP_ID: optionalString,
+  GH_AI_APP_PRIVATE_KEY_BASE64: optionalString,
 
   // Tavily Web Search - Optional
   // Required for research graph web search capability
