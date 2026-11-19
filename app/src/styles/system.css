@@ -148,12 +148,12 @@
     --secondary: 210 40% 96.1%; /* slate-100 chips on white cards */
     --secondary-foreground: 222 47% 11%;
     --muted: 214 32% 91.4%; /* slate-200 wells and chips */
-    --muted-foreground: 215 19% 35%; /* slate-600 #475569, 6.9:1 on canvas, 7.6:1 on white */
+    --muted-foreground: 215 19% 31%; /* #404d5e: 7.9:1 on canvas, 8.6:1 on white, 7.0:1 on muted */
     --accent: 212 39% 93.5%; /* hover, visible on canvas and cards */
     --accent-foreground: 222 47% 11%;
     --destructive: 0 74% 39%;
     --destructive-foreground: 0 0% 100%;
-    --border: 213 27% 84%; /* slate-300 #cbd5e1: card and divider edges stay visible */
+    --border: 213 23% 80%; /* a notch past slate-300: card and divider edges stay visible */
     --input: 216 15% 55%; /* control edge, 3.3:1 on the canvas (WCAG 1.4.11) */
     --ring: 217 91% 45%;
     --chart-1: 220 70% 50%;
@@ -187,9 +187,9 @@
     --sidebar-foreground: 222 47% 11%;
     --sidebar-primary: 217 91% 45%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 214 95% 93%; /* blue-100: the active and hover nav pill */
-    --sidebar-accent-foreground: 226 71% 40%; /* blue-800, 7.2:1 on the pill */
-    --sidebar-border: 213 27% 84%;
+    --sidebar-accent: 214 32% 91.4%; /* neutral default; each node tints its nav pill in tailwind.css */
+    --sidebar-accent-foreground: 222 47% 11%;
+    --sidebar-border: 213 23% 80%;
     --sidebar-ring: 217 91% 45%;
 
     --radius: 0.5rem;

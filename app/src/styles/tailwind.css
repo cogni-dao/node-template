@@ -18,6 +18,9 @@
     --sidebar-primary: 217 91% 45%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-ring: 217 91% 45%;
+    /* the active and hover nav pill, tinted with the brand hue */
+    --sidebar-accent: 214 95% 93%;
+    --sidebar-accent-foreground: 226 71% 40%;
   }
 
   .dark {
