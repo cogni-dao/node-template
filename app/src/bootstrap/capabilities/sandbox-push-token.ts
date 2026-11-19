@@ -95,7 +95,10 @@ function selectAdapter(
   fetchImpl: typeof fetch
 ): { name: "operator"; mint: Mint } | null {
   if (!env.NODE_AI_OPERATOR_KEY || !env.COGNI_OPERATOR_URL) return null;
-  return { name: "operator", mint: operatorMint(env.COGNI_OPERATOR_URL, env.NODE_AI_OPERATOR_KEY, nodeSlug, fetchImpl) };
+  return {
+    name: "operator",
+    mint: operatorMint(env.COGNI_OPERATOR_URL.replace(/\/+$/, ""), env.NODE_AI_OPERATOR_KEY, nodeSlug, fetchImpl),
+  };
 }
 
 /** The operator mints from its App after checking this principal is a developer on this node. */
