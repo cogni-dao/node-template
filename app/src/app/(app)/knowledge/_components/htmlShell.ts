@@ -11,6 +11,7 @@
  *   - LIGHT_TOKEN_BLOCK / DARK_TOKEN_BLOCK are snapshots of
  *     `app/src/styles/tailwind.css :root { … }` / `.dark { … }`.
  *     Drift = visual regressions. Bump in the same commit per spec TOKEN_BLOCK_PAIRED.
+ *     Status colours keep the `--color-success/-warning/-danger` names here: authored html atoms read them.
  *   - UTILITY_CSS is ≤15 classes per spec UTILITY_LIB_IS_CAPPED.
  *   - Shell never references external `<link>` or `<script>` per spec SHELL_IS_INLINE.
  * Links: https://node-template.cognidao.org/knowledge/knowledge-human-visuals
@@ -60,7 +61,7 @@ const DARK_TOKEN_BLOCK = `.dark {
   --card-foreground: 210 67% 96.5%;
   --popover: 214 25% 11%;
   --popover-foreground: 210 67% 96.5%;
-  --primary: 217 91% 60%;
+  --primary: 217 91% 65%;
   --primary-foreground: 216 28% 7%;
   --secondary: 212 19% 16%;
   --secondary-foreground: 210 67% 96.5%;
@@ -68,13 +69,13 @@ const DARK_TOKEN_BLOCK = `.dark {
   --muted-foreground: 214 8% 60%;
   --accent: 218 17% 18%;
   --accent-foreground: 210 67% 96.5%;
-  --destructive: 3 93% 63%;
+  --destructive: 3 93% 66%;
   --border: 214 12% 27%;
   --input: 215 9% 44%;
-  --ring: 217 91% 60%;
+  --ring: 217 91% 65%;
   --color-success: 128 49% 49%;
   --color-warning: 41 72% 48%;
-  --color-danger: 3 93% 63%;
+  --color-danger: 3 93% 66%;
 }`;
 
 const BASE_CSS = `*, *::before, *::after { box-sizing: border-box; }

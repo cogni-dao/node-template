@@ -200,7 +200,7 @@
     --card-foreground: 210 67% 96.5%;
     --popover: 214 25% 11%;
     --popover-foreground: 210 67% 96.5%;
-    --primary: 217 91% 60%; /* link-grade 5.2:1; a bright fill takes canvas-dark text */
+    --primary: 217 91% 65%; /* link-grade on canvas, muted and hover; a bright fill takes canvas-dark text */
     --primary-foreground: 216 28% 7%;
     --secondary: 212 19% 16%; /* #212830 */
     --secondary-foreground: 210 67% 96.5%;
@@ -208,11 +208,11 @@
     --muted-foreground: 214 8% 60%; /* #9198a1, 6.5:1 */
     --accent: 218 17% 18%; /* hover #262c36 */
     --accent-foreground: 210 67% 96.5%;
-    --destructive: 3 93% 63%; /* #f85149 */
+    --destructive: 3 93% 66%; /* #f85149, lifted to 4.8:1 on muted */
     --destructive-foreground: 216 28% 7%;
     --border: 214 12% 27%; /* #3d444d */
     --input: 215 9% 44%; /* control edge, 3.7:1 */
-    --ring: 217 91% 60%;
+    --ring: 217 91% 65%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -229,10 +229,10 @@
 
     /* Accent gradient stops (aligned with brand hue 217) */
     --accent-from: 217 91% 55%;
-    --accent-to: 217 92% 66%;
+    --accent-to: 217 91% 62%;
     --accent-glow: 217 90% 60%;
 
-    --danger: 3 93% 63%; /* #f85149 */
+    --danger: 3 93% 66%; /* #f85149, lifted to 4.8:1 on muted */
     --warning: 41 72% 48%; /* #d29922 */
     --success: 128 49% 49%; /* #3fb950 */
     --info: 262 90% 73%; /* #ab7df8 */
@@ -243,12 +243,12 @@
     /* Sidebar: the canvas, separated by its border */
     --sidebar: 216 28% 7%;
     --sidebar-foreground: 210 67% 96.5%;
-    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary: 217 91% 65%;
     --sidebar-primary-foreground: 216 28% 7%;
     --sidebar-accent: 218 17% 18%;
     --sidebar-accent-foreground: 210 67% 96.5%;
     --sidebar-border: 214 12% 27%;
-    --sidebar-ring: 217 91% 60%;
+    --sidebar-ring: 217 91% 65%;
   }
 
   /* Hero animation tokens (isolated, code.ts only) */
