@@ -66,6 +66,7 @@ export const EVENT_NAMES = {
 	KNOWLEDGE_READ_COUNTS_FLUSHED: "knowledge.read_counts_flushed",
 	KNOWLEDGE_READ_COUNT_WRITE_FAILED: "knowledge.read_count_write_failed",
 	// A citing patch whose (atom, item) pairs could not be recorded (story.0061): reason and pair count only.
+	KNOWLEDGE_CITE_PAIRS_RECORDED: "knowledge.cite_pairs_recorded",
 	KNOWLEDGE_CITE_PAIRS_WRITE_FAILED: "knowledge.cite_pairs_write_failed",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",

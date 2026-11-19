@@ -98,10 +98,12 @@ describe("KnowledgeReadCounter", () => {
 describe("CitePairRecorder", () => {
 	it("writes one row per distinct cited atom, pinned to the patch's revision", async () => {
 		const { sql, statements } = fakeSql();
-		new CitePairRecorder(sql, () => undefined).record("story.0061", "33", [{ id: "b" }, { id: "a" }, { id: "b" }]);
+		const events: UsageLogEvent[] = [];
+		new CitePairRecorder(sql, (e) => events.push(e)).record("story.0061", "33", [{ id: "b" }, { id: "a" }, { id: "b" }]);
 		await settle();
 		expect(statements[0]?.text).toContain("ON CONFLICT DO NOTHING");
 		expect(statements[0]?.params).toEqual(["a", "story.0061", 33, "b", "story.0061", 33]);
+		expect(events).toEqual([expect.objectContaining({ event: "knowledge.cite_pairs_recorded", pairs: 2 })]);
 	});
 
 	it("never throws into the patch and logs a failed insert", async () => {

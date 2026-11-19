@@ -35,6 +35,7 @@ export interface KnowledgeRead {
 export type UsageLogEvent =
 	| { event: "knowledge.read_counts_flushed"; reqId: string; keys: number; reads: number; byClass: Record<string, { ok: number; fail: number }> }
 	| { event: "knowledge.read_count_write_failed"; reqId: string; reason: "flush_failed" | "map_full"; reads: number; keys?: number; errorClass?: string }
+	| { event: "knowledge.cite_pairs_recorded"; reqId: string; pairs: number; inserted: number }
 	| { event: "knowledge.cite_pairs_write_failed"; reqId: string; reason: "in_flight_cap" | "insert_failed"; pairs: number; errorClass?: string };
 
 /** Same shape the work-items cite contract accepts; kept local so this package has no work-items dependency. */
@@ -254,15 +255,26 @@ export class CitePairRecorder {
 			void this.sql
 				.begin(async (tx) => {
 					await tx.unsafe(STATEMENT_TIMEOUT);
-					await tx.unsafe(
+					const result = await tx.unsafe(
 						`INSERT INTO knowledge_cite_pairs (atom_id, work_item_id, first_item_revision) VALUES ${values} ON CONFLICT DO NOTHING`,
 						params,
 					);
+					return Number((result as { count?: number }).count ?? 0);
 				})
+				.then((inserted) => this.recorded(ids.length, inserted))
 				.catch((error: unknown) => this.fail("insert_failed", ids.length, error))
 				.finally(() => {
 					this.inFlight -= 1;
 				});
+		} catch {
+			// NEVER_FAILS_THE_PATCH
+		}
+	}
+
+	/** One line per citing patch: pairs cited and pairs new to the table (a repeat cite inserts 0). Counts only. */
+	private recorded(pairs: number, inserted: number): void {
+		try {
+			this.log({ event: "knowledge.cite_pairs_recorded", reqId: `cite-pairs-${systemReqId()}`, pairs, inserted });
 		} catch {
 			// NEVER_FAILS_THE_PATCH
 		}
