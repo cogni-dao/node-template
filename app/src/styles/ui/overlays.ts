@@ -35,7 +35,9 @@ export const brainLoadingSpectrum = cva(
 
 export const brainLoadingTrack = cva("absolute inset-0 size-20 text-foreground/70");
 
-export const brainLoadingMark = cva("brain-loading-mark size-12");
+export const brainLoadingMark = cva(
+  "brain-loading-mark size-12 rounded-full bg-logo-tile p-1.5"
+);
 
 const terminalFrameSurfaceVariants = {
   default: "bg-card text-card-foreground",

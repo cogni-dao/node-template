@@ -33,6 +33,10 @@
   --color-danger: hsl(var(--color-danger));
   --color-warning: hsl(var(--color-warning));
   --color-success: hsl(var(--color-success));
+  --color-info: hsl(var(--info));
+  --color-invert: hsl(var(--invert));
+  --color-invert-foreground: hsl(var(--invert-foreground));
+  --color-logo-tile: hsl(var(--logo-tile));
   --color-syntax-property: hsl(var(--syntax-property));
   --color-syntax-operator: hsl(var(--syntax-operator));
   --color-syntax-punctuation: hsl(var(--syntax-punctuation));
@@ -125,25 +129,27 @@
     --dropdown-lg: 10rem;
     --dropdown-xl: 12rem;
 
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Neutrals and status follow GitHub Primer's functional colours. Roles and contrast
+       floors: https://node-template.cognidao.org/knowledge/ui-token-system */
+    --background: 0 0% 100%; /* canvas #ffffff */
+    --foreground: 213 13% 14%; /* fg default #1f2328 */
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 210 40% 96.1%;
-    --popover-foreground: 215.4 16.3% 20%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 20%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: var(--color-red-800);
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --card-foreground: 213 13% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 213 13% 14%;
+    --primary: 217 91% 45%; /* brand hue 217 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 29% 97%; /* #f6f8fa */
+    --secondary-foreground: 213 13% 14%;
+    --muted: 210 23% 95%; /* #eff2f5: a tint that still shows at /30 */
+    --muted-foreground: 211 11% 39%; /* fg muted #59636e, 6.1:1 */
+    --accent: 210 23% 95%; /* hover */
+    --accent-foreground: 213 13% 14%;
+    --destructive: 356 71% 48%; /* #d1242f */
+    --destructive-foreground: 0 0% 100%;
+    --border: 208 20% 85%; /* #d1d9e0 */
+    --input: 208 20% 85%;
+    --ring: 217 91% 45%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -159,64 +165,53 @@
     --syntax-keyword: 10 50% 50%; /* red/brown - keywords */
 
     /* Accent gradient stops (aligned with brand hue 217) */
-    --accent-from: 217 85% 50%;
-    --accent-to: 217 100% 70%;
-    --accent-glow: 217 95% 60%;
+    --accent-from: 217 91% 45%;
+    --accent-to: 217 91% 58%;
+    --accent-glow: 217 91% 50%;
 
-    /* Status colors */
-    --color-danger: 0 84.2% 60.2%;
-    --color-warning: 43 74% 66%;
-    --color-success: 142 71% 45%;
+    /* Status colours are text-grade (>=4.5:1 on canvas); tint backgrounds with /10-/15. */
+    --color-danger: 356 71% 48%; /* #d1242f */
+    --color-warning: 40 100% 30%; /* #9a6700 */
+    --color-success: 137 66% 30%; /* #1a7f37 */
+    --info: 261 69% 59%; /* #8250df */
+    --invert: 213 13% 14%;
+    --invert-foreground: 0 0% 100%;
+    /* The neon brand mark needs a dark backing on light surfaces. */
+    --logo-tile: 216 28% 7%;
 
-    /* Sidebar */
-    --sidebar: 0 0% 98%;
-    --sidebar-foreground: 222.2 84% 4.9%;
-    --sidebar-primary: 222.2 47.4% 11.2%;
-    --sidebar-primary-foreground: 210 40% 98%;
-    --sidebar-accent: 210 40% 96.1%;
-    --sidebar-accent-foreground: 222.2 47.4% 11.2%;
-    --sidebar-border: 214.3 31.8% 91.4%;
-    --sidebar-ring: 222.2 84% 4.9%;
+    /* Sidebar: the muted surface, one step off the canvas */
+    --sidebar: 210 29% 97%;
+    --sidebar-foreground: 213 13% 14%;
+    --sidebar-primary: 217 91% 45%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 18% 91%;
+    --sidebar-accent-foreground: 213 13% 14%;
+    --sidebar-border: 208 20% 85%;
+    --sidebar-ring: 217 91% 45%;
 
     --radius: 0.5rem;
-
-    --success: var(--color-emerald-500);
-
-    --success-foreground: var(--color-emerald-900);
-
-    --info: var(--color-violet-500);
-
-    --info-foreground: var(--color-violet-900);
-
-    --warning: var(--color-yellow-500);
-
-    --warning-foreground: var(--color-yellow-900);
-
-    --invert: var(--color-zinc-900);
-
-    --invert-foreground: var(--color-zinc-50);
   }
 
   .dark {
-    --background: 0 0% 0%;
-    --foreground: 210 40% 98%;
-    --card: 0 0% 0%;
-    --card-foreground: 210 40% 98%;
-    --popover: 217.2 32.6% 9%;
-    --popover-foreground: 215 20.2% 76.1%;
-    --primary: 217 71% 40%;
+    --background: 216 28% 7%; /* canvas #0d1117, never pure black */
+    --foreground: 210 67% 96.5%; /* #f0f6fc */
+    --card: 214 25% 11%; /* #151b23: raised one step */
+    --card-foreground: 210 67% 96.5%;
+    --popover: 214 25% 11%;
+    --popover-foreground: 210 67% 96.5%;
+    --primary: 217 84% 55%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 9%;
-    --muted-foreground: 215 20.2% 76.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: var(--color-red-600);
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 217 71% 40%;
+    --secondary: 212 19% 16%; /* #212830 */
+    --secondary-foreground: 210 67% 96.5%;
+    --muted: 214 25% 11%;
+    --muted-foreground: 214 8% 60%; /* #9198a1, 6.5:1 */
+    --accent: 218 17% 18%; /* hover #262c36 */
+    --accent-foreground: 210 67% 96.5%;
+    --destructive: 3 93% 63%; /* #f85149 */
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 12% 27%; /* #3d444d */
+    --input: 214 12% 27%;
+    --ring: 217 84% 55%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -231,28 +226,28 @@
     --syntax-string: 20 90% 80%; /* peach/orange - strings & variables */
     --syntax-keyword: 220 100% 65%; /* blue - keywords */
 
-    /* Accent gradient stops (aligned with brand hue 217, darker for dark mode) */
-    --accent-from: 217 80% 45%;
-    --accent-to: 217 100% 60%;
-    --accent-glow: 217 90% 52%;
+    /* Accent gradient stops (aligned with brand hue 217) */
+    --accent-from: 217 84% 50%;
+    --accent-to: 217 92% 64%;
+    --accent-glow: 217 90% 58%;
 
-    /* Sidebar */
-    --sidebar: 0 0% 3%;
-    --sidebar-foreground: 210 40% 98%;
-    --sidebar-primary: 217 71% 40%;
+    --color-danger: 3 93% 63%; /* #f85149 */
+    --color-warning: 41 72% 48%; /* #d29922 */
+    --color-success: 128 49% 49%; /* #3fb950 */
+    --info: 262 90% 73%; /* #ab7df8 */
+    --invert: 214 12% 27%;
+    --invert-foreground: 210 67% 96.5%;
+    --logo-tile: 216 28% 7%;
+
+    /* Sidebar: the canvas, separated by its border */
+    --sidebar: 216 28% 7%;
+    --sidebar-foreground: 210 67% 96.5%;
+    --sidebar-primary: 217 84% 55%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 217.2 32.6% 17.5%;
-    --sidebar-accent-foreground: 210 40% 98%;
-    --sidebar-border: 217.2 32.6% 17.5%;
-    --sidebar-ring: 217 71% 40%;
-    --success: var(--color-emerald-500);
-    --success-foreground: var(--color-emerald-600);
-    --info: var(--color-violet-500);
-    --info-foreground: var(--color-violet-600);
-    --warning: var(--color-yellow-500);
-    --warning-foreground: var(--color-yellow-600);
-    --invert: var(--color-zinc-700);
-    --invert-foreground: var(--color-zinc-50);
+    --sidebar-accent: 218 17% 18%;
+    --sidebar-accent-foreground: 210 67% 96.5%;
+    --sidebar-border: 214 12% 27%;
+    --sidebar-ring: 217 84% 55%;
   }
 
   /* Hero animation tokens (isolated, code.ts only) */

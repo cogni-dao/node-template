@@ -98,12 +98,12 @@ export function AppSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild tooltip="Cogni">
               <Link href="/chat">
-                <div className="flex aspect-square size-8 items-center justify-center">
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-logo-tile">
                   <Image
                     src="/TransparentBrainOnly.png"
                     alt="Cogni"
-                    width={24}
-                    height={24}
+                    width={22}
+                    height={22}
                   />
                 </div>
                 <span className="truncate font-bold text-gradient-accent">

@@ -20,13 +20,13 @@ const badgeVariants = cva(
         "primary-light":
           "bg-primary/10 border-none text-primary dark:bg-primary/20",
         "warning-light":
-          "bg-warning/10 border-none text-warning-foreground dark:bg-warning/20",
+          "bg-warning/10 border-none text-warning dark:bg-warning/20",
         "success-light":
-          "bg-success/10 border-none text-success-foreground dark:bg-success/20",
+          "bg-success/10 border-none text-success dark:bg-success/20",
         "info-light":
-          "bg-info/10 border-none text-info-foreground dark:bg-info/20",
+          "bg-info/10 border-none text-info dark:bg-info/20",
         "destructive-light":
-          "bg-destructive/10 border-none text-destructive-foreground dark:bg-destructive/20",
+          "bg-destructive/10 border-none text-destructive dark:bg-destructive/20",
         "invert-light":
           "bg-invert/10 border-none text-foreground dark:bg-invert/20",
         "focus-light":
@@ -34,15 +34,15 @@ const badgeVariants = cva(
         "primary-outline":
           "bg-background border-border text-primary dark:bg-input/30",
         "warning-outline":
-          "bg-background border-border text-warning-foreground dark:bg-input/30",
+          "bg-background border-border text-warning dark:bg-input/30",
         "success-outline":
-          "bg-background border-border text-success-foreground dark:bg-input/30",
+          "bg-background border-border text-success dark:bg-input/30",
         "info-outline":
-          "bg-background border-border text-info-foreground dark:bg-input/30",
+          "bg-background border-border text-info dark:bg-input/30",
         "destructive-outline":
-          "bg-background border-border text-destructive-foreground dark:bg-input/30",
+          "bg-background border-border text-destructive dark:bg-input/30",
         "invert-outline":
-          "bg-background border-border text-invert-foreground dark:bg-input/30",
+          "bg-background border-border text-foreground dark:bg-input/30",
         "focus-outline":
           "bg-background border-border text-focus-foreground dark:bg-input/30",
       },
