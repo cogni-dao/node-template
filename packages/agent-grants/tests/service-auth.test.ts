@@ -6,6 +6,7 @@ import type { SqlTag } from "../src";
 import {
   assertSigningKeyMatches,
   createMemoryReplayStore,
+  createPostgresReplayStore,
   createServiceAssertionSigner,
   createServiceAssertionSignerFromSeed,
   createServiceAssertionVerifier,
@@ -13,6 +14,7 @@ import {
   findServicePrincipal,
   JWKS_MAX_AGE_MS,
   JWKS_REFETCH_MIN_INTERVAL_MS,
+  MAX_OFFER_CHARS,
   nodeAudience,
   parseLinkTargets,
   parseTrustedHomes,
@@ -87,7 +89,7 @@ describe("signer and verifier", () => {
     expect(claims).toMatchObject({ iss: ISSUER, sub: "git-review", aud: "urn:cogni:node:node-x", client_id: `${ISSUER}#git-review`, scope: "knowledge:read", iat: T0 / 1000 });
     expect(claims.exp - claims.iat).toBeLessThanOrEqual(300);
     expect(typeof claims.jti).toBe("string");
-    expect(await r.verify(token)).toEqual({ ok: true, issuer: ISSUER, service: "git-review", clientId: `${ISSUER}#git-review`, scope: "knowledge:read", jti: claims.jti });
+    expect(await r.verify(token)).toEqual({ ok: true, issuer: ISSUER, service: "git-review", clientId: `${ISSUER}#git-review`, scope: "knowledge:read", jti: claims.jti, claims: {} });
   });
 
   it("authorizationHeader is Bearer plus a fresh assertion each time; jwks carries no private member", async () => {
@@ -361,5 +363,88 @@ describe("assertSigningKeyMatches", () => {
     const b = await keyPair();
     await expect(assertSigningKeyMatches(a)).resolves.toBeUndefined();
     await expect(assertSigningKeyMatches({ ...a, x: b.x })).rejects.toThrow();
+  });
+});
+
+describe("extra signed claims (connect from home)", () => {
+  const connect = { act: "connect", cap: 5000, seq: 3 } as const;
+
+  it("round trips act, cap and seq through the one verifier as verified claims", async () => {
+    const r = await rig({ homes: [{ issuer: ISSUER, jwksUri: `${ISSUER}/.well-known/jwks.json`, services: ["node-connect"] }] });
+    const token = await r.signer.sign({ service: "node-connect", audienceNodeId: NODE, scope: "connection:write", claims: connect });
+    const verified = await r.verify(token);
+    expect(verified).toMatchObject({ ok: true, service: "node-connect", scope: "connection:write", claims: connect });
+  });
+
+  it("an edited claim breaks the signature, so a replayed or tampered body changes nothing", async () => {
+    const r = await rig({ homes: [{ issuer: ISSUER, jwksUri: `${ISSUER}/.well-known/jwks.json`, services: ["node-connect"] }] });
+    const token = await r.signer.sign({ service: "node-connect", audienceNodeId: NODE, scope: "connection:write", claims: connect });
+    const [h, p, sig] = token.split(".") as [string, string, string];
+    const payload = JSON.parse(Buffer.from(p, "base64url").toString());
+    const edited = `${h}.${b64({ ...payload, cap: 999_999 })}.${sig}`;
+    expect(await r.verify(edited)).toMatchObject({ ok: false, code: "bad_signature" });
+  });
+
+  it("the signer refuses a reserved or malformed claim name and a non-primitive value", async () => {
+    const r = await rig();
+    for (const claims of [{ scope: "x" }, { iss: "https://evil.example" }, { jti: "j" }, { Cap: 1 }, { "a b": 1 }, { cap: 1.5 }, { cap: { n: 1 } as never }, { s: "x".repeat(201) }])
+      await expect(r.signer.sign({ service: "node-connect", audienceNodeId: NODE, scope: "connection:write", claims })).rejects.toThrow(TypeError);
+  });
+
+  it("an assertion with no extra claims verifies with an empty claims record", async () => {
+    const r = await rig();
+    expect(await r.verify(await r.sign())).toMatchObject({ ok: true, claims: {} });
+  });
+});
+
+describe("Postgres replay store", () => {
+  /** A tag that behaves like the table: the jti is the primary key and a live row blocks the insert (RETURNING is then empty). */
+  const table = () => {
+    const rows = new Map<string, string>();
+    const tag = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+      const text = strings.join("?");
+      if (text.includes("INSERT INTO service_assertion_jtis")) {
+        const [jti, until] = values as [string, string];
+        if (rows.has(jti)) return Promise.resolve([]);
+        rows.set(jti, until);
+        return Promise.resolve([{ jti }]);
+      }
+      return Promise.resolve([]);
+    }) as unknown as SqlTag;
+    return { rows, tag };
+  };
+
+  it("answers false for a new jti and true for a repeat, over the same table (a restart keeps the row)", async () => {
+    const { tag, rows } = table();
+    const exp = new Date("2026-11-18T00:05:00.000Z");
+    expect(await createPostgresReplayStore(tag).seen("home#j1", exp)).toBe(false);
+    // A second store over the same table is a restarted process or another replica.
+    expect(await createPostgresReplayStore(tag).seen("home#j1", exp)).toBe(true);
+    expect(rows.get("home#j1")).toBe("2026-11-18T00:05:00.000Z");
+  });
+
+  it("a store failure rejects, never a pass", async () => {
+    const down = (() => Promise.reject(new Error("db down"))) as unknown as SqlTag;
+    await expect(createPostgresReplayStore(down).seen("j", new Date())).rejects.toThrow("db down");
+  });
+});
+
+describe("node_id on a trusted home and offer on a target (config labels)", () => {
+  it("keeps a well-formed node_id on a trusted home and drops a malformed one without dropping the home", () => {
+    const base = { issuer: "https://cognidao.org", jwks_uri: "https://cognidao.org/.well-known/jwks.json", services: ["node-connect"] };
+    expect(parseTrustedHomes([{ ...base, node_id: "f66b260b-4633-41e2-8711-b7c1b8449cc1" }])).toEqual([
+      { issuer: base.issuer, jwksUri: base.jwks_uri, services: ["node-connect"], nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1" },
+    ]);
+    expect(parseTrustedHomes([{ ...base, node_id: "has space" }])).toEqual([{ issuer: base.issuer, jwksUri: base.jwks_uri, services: ["node-connect"] }]);
+    expect(parseTrustedHomes([{ ...base, node_id: 7 }])[0]).not.toHaveProperty("nodeId");
+  });
+
+  it("keeps a bounded offer string on a target and leaves a bad one out", () => {
+    const entry = { alias: "prov", node_id: "n1", origin: "https://prov.example.org" };
+    expect(parseLinkTargets([{ ...entry, offer: "  Shared AI, billed to your allowance.  " }])).toEqual([
+      { alias: "prov", nodeId: "n1", origin: entry.origin, offer: "Shared AI, billed to your allowance." },
+    ]);
+    for (const offer of ["", "   ", 7, "x".repeat(MAX_OFFER_CHARS + 1)])
+      expect(parseLinkTargets([{ ...entry, offer }])).toEqual([{ alias: "prov", nodeId: "n1", origin: entry.origin }]);
   });
 });

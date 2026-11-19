@@ -25,12 +25,24 @@ const load = (environment: string | undefined, read: (file: string) => string = 
   loadServiceLinksConfig({ environment, repoRoot, log: log as never, read });
 
 describe("the shipped .cogni/service-links.yaml", () => {
-  it("candidate-a trusts toks5-test's node-ai and may call toks5; production has none", () => {
+  it("candidate-a trusts toks5-test's node-ai and node-connect (with its node id) and may call toks5 (with its offer text); production has none", () => {
     expect(load("candidate-a")).toEqual({
       trustedHomes: [
-        { issuer: "https://toks5-test.cognidao.org", jwksUri: "https://toks5-test.cognidao.org/.well-known/jwks.json", services: ["node-ai"] },
+        {
+          issuer: "https://toks5-test.cognidao.org",
+          jwksUri: "https://toks5-test.cognidao.org/.well-known/jwks.json",
+          services: ["node-ai", "node-connect"],
+          nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1",
+        },
       ],
-      targets: [{ alias: "toks5", nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1", origin: "https://toks5-test.cognidao.org" }],
+      targets: [
+        {
+          alias: "toks5",
+          nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1",
+          origin: "https://toks5-test.cognidao.org",
+          offer: "Run this node's AI against toks5, paid from the allowance toks5 grants you, up to your cap.",
+        },
+      ],
     });
     expect(load("production")).toEqual({ trustedHomes: [], targets: [] });
   });

@@ -16,7 +16,9 @@ import {
 	FileSignature,
 	KeyRound,
 	Layers,
+	Network,
 	PieChart,
+	Plug,
 	ShieldCheck,
 	Sparkles,
 } from "lucide-react";
@@ -177,6 +179,42 @@ export default async function AdminIndexPage(): Promise<ReactElement> {
 								</div>
 								<p className="text-muted-foreground text-sm">
 									Permissions you approve here apply to the whole node.
+								</p>
+							</div>
+						</CardContent>
+					</Card>
+				</Link>
+				<Link href="/admin/connections" className="group block">
+					<Card className="h-full transition hover:border-primary/50 hover:shadow-md">
+						<CardContent className="flex items-start gap-4 p-5">
+							<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+								<Plug className="h-5 w-5 text-primary" />
+							</div>
+							<div className="min-w-0 flex-1 space-y-1">
+								<div className="flex items-center justify-between gap-2">
+									<h3 className="font-semibold">Connections</h3>
+									<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-1 group-hover:text-primary" />
+								</div>
+								<p className="text-muted-foreground text-sm">
+									Connect this node to another node, with a cap on what it may spend.
+								</p>
+							</div>
+						</CardContent>
+					</Card>
+				</Link>
+				<Link href="/admin/connected-orgs" className="group block">
+					<Card className="h-full transition hover:border-primary/50 hover:shadow-md">
+						<CardContent className="flex items-start gap-4 p-5">
+							<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+								<Network className="h-5 w-5 text-primary" />
+							</div>
+							<div className="min-w-0 flex-1 space-y-1">
+								<div className="flex items-center justify-between gap-2">
+									<h3 className="font-semibold">Connected orgs</h3>
+									<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-1 group-hover:text-primary" />
+								</div>
+								<p className="text-muted-foreground text-sm">
+									Nodes connected to this node, their allowance and what they used.
 								</p>
 							</div>
 						</CardContent>

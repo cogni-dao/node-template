@@ -8,6 +8,7 @@ import {
   DEFAULT_REPO_SPEC_PATH,
   orgSourceFromKey,
   validRepoSpecPath,
+  createIssuerOwnerSource,
   createOwnerSources,
   createRepoSpecOwnerSource,
   createGithubRepoSpecFetcher,
@@ -418,5 +419,53 @@ describe("fetchRepoSpecFromGithub", () => {
     const fetchImpl = vi.fn();
     await expect(fetchRepoSpecFromGithub("https://evil.example/a/b", undefined, { fetch: fetchImpl as unknown as typeof fetch })).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("issuer-keyed org (connect from home)", () => {
+  const ISSUER_SRC: OrgSource = { kind: "issuer", ref: "https://toks5-test.cognidao.org" };
+
+  it("ensureOrg keys an org by the issuer origin, idempotently, with its own user and one ordinary account", async () => {
+    const state = emptyState();
+    const { tag, writes } = fakeTag(state);
+    const first = await ensureOrg(tag, ISSUER_SRC);
+    expect(writes).toEqual(["INSERT INTO users", "INSERT INTO agent_principals", "INSERT INTO billing_accounts", "INSERT INTO virtual_keys"]);
+    expect([...state.orgs.keys()]).toEqual(["issuer|https://toks5-test.cognidao.org"]);
+    writes.length = 0;
+    expect(await ensureOrg(tag, ISSUER_SRC)).toEqual(first);
+    expect(writes).toEqual([]);
+    expect(await readOrgSource(tag, first.userId)).toEqual(ISSUER_SRC);
+  });
+
+  it("a candidate and a production origin are two orgs, and a repo-spec org never collides with an issuer org", async () => {
+    const state = emptyState();
+    const { tag } = fakeTag(state);
+    const a = await ensureOrg(tag, ISSUER_SRC);
+    const b = await ensureOrg(tag, { kind: "issuer", ref: "https://toks5.cognidao.org" });
+    const c = await ensureOrg(tag, SRC);
+    expect(new Set([a.userId, b.userId, c.userId]).size).toBe(3);
+  });
+
+  it("refuses an issuer ref that is not a canonical https origin", async () => {
+    const { tag, writes } = fakeTag(emptyState());
+    for (const ref of ["http://x.example.org", "https://x.example.org/", "https://x.example.org/path", "not a url", "https://user@x.example.org"])
+      await expect(ensureOrg(tag, { kind: "issuer", ref }), ref).rejects.toBeInstanceOf(InvalidOrgSourceError);
+    expect(writes).toEqual([]);
+  });
+
+  it("orgSourceFromKey reads an issuer key and refuses a non-origin", () => {
+    expect(orgSourceFromKey("issuer", "https://a.example.org")).toEqual({ kind: "issuer", ref: "https://a.example.org" });
+    expect(orgSourceFromKey("issuer", "https://a.example.org/x")).toBeNull();
+    expect(orgSourceFromKey("issuer", null)).toBeNull();
+  });
+
+  it("the issuer owner source has no owners: every read throws issuer_has_no_owners, so no owner list can approve for it", async () => {
+    const owners = createOwnerSources([createIssuerOwnerSource(), source().owners]);
+    await expect(owners.owners(ISSUER_SRC)).rejects.toMatchObject({ name: "OwnerSourceUnavailableError", reason: "issuer_has_no_owners" });
+    // canApprove over an issuer-keyed account fails closed instead of allowing.
+    const store = memoryStore({ accounts: { org1: "acct-org" }, orgAccounts: { "acct-org": ISSUER_SRC } });
+    await expect(canApprove(store, { userId: "bob", admin: null }, { resource: "account", principalUserId: "agent", accountId: "acct-org" }, owners)).rejects.toBeInstanceOf(
+      OwnerSourceUnavailableError
+    );
   });
 });

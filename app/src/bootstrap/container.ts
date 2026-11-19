@@ -152,7 +152,9 @@ import {
 	NODE_LOCAL_TOOL_BUNDLE,
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
+import { type Connections, createConnections } from "@/bootstrap/connections";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
+import { createServiceConnections, type ServiceConnections } from "@/bootstrap/service-connections";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
@@ -307,6 +309,10 @@ export interface Container {
 	serviceAuth: ServiceAuth;
 	/** Calling other nodes as this node's AI (story.0038 phase 2): the remote-knowledge capability and the outbound ask. Targets come only from .cogni/service-links.yaml. */
 	serviceLinks: ServiceLinks;
+	/** Connect from home, PROVIDER side (story.0038, agent-grants 0.9.0): apply a customer's signed connect, list, suspend, grant an allowance, and the run gate. */
+	connections: Connections;
+	/** Connect from home, CUSTOMER side: this node's own connection state per configured target, and the signed connect or disconnect it sends. */
+	serviceConnections: ServiceConnections;
 	/** ADMIN_ACTS_IN_ADMIN: the only door for node-admin writes; callable only with an `AdminSession` minted in `(admin)/`. */
 	nodeAdminPort: NodeAdminPort;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
@@ -1278,6 +1284,19 @@ function createContainer(): Container {
 		log,
 	});
 
+	const connections = createConnections({
+		sql: agentSql,
+		trustedHomes: serviceLinksConfig.trustedHomes,
+		accounts: serviceAccountService,
+		log,
+	});
+	const serviceConnections = createServiceConnections({
+		targets: serviceLinksConfig.targets,
+		signer: () => serviceAuth.getSigner(),
+		sql: agentSql,
+		log,
+	});
+
 	const agentAuthority = createAgentToolAuthority({
 		// Service role: agent_roles / agent_principals are deny-all for the app role.
 		sql: agentSql,
@@ -1331,7 +1350,9 @@ function createContainer(): Container {
 		agentAuthority,
 		serviceAuth,
 		serviceLinks,
-		nodeAdminPort: createNodeAdminPort(agentAuthority),
+		connections,
+		serviceConnections,
+		nodeAdminPort: createNodeAdminPort(agentAuthority, { connections, outbound: serviceConnections }),
 		knowledgeStorePort,
 		goalMetrics,
 		goalProgress,

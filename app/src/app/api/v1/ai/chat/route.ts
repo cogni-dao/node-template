@@ -19,6 +19,7 @@
  */
 
 import { createHash, createHmac } from "node:crypto";
+import { isConnectionRefusedError } from "@cogni/agent-grants";
 import { isAiExecutionError, type ModelRef } from "@cogni/ai-core";
 import { toUserId } from "@cogni/ids";
 import { aiChatOperation, type ChatInput } from "@cogni/node-contracts";
@@ -27,7 +28,10 @@ import type { UIMessage } from "ai";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { nanoid } from "nanoid";
 import { NextResponse } from "next/server";
-import { executionErrorToHttpStatus } from "@/app/_facades/ai/execution-error-mapper";
+import {
+  connectionRefusalToHttpStatus,
+  executionErrorToHttpStatus,
+} from "@/app/_facades/ai/execution-error-mapper";
 import { completionStream } from "@/app/_facades/ai/completion.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { UiMessageEventMapper } from "@/app/_lib/ai/ui-message-event-mapper";
@@ -193,6 +197,15 @@ function handleRouteError(
     return NextResponse.json(
       { error: "Insufficient credits" },
       { status: 402 }
+    );
+  }
+
+  // Connect from home (story.0038): a run billed to a connected customer's record was refused by the connection gate; the plain code is the answer.
+  if (isConnectionRefusedError(error)) {
+    logRequestWarn(ctx.log, error, error.code.toUpperCase());
+    return NextResponse.json(
+      { error: error.code },
+      { status: connectionRefusalToHttpStatus(error.code) }
     );
   }
 

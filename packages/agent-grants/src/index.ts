@@ -69,23 +69,30 @@ export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildAccountAiView, buildAskView, buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
-  createPostgresPayerBindingStore,
-  decidePayerBinding,
-  MAX_PENDING_PER_ACCOUNT,
-  type PayerAskOutcome,
-  type PayerAskResult,
-  type PayerBindingRow,
-  type PayerBindingState,
-  type PayerBindingStore,
-  ownersForBinding,
-  PENDING_BINDING_TTL_DAYS,
-  payerFor,
-  payerScopeUserFor,
-  requestPayerBinding,
-  revokePayerBinding,
-  type RunPayerDeps,
-  selectRunPayer,
-} from "./payer";
+  type ConnectAct,
+  type ConnectClaims,
+  type ConnectionRecord,
+  type ConnectionRefusal,
+  ConnectionRefusedError,
+  type ConnectionStanding,
+  type ConnectionStatus,
+  type ConnectionStore,
+  type ConnectionView,
+  type ConnectOutcome,
+  type ConnectRefusal,
+  CONNECT_SCOPE,
+  applyConnection,
+  assertConnectionAdmits,
+  connectionRefusalFor,
+  createPostgresConnectionStore,
+  decideConnection,
+  DEFAULT_CONNECTION_ROWS,
+  isConnectionRefusedError,
+  MAX_CONNECTION_ROWS,
+  parseConnectClaims,
+  viewOf,
+} from "./connections";
+export { createPostgresPayerBindingStore, type PayerBindingStore, payerFor, payerScopeUserFor, type RunPayerDeps, selectRunPayer } from "./payer";
 export { type PrincipalKind, principalKindOf, writeExternalPrincipal } from "./principals";
 export {
   AgentRolesError,

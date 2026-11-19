@@ -35,7 +35,7 @@ admin-only surfaces in one role-gated shell.
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/admin` (index), `/admin/payments` (Financials: read-only report plus row actions — fund steward, top-up links; authorization also enforced before snapshot reads)
+- **Routes:** `/admin` (index), `/admin/payments` (Financials: read-only report plus row actions — fund steward, top-up links; authorization also enforced before snapshot reads), `/admin/ai-access` (node-wide AI permissions), `/admin/connections` (CUSTOMER side of connect from home, story.0038: the configured providers with their offer text, status and cap; Connect with a cap and Disconnect, signed by this node), `/admin/connected-orgs` (PROVIDER side: the nodes connected to this one with allowance, usage, cap and last call; Suspend, Resume and Grant allowance)
 - **Files considered API:** `layout.tsx`, `admin/page.tsx`
 
 ## Auth contract

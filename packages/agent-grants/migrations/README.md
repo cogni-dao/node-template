@@ -38,3 +38,13 @@ The store needs a BYPASSRLS (service role) connection: the table has no policy, 
 2. Append the hand-written part (everything after the line `Hand-written below`): `FORCE ROW LEVEL SECURITY`. The table has no policy, so the app role sees nothing.
 3. The store needs a BYPASSRLS (service role) connection, like `agent_roles`.
 4. Run `db:check`. The journal `when` must be greater than every earlier entry.
+
+# org_connections migration template
+
+`org_connections.sql` is the shape a node applies for connect from home (`@cogni-dao/agent-grants` 0.9.0, `./connections`, `createPostgresReplayStore`). node-template keeps it as `0047_org_connections.sql`. It is ADDITIVE and standalone: it creates two new tables and touches nothing 0.8.0 shipped, so a node that mirrored `agent_principals_orgs.sql` and `payer_bindings.sql` exactly does not edit them. Mirror it exactly:
+
+1. Add the `orgConnections` table (the columns, the unique indexes `org_connections_issuer_unique` and `org_connections_billing_account_unique`, the three CHECKs, the two foreign keys) and the `serviceAssertionJtis` table (`jti` primary key, `expires_at`, the expiry index) to the node's own schema package, then run the node's `db:generate`. drizzle-kit writes the DDL and the snapshot against the node's own prior snapshot. Never copy a snapshot.
+2. Append the hand-written part (everything after the line `Hand-written below`): `FORCE ROW LEVEL SECURITY` on both tables. Neither has a policy, so the app role sees nothing; the store needs a BYPASSRLS (service role) connection.
+3. The `issuer` org source kind needs NO schema change: `agent_principals.owner_source_kind` is plain text and the 0.8.0 CHECK only requires both source columns on an `org` row. The new rows are `org` principals of kind `issuer`, written by `ensureOrg`.
+4. `payer_bindings` is unchanged: `connect` writes ordinary live rows into it (one per service principal of the issuer), approved by the record's own org user. The record's state (status, suspended, cap, seq) lives in `org_connections`, one row per customer, because a payer row is one per subject.
+5. Run `db:check`. The journal `when` must be greater than every earlier entry.

@@ -3,179 +3,21 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
-  AgentRolesError,
   approveAccountAsk,
   authorizeAccount,
-  decidePayerBinding,
   denyAccountAsk,
   hashLinkToken,
-  MAX_PENDING_PER_ACCOUNT,
   newLinkToken,
-  ownersForBinding,
-  PENDING_BINDING_TTL_DAYS,
-  payerFor,
   payerScopeUserFor,
-  requestPayerBinding,
   revokeAccountRow,
-  revokePayerBinding,
   selectRunPayer,
 } from "../src";
 import { type OrgSource, OwnerSourceUnavailableError } from "../src/orgs";
 import { memoryStore } from "./memory-store";
-import { memoryPayerStore } from "./payer-store";
 
 const SRC: OrgSource = { kind: "repo-spec", ref: "https://github.com/cogni-dao/toks5" };
 const owners = (list: string[]) => ({ owners: async () => list });
 const down = { owners: async () => Promise.reject(new OwnerSourceUnavailableError("down")) };
-
-// acct-org belongs to the org user `org1` (owners: bob, carol); acct-alice to the person alice. `svc` is a service principal from another node.
-const fixture = () => {
-  const grants = memoryStore({ accounts: { org1: "acct-org", alice: "acct-alice" }, orgAccounts: { "acct-org": SRC } });
-  const payer = memoryPayerStore({ accounts: { "acct-org": "org1", "acct-alice": "alice" }, orgAccounts: ["acct-org"] });
-  const me = (userId: string) => ({ userId, admin: null });
-  return { grants, payer, me };
-};
-
-describe("payer binding lifecycle", () => {
-  it("an ask names no payer until an owner of the org approves; Off ends it", async () => {
-    const { grants, payer, me } = fixture();
-    const ask = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    expect(ask).toMatchObject({ state: "pending", created: true });
-    expect(await payerFor(payer, "svc")).toBeNull();
-
-    const decided = await decidePayerBinding(payer, grants, { me: me("bob"), id: ask.id, approve: true, owners: owners(["bob", "carol"]) });
-    expect(decided).toMatchObject({ decided: true, subjectUserId: "svc", billingAccountId: "acct-org" });
-    expect(await payerFor(payer, "svc")).toBe("acct-org");
-
-    // Off by another owner: the very next read names no payer.
-    const off = await revokePayerBinding(payer, grants, { me: me("carol"), id: ask.id, owners: owners(["bob", "carol"]) });
-    expect(off.revoked).toBe(true);
-    expect(await payerFor(payer, "svc")).toBeNull();
-    // A closed binding is invisible: a second Off and a late approve change nothing.
-    expect((await revokePayerBinding(payer, grants, { me: me("bob"), id: ask.id, owners: owners(["bob"]) })).revoked).toBe(false);
-    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id: ask.id, approve: true, owners: owners(["bob"]) })).decided).toBe(false);
-  });
-
-  it("a non-owner is refused on approve, deny and revoke; an admin session adds nothing", async () => {
-    const { grants, payer, me } = fixture();
-    const { id } = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    const stranger = { userId: "dave", admin: {} };
-    for (const approve of [true, false])
-      await expect(decidePayerBinding(payer, grants, { me: stranger, id, approve, owners: owners(["bob"]) })).rejects.toMatchObject({ code: "not_allowed" });
-    await expect(revokePayerBinding(payer, grants, { me: stranger, id, owners: owners(["bob"]) })).rejects.toMatchObject({ code: "not_allowed" });
-    expect(await payerFor(payer, "svc")).toBeNull();
-    // Without owner sources an org account has no approver but its own user.
-    await expect(decidePayerBinding(payer, grants, { me: me("bob"), id, approve: true })).rejects.toMatchObject({ code: "not_allowed" });
-  });
-
-  it("the subject cannot approve its own binding even when it is an owner (NO_SELF_APPROVAL)", async () => {
-    const { grants, payer, me } = fixture();
-    const { id } = await requestPayerBinding(payer, { subjectUserId: "bob", billingAccountId: "acct-org" });
-    await expect(decidePayerBinding(payer, grants, { me: me("bob"), id, approve: true, owners: owners(["bob"]) })).rejects.toBeInstanceOf(AgentRolesError);
-    await expect(decidePayerBinding(payer, grants, { me: me("bob"), id, approve: true, owners: owners(["bob"]) })).rejects.toMatchObject({ code: "self_approval" });
-    expect(await payerFor(payer, "bob")).toBeNull();
-  });
-
-  it("a person's own account is decided by that person alone", async () => {
-    const { grants, payer, me } = fixture();
-    const { id } = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-alice" });
-    await expect(decidePayerBinding(payer, grants, { me: me("bob"), id, approve: true, owners: owners(["bob"]) })).rejects.toMatchObject({ code: "not_allowed" });
-    expect((await decidePayerBinding(payer, grants, { me: me("alice"), id, approve: true, owners: down })).decided).toBe(true);
-    expect(await payerFor(payer, "svc")).toBe("acct-alice");
-  });
-
-  it("an unavailable owner source refuses an org decision by throwing, and never changes a live binding", async () => {
-    const { grants, payer, me } = fixture();
-    const { id } = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    await expect(decidePayerBinding(payer, grants, { me: me("bob"), id, approve: true, owners: down })).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
-    expect(await payerFor(payer, "svc")).toBeNull();
-    await decidePayerBinding(payer, grants, { me: me("bob"), id, approve: true, owners: owners(["bob"]) });
-    // Calls read the binding row alone: the owner source being down does not touch payerFor.
-    expect(await payerFor(payer, "svc")).toBe("acct-org");
-    await expect(revokePayerBinding(payer, grants, { me: me("bob"), id, owners: down })).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
-    expect(await payerFor(payer, "svc")).toBe("acct-org");
-  });
-
-  it("one open binding per subject: the same account is idempotent, a pending ask is replaced, a live one must be turned Off first", async () => {
-    const { grants, payer, me } = fixture();
-    const first = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    const again = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    expect(again).toMatchObject({ id: first.id, created: false });
-    const other = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-alice" });
-    expect(other.id).not.toBe(first.id);
-    expect(payer.rows.filter((b) => !b.revoked)).toHaveLength(1);
-
-    await decidePayerBinding(payer, grants, { me: me("alice"), id: other.id, approve: true });
-    await expect(requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" })).rejects.toMatchObject({ code: "not_allowed" });
-    expect(await payerFor(payer, "svc")).toBe("acct-alice");
-    await expect(requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "nope" })).rejects.toMatchObject({ code: "not_allowed" });
-  });
-
-  it("an unknown account answers like a known one (a pending id) and writes no row", async () => {
-    const { payer } = fixture();
-    const known = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    const unknown = await requestPayerBinding(payer, { subjectUserId: "svc2", billingAccountId: "no-such-account" });
-    expect(Object.keys(unknown).sort()).toEqual(Object.keys(known).sort());
-    expect(unknown).toMatchObject({ state: "pending", created: true });
-    expect(unknown.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(payer.rows.filter((b) => b.subject === "svc2")).toHaveLength(0);
-    expect(await payerFor(payer, "svc2")).toBeNull();
-  });
-
-  it("an ask for an unknown account closes nothing: the subject's other pending ask stays and can still be approved", async () => {
-    const { grants, payer, me } = fixture();
-    const kept = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    const decoy = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "no-such-account" });
-    expect(decoy).toMatchObject({ state: "pending", created: true });
-    expect(decoy.id).not.toBe(kept.id);
-    expect(payer.rows.filter((b) => b.subject === "svc" && !b.revoked).map((b) => b.id)).toEqual([kept.id]);
-    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id: kept.id, approve: true, owners: owners(["bob"]) })).decided).toBe(true);
-    expect(await payerFor(payer, "svc")).toBe("acct-org");
-  });
-
-  it("an account holds at most MAX_PENDING_PER_ACCOUNT pending asks; another account is unaffected, and a subject holds one", async () => {
-    const { grants, payer, me } = fixture();
-    for (let i = 0; i < MAX_PENDING_PER_ACCOUNT; i++) await requestPayerBinding(payer, { subjectUserId: `s${i}`, billingAccountId: "acct-org" });
-    await expect(requestPayerBinding(payer, { subjectUserId: "one-more", billingAccountId: "acct-org" })).rejects.toMatchObject({ code: "too_many_requests" });
-    // The same subject asking again is the same row, not a second ask.
-    expect((await requestPayerBinding(payer, { subjectUserId: "s0", billingAccountId: "acct-org" })).created).toBe(false);
-    // Another account has its own count.
-    expect((await requestPayerBinding(payer, { subjectUserId: "one-more", billingAccountId: "acct-alice" })).created).toBe(true);
-    // A decided ask frees a slot.
-    const first = payer.rows[0]?.id as string;
-    await decidePayerBinding(payer, grants, { me: me("bob"), id: first, approve: false, owners: owners(["bob"]) });
-    expect((await requestPayerBinding(payer, { subjectUserId: "late", billingAccountId: "acct-org" })).created).toBe(true);
-  });
-
-  it("a pending ask expires after the TTL: it is not counted, cannot be decided, and the subject's next ask replaces it", async () => {
-    const { grants, payer, me } = fixture();
-    const day = 86_400_000;
-    const old = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    for (let i = 0; i < MAX_PENDING_PER_ACCOUNT - 1; i++) await requestPayerBinding(payer, { subjectUserId: `s${i}`, billingAccountId: "acct-org" });
-    await expect(requestPayerBinding(payer, { subjectUserId: "x", billingAccountId: "acct-org" })).rejects.toMatchObject({ code: "too_many_requests" });
-    payer.clock.now += PENDING_BINDING_TTL_DAYS * day;
-    // Expired: refused at decide time (nothing to decide), and filtered from the count.
-    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id: old.id, approve: true, owners: owners(["bob"]) })).decided).toBe(false);
-    expect(await payerFor(payer, "svc")).toBeNull();
-    expect((await requestPayerBinding(payer, { subjectUserId: "x", billingAccountId: "acct-org" })).created).toBe(true);
-    // The subject's own expired ask is replaced by a fresh one that can be approved.
-    const fresh = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    expect(fresh).toMatchObject({ created: true });
-    expect(fresh.id).not.toBe(old.id);
-    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id: fresh.id, approve: true, owners: owners(["bob"]) })).decided).toBe(true);
-    // A live binding does not expire.
-    payer.clock.now += 365 * day;
-    expect(await payerFor(payer, "svc")).toBe("acct-org");
-  });
-
-  it("deny dismisses a pending ask and a later ask starts again", async () => {
-    const { grants, payer, me } = fixture();
-    const { id } = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    expect((await decidePayerBinding(payer, grants, { me: me("carol"), id, approve: false, owners: owners(["carol"]) })).decided).toBe(true);
-    expect(await payerFor(payer, "svc")).toBeNull();
-    expect((await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" })).created).toBe(true);
-  });
-});
 
 describe("org account decisions (approve, deny, revoke a grant row)", () => {
   const ASK_SCOPE = "account:read";
@@ -253,35 +95,6 @@ describe("org account decisions (approve, deny, revoke a grant row)", () => {
     const store = org();
     store.roles.push({ id: "r-h", principal: "agent", scope: ASK_SCOPE, revoked: false, approvedBy: "alice", resource: "account", accountId: "acct-alice", grantedAt: 1, expiresAt: null, revokedAt: null, linkHash: null, linkExpiresAt: null, linkConsumed: false, seq: 99 });
     expect((await revokeAccountRow(store, { me: me("alice"), rowId: "r-h" })).revoked).toBe(true);
-  });
-});
-
-describe("ownersForBinding (the owner read happens before the decision transaction)", () => {
-  it("reads an org's owners once, answers only for that source, and is undefined for a person's account or an unknown binding", async () => {
-    const { grants, payer, me } = fixture();
-    const { id } = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    const read = vi.fn(async () => ["bob"]);
-    const pre = await ownersForBinding(payer, grants, { owners: read }, id);
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(await pre?.owners(SRC)).toEqual(["bob"]);
-    expect(await pre?.owners({ kind: "repo-spec", ref: "https://github.com/cogni-dao/other" })).toEqual([]);
-    expect(read).toHaveBeenCalledTimes(1);
-    // The decision uses the list read earlier: no second read, and a non-owner is still refused.
-    expect((await decidePayerBinding(payer, grants, { me: me("bob"), id, approve: true, owners: pre })).decided).toBe(true);
-    expect(read).toHaveBeenCalledTimes(1);
-    const personal = await requestPayerBinding(payer, { subjectUserId: "svc2", billingAccountId: "acct-alice" });
-    expect(await ownersForBinding(payer, grants, { owners: read }, personal.id)).toBeUndefined();
-    expect(await ownersForBinding(payer, grants, { owners: read }, "00000000-0000-4000-8000-00000000ffff")).toBeUndefined();
-    expect(await ownersForBinding(payer, grants, undefined, id)).toBeUndefined();
-    expect(read).toHaveBeenCalledTimes(1);
-  });
-
-  it("a failed read throws before anything is decided, and a stale list does not let a non-owner through", async () => {
-    const { grants, payer, me } = fixture();
-    const { id } = await requestPayerBinding(payer, { subjectUserId: "svc", billingAccountId: "acct-org" });
-    await expect(ownersForBinding(payer, grants, down, id)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
-    const pre = await ownersForBinding(payer, grants, owners(["bob"]), id);
-    await expect(decidePayerBinding(payer, grants, { me: me("dave"), id, approve: true, owners: pre })).rejects.toMatchObject({ code: "not_allowed" });
   });
 });
 

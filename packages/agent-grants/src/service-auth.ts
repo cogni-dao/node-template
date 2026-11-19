@@ -20,6 +20,7 @@
  * @public
  */
 
+import { isCanonicalHttpsOrigin } from "./origin";
 import type { SqlTag } from "./postgres";
 import { writeExternalPrincipal } from "./principals";
 import { AgentRolesError, type AskOutcome, requestAccess } from "./roles";
@@ -38,6 +39,9 @@ export const JWKS_MAX_AGE_MS = 60 * 60_000;
 const MAX_TOKEN_CHARS = 4096;
 const JWKS_FETCH_TIMEOUT_MS = 5_000;
 const JWKS_MAX_BYTES = 64 * 1024;
+
+/** The service a customer node signs as for a connect or disconnect (`./connections`). It is never a run principal: no principal row is made for it. */
+export const NODE_CONNECT_SERVICE = "node-connect";
 
 /** A service slug: lowercase, starts with a letter or digit, at most 64 characters. */
 export const SERVICE_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -91,15 +95,7 @@ function parseJsonObject(bytes: Uint8Array): Record<string, unknown> | null {
   }
 }
 
-/** True for a canonical https origin: `https://host[:port]`, nothing else. */
-export function isCanonicalHttpsOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.origin === value;
-  } catch {
-    return false;
-  }
-}
+export { isCanonicalHttpsOrigin };
 
 /** The audience claim for a node id. */
 export const nodeAudience = (nodeId: string): string => `urn:cogni:node:${nodeId}`;
@@ -115,6 +111,32 @@ export interface ServiceAssertionRequest {
   readonly audienceNodeId: string;
   /** The permissions the call uses, space separated, such as `knowledge:read`. */
   readonly scope: string;
+  /**
+   * Extra signed claims (story.0038 0.9.0): primitive values under names that are not registered claims. They are covered by the signature, so a replayed or edited body changes
+   * nothing. The signed connect carries `act`, `cap` and `seq` here. A reserved name (`iss`, `sub`, `aud`, `client_id`, `scope`, `iat`, `exp`, `jti`, `nbf`) or a non-primitive value
+   * throws `TypeError`.
+   */
+  readonly claims?: Readonly<Record<string, string | number | boolean>>;
+}
+
+/** Claim names the signer owns: a caller's extra claim can never replace one. */
+const RESERVED_CLAIMS: ReadonlySet<string> = new Set(["iss", "sub", "aud", "client_id", "scope", "iat", "exp", "jti", "nbf", "typ"]);
+const CLAIM_NAME = /^[a-z][a-z0-9_]{0,31}$/;
+const MAX_EXTRA_CLAIMS = 8;
+const MAX_CLAIM_STRING = 200;
+
+/** The extra claims a request may carry, checked, or a `TypeError`. */
+function checkedExtraClaims(claims: ServiceAssertionRequest["claims"]): Record<string, string | number | boolean> {
+  if (claims === undefined) return {};
+  const entries = Object.entries(claims);
+  if (entries.length > MAX_EXTRA_CLAIMS) throw new TypeError("too many extra claims");
+  for (const [name, value] of entries) {
+    if (!CLAIM_NAME.test(name) || RESERVED_CLAIMS.has(name)) throw new TypeError("extra claim name is reserved or malformed");
+    const ok =
+      (typeof value === "string" && value.length <= MAX_CLAIM_STRING) || (typeof value === "number" && Number.isSafeInteger(value)) || typeof value === "boolean";
+    if (!ok) throw new TypeError("extra claim must be a short string, a safe integer or a boolean");
+  }
+  return Object.fromEntries(entries);
 }
 
 export interface ServiceAssertionSigner {
@@ -154,9 +176,11 @@ export function createServiceAssertionSigner(opts: {
     if (!SERVICE_SLUG.test(request.service)) throw new TypeError("service must be a lowercase slug");
     if (!request.audienceNodeId || /\s/.test(request.audienceNodeId)) throw new TypeError("audienceNodeId is required");
     if (!SCOPE_CLAIM.test(request.scope)) throw new TypeError("scope must be space-separated permission names");
+    const extra = checkedExtraClaims(request.claims);
     const iat = Math.floor(now() / 1000);
     const header = jsonB64Url({ alg: "EdDSA", kid, typ: "JWT" });
     const payload = jsonB64Url({
+      ...extra,
       iss: issuer,
       sub: request.service,
       aud: nodeAudience(request.audienceNodeId),
@@ -252,6 +276,32 @@ export function createMemoryReplayStore(opts?: { maxEntries?: number; now?: () =
   };
 }
 
+/** Rows one prune pass removes at most (the table holds only the assertion window, so this keeps a pass cheap). */
+const REPLAY_PRUNE_BATCH = 200;
+
+/**
+ * DURABLE replay store over `service_assertion_jtis` (migration template `migrations/org_connections.sql`): the `jti` is the primary key, so a replay is refused by every replica and
+ * after a restart. `seen` inserts the `jti` with its expiry and answers true only when a LIVE row already holds it; an expired row that was not pruned yet is taken over, not
+ * reported as a replay. Each call also prunes at most `REPLAY_PRUNE_BATCH` rows past their expiry (PRUNED_AFTER_EXP), so the table holds one assertion window. The expiry travels as
+ * an ISO string (NO_DATE_PARAMETERS). `sql` is a service-role connection (the table has no policy). A store failure rejects (the node answers 503); it is never a pass.
+ */
+export function createPostgresReplayStore(sql: SqlTag): ReplayStore {
+  return {
+    async seen(jti, expiresAt) {
+      const until = expiresAt.toISOString();
+      const taken = await sql`
+        INSERT INTO service_assertion_jtis (jti, expires_at) VALUES (${jti}, ${until}::timestamptz)
+        ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at
+          WHERE service_assertion_jtis.expires_at <= now()
+        RETURNING jti`;
+      await sql`
+        DELETE FROM service_assertion_jtis
+        WHERE jti IN (SELECT jti FROM service_assertion_jtis WHERE expires_at <= now() LIMIT ${REPLAY_PRUNE_BATCH})`;
+      return taken.length === 0;
+    },
+  };
+}
+
 /** One home node the target trusts. */
 export interface TrustedHome {
   /** The home's canonical https origin: must equal the assertion's `iss`. */
@@ -259,6 +309,8 @@ export interface TrustedHome {
   readonly jwksUri: string;
   /** The service slugs this home may call as. */
   readonly services: readonly string[];
+  /** The home's node id as the PROVIDER's own list says it (optional `node_id` in `trusted_homes`); a label for the provider's page, never a trust input. */
+  readonly nodeId?: string;
 }
 
 export type ServiceAssertionRefusal =
@@ -279,6 +331,8 @@ export interface VerifiedServiceAssertion {
   readonly clientId: string;
   readonly scope: string;
   readonly jti: string;
+  /** The signed extra claims (primitives under non-registered names), verified with the rest. Empty for an ordinary call. */
+  readonly claims: Readonly<Record<string, string | number | boolean>>;
 }
 
 /**
@@ -306,7 +360,7 @@ export interface ServiceAssertionVerifier {
 export function parseTrustedHomes(raw: unknown): TrustedHome[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((entry): TrustedHome[] => {
-    const e = entry as { issuer?: unknown; jwks_uri?: unknown; services?: unknown } | null;
+    const e = entry as { issuer?: unknown; jwks_uri?: unknown; services?: unknown; node_id?: unknown } | null;
     if (!e || typeof e.issuer !== "string" || !isCanonicalHttpsOrigin(e.issuer) || typeof e.jwks_uri !== "string" || !Array.isArray(e.services)) return [];
     try {
       if (new URL(e.jwks_uri).protocol !== "https:") return [];
@@ -314,7 +368,8 @@ export function parseTrustedHomes(raw: unknown): TrustedHome[] {
       return [];
     }
     const services = e.services.filter((s): s is string => typeof s === "string" && SERVICE_SLUG.test(s));
-    return [{ issuer: e.issuer, jwksUri: e.jwks_uri, services }];
+    const nodeId = typeof e.node_id === "string" && LINK_NODE_ID.test(e.node_id) ? e.node_id : undefined;
+    return [{ issuer: e.issuer, jwksUri: e.jwks_uri, services, ...(nodeId ? { nodeId } : {}) }];
   });
 }
 
@@ -323,26 +378,33 @@ export interface LinkTarget {
   readonly alias: string;
   readonly nodeId: string;
   readonly origin: string;
+  /** Static offer text the customer's connections page shows beside this provider (optional `offer` in `targets`; at most `MAX_OFFER_CHARS`). Config only: the provider is never asked. */
+  readonly offer?: string;
 }
+
+/** The longest offer text a target may carry. */
+export const MAX_OFFER_CHARS = 280;
 
 /** The alias a tool may name. */
 export const LINK_ALIAS = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const LINK_NODE_ID = /^[A-Za-z0-9._-]{1,100}$/;
 
 /**
- * The link targets from a parsed list (`[{ alias, node_id, origin }]`, the shape of a node's `.cogni/service-links.yaml`), or `[]` when it is missing or not a list. Strict per
- * entry (a lowercase `alias`, a `node_id`, a canonical https `origin` with no credentials); any other entry is dropped, and a repeated alias keeps its first entry.
+ * The link targets from a parsed list (`[{ alias, node_id, origin, offer? }]`, the shape of a node's `.cogni/service-links.yaml`), or `[]` when it is missing or not a list. Strict per
+ * entry (a lowercase `alias`, a `node_id`, a canonical https `origin` with no credentials); any other entry is dropped, and a repeated alias keeps its first entry. An `offer` that is not a
+ * non-empty string of at most `MAX_OFFER_CHARS` is left out (the target stays).
  */
 export function parseLinkTargets(raw: unknown): LinkTarget[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: LinkTarget[] = [];
   for (const entry of raw) {
-    const e = entry as { alias?: unknown; node_id?: unknown; origin?: unknown } | null;
+    const e = entry as { alias?: unknown; node_id?: unknown; origin?: unknown; offer?: unknown } | null;
     if (!e || typeof e.alias !== "string" || !LINK_ALIAS.test(e.alias) || typeof e.node_id !== "string" || !LINK_NODE_ID.test(e.node_id)) continue;
     if (typeof e.origin !== "string" || !isCanonicalHttpsOrigin(e.origin) || seen.has(e.alias)) continue;
     seen.add(e.alias);
-    out.push({ alias: e.alias, nodeId: e.node_id, origin: e.origin });
+    const offer = typeof e.offer === "string" ? e.offer.trim() : "";
+    out.push({ alias: e.alias, nodeId: e.node_id, origin: e.origin, ...(offer.length > 0 && offer.length <= MAX_OFFER_CHARS ? { offer } : {}) });
   }
   return out;
 }
@@ -504,7 +566,12 @@ export function createServiceAssertionVerifier(opts: {
       if (iat > nowSeconds + CLOCK_SKEW_SECONDS) return refuse("malformed");
       // Replay is last so only a fully valid assertion can use up a `jti`. A store failure rejects (the node answers 503); it is never a pass.
       if (await opts.replay.seen(`${iss}#${jti}`, new Date((exp + CLOCK_SKEW_SECONDS) * 1000))) return refuse("replayed");
-      return { ok: true, issuer: iss, service: sub, clientId, scope, jti };
+      const extra: Record<string, string | number | boolean> = {};
+      for (const [name, value] of Object.entries(claims)) {
+        if (RESERVED_CLAIMS.has(name)) continue;
+        if (CLAIM_NAME.test(name) && (typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isSafeInteger(value)))) extra[name] = value;
+      }
+      return { ok: true, issuer: iss, service: sub, clientId, scope, jti, claims: extra };
     },
   };
 }
@@ -534,6 +601,8 @@ const serviceDisplayName = (input: { issuer: string; service: string }): string 
  */
 export async function ensureServicePrincipal(tx: SqlTag, input: { issuer: string; service: string }): Promise<string> {
   if (!isCanonicalHttpsOrigin(input.issuer) || !SERVICE_SLUG.test(input.service)) throw new TypeError("issuer and service must be canonical");
+  // `node-connect` only signs connects: it is never a run principal, so it never asks for a grant and never holds a payer row.
+  if (input.service === NODE_CONNECT_SERVICE) throw new TypeError("node-connect is not a principal");
   const userId = await servicePrincipalId(input);
   await tx`INSERT INTO users (id, name) VALUES (${userId}, ${serviceDisplayName(input)}) ON CONFLICT (id) DO NOTHING`;
   await writeExternalPrincipal(tx, userId);

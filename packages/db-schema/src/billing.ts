@@ -108,6 +108,12 @@ export const creditLedger = pgTable(
     revenueShareRefUnique: uniqueIndex("credit_ledger_revenue_share_ref_unique")
       .on(table.reference)
       .where(sql`${table.reason} = 'platform_revenue_share'`),
+    /** Idempotency guard for a provider admin's allowance grant to a connected org (story.0038): one ledger row per grant reference */
+    connectionAllowanceRefUnique: uniqueIndex(
+      "credit_ledger_connection_allowance_ref_unique"
+    )
+      .on(table.reference)
+      .where(sql`${table.reason} = 'connection_allowance'`),
   })
 ).enableRLS();
 

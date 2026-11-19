@@ -26,6 +26,8 @@
 
 import { sql } from "drizzle-orm";
 import {
+  bigint,
+  boolean,
   check,
   foreignKey,
   index,
@@ -240,4 +242,59 @@ export const payerBindings = pgTable(
       sql`(${table.approvedBy} IS NULL) = (${table.approvedAt} IS NULL)`
     ),
   ]
+).enableRLS();
+
+/**
+ * Connect from home (story.0038, 0.9.0): the provider's ONE live row per customer node, keyed by the org user the customer's signing issuer maps to (an `org` principal of source kind
+ * `issuer`, with one ordinary billing account). `status` is the customer's own act (`connected` | `disconnected`, a tombstone); `suspended` is the provider admin's sticky Suspend and
+ * no connect or disconnect writes it; `cap` is the customer's cap in integer credits; `seq` is the last signed seq applied (a connect at or below it is refused). The allowance is the
+ * credit balance of `billing_account_id`; cumulative debits are the sum of its charge receipts. Sibling of `payer_bindings` (not extra columns on it): a payer row is one per SUBJECT
+ * (every service principal of the issuer has one, all pointing here), this row is one per CUSTOMER. Service-role only: ENABLE + FORCE RLS and no policy (FORCE is added by hand in the migration).
+ */
+export const orgConnections = pgTable(
+  "org_connections",
+  {
+    orgUserId: text("org_user_id")
+      .primaryKey()
+      .references(() => users.id),
+    billingAccountId: text("billing_account_id")
+      .notNull()
+      .references(() => billingAccounts.id),
+    issuer: text("issuer").notNull(),
+    status: text("status").notNull(),
+    suspended: boolean("suspended").notNull().default(false),
+    cap: bigint("cap", { mode: "number" }).notNull(),
+    seq: bigint("seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("org_connections_issuer_unique").on(table.issuer),
+    uniqueIndex("org_connections_billing_account_unique").on(
+      table.billingAccountId
+    ),
+    check(
+      "org_connections_status_canonical",
+      sql`${table.status} IN ('connected','disconnected')`
+    ),
+    check("org_connections_cap_nonnegative", sql`${table.cap} >= 0`),
+    check("org_connections_seq_positive", sql`${table.seq} >= 1`),
+  ]
+).enableRLS();
+
+/**
+ * Durable replay memory for signed service assertions (story.0038, 0.9.0): one row per `jti` (prefixed by its issuer) until its assertion expires, then pruned. The `jti` is the primary
+ * key, so a replay is refused by every replica and after a restart. Service-role only: ENABLE + FORCE RLS and no policy (FORCE is added by hand in the migration).
+ */
+export const serviceAssertionJtis = pgTable(
+  "service_assertion_jtis",
+  {
+    jti: text("jti").primaryKey(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [index("service_assertion_jtis_expires_idx").on(table.expiresAt)]
 ).enableRLS();
