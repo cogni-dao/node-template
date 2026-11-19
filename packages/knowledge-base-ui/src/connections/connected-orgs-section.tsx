@@ -97,7 +97,7 @@ export function ConnectedOrgsSection({ endpoints, money, className }: ConnectedO
             <table className="w-full text-left text-sm">
               <thead className="text-muted-foreground text-xs">
                 <tr>
-                  <th scope="col" className="py-1 pr-3 font-medium">Node</th>
+                  <th scope="col" className="w-full py-1 pr-3 font-medium">Node</th>
                   <th scope="col" className="py-1 pr-3 text-right font-medium">Used</th>
                   <th scope="col" className="py-1 pr-3 text-right font-medium">Left</th>
                   <th scope="col" className="w-12 py-1 text-right font-medium">On</th>
