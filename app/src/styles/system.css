@@ -150,10 +150,10 @@
     --muted-foreground: 222 8% 32%; /* secondary text, 7.5:1 on canvas */
     --accent: 240 10% 91.8%; /* hover */
     --accent-foreground: 210 13% 12.5%;
-    --destructive: 0 74% 42%;
+    --destructive: 0 74% 39%;
     --destructive-foreground: 0 0% 100%;
     --border: 240 10% 86.5%; /* slate-6 */
-    --input: 231 6% 57%; /* control edge, 3:1 (WCAG 1.4.11) */
+    --input: 231 6% 55%; /* control edge, 3.2:1 on the canvas (WCAG 1.4.11) */
     --ring: 217 91% 45%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -174,10 +174,10 @@
     --accent-to: 217 91% 58%;
     --accent-glow: 217 91% 50%;
 
-    /* Status: the dark theme's hues, darkened until text holds 4.5:1 on the light canvas. */
-    --danger: 0 74% 42%;
-    --warning: 26 90% 37%;
-    --success: 142 72% 29%;
+    /* Status: the dark theme's hues, darkened until text holds 4.5:1 on canvas, muted and its own /15 tint. */
+    --danger: 0 74% 39%;
+    --warning: 26 90% 30%;
+    --success: 142 72% 23.5%;
     --invert: 213 13% 14%;
     --invert-foreground: 0 0% 100%;
 
@@ -202,7 +202,7 @@
     --popover: 240 6% 7.1%;
     --popover-foreground: 220 9% 93.5%;
     --primary: 217 91% 65%; /* link-grade on canvas, muted and hover; a bright fill takes canvas-dark text */
-    --primary-foreground: 216 28% 7%;
+    --primary-foreground: 240 10% 3.9%;
     --secondary: 225 6% 13.7%;
     --secondary-foreground: 220 9% 93.5%;
     --muted: 220 6% 10%; /* wells and chips */
@@ -244,7 +244,7 @@
     --sidebar: 0 0% 0%;
     --sidebar-foreground: 220 9% 93.5%;
     --sidebar-primary: 217 91% 65%;
-    --sidebar-primary-foreground: 216 28% 7%;
+    --sidebar-primary-foreground: 240 10% 3.9%;
     --sidebar-accent: 225 6% 13.7%;
     --sidebar-accent-foreground: 220 9% 93.5%;
     --sidebar-border: 220 6% 18.4%;

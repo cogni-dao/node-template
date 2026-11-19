@@ -22,13 +22,13 @@
 
   .dark {
     --primary: 217 91% 65%;
-    --primary-foreground: 216 28% 7%;
+    --primary-foreground: 240 10% 3.9%;
     --ring: 217 91% 65%;
     --accent-from: 217 91% 55%;
     --accent-to: 217 91% 62%;
     --accent-glow: 217 90% 60%;
     --sidebar-primary: 217 91% 65%;
-    --sidebar-primary-foreground: 216 28% 7%;
+    --sidebar-primary-foreground: 240 10% 3.9%;
     --sidebar-ring: 217 91% 65%;
   }
 }
