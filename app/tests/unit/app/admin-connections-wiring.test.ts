@@ -33,7 +33,9 @@ describe("connect from home pages", () => {
       expect(page).not.toMatch(/<p[\s>]/);
       const view = read(`app/(admin)/admin/${dir}/${mount}`);
       expect(view).toContain(`import { ${section} } from "@cogni/knowledge-base-ui";`);
-      expect(view).toContain(`<${section} endpoints={${endpoints}} />`);
+      // Money is the node's own rate from its payments module, never a copied constant.
+      expect(view).toContain(`<${section} endpoints={${endpoints}} money={CONNECTION_MONEY} />`);
+      expect(view).toContain('import { CONNECTION_MONEY } from "../connection-money";');
       // No node-local copy of the table: the directory holds only the page, the mount and the endpoints object.
       expect(readdirSync(resolve(SRC, `app/(admin)/admin/${dir}`)).sort()).toEqual([mount, `${dir}-endpoints.ts`, "page.tsx"].sort());
     }

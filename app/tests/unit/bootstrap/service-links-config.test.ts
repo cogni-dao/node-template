@@ -33,21 +33,22 @@ describe("the shipped .cogni/service-links.yaml", () => {
           jwksUri: "https://toks5-test.cognidao.org/.well-known/jwks.json",
           services: ["node-ai", "node-connect"],
           nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1",
+          name: "toks5",
         },
         // The operator's git-review (test.cognidao.org); no kid is pinned.
-        { issuer: "https://test.cognidao.org", jwksUri: "https://test.cognidao.org/.well-known/jwks.json", services: ["git-review"] },
+        { issuer: "https://test.cognidao.org", jwksUri: "https://test.cognidao.org/.well-known/jwks.json", services: ["git-review"], name: "operator" },
       ],
       targets: [
         {
           alias: "toks5",
           nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1",
           origin: "https://toks5-test.cognidao.org",
-          offer: "Run this node's AI against toks5, paid from the allowance toks5 grants you, up to your cap.",
+          offer: "AI runs on toks5, charged to this node's account there, up to your limit. Reads are free.",
         },
       ],
     });
     expect(load("production")).toEqual({
-      trustedHomes: [{ issuer: "https://cognidao.org", jwksUri: "https://cognidao.org/.well-known/jwks.json", services: ["git-review"] }],
+      trustedHomes: [{ issuer: "https://cognidao.org", jwksUri: "https://cognidao.org/.well-known/jwks.json", services: ["git-review"], name: "operator" }],
       targets: [],
     });
     // The operator's git-review may read, never connect: node-connect is on no operator entry.
