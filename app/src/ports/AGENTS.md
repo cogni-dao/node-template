@@ -50,7 +50,6 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - PaymentAttemptUserRepository, PaymentAttemptServiceRepository, OnChainVerifier
 - MetricsQueryPort, AiTelemetryPort, LangfusePort, Clock
 - Port-level errors (InsufficientCreditsPortError, BillingAccountNotFoundPortError, etc.)
-- SandboxRunnerPort, SandboxRunSpec, SandboxRunResult, SandboxProgramContract
 - ThreadPersistencePort, ThreadConflictError, ThreadSummary
 - OperatorWalletPort
 - IdentityBindingRepositoryPort, IdentityBindingTransactionPort

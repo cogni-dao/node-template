@@ -55,8 +55,8 @@ export type CreditsTopupSpec = z.infer<typeof creditsTopupSpecSchema>;
 
 /**
  * Schema for a single governance schedule entry.
- * Each schedule triggers an agent run with a 1-word entrypoint — the sandbox agent
- * by default, or the catalog graph named by `graph` (task.5282).
+ * Each schedule triggers a run of the catalog graph named by `graph` (task.5282) with a
+ * 1-word entrypoint. A non-ledger charter without `graph` is skipped by the sync.
  * Invariants: Charter must be unique per config; cron must be 5 fields; entrypoint must be 1 token (no spaces);
  *   `graph` requires `model` (a graph run needs an explicit platform model id — there is no safe default).
  */
@@ -79,7 +79,7 @@ export const governanceScheduleSchema = z
       .regex(/^\S+$/, "Entrypoint must be a single token (no spaces)"),
     /**
      * Optional namespaced graph id (`<provider>:<name>`, e.g. `langgraph:work-prioritizer`).
-     * Absent → the sandbox agent (`sandbox:openclaw`), byte-for-byte the pre-existing behavior.
+     * Absent → the schedule sync skips a non-ledger charter with a warning (never a parse error).
      * Ignored for LEDGER_INGEST (that charter always runs the epoch-collect workflow).
      */
     graph: z

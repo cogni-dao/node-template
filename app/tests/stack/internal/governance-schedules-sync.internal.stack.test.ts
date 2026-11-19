@@ -115,14 +115,14 @@ describe("[internal] POST /api/internal/ops/governance/schedules/sync", () => {
 
     expect(grants).toHaveLength(1);
     expect(grants[0]?.billingAccountId).toBe(COGNI_SYSTEM_BILLING_ACCOUNT_ID);
-    expect(grants[0]?.scopes).toContain("graph:execute:sandbox:openclaw");
+    expect(grants[0]?.scopes).toContain("graph:execute:ledger:ingest");
 
     // Use getHandle directly — schedule.list() has eventual consistency
     // and may not reflect a just-created schedule immediately
     const client = await getTestTemporalClient();
-    const handle = client.schedule.getHandle("governance:heartbeat");
+    const handle = client.schedule.getHandle("governance:ledger_ingest");
     const desc = await handle.describe();
     expect(desc).toBeDefined();
-    createdScheduleIds.push("governance:heartbeat");
+    createdScheduleIds.push("governance:ledger_ingest");
   });
 });

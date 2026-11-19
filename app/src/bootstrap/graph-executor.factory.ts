@@ -12,10 +12,9 @@
  *   - Per LANGFUSE_INTEGRATION: ObservabilityGraphExecutorDecorator wraps for Langfuse traces
  *   - Per CALLBACK_WRITES_PLATFORM_RECEIPTS: UsageCommitDecorator validates usage_report events. Platform receipts via LiteLLM callback; BYO receipts committed directly.
  *   - Per CREDITS_ENFORCED_AT_EXECUTION_PORT: PreflightCreditCheckDecorator rejects runs with insufficient credits
- *   - LAZY_SANDBOX_IMPORT: Sandbox provider loaded via dynamic import() to defer dockerode native addon chain (SandboxRunnerAdapter)
  *   - MCP_NOT_SINGLETON: MCP connections use McpConnectionCache with reconnect-on-error + TTL backstop
  *   - MCP_RECONNECT_ON_ERROR: ErrorDetectingMcpToolSource invalidates cache on transport-level connection errors
- * Side-effects: global (module-scoped McpConnectionCache, cached sandbox provider promise)
+ * Side-effects: global (module-scoped McpConnectionCache)
  * Links: container.ts, NamespaceGraphRouter, https://node-template.cognidao.org/knowledge/graph-execution-invariants, https://cognidao.org/knowledge/node-observability-finish-pass, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/mcp-control-plane.md
  * @public
  */
@@ -61,7 +60,6 @@ import {
 } from "@/bootstrap/ai/secret-probe";
 import { resolveNodeSourceContext } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type {
-  AiExecutionErrorCode,
   BillingContext,
   ConnectionBrokerPort,
   GraphExecutorPort,
@@ -122,12 +120,10 @@ export function createGraphExecutor(
     : createInProcProvider(deps, completionStreamFn);
 
   // Build namespace → provider map
-  const env = serverEnv();
   // Both LangGraphInProcProvider and LangGraphDevProvider expose providerId
   const providerId = (langGraphProvider as LangGraphInProcProvider).providerId;
   const providers = new Map<string, GraphExecutorPort>([
     [providerId, langGraphProvider],
-    ["sandbox", new LazySandboxGraphProvider(env.LITELLM_MASTER_KEY)],
   ]);
 
   // Create namespace router with all configured providers
@@ -597,77 +593,4 @@ function createDevProvider(apiUrl: string): LangGraphDevProvider {
     .filter((bt) => declaresSecretArgs(bt.contract))
     .map((bt) => bt.contract.name);
   return new LangGraphDevProvider(client, { availableGraphs, secretToolIds });
-}
-
-// ---------------------------------------------------------------------------
-// Lazy sandbox provider — defers dockerode import to first runGraph() call
-// ---------------------------------------------------------------------------
-
-/** Module-scoped singleton: caches the dynamic import + provider construction */
-let _sandboxProvider: Promise<GraphExecutorPort> | null = null;
-
-function loadSandboxProvider(
-  litellmMasterKey: string,
-): Promise<GraphExecutorPort> {
-  if (!_sandboxProvider) {
-    _sandboxProvider = import("@/adapters/server/sandbox").then(
-      ({ SandboxRunnerAdapter, SandboxGraphProvider }) => {
-        const runner = new SandboxRunnerAdapter({ litellmMasterKey });
-        return new SandboxGraphProvider(runner) as GraphExecutorPort;
-      },
-    );
-  }
-  return _sandboxProvider;
-}
-
-/**
- * GraphExecutorPort that lazy-loads SandboxGraphProvider on first use.
- *
- * Avoids top-level import of dockerode → ssh2 → cpu-features (native addon)
- * which breaks Turbopack bundling when the barrel re-exports it.
- *
- * Per LAZY_SANDBOX_IMPORT: runGraph() returns {stream, final} synchronously;
- * the async generator inside awaits the cached import before delegating.
- */
-class LazySandboxGraphProvider implements GraphExecutorPort {
-  private readonly delegate: Promise<GraphExecutorPort>;
-
-  constructor(litellmMasterKey: string) {
-    this.delegate = loadSandboxProvider(litellmMasterKey);
-  }
-
-  runGraph(req: GraphRunRequest, ctx?: ExecutionContext): GraphRunResult {
-    const delegate = this.delegate;
-
-    // Shared promise: resolves to delegate's runGraph result once module loads
-    const innerResult = delegate.then((p) => p.runGraph(req, ctx));
-
-    const stream = (async function* () {
-      let inner: GraphRunResult;
-      try {
-        inner = await innerResult;
-      } catch {
-        yield {
-          type: "error" as const,
-          error: "internal" as AiExecutionErrorCode,
-        };
-        yield { type: "done" as const };
-        return;
-      }
-      yield* inner.stream;
-    })();
-
-    const final = innerResult.then(
-      (r) => r.final,
-      () =>
-        ({
-          ok: false,
-          runId: req.runId,
-          requestId: ctx?.requestId ?? req.runId,
-          error: "internal",
-        }) as const,
-    );
-
-    return { stream, final };
-  }
 }

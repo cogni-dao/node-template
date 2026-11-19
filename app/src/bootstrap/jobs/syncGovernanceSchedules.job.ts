@@ -28,7 +28,13 @@ import { getGovernanceConfig, getNodeId } from "@/shared/config";
 import { schedules } from "@/shared/db/schema";
 import { serverEnv } from "@/shared/env/server-env";
 
-const GOVERNANCE_GRANT_SCOPES = ["graph:execute:sandbox:openclaw"] as const;
+/**
+ * Governance grant (LEDGER_INGEST's) is scoped to the graph id its schedule row
+ * carries. ensureGrant matches on scope containment, so already-deployed DBs mint
+ * one new grant on first sync; the schedule row is repointed by the upsert and the
+ * old grant row is left unreferenced (ledger workflows never validate it).
+ */
+const GOVERNANCE_GRANT_SCOPES = ["graph:execute:ledger:ingest"] as const;
 
 /** Temporal schedule ID for the ledger-ingest (epoch) schedule. */
 const LEDGER_INGEST_SCHEDULE_ID = "governance:ledger_ingest";
@@ -99,8 +105,8 @@ export async function runGovernanceSchedulesSyncJob(
         return grant.id;
       },
       // GRAPH_CHARTER (task.5282): a charter that declares `graph` runs on its own
-      // `graph:execute:{graphId}` grant, so the sandbox governance grant (and the
-      // LEDGER_INGEST schedule that shares it) is untouched.
+      // `graph:execute:{graphId}` grant, so the governance grant (and the
+      // LEDGER_INGEST schedule that uses it) is untouched.
       ensureGraphGrant: async (graphId: string) => {
         const grant = await container.executionGrantPort.ensureGrant({
           userId: systemUserId,

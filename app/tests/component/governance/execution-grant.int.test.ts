@@ -156,7 +156,7 @@ describe("ExecutionGrantUserPort.ensureGrant (Component)", () => {
     expect(grant2.id).not.toBe(grant1.id);
   });
   it("retains distinct least-privilege graph grants across repeated reconciliations", async () => {
-    const scopes = ["graph:execute:sandbox:openclaw", "graph:execute:langgraph:cogni", "graph:execute:langgraph:work-prioritizer"];
+    const scopes = ["graph:execute:ledger:ingest", "graph:execute:langgraph:cogni", "graph:execute:langgraph:work-prioritizer"];
     const ids: string[] = [];
     for (const scope of scopes) {
       const grant = await adapter.ensureGrant({ userId: testUserId, billingAccountId: actor.billingAccountId, scopes: [scope] });
