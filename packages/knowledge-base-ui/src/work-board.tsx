@@ -171,7 +171,7 @@ export function WorkBoard<TItem extends WorkBoardItem>({
               key={status}
               value={status}
               disabled
-              className="w-72 shrink-0 gap-3 rounded-xl bg-muted/30 p-3 opacity-100"
+              className="w-72 shrink-0 gap-3 rounded-xl bg-muted/70 p-3 opacity-100 dark:bg-muted/40"
             >
               <div className="flex items-center justify-between gap-2 px-1">
                 <h2>
