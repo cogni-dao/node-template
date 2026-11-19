@@ -16,7 +16,7 @@ import type { ReactElement } from "react";
 
 import { PageContainer } from "@/components";
 
-import { ConnectionsClient } from "./Connections.client";
+import { ConnectionsMount } from "./Connections.mount";
 
 export default function ConnectionsPage(): ReactElement {
 	return (
@@ -24,7 +24,7 @@ export default function ConnectionsPage(): ReactElement {
 			<p className="max-w-prose text-muted-foreground">
 				Connect this node to another node so its AI can run there, paid from your cap.
 			</p>
-			<ConnectionsClient />
+			<ConnectionsMount />
 		</PageContainer>
 	);
 }

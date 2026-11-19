@@ -10,7 +10,7 @@
  * Invariants: DURABLE_REPLAY (a replayed `jti` is refused after a restart; an expired row is taken over and pruned), CONNECT_IS_ORDERED (a stale `seq` after a restart is refused and the
  *   cap is unchanged), SUSPEND_IS_STICKY (survives a higher-seq connect, a disconnect and a reconnect; only Resume clears it), TRUSTED_HOMES_ONLY (an unlisted issuer or service creates no
  *   record, no org, no principal), ALLOWANCE_BOUNDS_COST (a zero balance and a reached cap each refuse a run; a new connect replaces the cap and keeps the count),
- *   ONE_RECORD_PER_ISSUER (every service principal of the issuer is billed to the one record), ALLOWANCE_IS_ONE_LEDGER_ROW (idempotent, race-safe through the real accounts adapter).
+ *   ONE_RECORD_PER_ISSUER (an existing service principal of the issuer is billed to the one record, a connect creates none, the ask binds the rest), SEQ_STEP_IS_BOUNDED (+ the admin reset), OUTBOUND_SEQ (this node's own side), ALLOWANCE_IS_ONE_LEDGER_ROW (idempotent, race-safe through the real accounts adapter).
  * Side-effects: IO (testcontainers Postgres; rows are not rolled back because the replay store and the accounts adapter use their own connections)
  */
 
@@ -21,8 +21,10 @@ import {
   CONNECT_SCOPE,
   type ConnectOutcome,
   createPostgresConnectionStore,
+  createPostgresOutboundConnectionStore,
   createPostgresPayerBindingStore,
   isConnectionRefusedError,
+  MAX_SEQ_STEP,
   payerFor,
   type SqlTag,
 } from "@cogni/agent-grants";
@@ -31,6 +33,7 @@ import {
   createServiceAssertionSignerFromSeed,
   createServiceAssertionVerifier,
   ensureServicePrincipal,
+  findServicePrincipal,
   NODE_CONNECT_SERVICE,
   servicePrincipalId,
   type ServiceAssertionSigner,
@@ -177,24 +180,61 @@ describe("connect from home (real Postgres)", () => {
     }
   });
 
-  it("every service principal of the issuer is billed to the one record, node-connect is never a principal, and a service that asks later is bound too", async () => {
+  it("a connect creates NO service principal: the customer's AI still has none (so its first read is 401 and it asks); an existing principal is bound, and a service that asks later is bound by the ask", async () => {
     const c = await customer({ services: ["node-ai", "git-review", NODE_CONNECT_SERVICE] });
+    // node-ai asked before this connect; git-review has not.
+    await sql.begin((tx) => ensureServicePrincipal(tx as unknown as SqlTag, { issuer: c.issuer, service: "node-ai" }));
     await c.send(await c.sign({ act: "connect", cap: 1000, seq: 1 }));
     const account = (await row(c.issuer))?.billing_account_id as string;
     const payer = createPostgresPayerBindingStore(sql as unknown as SqlTag);
-    for (const svc of ["node-ai", "git-review"])
-      expect(await payerFor(payer, await servicePrincipalId({ issuer: c.issuer, service: svc }))).toBe(account);
-    expect(await sql`SELECT 1 FROM users WHERE id = ${await servicePrincipalId({ issuer: c.issuer, service: NODE_CONNECT_SERVICE })}`).toHaveLength(0);
+    expect(await payerFor(payer, await servicePrincipalId({ issuer: c.issuer, service: "node-ai" }))).toBe(account);
+    for (const svc of ["git-review", NODE_CONNECT_SERVICE]) {
+      // No users row, no principal: `servicePrincipalOf` answers null, so a signed read is 401 and the AI's own ask follows.
+      expect(await findServicePrincipal(sql as unknown as SqlTag, { issuer: c.issuer, service: svc }), svc).toBeNull();
+      expect(await sql`SELECT 1 FROM users WHERE id = ${await servicePrincipalId({ issuer: c.issuer, service: svc })}`, svc).toHaveLength(0);
+      expect(await payerFor(payer, await servicePrincipalId({ issuer: c.issuer, service: svc })), svc).toBeNull();
+    }
 
-    // A connect again changes no binding; a service that was not listed at connect time asks later and is bound to the same record.
+    // A second connect changes no binding. git-review then asks (the ask makes its principal) and the ask's own transaction binds it to the same record.
     await c.send(await c.sign({ act: "connect", cap: 1500, seq: 2 }));
-    const late = await sql.begin(async (tx) => {
-      const userId = await ensureServicePrincipal(tx as unknown as SqlTag, { issuer: c.issuer, service: "later-service" });
+    expect(await findServicePrincipal(sql as unknown as SqlTag, { issuer: c.issuer, service: "git-review" })).toBeNull();
+    const bound = await sql.begin(async (tx) => {
+      const userId = await ensureServicePrincipal(tx as unknown as SqlTag, { issuer: c.issuer, service: "git-review" });
       return createPostgresConnectionStore(tx as unknown as SqlTag).bindService({ issuer: c.issuer, subjectUserId: userId });
     });
-    expect(late).toBe(true);
-    expect(await payerFor(payer, await servicePrincipalId({ issuer: c.issuer, service: "later-service" }))).toBe(account);
-    expect(await sql`SELECT 1 FROM payer_bindings WHERE billing_account_id = ${account} AND revoked_at IS NULL`).toHaveLength(3);
+    expect(bound).toBe(true);
+    expect(await payerFor(payer, await servicePrincipalId({ issuer: c.issuer, service: "git-review" }))).toBe(account);
+    expect(await sql`SELECT 1 FROM payer_bindings WHERE billing_account_id = ${account} AND revoked_at IS NULL`).toHaveLength(2);
+  });
+
+  it("a seq more than MAX_SEQ_STEP above the stored one is refused (nothing created on a first connect), and the admin's reset puts the stored seq back to 1", async () => {
+    const c = await customer();
+    expect(await c.send(await c.sign({ act: "connect", cap: 1, seq: MAX_SEQ_STEP + 1 }))).toMatchObject({ verified: true, outcome: { ok: false, code: "seq_jump" } });
+    expect(await row(c.issuer)).toBeUndefined();
+    await c.send(await c.sign({ act: "connect", cap: 1000, seq: 5 }));
+    expect(await c.send(await c.sign({ act: "connect", cap: 1000, seq: 5 + MAX_SEQ_STEP + 1 }))).toMatchObject({ verified: true, outcome: { ok: false, code: "seq_jump", seq: 5 } });
+    expect(await c.send(await c.sign({ act: "connect", cap: 1000, seq: 5 + MAX_SEQ_STEP }))).toMatchObject({ verified: true, outcome: { ok: true } });
+    const record = await row(c.issuer);
+    expect(await createPostgresConnectionStore(sql as unknown as SqlTag).resetSeq(record?.org_user_id as string)).toBe(true);
+    expect(await row(c.issuer)).toMatchObject({ seq: "1", cap: "1000", status: "connected" });
+    expect(await c.send(await c.sign({ act: "connect", cap: 2000, seq: 2 }))).toMatchObject({ verified: true, outcome: { ok: true, record: { seq: 2, cap: 2000 } } });
+    expect(await createPostgresConnectionStore(sql as unknown as SqlTag).resetSeq(randomUUID())).toBe(false);
+  });
+
+  it("this node's own outbound state: seq rises across instances, a stale-guarded accept does not overwrite a newer one, and a lift never lowers", async () => {
+    const origin = `https://prov-${randomUUID()}.example.org`;
+    const a = createPostgresOutboundConnectionStore(sql as unknown as SqlTag);
+    const b = createPostgresOutboundConnectionStore(sql as unknown as SqlTag);
+    expect(await a.reserveSeq(origin)).toEqual({ seq: 1, cap: 0 });
+    expect(await b.reserveSeq(origin)).toEqual({ seq: 2, cap: 0 });
+    await b.accept({ origin, status: "connected", cap: 900, reservedSeq: 2 });
+    // The slower answer of seq 1 arrives last and must not overwrite.
+    await a.accept({ origin, status: "connected", cap: 100, reservedSeq: 1 });
+    expect((await a.states([origin])).get(origin)).toEqual({ status: "connected", cap: 900, seq: 2 });
+    await a.liftSeq(origin, 40);
+    await a.liftSeq(origin, 3);
+    expect((await a.states([origin])).get(origin)?.seq).toBe(40);
+    expect((await a.states([`${origin}x`])).size).toBe(0);
   });
 
   it("the cap and a zero balance each refuse a run; a new connect replaces the cap and keeps the count; Disconnect refuses the next run", async () => {

@@ -12,7 +12,8 @@
  *   - TRUSTED_HOMES_ONLY: an issuer this node does not list under `trusted_homes`, a service it does not allow, a bad signature, an expired or replayed (`jti` stored durably in Postgres)
  *     assertion is 401 `invalid_token` and creates nothing; an unreachable key set or a store failure is 503 `authz_unavailable`.
  *   - ONLY_NODE_CONNECT: an assertion of any other service is 401 here.
- *   - CONNECT_IS_ORDERED: a `seq` at or below the stored one is 409 `stale_seq` with the stored `seq`, and changes nothing (cap included).
+ *   - CONNECT_IS_ORDERED: a `seq` at or below the stored one is 409 `stale_seq` with the stored `seq`, and changes nothing (cap included). A `seq` more than 1,000,000 above it is 409 `seq_jump`.
+ *   - NO_PRINCIPAL_IS_MADE: a connect creates no service principal; the customer's AI still gets 401, asks, and waits for an admin on /admin/ai-access.
  *   - NOTHING_IS_GRANTED: a connect gives the customer no permission and no money: the allowance is the provider admin's own grant, and Suspend is the provider's and sticky.
  * Side-effects: IO (service-role database write, home JWKS fetch)
  * Links: https://node-template.cognidao.org/knowledge/node-relationships-design
@@ -57,6 +58,7 @@ export const POST = wrapPublicRoute(
       const outcome = await container.connections.apply(assertion);
       if (!outcome.ok) {
         if (outcome.code === "stale_seq") return json({ error: "stale_seq", ...(outcome.seq !== undefined ? { seq: outcome.seq } : {}) }, 409);
+        if (outcome.code === "seq_jump") return json({ error: "seq_jump", ...(outcome.seq !== undefined ? { seq: outcome.seq } : {}) }, 409);
         if (outcome.code === "wrong_service") return json({ error: "invalid_token" }, 401);
         if (outcome.code === "wrong_scope") return json({ error: "invalid_scope" }, 400);
         return json({ error: "invalid_claims" }, 400);

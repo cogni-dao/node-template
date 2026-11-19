@@ -23,9 +23,17 @@ candidate-a:
       jwks_uri: "https://toks5-test.cognidao.org/.well-known/jwks.json"
       services: ["node-ai", "node-connect"]
       node_id: "f66b260b-4633-41e2-8711-b7c1b8449cc1"
+    # The operator's git-review reads this node's hub as service `git-review`. No kid is pinned: the verifier picks the key by kid from the JWKS.
+    - issuer: "https://test.cognidao.org"
+      jwks_uri: "https://test.cognidao.org/.well-known/jwks.json"
+      services: ["git-review"]
   targets:
     - alias: toks5
       node_id: "f66b260b-4633-41e2-8711-b7c1b8449cc1"
       origin: "https://toks5-test.cognidao.org"
       offer: "Run this node's AI against toks5, paid from the allowance toks5 grants you, up to your cap."
-production: {}
+production:
+  trusted_homes:
+    - issuer: "https://cognidao.org"
+      jwks_uri: "https://cognidao.org/.well-known/jwks.json"
+      services: ["git-review"]

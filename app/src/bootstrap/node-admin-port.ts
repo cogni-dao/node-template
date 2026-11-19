@@ -16,7 +16,7 @@ import type { ApprovalCaller } from "@cogni/agent-grants";
 
 import type { AgentToolAuthority } from "@/bootstrap/agent-authority";
 import type { Connections } from "@/bootstrap/connections";
-import type { ServiceConnections } from "@/bootstrap/service-connections";
+import type { ConnectSender } from "@cogni/agent-grants";
 import type { AdminSession, NodeAdminPort } from "@/ports";
 
 /** The admin session is the proof of node-admin: it rides in `admin`, and only `requireAdminSession()` can make one. */
@@ -24,7 +24,7 @@ const adminCaller = (session: AdminSession): ApprovalCaller => ({ userId: sessio
 
 export function createNodeAdminPort(
   authority: AgentToolAuthority,
-  connect: { readonly connections: Connections; readonly outbound: ServiceConnections }
+  connect: { readonly connections: Connections; readonly outbound: ConnectSender }
 ): NodeAdminPort {
   return {
     listNodeAi: () => authority.listNodeAi(),
@@ -47,6 +47,7 @@ export function createNodeAdminPort(
     listConnectedOrgs: (_session, input) => connect.connections.list(input),
     setConnectedOrgSuspended: (_session, { orgUserId, suspended }) => connect.connections.setSuspended(orgUserId, suspended),
     grantConnectionAllowance: (_session, input) => connect.connections.grantAllowance(input),
+    resetConnectedOrgSeq: (_session, orgUserId) => connect.connections.resetSeq(orgUserId),
     listOutboundConnections: () => connect.outbound.list(),
     actOutboundConnection: (_session, input) => connect.outbound.act(input),
   };

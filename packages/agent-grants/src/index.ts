@@ -69,6 +69,16 @@ export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildAccountAiView, buildAskView, buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
+  CONNECT_PATH,
+  type ConnectSender,
+  createConnectSender,
+  createPostgresOutboundConnectionStore,
+  type OutboundActResult,
+  type OutboundConnectionStore,
+  type OutboundState,
+  type OutboundTargetView,
+} from "./connect-sender";
+export {
   type ConnectAct,
   type ConnectClaims,
   type ConnectionRecord,
@@ -78,6 +88,7 @@ export {
   type ConnectionStatus,
   type ConnectionStore,
   type ConnectionView,
+  type ConnectedOrgView,
   type ConnectOutcome,
   type ConnectRefusal,
   CONNECT_SCOPE,
@@ -89,6 +100,7 @@ export {
   DEFAULT_CONNECTION_ROWS,
   isConnectionRefusedError,
   MAX_CONNECTION_ROWS,
+  MAX_SEQ_STEP,
   parseConnectClaims,
   viewOf,
 } from "./connections";

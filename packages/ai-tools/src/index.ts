@@ -85,7 +85,9 @@ export {
   RemoteKnowledgeError,
   readBodyCapped,
   redactSecretShapes,
+  REMOTE_INDEX_MAX_LIMIT,
   type RemoteKnowledgeCapability,
+  type RemoteKnowledgeIndexRow,
   type RemoteKnowledgeTarget,
 } from "./remote-knowledge";
 // Capabilities

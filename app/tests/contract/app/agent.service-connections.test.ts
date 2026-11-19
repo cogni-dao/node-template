@@ -115,6 +115,10 @@ describe("POST /api/v1/public/agent/service-connections", () => {
     const stale = await call();
     expect(stale.status).toBe(409);
     expect(await stale.json()).toEqual({ error: "stale_seq", seq: 9 });
+    fake.apply.mockResolvedValue({ ok: false, code: "seq_jump", seq: 5 });
+    const jump = await call();
+    expect(jump.status).toBe(409);
+    expect(await jump.json()).toEqual({ error: "seq_jump", seq: 5 });
     fake.apply.mockResolvedValue({ ok: false, code: "invalid_claims" });
     expect(await (await call()).json()).toEqual({ error: "invalid_claims" });
     fake.apply.mockResolvedValue({ ok: false, code: "wrong_scope" });

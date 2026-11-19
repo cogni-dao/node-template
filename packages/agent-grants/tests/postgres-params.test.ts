@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createPostgresAgentGrantsStore, createPostgresConnectionStore, createPostgresPayerBindingStore, type SqlTag } from "../src";
+import { createPostgresAgentGrantsStore, createPostgresConnectionStore, createPostgresOutboundConnectionStore, createPostgresPayerBindingStore, type SqlTag } from "../src";
 import { createPostgresReplayStore } from "../src/service-auth";
 
 const refusesDates = (seen: unknown[][]): SqlTag =>
@@ -69,6 +69,12 @@ describe("the Postgres store passes no JS Date as a parameter", () => {
     await connections.list({ limit: 5, after: null });
     await connections.setSuspended("o", true);
     await connections.bindService({ issuer: "https://home.example", subjectUserId: "s" });
+    await connections.resetSeq("o");
+    const outbound = createPostgresOutboundConnectionStore(tag);
+    await outbound.reserveSeq("https://prov.example");
+    await outbound.states(["https://prov.example"]);
+    await outbound.accept({ origin: "https://prov.example", status: "connected", cap: 5, reservedSeq: 1 });
+    await outbound.liftSeq("https://prov.example", 9);
     // The replay store hands the expiry over as an ISO string.
     await createPostgresReplayStore(tag).seen("jti-1", new Date("2026-11-18T00:05:00.000Z"));
     expect(seen.flat()).toContain("2026-11-18T00:05:00.000Z");

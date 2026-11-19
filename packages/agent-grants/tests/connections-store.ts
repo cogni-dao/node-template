@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import type { ConnectionRecord, ConnectionStanding, ConnectionStore } from "../src";
+import { type ConnectionRecord, type ConnectionStanding, type ConnectionStore, MAX_SEQ_STEP } from "../src";
 
 interface Row {
   record: ConnectionRecord;
@@ -17,16 +17,20 @@ interface Row {
 export function memoryConnectionStore(): ConnectionStore & {
   rows: Map<string, Row>;
   bound: Map<string, string>;
+  /** `<issuer>#<service>` keys of service principals that already exist (they asked); a connect binds only these and creates none. */
+  principals: Set<string>;
   credit(orgUserId: string, credits: number): void;
   debit(orgUserId: string, credits: number): void;
 } {
   const rows = new Map<string, Row>();
   const bound = new Map<string, string>();
+  const principals = new Set<string>();
   const byIssuer = (issuer: string) => [...rows.values()].find((r) => r.record.issuer === issuer);
   const standing = (row: Row): ConnectionStanding => ({ ...row.record, balance: row.balance, debits: row.debits, lastCallAt: row.lastCallAt });
   return {
     rows,
     bound,
+    principals,
     credit: (orgUserId, credits) => {
       const row = rows.get(orgUserId);
       if (row) row.balance += credits;
@@ -41,7 +45,9 @@ export function memoryConnectionStore(): ConnectionStore & {
     async apply({ issuer, claims, services }) {
       const found = byIssuer(issuer);
       const orgUserId = found?.record.orgUserId ?? `org-${rows.size + 1}`;
+      if (!found && claims.seq > MAX_SEQ_STEP) return { ok: false, code: "seq_jump", seq: 0 };
       if (found && found.record.seq >= claims.seq) return { ok: false, code: "stale_seq", seq: found.record.seq };
+      if (found && claims.seq - found.record.seq > MAX_SEQ_STEP) return { ok: false, code: "seq_jump", seq: found.record.seq };
       const record: ConnectionRecord = {
         orgUserId,
         billingAccountId: found?.record.billingAccountId ?? `acct-${orgUserId}`,
@@ -52,7 +58,7 @@ export function memoryConnectionStore(): ConnectionStore & {
         seq: claims.seq,
       };
       rows.set(orgUserId, { record, balance: found?.balance ?? 0, debits: found?.debits ?? 0, lastCallAt: found?.lastCallAt ?? null });
-      if (claims.act === "connect") for (const service of services) bound.set(`${issuer}#${service}`, record.billingAccountId);
+      if (claims.act === "connect") for (const service of services) if (principals.has(`${issuer}#${service}`)) bound.set(`${issuer}#${service}`, record.billingAccountId);
       return { ok: true, record };
     },
     async get(orgUserId) {
@@ -73,6 +79,12 @@ export function memoryConnectionStore(): ConnectionStore & {
       const row = rows.get(orgUserId);
       if (!row) return false;
       row.record = { ...row.record, suspended };
+      return true;
+    },
+    async resetSeq(orgUserId) {
+      const row = rows.get(orgUserId);
+      if (!row) return false;
+      row.record = { ...row.record, seq: 1 };
       return true;
     },
     async bindService({ issuer, subjectUserId }) {

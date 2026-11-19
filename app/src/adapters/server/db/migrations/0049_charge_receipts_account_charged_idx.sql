@@ -1,0 +1,1 @@
+CREATE INDEX "charge_receipts_account_charged_idx" ON "charge_receipts" USING btree ("billing_account_id","charged_credits");

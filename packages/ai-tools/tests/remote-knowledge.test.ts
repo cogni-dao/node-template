@@ -170,6 +170,59 @@ describe("remote knowledge transport", () => {
   });
 });
 
+describe("remote knowledge index (the routing projection)", () => {
+  const indexRow = (over: Record<string, unknown> = {}) => ({ id: "k1", domain: "meta", entryType: "fact", useWhen: "when reading about poly", ...over });
+
+  it("sends one signed GET to /api/v1/knowledge/index on the configured origin with domain, q and limit, and returns id, domain, entryType and trigger only", async () => {
+    const h = harness(() => jsonResponse({ items: [indexRow(), indexRow({ id: "k2", useWhen: null }), { id: "bad" }], domains: ["meta"], total: 3 }));
+    const rows = await h.remote.index("toks5", { domain: "meta", q: "poly", limit: 10 });
+    expect(rows).toEqual([indexRow(), indexRow({ id: "k2", useWhen: null })]);
+    expect(h.calls).toHaveLength(1);
+    const url = new URL(h.calls[0]?.url as string);
+    expect(url.origin).toBe(TARGET.origin);
+    expect(url.pathname).toBe("/api/v1/knowledge/index");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ domain: "meta", q: "poly", limit: "10" });
+    expect(h.calls[0]?.init).toMatchObject({ method: "GET", redirect: "manual" });
+    expect((h.calls[0]?.init.headers as Record<string, string>).authorization).toBe("Bearer signed-assertion");
+  });
+
+  it("omits an unset domain and q, bounds the limit to 1000, caps rows at limit, and never carries content through", async () => {
+    const h = harness(() => jsonResponse({ items: [indexRow({ content: "body that must not pass" }), indexRow({ id: "k2" }), indexRow({ id: "k3" })] }));
+    const rows = await h.remote.index("toks5", { limit: 2 });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).not.toHaveProperty("content");
+    expect([...new URL(h.calls[0]?.url as string).searchParams.keys()]).toEqual(["limit"]);
+    await h.remote.index("toks5", { limit: 50_000 });
+    expect(new URL(h.calls[1]?.url as string).searchParams.get("limit")).toBe("1000");
+  });
+
+  it("an unknown alias fails before any signing or network call", async () => {
+    const h = harness(() => jsonResponse({ items: [] }));
+    await expect(h.remote.index("nope", { limit: 5 })).rejects.toMatchObject({ code: "unknown_alias" });
+    expect(h.authorize).not.toHaveBeenCalled();
+    expect(h.fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same caps, redaction and denial behaviour: a 403 is policy_denied, a 5xx is unavailable, a secret shape is redacted, an oversized body is refused", async () => {
+    await expect(harness(() => new Response("", { status: 403 })).remote.index("toks5", { limit: 5 })).rejects.toMatchObject({ code: "policy_denied" });
+    await expect(harness(() => new Response("", { status: 503 })).remote.index("toks5", { limit: 5 })).rejects.toMatchObject({ code: "unavailable" });
+    const leaked = harness(() => jsonResponse({ items: [indexRow({ useWhen: "when cogni_ag_sk_v1_abcDEF123 shows" })] }));
+    expect((await leaked.remote.index("toks5", { limit: 5 }))[0]?.useWhen).toBe("when [REDACTED] shows");
+    const big = harness(() => new Response("x".repeat(REMOTE_MAX_BODY_BYTES + 1), { status: 200 }));
+    await expect(big.remote.index("toks5", { limit: 5 })).rejects.toMatchObject({ code: "unavailable" });
+  });
+
+  it("a 401 to a signed index read sends ONE ask and the read is access_requested", async () => {
+    const calls: string[] = [];
+    const h = harness((url) => {
+      calls.push(url);
+      return url.endsWith("/service-enrollments") ? jsonResponse({ status: "pending" }, { status: 201 }) : new Response("", { status: 401 });
+    });
+    await expect(h.remote.index("toks5", { limit: 5 })).rejects.toMatchObject({ code: "access_requested" });
+    expect(calls.filter((u) => u.endsWith("/api/v1/public/agent/service-enrollments"))).toHaveLength(1);
+  });
+});
+
 describe("the stock knowledge tools with a `node` argument", () => {
   const local = {
     get: vi.fn(async () => row({ id: "local" })),

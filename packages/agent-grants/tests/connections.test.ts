@@ -10,6 +10,7 @@ import {
   connectionRefusalFor,
   decideConnection,
   isConnectionRefusedError,
+  MAX_SEQ_STEP,
   parseConnectClaims,
   viewOf,
 } from "../src";
@@ -31,7 +32,7 @@ const assertion = (over: Partial<VerifiedServiceAssertion> & { claims?: Record<s
 
 const connect = (cap: number, seq: number) => assertion({ claims: { act: "connect", cap, seq } });
 const disconnect = (seq: number) => assertion({ claims: { act: "disconnect", cap: 0, seq } });
-const SERVICES = ["node-ai", NODE_CONNECT_SERVICE];
+const SERVICES = ["node-ai", "git-review", NODE_CONNECT_SERVICE];
 
 describe("parseConnectClaims", () => {
   it("accepts act connect or disconnect with an integer cap of at least 0 and an integer seq of at least 1", () => {
@@ -54,15 +55,39 @@ describe("applyConnection", () => {
     expect(store.rows.size).toBe(0);
   });
 
-  it("a connect creates the one record, binds every service principal of the issuer except node-connect, and a second connect reuses the record", async () => {
+  it("a connect creates the one record, binds only the service principals that already exist (never node-connect), and a second connect reuses the record", async () => {
     const store = memoryConnectionStore();
+    // node-ai asked before this connect; git-review has not asked.
+    store.principals.add(`${HOME}#node-ai`);
     const first = await applyConnection(store, { assertion: connect(1000, 1), services: SERVICES });
     expect(first).toMatchObject({ ok: true, act: "connect", record: { issuer: HOME, status: "connected", cap: 1000, seq: 1, suspended: false } });
     expect([...store.bound.keys()]).toEqual([`${HOME}#node-ai`]);
+    expect(await store.bindService({ issuer: HOME, subjectUserId: `${HOME}#git-review` })).toBe(true);
     const second = await applyConnection(store, { assertion: connect(2500, 2), services: SERVICES });
     expect(second).toMatchObject({ ok: true, record: { cap: 2500, seq: 2 } });
     expect(store.rows.size).toBe(1);
     expect(first.ok && second.ok && first.record.orgUserId === second.record.orgUserId && first.record.billingAccountId === second.record.billingAccountId).toBe(true);
+  });
+
+  it("a connect creates NO service principal and binds nothing: the customer's AI must still ask and wait for an admin", async () => {
+    const store = memoryConnectionStore();
+    expect(await applyConnection(store, { assertion: connect(1000, 1), services: SERVICES })).toMatchObject({ ok: true });
+    expect(store.principals.size).toBe(0);
+    expect(store.bound.size).toBe(0);
+  });
+
+  it("a seq more than MAX_SEQ_STEP above the stored one (or above 1 million on a first connect) is refused and changes nothing; the admin's reset puts the record back to 1", async () => {
+    const store = memoryConnectionStore();
+    expect(await applyConnection(store, { assertion: connect(1, MAX_SEQ_STEP + 1), services: SERVICES })).toEqual({ ok: false, code: "seq_jump", seq: 0 });
+    expect(store.rows.size).toBe(0);
+    const first = await applyConnection(store, { assertion: connect(1000, MAX_SEQ_STEP), services: SERVICES });
+    if (!first.ok) throw new Error("connect failed");
+    expect(await applyConnection(store, { assertion: connect(1000, 2 * MAX_SEQ_STEP + 1), services: SERVICES })).toEqual({ ok: false, code: "seq_jump", seq: MAX_SEQ_STEP });
+    expect(await applyConnection(store, { assertion: connect(1000, 2 * MAX_SEQ_STEP), services: SERVICES })).toMatchObject({ ok: true });
+    // A bricked record: the admin resets the stored seq, and the customer's next seq lands.
+    expect(await store.resetSeq(first.record.orgUserId)).toBe(true);
+    expect(await applyConnection(store, { assertion: connect(1000, 2), services: SERVICES })).toMatchObject({ ok: true, record: { seq: 2, cap: 1000 } });
+    expect(await store.resetSeq("nobody")).toBe(false);
   });
 
   it("refuses a seq at or below the stored one and changes nothing (CONNECT_IS_ORDERED)", async () => {

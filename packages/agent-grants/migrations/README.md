@@ -48,3 +48,12 @@ The store needs a BYPASSRLS (service role) connection: the table has no policy, 
 3. The `issuer` org source kind needs NO schema change: `agent_principals.owner_source_kind` is plain text and the 0.8.0 CHECK only requires both source columns on an `org` row. The new rows are `org` principals of kind `issuer`, written by `ensureOrg`.
 4. `payer_bindings` is unchanged: `connect` writes ordinary live rows into it (one per service principal of the issuer), approved by the record's own org user. The record's state (status, suspended, cap, seq) lives in `org_connections`, one row per customer, because a payer row is one per subject.
 5. Run `db:check`. The journal `when` must be greater than every earlier entry.
+
+# outbound_connections migration template
+
+`outbound_connections.sql` is the shape a node applies for the CUSTOMER side of connect from home (`@cogni-dao/agent-grants` 0.9.0, `createConnectSender`, `createPostgresOutboundConnectionStore`): one row per provider origin holding what this node last told it (`status`, `cap`) and the last `seq` it signed, so the seq rises across restarts. node-template keeps it inside `0048_outbound_connections.sql`, which also carries one node-local statement (a partial unique index on `credit_ledger` for allowance references) that is NOT part of this template. Mirror the table, the two CHECKs and the FORCE RLS exactly: add `outboundConnections` to the node's schema package, run `db:generate`, append the hand-written `FORCE ROW LEVEL SECURITY` (no policy: service role only), run `db:check`. A node that only acts as a provider needs no outbound table.
+
+# charge_receipts_account_charged_idx migration template
+
+`charge_receipts_account_charged_idx.sql` is one index, `("billing_account_id", "charged_credits")` on `charge_receipts` (node-template `0049_charge_receipts_account_charged_idx.sql`). The run gate sums an account's charged credits on every run billed to a connected org (`createPostgresConnectionStore().standingOf`); with this index the sum is an index-only scan of that account's receipts and needs no per-run table read. A provider node mirrors it before adopting the gate (add the index to the node's own `chargeReceipts` schema and run `db:generate`).
+

@@ -21,7 +21,7 @@ import {
   applyConnection,
   assertConnectionAdmits,
   type ConnectionRefusal,
-  type ConnectionView,
+  type ConnectedOrgView,
   type ConnectOutcome,
   createPostgresConnectionStore,
   DEFAULT_CONNECTION_ROWS,
@@ -37,11 +37,6 @@ import type { AgentAuthoritySql } from "./agent-authority";
 /** The reason on the one ledger row an allowance writes. */
 export const CONNECTION_ALLOWANCE_REASON = "connection_allowance";
 
-export interface ConnectedOrgView extends ConnectionView {
-  /** The customer's node id, only when the provider's own `trusted_homes` entry names one. */
-  readonly nodeId?: string;
-}
-
 export interface Connections {
   /** Applies a VERIFIED assertion (the connect route's). Throws only on a store failure. */
   apply(assertion: VerifiedServiceAssertion): Promise<ConnectOutcome>;
@@ -49,6 +44,8 @@ export interface Connections {
   list(input: { limit?: number | undefined; after?: string | null | undefined }): Promise<{ orgs: ConnectedOrgView[]; nextAfter: string | null }>;
   /** Suspend or Resume. False when the org user has no record. */
   setSuspended(orgUserId: string, suspended: boolean): Promise<boolean>;
+  /** Puts the record's stored `seq` back to 1. False when the org user has no record. */
+  resetSeq(orgUserId: string): Promise<boolean>;
   /** One ledger row on the record's billing account; null when the org user has no record. `applied` is false when `key` was already applied. */
   grantAllowance(input: { orgUserId: string; credits: number; key: string }): Promise<{ allowance: number; applied: boolean } | null>;
   /** Throws `ConnectionRefusedError` when a run billed to `billingAccountId` is refused; returns for an ordinary payer or a record that admits it. */
@@ -108,6 +105,8 @@ export function createConnections(deps: {
     },
 
     setSuspended: (orgUserId, suspended) => store().setSuspended(orgUserId, suspended),
+
+    resetSeq: (orgUserId) => store().resetSeq(orgUserId),
 
     async grantAllowance({ orgUserId, credits, key }) {
       const record = await store().get(orgUserId);

@@ -16,7 +16,7 @@ import type { ReactElement } from "react";
 
 import { PageContainer } from "@/components";
 
-import { ConnectedOrgsClient } from "./ConnectedOrgs.client";
+import { ConnectedOrgsMount } from "./ConnectedOrgs.mount";
 
 export default function ConnectedOrgsPage(): ReactElement {
 	return (
@@ -24,7 +24,7 @@ export default function ConnectedOrgsPage(): ReactElement {
 			<p className="max-w-prose text-muted-foreground">
 				Nodes that connected to this node can run AI here, paid from the allowance you grant them.
 			</p>
-			<ConnectedOrgsClient />
+			<ConnectedOrgsMount />
 		</PageContainer>
 	);
 }

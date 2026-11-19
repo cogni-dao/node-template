@@ -88,6 +88,7 @@ export function createServiceLinks(deps: {
     get: (alias, id) => logged(alias, "get", () => transport.get(alias, id)),
     list: (alias, params) => logged(alias, "list", () => transport.list(alias, params)),
     search: (alias, params) => logged(alias, "search", () => transport.search(alias, params)),
+    index: (alias, params) => logged(alias, "index", () => transport.index(alias, params)),
   };
 
   return {

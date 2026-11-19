@@ -3,7 +3,8 @@
 
 /**
  * Module: `@app/(admin)/admin/connected-orgs/connected-orgs-endpoints`
- * Purpose: The admin-area routes the "Connected orgs" page calls. One place, so a test can prove each route exists.
+ * Purpose: The admin-area route the "Connected orgs" page calls. One object, so a test can prove the route exists. The package's `ConnectedOrgsSection` appends `/{orgUserId}/allowance`,
+ *   `/suspension` and `/seq-reset` to `list`.
  * Invariants: ONE_ADMIN_CHECK. The page sends the browser session; each route runs the same admin check for a session or a bearer.
  * Side-effects: none
  * Links: src/app/api/v1/admin/connected-orgs/route.ts
@@ -11,5 +12,4 @@
  */
 
 export const CONNECTED_ORGS_PATH = "/api/v1/admin/connected-orgs" as const;
-export const allowancePath = (orgUserId: string): string => `${CONNECTED_ORGS_PATH}/${encodeURIComponent(orgUserId)}/allowance`;
-export const suspensionPath = (orgUserId: string): string => `${CONNECTED_ORGS_PATH}/${encodeURIComponent(orgUserId)}/suspension`;
+export const CONNECTED_ORGS_ENDPOINTS = { list: CONNECTED_ORGS_PATH } as const;

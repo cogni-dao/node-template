@@ -71,7 +71,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `RateLimitBypassConfig` - Test bypass config type (from `http/wrapPublicRoute`)
   - `TokenBucketRateLimiter`, `publicApiLimiter`, `extractClientIp` - Rate limiting utilities (from `http/`)
 - **Env/Config keys:** none (uses `@/shared/env`)
-- **Files considered API:** `agent-authority.ts` (tool authority wiring: principal lookup, wallet-bound `adminCheck`, role grant/revoke, `agent_tool.authz` log), `agent-credentials.ts` (the revocable agent key store over the service-role client), `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
+- **Files considered API:** `agent-authority.ts` (tool authority wiring: principal lookup, wallet-bound `adminCheck`, role grant/revoke, `agent_tool.authz` log), `agent-credentials.ts` (the revocable agent key store over the service-role client), `service-auth.ts` (the signer, the verifier over the durable Postgres replay store and the org owner sources), `service-links.ts` / `service-links-config.ts` (this node's AI reading other nodes through the stock tools, and `.cogni/service-links.yaml`), `connections.ts` (connect from home, PROVIDER side: apply a signed connect, list, Suspend, reset seq, grant an allowance, the run gate; thin wiring over `@cogni-dao/agent-grants` 0.9.0; the CUSTOMER side is the package's `createConnectSender`, wired in `container.ts`), `node-admin-port.ts`, `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
 
 **Subdirectories:**
 

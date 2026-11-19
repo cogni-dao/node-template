@@ -283,7 +283,7 @@ const REPLAY_PRUNE_BATCH = 200;
  * DURABLE replay store over `service_assertion_jtis` (migration template `migrations/org_connections.sql`): the `jti` is the primary key, so a replay is refused by every replica and
  * after a restart. `seen` inserts the `jti` with its expiry and answers true only when a LIVE row already holds it; an expired row that was not pruned yet is taken over, not
  * reported as a replay. Each call also prunes at most `REPLAY_PRUNE_BATCH` rows past their expiry (PRUNED_AFTER_EXP), so the table holds one assertion window. The expiry travels as
- * an ISO string (NO_DATE_PARAMETERS). `sql` is a service-role connection (the table has no policy). A store failure rejects (the node answers 503); it is never a pass.
+ * an ISO string (NO_DATE_PARAMETERS). The prune takes the oldest expired rows with `FOR UPDATE SKIP LOCKED`, so concurrent calls never wait on each other or deadlock. `sql` is a service-role connection (the table has no policy). A store failure rejects (the node answers 503); it is never a pass.
  */
 export function createPostgresReplayStore(sql: SqlTag): ReplayStore {
   return {
@@ -296,7 +296,9 @@ export function createPostgresReplayStore(sql: SqlTag): ReplayStore {
         RETURNING jti`;
       await sql`
         DELETE FROM service_assertion_jtis
-        WHERE jti IN (SELECT jti FROM service_assertion_jtis WHERE expires_at <= now() LIMIT ${REPLAY_PRUNE_BATCH})`;
+        WHERE jti IN (
+          SELECT jti FROM service_assertion_jtis WHERE expires_at <= now() ORDER BY expires_at LIMIT ${REPLAY_PRUNE_BATCH} FOR UPDATE SKIP LOCKED
+        )`;
       return taken.length === 0;
     },
   };

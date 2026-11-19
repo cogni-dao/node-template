@@ -14,7 +14,7 @@
  * @public
  */
 
-import type { ConnectionView, NodeAiPermissionView, PrincipalRef } from "@cogni/agent-grants";
+import type { ConnectedOrgView, OutboundActResult, OutboundTargetView, NodeAiPermissionView, PrincipalRef } from "@cogni/agent-grants";
 
 declare const adminSessionBrand: unique symbol;
 
@@ -34,32 +34,14 @@ export interface AiPermissionChange {
   readonly changed: boolean;
 }
 
-/** A connected org as the provider's page shows it. */
-export interface ConnectedOrgRow extends ConnectionView {
-  /** The customer's node id, only when this node's own `trusted_homes` entry names one. */
-  readonly nodeId?: string;
-}
+/** A connected org as the provider's page shows it (the package's view). */
+export type ConnectedOrgRow = ConnectedOrgView;
 
-/** A configured provider as the customer's page shows it, with this node's own connection state. */
-export interface OutboundTarget {
-  readonly alias: string;
-  readonly origin: string;
-  readonly offer?: string;
-  readonly status: "connected" | "not_connected";
-  readonly cap: number | null;
-}
+/** A configured provider as the customer's page shows it, with this node's own connection state (the package's view). */
+export type OutboundTarget = OutboundTargetView;
 
-export type OutboundActOutcome =
-  | {
-      readonly ok: true;
-      readonly alias: string;
-      readonly act: "connect" | "disconnect";
-      readonly httpStatus: number;
-      readonly status: "connected" | "disconnected" | null;
-      readonly error: string | null;
-      readonly target: OutboundTarget;
-    }
-  | { readonly ok: false; readonly reason: "unknown_alias" | "no_signer" | "unreachable" };
+/** The provider's answer to a signed connect or disconnect (the package's result). */
+export type OutboundActOutcome = OutboundActResult;
 
 export interface NodeAdminPort {
   /** The admin table of this node's AI permissions. */
@@ -84,6 +66,8 @@ export interface NodeAdminPort {
     session: AdminSession,
     input: { orgUserId: string; credits: number; key: string }
   ): Promise<{ allowance: number; applied: boolean } | null>;
+  /** PROVIDER: puts a connected org's stored `seq` back to 1 (a record whose seq a stolen key pushed up). False when the org has no record. */
+  resetConnectedOrgSeq(session: AdminSession, orgUserId: string): Promise<boolean>;
   /** CUSTOMER: the configured providers with this node's own state; `signer` is false when this node has no signing key. */
   listOutboundConnections(session: AdminSession): Promise<{ signer: boolean; targets: OutboundTarget[] }>;
   /** CUSTOMER: signs and sends one connect (with a cap) or disconnect to a configured provider and returns the provider's answer. */

@@ -8,7 +8,8 @@
  * Scope: Pure construction plus one injected `fetch` and one injected `authorize` (the host signs a short-lived service assertion). Reads no env and holds no key.
  * Invariants:
  *   - ALIAS_FROM_SERVER_CONFIG: targets come only from the deployment's Git config (`.cogni/service-links.yaml`, parsed by `parseLinkTargets` in `@cogni-dao/agent-grants`); an alias that is not listed is `unknown_alias`. The model names an alias, never a URL.
- *   - GET_ONLY_CONFIGURED_ORIGIN: every request is a GET to `{origin}/api/v1/knowledge/{id}` or `{origin}/api/v1/knowledge?...`, https only, the configured origin only.
+ *   - GET_ONLY_CONFIGURED_ORIGIN: every request is a GET to `{origin}/api/v1/knowledge/{id}`, `{origin}/api/v1/knowledge?domain&q&limit` (list and search) or
+ *     `{origin}/api/v1/knowledge/index?domain&q&limit` (the routing projection: id, domain, entryType and trigger, no content), https only, the configured origin only.
  *     Redirects are never followed (`redirect: "manual"`; any 3xx is `unavailable`). 10 s timeout. The body is capped at 1 MiB while it streams.
  *   - NO_HEADERS_BACK: only parsed knowledge rows leave the transport; no response header is returned or logged.
  *   - REDACT_SECRET_SHAPES: any `cogni_ag_sk_` key or JWT-shaped string in a body is replaced before the body is parsed.
@@ -23,6 +24,7 @@
  */
 
 import { type KnowledgeEntry, KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
+import { z } from "zod";
 
 /** One configured remote node: the alias a tool names, the node id the assertion's `aud` carries, and the target's canonical https origin. */
 export interface RemoteKnowledgeTarget {
@@ -82,12 +84,27 @@ export class RemoteKnowledgeError extends Error {
   }
 }
 
+/** One routing row of a remote node's knowledge index: no content, only what an agent needs to pick an entry. `useWhen` is the retrieval trigger (null until backfilled). */
+export interface RemoteKnowledgeIndexRow {
+  readonly id: string;
+  readonly domain: string;
+  readonly entryType: string;
+  readonly useWhen: string | null;
+}
+
+const IndexRowSchema = z.object({ id: z.string(), domain: z.string(), entryType: z.string(), useWhen: z.string().nullable() });
+
+/** The most rows an index read asks for (the target's own cap). */
+export const REMOTE_INDEX_MAX_LIMIT = 1000;
+
 export interface RemoteKnowledgeCapability {
   /** The configured origin of an alias (for source provenance), or undefined when the alias is not configured. */
   originOf(alias: string): string | undefined;
   get(alias: string, id: string): Promise<KnowledgeEntry | null>;
   list(alias: string, params: { domain: string; limit: number }): Promise<KnowledgeEntry[]>;
   search(alias: string, params: { domain: string; query: string; limit: number }): Promise<KnowledgeEntry[]>;
+  /** The routing projection of the target's knowledge (`GET /api/v1/knowledge/index`): id, domain, entryType and trigger per entry, no content. `q` matches the trigger only. */
+  index(alias: string, params: { domain?: string | undefined; q?: string | undefined; limit: number }): Promise<RemoteKnowledgeIndexRow[]>;
 }
 
 function isCanonicalHttpsOrigin(value: string): boolean {
@@ -268,6 +285,21 @@ export function createRemoteKnowledgeTransport(deps: {
     async list(alias, { domain, limit }) {
       const body = await getJson(alias, "/api/v1/knowledge", new URLSearchParams({ domain, limit: String(limit) }));
       return rows(body).slice(0, limit).map(capContent);
+    },
+    async index(alias, { domain, q, limit }) {
+      const query = new URLSearchParams({ limit: String(Math.min(REMOTE_INDEX_MAX_LIMIT, Math.max(1, Math.floor(limit)))) });
+      if (domain) query.set("domain", domain);
+      if (q) query.set("q", q.slice(0, 320));
+      const body = await getJson(alias, "/api/v1/knowledge/index", query);
+      const items = (body as { items?: unknown } | null)?.items;
+      if (!Array.isArray(items)) return [];
+      return items
+        .flatMap((item) => {
+          const parsed = IndexRowSchema.safeParse(item);
+          return parsed.success ? [parsed.data] : [];
+        })
+        .slice(0, limit)
+        .map((r) => (r.useWhen !== null && r.useWhen.length > REMOTE_ENTRY_CONTENT_MAX_CHARS ? { ...r, useWhen: `${r.useWhen.slice(0, REMOTE_ENTRY_CONTENT_MAX_CHARS)}…` } : r));
     },
     async search(alias, { domain, query, limit }) {
       const body = await getJson(

@@ -84,6 +84,8 @@ export const EVENT_NAMES = {
 	CONNECTION_REFUSED: "connection.refused",
 	/** The provider admin Suspended or Resumed a connected org (story.0038): orgUserId, suspended, adminUserId. */
 	CONNECTION_SUSPENSION: "connection.suspension",
+	/** The provider admin put a connected org's stored seq back to 1 (story.0038): orgUserId, adminUserId. */
+	CONNECTION_SEQ_RESET: "connection.seq_reset",
 	/** The provider admin granted a connected org an allowance (story.0038): orgUserId, credits, applied, adminUserId. */
 	CONNECTION_ALLOWANCE_GRANTED: "connection.allowance_granted",
 	/** A run was refused by the connection gate (story.0038): billingAccountId, code (`connection_suspended`, `connection_disconnected`, `connection_allowance_empty`, `connection_cap_reached`). */

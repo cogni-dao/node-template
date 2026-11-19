@@ -48,8 +48,8 @@ import {
   type VerifyResult,
   verifyBearer,
 } from "@cogni/agent-grants/credentials";
-import type { SessionUser } from "@cogni/node-shared";
 import { NODE_CONNECT_SERVICE } from "@cogni/agent-grants/service-auth";
+import type { SessionUser } from "@cogni/node-shared";
 import { headers } from "next/headers";
 import { ServiceAuthUnavailableError } from "@/bootstrap/service-auth-error";
 import { getServerSessionUser } from "@/lib/auth/server";

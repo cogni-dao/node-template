@@ -176,6 +176,11 @@ export const chargeReceipts = pgTable(
       table.billingAccountId,
       table.createdAt
     ),
+    // Connect from home (story.0038): the run gate sums an account's charged credits on every run billed to a connected org. (account, credits) makes that sum an index-only scan.
+    chargedSumIdx: index("charge_receipts_account_charged_idx").on(
+      table.billingAccountId,
+      table.chargedCredits
+    ),
     // Index for pagination: Filter by account + order by createdAt DESC, id DESC
     paginationIdx: index("charge_receipts_pagination_idx").on(
       table.billingAccountId,
