@@ -16,6 +16,7 @@ export type WorkItemsBusyReason =
   | "capacity_held"
   | "queue_timeout"
   | "writer_settling"
+  /** Any transport failure before the first writer-lock request (timeout, reset, EPIPE): retryable, no native effect. */
   | "connect_timeout"
   | "lock_contended"
   | "writer_admission"
