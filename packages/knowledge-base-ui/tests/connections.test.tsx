@@ -110,12 +110,15 @@ describe("ConnectedOrgsSection (provider) states", () => {
     const { container } = render(<ConnectedOrgsSection endpoints={ORGS} />);
     await flush();
     expect(screen.getByRole("heading", { name: "Connected nodes" })).toBeInTheDocument();
-    expect(screen.getByText("toks5")).toBeInTheDocument();
+    // The title is ALWAYS the host, never the node id (a UUID); the id shows only inside the usage popover.
+    expect(screen.getByText("node1.example.org")).toBeInTheDocument();
+    expect(screen.queryByText("toks5")).toBeNull();
     expect(screen.getByText("node2.example.org")).toBeInTheDocument();
     expect(screen.getByText("Connected")).toBeInTheDocument();
     expect(screen.getByText("Suspended")).toBeInTheDocument();
     expect(screen.getByText("Off")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Allowance 500 cr/ })).toHaveTextContent("500 cr");
+    expect(screen.queryByText("toks5")).toBeNull();
     expect(screen.getAllByRole("button", { name: "Add credits" })).toHaveLength(3);
     // Cut hard: nothing but the structure.
     expect(container.querySelector("table")).toBeNull();
@@ -171,6 +174,20 @@ describe("ConnectedOrgsSection (provider) controls", () => {
     expect(screen.getByText("1,000 cr")).toBeInTheDocument();
   });
 
+  it("the node id (when the provider's own list names one) shows only inside the usage popover, in mono; the row title and every aria-label use the host", async () => {
+    const user = userEvent.setup();
+    ready([org(1, { nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1" })]);
+    render(<ConnectedOrgsSection endpoints={ORGS} />);
+    await flush();
+    expect(screen.queryByText("f66b260b-4633-41e2-8711-b7c1b8449cc1")).toBeNull();
+    expect(screen.getByRole("button", { name: "Allowance 500 cr for node1.example.org. Show usage" })).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Credits to add for node1.example.org" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More for node1.example.org" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Show usage/ }));
+    expect(screen.getByText("f66b260b-4633-41e2-8711-b7c1b8449cc1")).toBeInTheDocument();
+    expect(screen.getByText("Node")).toBeInTheDocument();
+  });
+
   it("Add credits sends the number with a fresh Idempotency-Key and clears the input; a non-whole number sends nothing", async () => {
     const user = userEvent.setup();
     ready([org(1)]);
@@ -198,34 +215,82 @@ describe("ConnectedOrgsSection (provider) controls", () => {
     expect((screen.getByRole("spinbutton", { name: "Credits to add for node1.example.org" }) as HTMLInputElement).value).toBe("");
   });
 
-  it("the ⋯ menu holds Suspend (Resume when suspended) and Reset seq, with no explanation text; Reset seq asks one short question first", async () => {
+  it("the ⋯ menu holds Suspend (Resume when suspended) and Reset seq, with no explanation text", async () => {
     const user = userEvent.setup();
     ready([org(1), org(2, { status: "suspended" })]);
-    const confirm = vi.spyOn(window, "confirm");
     render(<ConnectedOrgsSection endpoints={ORGS} />);
     await flush();
-
     await user.click(screen.getByRole("button", { name: "More for node2.example.org" }));
-    expect(screen.getByRole("menuitem", { name: "Resume" })).toBeInTheDocument();
     expect(screen.getByRole("menu").textContent).toBe("ResumeReset seq");
     await user.click(screen.getByRole("menuitem", { name: "Resume" }));
     await flush();
     expect(JSON.parse(posts()[0]?.[1].body as string)).toEqual({ suspended: false });
+    await user.click(screen.getByRole("button", { name: "More for node1.example.org" }));
+    await user.click(screen.getByRole("menuitem", { name: "Suspend" }));
+    await flush();
+    expect(JSON.parse(posts()[1]?.[1].body as string)).toEqual({ suspended: true });
+  });
 
-    // Declined: nothing is sent. Accepted: one POST to the seq-reset route with no body, then every loaded page is re-read.
-    confirm.mockReturnValueOnce(false);
-    await user.click(screen.getByRole("button", { name: "More for node1.example.org" }));
-    await user.click(screen.getByRole("menuitem", { name: "Reset seq" }));
+  it("Reset seq opens a real alert dialog with one sentence and Cancel and Reset; Cancel sends nothing and returns focus to the row's ⋯; Reset posts to seq-reset with no body", async () => {
+    const user = userEvent.setup();
+    ready([org(1)]);
+    const confirm = vi.spyOn(window, "confirm");
+    render(<ConnectedOrgsSection endpoints={ORGS} />);
     await flush();
-    expect(confirm).toHaveBeenCalledWith("Reset seq to 1?");
-    expect(posts()).toHaveLength(1);
-    confirm.mockReturnValueOnce(true);
-    await user.click(screen.getByRole("button", { name: "More for node1.example.org" }));
+    const more = screen.getByRole("button", { name: "More for node1.example.org" });
+
+    await user.click(more);
     await user.click(screen.getByRole("menuitem", { name: "Reset seq" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Reset seq to 1?");
+    expect(dialog.textContent).toBe("Reset seq to 1?CancelReset");
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reset" }).className).toMatch(/h-11/);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     await flush();
-    expect(posts()[1]?.[0]).toBe("/api/v1/admin/connected-orgs/org-1/seq-reset");
-    expect(posts()[1]?.[1].body).toBeUndefined();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(posts()).toHaveLength(0);
+    expect(more).toHaveFocus();
+
+    await user.click(more);
+    await user.click(screen.getByRole("menuitem", { name: "Reset seq" }));
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    await flush();
+    expect(posts()[0]?.[0]).toBe("/api/v1/admin/connected-orgs/org-1/seq-reset");
+    expect(posts()[0]?.[1].body).toBeUndefined();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(more).toHaveFocus();
     confirm.mockRestore();
+  });
+
+  it("a click in flight KEEPS the row and disables its controls (other rows' clicks are ignored); when it finishes focus returns to the row's ⋯", async () => {
+    const user = userEvent.setup();
+    let release: (r: Response) => void = () => undefined;
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) =>
+      init?.method === "POST" ? new Promise<Response>((resolve) => (release = resolve)) : json(200, { orgs: [org(1), org(2)], nextAfter: null })
+    );
+    render(<ConnectedOrgsSection endpoints={ORGS} />);
+    await flush();
+    await user.type(screen.getByRole("spinbutton", { name: "Credits to add for node1.example.org" }), "5");
+    await user.click(screen.getAllByRole("button", { name: "Add credits" })[0] as HTMLElement);
+    // The row is still there, its controls are disabled, and nothing was swapped for a skeleton.
+    const row = screen.getAllByRole("listitem")[0] as HTMLElement;
+    expect(row).toHaveTextContent("node1.example.org");
+    expect(screen.getByRole("spinbutton", { name: "Credits to add for node1.example.org" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Add credits" })[0]).toBeDisabled();
+    expect(screen.getByRole("button", { name: "More for node1.example.org" })).toBeDisabled();
+    expect(row).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("Saving");
+    expect(row.querySelector(".animate-pulse")).toBeNull();
+    // Another row's click is ignored while this one runs.
+    await user.type(screen.getByRole("spinbutton", { name: "Credits to add for node2.example.org" }), "7");
+    await user.click(screen.getAllByRole("button", { name: "Add credits" })[1] as HTMLElement);
+    expect(posts()).toHaveLength(1);
+    release(fake(200, {}));
+    await flush();
+    expect(screen.getByRole("button", { name: "More for node1.example.org" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "More for node1.example.org" })).toHaveFocus();
   });
 
   it("a failed click is ONE short destructive line in that row's own slot, never a raw status: 500 is \"Couldn't save.\", 401 and 403 are \"Not allowed.\"; the status is only a title; it still re-reads", async () => {
@@ -312,7 +377,9 @@ describe("ConnectionsSection (customer) states", () => {
     expect(screen.getByText("2,500 cr")).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/Shared AI|example\.org|Spending/);
     expect(screen.getAllByRole("button", { name: "Connect" })).toHaveLength(14);
-    expect(screen.getAllByRole("spinbutton", { name: "Cap" })).toHaveLength(14);
+    expect(screen.getAllByRole("spinbutton", { name: /^Cap for n/ }).length).toBe(12);
+    expect(screen.getAllByRole("spinbutton", { name: /^Cap for / })).toHaveLength(14);
+    expect(screen.getByRole("spinbutton", { name: "Cap for prov" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Connect" })[0]?.className).toMatch(/h-11/);
     expect(screen.getAllByRole("listitem")[0]?.className).toContain("flex-col");
   });
@@ -337,7 +404,7 @@ describe("ConnectionsSection (customer) controls", () => {
     ready([target()]);
     render(<ConnectionsSection endpoints={CONNECTIONS} />);
     await flush();
-    const input = screen.getByRole("spinbutton", { name: "Cap" });
+    const input = screen.getByRole("spinbutton", { name: "Cap for prov" });
     expect(input).toHaveAttribute("placeholder", "Cap");
     // The unit is inside the field, at its trailing edge, and the field keeps its 44px height on a phone.
     expect(input.parentElement).toHaveTextContent("cr");
@@ -403,21 +470,39 @@ describe("ConnectionsSection (customer) controls", () => {
     expect(screen.queryByRole("button", { name: "More for prov" })).toBeNull();
   });
 
-  it("a click in flight replaces that row's controls with a skeleton and ignores every other click", async () => {
+  it("a click in flight KEEPS the row and disables its controls, ignores every other click, and returns focus to the row's Connect (no menu yet) when it finishes", async () => {
     const user = userEvent.setup();
     let release: (r: Response) => void = () => undefined;
     ready([target(), target({ alias: "b", origin: "https://b.example.org" })], true, () => new Promise<Response>((resolve) => (release = resolve)));
     render(<ConnectionsSection endpoints={CONNECTIONS} />);
     await flush();
-    const [first, second] = screen.getAllByRole("spinbutton", { name: "Cap" }) as HTMLElement[];
-    await user.type(first as HTMLElement, "10");
-    await user.type(second as HTMLElement, "10");
+    await user.type(screen.getByRole("spinbutton", { name: "Cap for prov" }), "10");
+    await user.type(screen.getByRole("spinbutton", { name: "Cap for b" }), "10");
     await user.click(screen.getAllByRole("button", { name: "Connect" })[0] as HTMLElement);
-    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Saving");
-    await user.click(screen.getAllByRole("button", { name: "Connect" })[0] as HTMLElement);
+    const row = screen.getAllByRole("listitem")[0] as HTMLElement;
+    expect(row).toHaveTextContent("prov");
+    expect(row.querySelector(".animate-pulse")).toBeNull();
+    expect(screen.getByRole("spinbutton", { name: "Cap for prov" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Connect" })[0]).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Saving");
+    await user.click(screen.getAllByRole("button", { name: "Connect" })[1] as HTMLElement);
     expect(posts()).toHaveLength(1);
     release(fake(200, { status: "connected", httpStatus: 200, error: null }));
     await flush();
+    expect(screen.getAllByRole("button", { name: "Connect" })[0]).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: "Connect" })[0]).toHaveFocus();
+  });
+
+  it("a connected row's focus returns to its ⋯ trigger after Disconnect", async () => {
+    const user = userEvent.setup();
+    ready([target({ status: "connected", cap: 5 })]);
+    render(<ConnectionsSection endpoints={CONNECTIONS} />);
+    await flush();
+    const more = screen.getByRole("button", { name: "More for prov" });
+    await user.click(more);
+    await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    await flush();
+    expect(screen.getByRole("button", { name: "More for prov" })).toHaveFocus();
   });
 });
 

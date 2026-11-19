@@ -12,7 +12,7 @@
  *   - FIVE_STATES: loading (a skeleton that mirrors the items), empty ("No nodes yet."), sparse, dense and error ("Couldn't load." and Retry). A 401, 403 or 404 renders nothing.
  *   - NO_SIGNER_IS_A_STATE: a node with no signing key shows one short line ("No signing key.") and offers no controls; names, status and the offer icon still show.
  *   - MOBILE_FIRST: at 360px each item is stacked (name, badge and number, then a full-width input and 44px button); controls are never dropped at any width. No horizontal scroll.
- *   - ONE_CLICK_ONE_ACTION: a click in flight replaces that item's controls with a Skeleton; every other click is ignored meanwhile (never dimmed).
+ *   - ROW_STAYS: a click in flight keeps the row and DISABLES its controls (other rows' clicks are ignored); when the action finishes focus returns to the row's ⋯ trigger, or to its Connect button when it has no menu.
  *   - TARGETS: every control is at least 24px; the primary mobile actions are 44px. Tokens only: semantic colours, no raw palette, no inline style, no magic size.
  *   - No filters and no extra controls.
  * Side-effects: IO (through the hook)
@@ -23,7 +23,7 @@
 "use client";
 
 import { Info, MoreHorizontal } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "../cn.js";
 import { Button } from "../ui/button.js";
@@ -55,6 +55,20 @@ function ItemSkeleton() {
 export function ConnectionsSection({ endpoints, className }: ConnectionsSectionProps) {
   const { state, busy, failure, reload, connect, disconnect } = useConnections(endpoints);
   const [caps, setCaps] = useState<Readonly<Record<string, string>>>({});
+  /** Each row's ⋯ trigger when it has one, else its Connect button: focus goes back to it when an action finishes. */
+  const anchors = useRef(new Map<string, HTMLElement | null>());
+  const wasBusy = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (busy !== null) {
+      wasBusy.current = busy;
+      return;
+    }
+    if (wasBusy.current !== null) {
+      anchors.current.get(wasBusy.current)?.focus();
+      wasBusy.current = null;
+    }
+  }, [busy]);
 
   if (state.status === "hidden") return null;
 
@@ -119,13 +133,7 @@ export function ConnectionsSection({ endpoints, className }: ConnectionsSectionP
                       {connected && target.cap !== null && <span className="shrink-0 text-foreground text-sm tabular-nums">{formatCredits(target.cap)}</span>}
                     </div>
 
-                    {state.view.signer &&
-                      (saving ? (
-                        <>
-                          <Skeleton className={cn(TOUCH, "w-full md:w-64")} />
-                          <span className="sr-only" role="status">Saving</span>
-                        </>
-                      ) : (
+                    {state.view.signer && (
                         <div className="flex min-w-0 flex-col gap-1">
                           <div className="flex min-w-0 items-center gap-2">
                             <div className="flex min-w-0 flex-1 md:flex-none">
@@ -135,21 +143,41 @@ export function ConnectionsSection({ endpoints, className }: ConnectionsSectionP
                                 min={1}
                                 step={1}
                                 suffix="cr"
+                                disabled={saving}
                                 className="min-w-0 flex-1 md:w-28 md:flex-none"
                                 inputClassName={cn(TOUCH, "rounded-r-none tabular-nums")}
                                 placeholder="Cap"
-                                aria-label="Cap"
+                                aria-label={`Cap for ${target.alias}`}
                                 value={caps[target.alias] ?? ""}
                                 onChange={(event) => setCaps((prev) => ({ ...prev, [target.alias]: event.target.value }))}
                               />
-                              <Button type="button" size="sm" className={cn(TOUCH, "shrink-0 rounded-l-none")} onClick={() => void connect(target.alias, Number(caps[target.alias] ?? ""))}>
+                              <Button
+                                ref={(el) => {
+                                  if (!connected) anchors.current.set(target.alias, el);
+                                }}
+                                type="button"
+                                size="sm"
+                                disabled={saving}
+                                className={cn(TOUCH, "shrink-0 rounded-l-none")}
+                                onClick={() => void connect(target.alias, Number(caps[target.alias] ?? ""))}
+                              >
                                 Connect
                               </Button>
                             </div>
                             {connected && (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <Button type="button" size="sm" variant="ghost" className={cn(TOUCH, "w-11 shrink-0 px-0 md:w-8")} aria-label={`More for ${target.alias}`}>
+                                  <Button
+                                    ref={(el) => {
+                                      if (connected) anchors.current.set(target.alias, el);
+                                    }}
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    disabled={saving}
+                                    className={cn(TOUCH, "w-11 shrink-0 px-0 md:w-8")}
+                                    aria-label={`More for ${target.alias}`}
+                                  >
                                     <MoreHorizontal aria-hidden="true" />
                                   </Button>
                                 </DropdownMenuTrigger>
@@ -159,13 +187,18 @@ export function ConnectionsSection({ endpoints, className }: ConnectionsSectionP
                               </DropdownMenu>
                             )}
                           </div>
+                          {saving && (
+                            <span className="sr-only" role="status">
+                              Saving
+                            </span>
+                          )}
                           {failure?.rowId === target.alias && (
                             <p className="text-destructive text-xs" role="alert" title={failure.code === null ? undefined : String(failure.code)}>
                               {failure.text}
                             </p>
                           )}
                         </div>
-                      ))}
+                    )}
                   </li>
                 );
               })}
