@@ -211,6 +211,19 @@ export const serverSchema = z.object({
   DOLTHUB_OAUTH_CLIENT_ID: optionalString,
   DOLTHUB_OAUTH_CLIENT_SECRET: optionalString,
 
+  // Remote sandbox workspace (services/sandbox, isolated lease) - Optional.
+  // SANDBOX_EXECD_TOKEN: shared execd access token; the sandbox refuses to start without a
+  // >=32-char value. SANDBOX_BASE_URL: override for local dev; otherwise the origin is
+  // derived from APP_BASE_URL (node-template-test.* -> node-template-sandbox-test.*).
+  SANDBOX_EXECD_TOKEN: z.preprocess(
+    emptyToUndefined,
+    z.string().min(32).optional()
+  ),
+  SANDBOX_BASE_URL: optionalUrl.refine(
+    (url) => !url || url.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(url),
+    { message: "SANDBOX_BASE_URL must be https (http only for localhost)" }
+  ),
+
   // Tavily Web Search - Optional
   // Required for research graph web search capability
   TAVILY_API_KEY: optionalString,

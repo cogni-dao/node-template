@@ -452,6 +452,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
             runInScope(
               {
                 ...scope,
+                runId,
                 ...(identity.principalId
                   ? { principalId: identity.principalId }
                   : {}),

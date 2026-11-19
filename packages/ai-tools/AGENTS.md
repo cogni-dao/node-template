@@ -58,6 +58,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `toToolSpec()`, `toToolSpecs()` - Compile ToolContract to ToolSpec (Zod → JSONSchema7)
   - `vcsListPrsBoundTool`, `VCS_LIST_PRS_NAME`, `createVcsListPrsImplementation` - VCS list PRs tool
   - `vcsGetCiStatusBoundTool`, `VCS_GET_CI_STATUS_NAME`, `createVcsGetCiStatusImplementation` - VCS CI status tool
+  - `sandboxShellBoundTool`, `SANDBOX_SHELL_NAME`, `createSandboxShellImplementation`, `sandboxShellUnavailableImplementation` - `core__sandbox_shell` (story.0064, 0.15.0): one command or script per call in the run's own sandbox folder; `external_side_effect`, requires `sandbox:exec` (admin). The capability (`SandboxShellCapability`) knows the run; the model never names a folder. Output merges stdout and stderr; no sandbox configured returns `unavailable`
   - `vcsMergePrBoundTool`, `VCS_MERGE_PR_NAME`, `createVcsMergePrImplementation` - VCS merge PR tool
   - `vcsCreateBranchBoundTool`, `VCS_CREATE_BRANCH_NAME`, `createVcsCreateBranchImplementation` - VCS create branch tool
   - `vcsFlightCandidateBoundTool`, `VCS_FLIGHT_CANDIDATE_NAME`, `createVcsFlightCandidateImplementation` - VCS dispatch candidate-flight tool (NO_AUTO_FLIGHT)

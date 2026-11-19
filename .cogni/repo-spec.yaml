@@ -104,3 +104,20 @@ deployment:
         cpu_units: 2
         memory_mi: 2048
         storage_mi: 4096
+    # Remote code-execution workspace (OpenSandbox execd behind Caddy) that the
+    # node AI's shell tool calls over HTTPS (story.0064). The operator deploys it
+    # as its own isolated lease at node-template-sandbox[-<env>]. No app->sandbox
+    # binding: cross-lease bindings are refused, so the app derives the host.
+    - name: sandbox
+      artifact:
+        name: sandbox
+        context: services/sandbox
+        dockerfile: services/sandbox/Dockerfile
+      port: 8080
+      visibility: private
+      bindings: {}
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 2
+        memory_mi: 4096
+        storage_mi: 10240

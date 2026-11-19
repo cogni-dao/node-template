@@ -20,6 +20,9 @@ export const EVENT_NAMES = {
   KNOWLEDGE_BROWSE_COMPLETE: "knowledge.browse.complete",
   KNOWLEDGE_OVERVIEW_COMPLETE: "knowledge.overview.complete",
   DB_POOL_CONFIGURED: "adapter.db_pool.configured",
+  // Sandbox cleanup tick (story.0064): one per tick, at most every 5 minutes while the tool is used.
+  // Fields: reaped, workspaces, diskUsedPct, memCurrent, memMax; or error_code on failure.
+  ADAPTER_SANDBOX_TICK: "adapter.sandbox.tick",
   // Auth perimeter (proxy): request rejected before reaching any route handler,
   // so the request-scoped logger never sees it — emitted directly from the proxy.
   AUTH_PERIMETER_DENIED: "auth.perimeter.denied",

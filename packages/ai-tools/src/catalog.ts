@@ -30,6 +30,7 @@ import { metricsQueryBoundTool } from "./tools/metrics-query";
 import { repoListBoundTool } from "./tools/repo-list";
 import { repoOpenBoundTool } from "./tools/repo-open";
 import { repoSearchBoundTool } from "./tools/repo-search";
+import { sandboxShellBoundTool } from "./tools/sandbox-shell";
 import { scheduleListBoundTool } from "./tools/schedule-list";
 import { scheduleManageBoundTool } from "./tools/schedule-manage";
 import { vcsCommitContainsBoundTool } from "./tools/vcs-commit-contains";
@@ -133,6 +134,7 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   repoListBoundTool as CatalogBoundTool,
   repoOpenBoundTool as CatalogBoundTool,
   repoSearchBoundTool as CatalogBoundTool,
+  sandboxShellBoundTool as CatalogBoundTool,
   scheduleListBoundTool as CatalogBoundTool,
   scheduleManageBoundTool as CatalogBoundTool,
   vcsCommitContainsBoundTool as CatalogBoundTool,
