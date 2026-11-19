@@ -60,6 +60,11 @@
       "types": "./dist/agent-authority.d.ts",
       "import": "./dist/agent-authority.js",
       "default": "./dist/agent-authority.js"
+    },
+    "./knowledge-read-daily": {
+      "types": "./dist/knowledge-read-daily.d.ts",
+      "import": "./dist/knowledge-read-daily.js",
+      "default": "./dist/knowledge-read-daily.js"
     }
   },
   "files": [

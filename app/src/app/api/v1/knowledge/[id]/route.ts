@@ -19,6 +19,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { countAgentRead } from "../_usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -51,6 +52,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     const { id } = await context.params;
 
     const entry = await port.getKnowledge(id);
+    countAgentRead(sessionUser, id, entry ? "ok" : "fail");
     if (!entry) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
