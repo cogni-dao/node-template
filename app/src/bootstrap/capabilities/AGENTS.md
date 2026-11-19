@@ -30,7 +30,7 @@ Capability factories bridging ai-tools interfaces to adapters. Creates environme
 
 - **Exports:** `createMetricsCapability()`, `stubMetricsCapability`, `createRepoCapability()`, `stubRepoCapability`, `createWebSearchCapability()`, `createSandboxShellCapability()`
 - **Env/Config keys:** PROMETHEUS_REMOTE_WRITE_URL, PROMETHEUS_QUERY_URL, PROMETHEUS_READ_USERNAME, PROMETHEUS_READ_PASSWORD, COGNI_REPO_PATH, COGNI_REPO_ROOT, TAVILY_API_KEY via ServerEnv
-- **Files considered API:** `metrics.ts`, `repo.ts`, `web-search.ts`, `sandbox-workspace.ts`
+- **Files considered API:** `metrics.ts`, `repo.ts`, `web-search.ts`, `sandbox-workspace.ts`, `sandbox-push-token.ts` (reads `NODE_AI_OPERATOR_KEY`, `COGNI_OPERATOR_URL`, `GH_AI_APP_*`)
 
 ## Responsibilities
 

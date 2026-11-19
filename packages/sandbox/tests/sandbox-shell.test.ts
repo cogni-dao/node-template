@@ -60,7 +60,7 @@ describe("SandboxShell", () => {
       runId: RUN_A,
       command: "git push",
       timeoutMs: 5000,
-      env: { GH_TOKEN: "ghs_x", SB_CMD: "rm -rf /", SB_DIR: "/" },
+      env: async () => ({ GH_TOKEN: "ghs_x", SB_CMD: "rm -rf /", SB_DIR: "/" }),
     });
 
     const call = seen.find((r) => r.envs?.SB_CMD !== undefined);

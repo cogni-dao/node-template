@@ -3,8 +3,9 @@
 
 /**
  * Module: `@tests/unit/bootstrap/sandbox-push-token`
- * Purpose: Guards three defects of the sandbox push-token provider: a sovereign node that still calls the operator,
- *   an operator outage that adds the mint timeout to every call, and a token re-minted on every call.
+ * Purpose: Guards the defects of the sandbox push-token provider: a sovereign node that still calls the operator or
+ *   gets auth-app's cached (stale) token, an operator outage that adds the mint timeout to every call or drops a
+ *   still-valid token, and a token re-minted on every call.
  * Scope: Fake fetch and clock; no network.
  * Side-effects: none
  * Links: app/src/bootstrap/capabilities/sandbox-push-token.ts, https://node-template.cognidao.org/knowledge/node-ai-push-token
@@ -12,9 +13,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+const authCalls = vi.hoisted(() => vi.fn());
 vi.mock("@octokit/auth-app", () => ({
-  createAppAuth: () => async (opts: { type: string }) =>
-    opts.type === "app" ? { token: "jwt" } : { token: "ghs_self", expiresAt: "2026-01-01T01:00:00Z" },
+  createAppAuth: () => async (opts: { type: string }) => {
+    authCalls(opts);
+    return opts.type === "app" ? { token: "jwt" } : { token: "ghs_self", expiresAt: "2026-01-01T01:00:00Z" };
+  },
 }));
 
 import { createSandboxPushTokenEnv } from "@/bootstrap/capabilities/sandbox-push-token";
@@ -45,6 +49,9 @@ describe("createSandboxPushTokenEnv", () => {
 
     expect(await provider()).toEqual({ GH_TOKEN: "ghs_self" });
     expect(fetchImpl.mock.calls.some(([u]) => String(u).includes("operator.test"))).toBe(false);
+    expect(authCalls).toHaveBeenCalledWith(
+      expect.objectContaining({ repositoryNames: ["node-x"], refresh: true, permissions: { contents: "write", pull_requests: "write" } })
+    );
   });
 
   it("reuses one fleet token until 20 minutes before expiry, then mints again", async () => {
@@ -75,5 +82,20 @@ describe("createSandboxPushTokenEnv", () => {
     now = T0 + 61_000;
     await provider();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps handing out the cached token while it is unexpired when a refresh fails", async () => {
+    let now = T0;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(json(200, { token: "ghs_fleet", expiresAt: "2026-01-01T01:00:00Z" }))
+      .mockResolvedValue(json(503, { errorCode: "authz_unavailable" }));
+    const provider = createSandboxPushTokenEnv(fleet, "node-x", fetchImpl as typeof fetch, () => now);
+
+    await provider();
+    now = T0 + 45 * 60_000;
+    expect(await provider()).toEqual({ GH_TOKEN: "ghs_fleet" });
+    now = T0 + 61 * 60_000;
+    expect(await provider()).toEqual({});
   });
 });

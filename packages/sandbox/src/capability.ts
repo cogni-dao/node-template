@@ -60,8 +60,7 @@ export function createSandboxShellCapability(
     async run(params) {
       const runId = config.runId();
       if (!runId) throw new Error("no run to give a folder");
-      const env = config.callEnv ? await config.callEnv().catch(() => ({})) : {};
-      return shell.run({ runId, ...params, env });
+      return shell.run({ runId, ...params, ...(config.callEnv && { env: config.callEnv }) });
     },
   };
 }

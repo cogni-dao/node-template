@@ -227,7 +227,9 @@ export const serverSchema = z.object({
   // principal, role pusher) + COGNI_OPERATOR_URL; the operator mints from the fleet dev App. Sovereign nodes:
   // GH_AI_APP_* (their own App on one repo), minted locally. All optional: without them only git push fails.
   NODE_AI_OPERATOR_KEY: optionalString,
-  COGNI_OPERATOR_URL: optionalUrl,
+  COGNI_OPERATOR_URL: optionalUrl.refine((url) => !url || url.startsWith("https://"), {
+    message: "COGNI_OPERATOR_URL must be https: the node AI's operator key travels to it",
+  }),
   GH_AI_APP_ID: optionalString,
   GH_AI_APP_PRIVATE_KEY_BASE64: optionalString,
 

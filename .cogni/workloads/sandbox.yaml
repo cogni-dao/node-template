@@ -8,7 +8,7 @@
 # route on that host. Execd enforces the token on every request except /version and /readyz.
 #
 # `variables` are plain, committed values (never secrets): git identity and a credential helper that reads
-# the call's GH_TOKEN at push time. The author email is the node AI's own mailbox. Design: hub `node-ai-github-apps`.
+# the call's GH_TOKEN at push time. Author name and email are display only. Design: hub `node-ai-push-token`.
 #
 # The image is node-template's standard sandbox (services/sandbox: execd, Node 22, pnpm, gh), pinned by
 # digest: a worker's `image: .` would resolve to the app image. When services/sandbox changes, bump the

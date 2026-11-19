@@ -14,7 +14,7 @@
  *   - WARN_NEVER_BLOCK: no key, or a failed mint, logs a warning and returns no env; the call still runs and only
  *     git push fails.
  *   - CACHE_UNTIL_NEAR_EXPIRY: one mint serves every call until 20 minutes before expiry, longer than any call (15 min).
- *   - BACK_OFF_ON_FAILURE: after a failed mint, calls skip minting for 60 seconds.
+ *   - BACK_OFF_ON_FAILURE: after a failed mint, calls skip minting for 60 seconds and keep any unexpired cached token.
  *   - TOKEN_NEVER_LOGGED: logs carry the adapter and error code only.
  * Side-effects: IO (HTTPS to the operator or GitHub); logs `adapter.sandbox.push_token` on failure
  * Links: https://node-template.cognidao.org/knowledge/node-ai-push-token
@@ -62,8 +62,10 @@ export function createSandboxPushTokenEnv(
       { event: EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN, adapter: adapter?.name ?? "none", error_code: errorCode },
       EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN
     );
-    return {};
+    return stillValid();
   };
+  // A failed refresh keeps handing out the cached token while it has not expired.
+  const stillValid = (): CallEnv => (cached && cached.expiresAtMs > now() ? { GH_TOKEN: cached.token } : {});
 
   const refresh = async (): Promise<CallEnv> => {
     if (!adapter) {
@@ -74,7 +76,9 @@ export function createSandboxPushTokenEnv(
     try {
       const result = await adapter.mint();
       if ("errorCode" in result) return warn(result.errorCode);
-      cached = { token: result.token, expiresAtMs: Date.parse(result.expiresAt) };
+      const expiresAtMs = Date.parse(result.expiresAt);
+      if (!Number.isFinite(expiresAtMs)) return warn("bad_expiry");
+      cached = { token: result.token, expiresAtMs };
       return { GH_TOKEN: result.token };
     } catch {
       return warn("mint_failed");
@@ -85,7 +89,7 @@ export function createSandboxPushTokenEnv(
     if (cached && cached.expiresAtMs - now() > REFRESH_BEFORE_MS) {
       return { GH_TOKEN: cached.token };
     }
-    if (now() - failedAtMs < FAILURE_BACKOFF_MS) return {};
+    if (now() - failedAtMs < FAILURE_BACKOFF_MS) return stillValid();
     inFlight ??= refresh().finally(() => {
       inFlight = null;
     });
@@ -154,6 +158,8 @@ function sovereignMint(appId: string, keyBase64: string, fetchImpl: typeof fetch
       installationId: install.id,
       repositoryNames: [repo.name],
       permissions: { ...PUSH_PERMISSIONS },
+      // auth-app caches installation tokens for 59 min; refresh so a re-mint is truly fresh.
+      refresh: true,
     });
     return { token: minted.token, expiresAt: minted.expiresAt };
   };
