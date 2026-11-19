@@ -330,6 +330,13 @@
       "when": 1795035750774,
       "tag": "0046_payer_bindings",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1795047243323,
+      "tag": "0047_dark_oracle",
+      "breakpoints": true
     }
   ]
 }
