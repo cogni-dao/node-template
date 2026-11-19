@@ -61,6 +61,15 @@ const keyOf = (r: Pick<CounterRow, "day" | "atomId" | "principalId" | "principal
 
 const errorClass = (error: unknown) => (error instanceof Error ? error.name : typeof error);
 
+/** A system reqId for a log line outside any request; never throws, even without global crypto. */
+const systemReqId = () => {
+	try {
+		return globalThis.crypto.randomUUID();
+	} catch {
+		return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+	}
+};
+
 /** Batched write-time counters for agent atom reads in `knowledge_read_daily`. */
 export class KnowledgeReadCounter {
 	private pending = new Map<string, CounterRow>();
@@ -103,6 +112,14 @@ export class KnowledgeReadCounter {
 		this.reportDropped();
 		if (this.flushing || this.pending.size === 0) return;
 		this.flushing = true;
+		try {
+			await this.write();
+		} finally {
+			this.flushing = false;
+		}
+	}
+
+	private async write(): Promise<void> {
 		const rows = [...this.pending.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, r]) => r);
 		this.pending = new Map();
 		const reads = rows.reduce((sum, r) => sum + r.okCount + r.failCount, 0);
@@ -112,7 +129,7 @@ export class KnowledgeReadCounter {
 			c.ok += r.okCount;
 			c.fail += r.failCount;
 		}
-		const reqId = `read-count-flush-${globalThis.crypto.randomUUID()}`;
+		const reqId = `read-count-flush-${systemReqId()}`;
 		const params: Array<string | number> = [];
 		const values = rows
 			.map((r) => {
@@ -145,8 +162,6 @@ ON CONFLICT (day, atom_id, principal_id, principal_class) DO UPDATE SET
 				reads,
 				errorClass: errorClass(error),
 			});
-		} finally {
-			this.flushing = false;
 		}
 	}
 
@@ -188,7 +203,7 @@ ON CONFLICT (day, atom_id, principal_id, principal_class) DO UPDATE SET
 		if (this.dropped === 0) return;
 		const reads = this.dropped;
 		this.dropped = 0;
-		this.safeLog({ event: "knowledge.read_count_write_failed", reqId: `read-count-flush-${globalThis.crypto.randomUUID()}`, reason: "map_full", reads });
+		this.safeLog({ event: "knowledge.read_count_write_failed", reqId: `read-count-flush-${systemReqId()}`, reason: "map_full", reads });
 	}
 
 	private safeLog(event: UsageLogEvent): void {
@@ -257,7 +272,7 @@ export class CitePairRecorder {
 		try {
 			this.log({
 				event: "knowledge.cite_pairs_write_failed",
-				reqId: `cite-pairs-${globalThis.crypto.randomUUID()}`,
+				reqId: `cite-pairs-${systemReqId()}`,
 				reason,
 				pairs,
 				...(error ? { errorClass: errorClass(error) } : {}),

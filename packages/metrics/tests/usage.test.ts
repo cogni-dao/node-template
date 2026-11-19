@@ -150,6 +150,12 @@ describe("readKnowledgeReads", () => {
 		expect(sample.evidenceRefs).toContain("node:knowledge_read_daily:day=2026-11-19");
 	});
 
+	it("returns the unit count as the guardrail", async () => {
+		const { sql } = answer(day);
+		const sample = await readKnowledgeReads(sql, { measure: "read_units" }, window, new AbortController().signal);
+		expect(sample).toMatchObject({ value: 40, unit: "units", complete: true });
+	});
+
 	it("reports an empty day as unknown, never as a 0% miss share", async () => {
 		const { sql } = answer({ ...day, units: 0, miss_units: 0, reads: 0, principals: 0, top_misses: [], top_reads: [] });
 		const sample = await readKnowledgeReads(sql, { measure: "miss_share" }, window, new AbortController().signal);
