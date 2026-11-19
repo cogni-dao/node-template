@@ -13,6 +13,7 @@
 
 import {
 	GOALS_BOOTSTRAP_INSTRUCTION,
+	GOVERNING_ENTRY_TYPES,
 	resolveGoals,
 } from "@cogni/knowledge-store";
 import { describe, expect, it, vi } from "vitest";
@@ -430,7 +431,7 @@ it("follows the served oversized same-cognition index beyond 1,000 newer rows wi
 		);
 		expect(
 			new Set(selected.map((r: { entryType: string }) => r.entryType)).size,
-		).toBe(7);
+		).toBe(GOVERNING_ENTRY_TYPES.length);
 		expect(
 			selected.some((r: { id: string }) =>
 				["gov-blank", "gov-null", "gov-retired", "gov-evidence"].includes(r.id),

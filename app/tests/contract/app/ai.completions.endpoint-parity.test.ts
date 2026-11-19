@@ -55,6 +55,8 @@ vi.mock("@/bootstrap/container", () => ({
       child: vi.fn().mockReturnThis(),
     },
     clock: { now: () => new Date("2025-01-15T12:00:00.000Z") },
+    agentAuthority: { payerFor: async () => null },
+    serviceAccountService: { getBillingAccountById: async () => null },
     runStream: {
       subscribe: async function* () {
         yield {
@@ -152,6 +154,8 @@ function setupMocks(
       child: vi.fn().mockReturnThis(),
     },
     clock: fakeClock,
+    agentAuthority: { payerFor: async () => null },
+    serviceAccountService: { getBillingAccountById: async () => null },
     executionRequestPort,
     runStream,
   } as never);
@@ -195,6 +199,8 @@ function setupMocksWithError(error: Error) {
       child: vi.fn().mockReturnThis(),
     },
     clock: fakeClock,
+    agentAuthority: { payerFor: async () => null },
+    serviceAccountService: { getBillingAccountById: async () => null },
     executionRequestPort: createExecutionRequestPortMock(),
     runStream: createRunStreamMock({ responseContent: "" }),
   } as never);

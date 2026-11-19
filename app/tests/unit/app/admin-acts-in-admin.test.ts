@@ -24,6 +24,7 @@ const PORT_WIRING = ["ports/node-admin.port.ts", "ports/index.ts", "bootstrap/no
 /** Callers of the node-admin question (`adminCheck(`, `checkNodeAdmin(`, `nodeAdmin.check(`) and the roster lookup (`isDaoAdmin(`) outside the Admin area. An entry must be the one adminCheck (ONE_ADMIN_CHECK) or the roster beneath it, with its reason; the removed legacy asks (`isLedgerApprover(`, `checkApprover(`) stay in ASK so a reintroduction fails. */
 const ASK_ALLOWLIST: ReadonlyArray<{ path: string; reason: string }> = [
   { path: "app/api/v1/attribution/_lib/admin-guard.ts", reason: "attribution write and read gate: a thin wrapper over the one adminCheck (ONE_ADMIN_CHECK)" },
+  { path: "app/api/v1/service-links/ask/route.ts", reason: "starts this node's AI enrollment on a configured remote node: the one adminCheck (ONE_ADMIN_CHECK), any credential" },
   { path: "app/api/v1/payments/steward-withdrawal/route.ts", reason: "steward top-up gate: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/(app)/gov/review/page.tsx", reason: "Finish Epoch eligibility hint: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/_facades/work/items.server.ts", reason: "work-items facade: priority 0/1 through container.nodeAdmin, which is the one adminCheck (ONE_ADMIN_CHECK)" },

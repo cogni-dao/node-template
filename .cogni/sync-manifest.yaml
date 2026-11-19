@@ -36,6 +36,8 @@ node_local:
   # story.5137: each node declares its own workloads (host, size); never fork-synced.
   - ".cogni/workloads/**"
   - ".cogni/persona/**"
+  # story.0038: which homes a node trusts and which nodes its AI calls are that node's own relationships, never fork-synced.
+  - ".cogni/service-links.yaml"
   # Spawned-node secret names, targets, and OpenBao paths are node identity.
   - "k8s/external-secrets/**"
   # The repo's front page — the same call as `tailwind.css` above, for the same reason.

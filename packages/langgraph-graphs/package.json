@@ -58,8 +58,8 @@
     "zod": "^3.24.1"
   },
   "peerDependencies": {
-    "@cogni/ai-tools": ">=0.15.0",
-    "@cogni/agent-grants": ">=0.7.1"
+    "@cogni/ai-tools": ">=0.16.0",
+    "@cogni/agent-grants": ">=0.8.1"
   },
   "devDependencies": {
     "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*",

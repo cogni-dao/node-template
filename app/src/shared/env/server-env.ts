@@ -293,6 +293,12 @@ export const serverSchema = z.object({
   // Optional — BYO-AI features disabled when not set.
   CONNECTIONS_ENCRYPTION_KEY: optionalString,
 
+  // Service assertions (story.0038): this node signs short-lived assertions as a home with an Ed25519 key derived from this 32-byte hex seed (the operator generates it).
+  // Optional: unset = no jwks route and no outbound signer. The homes it trusts and the nodes its AI calls are Git config (.cogni/service-links.yaml), not env.
+  SERVICE_ASSERTION_SIGNING_SEED: optionalString,
+  // Optional GitHub token: sent as a bearer on the repo-spec read for org owners, to lift the unauthenticated rate limit.
+  GITHUB_READ_TOKEN: optionalString,
+
   // PostHog product analytics — required
   // See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/posthog-setup.md for setup
   // PostHog Cloud free tier: 1M events/month at https://us.i.posthog.com

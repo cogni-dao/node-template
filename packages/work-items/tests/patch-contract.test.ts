@@ -8,6 +8,7 @@
  * Invariants:
  *   - REASON_REQUIRED: a missing reason is an issue at ["reason"] that says what to send; the caps match the adapter's.
  *   - CITES_BOUNDED: at most 8, ids unique, id and contribution patterns pinned.
+ *   - SPEC_REFS_TYPED: a written specRefs entry is knowledge:<atom-id>; the old untyped forms are refused (story.0069).
  * Side-effects: none
  * Links: hub change-history-design
  * @internal
@@ -18,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { CITE_ID_PATTERN, CITE_MAX } from "../src/cites.js";
 import { CHANGE_REASON_REQUIRED_MESSAGE } from "../src/history.js";
 import { WorkItemPatchInputSchema } from "../src/patch-contract.js";
+import { parseSpecRef, SPEC_REF_MESSAGE } from "../src/spec-refs.js";
 
 const base = { id: "task.1", set: { title: "t" } };
 const parse = (extra: Record<string, unknown>) =>
@@ -79,5 +81,36 @@ describe("WorkItemPatchInputSchema cites", () => {
   it("pins the id pattern at 256 characters", () => {
     expect(CITE_ID_PATTERN.test("a".repeat(256))).toBe(true);
     expect(CITE_ID_PATTERN.test("a".repeat(257))).toBe(false);
+  });
+});
+
+describe("WorkItemPatchInputSchema specRefs (story.0069)", () => {
+  const specRefs = (refs: unknown) =>
+    WorkItemPatchInputSchema.safeParse({ id: "task.1", reason: "r", set: { specRefs: refs } });
+
+  it("accepts design links written as knowledge:<atom-id>, and an empty list", () => {
+    expect(specRefs(["knowledge:node-sandbox-design", "knowledge:work-item-artifacts"]).success).toBe(true);
+    expect(specRefs([]).success).toBe(true);
+  });
+
+  it("refuses the untyped forms agents used to write, and says where each belongs", () => {
+    for (const ref of [
+      "node-sandbox-design",
+      "https://github.com/cogni-dao/node-template/pull/255",
+      "https://node-template.cognidao.org/knowledge/inbox/contrib-derek-conductor-node-template-0b081fe2",
+      "contribution:contrib-derek-conductor-node-template-4399f236",
+      "knowledge:",
+      "knowledge:Upper",
+    ]) {
+      const result = specRefs([ref]);
+      expect(result.success, ref).toBe(false);
+      if (result.success) continue;
+      expect(result.error.issues[0]?.message).toBe(SPEC_REF_MESSAGE);
+    }
+  });
+
+  it("parses the atom id and nothing else", () => {
+    expect(parseSpecRef("knowledge:node-sandbox-design")).toBe("node-sandbox-design");
+    expect(parseSpecRef("https://node-template.cognidao.org/knowledge/x")).toBeNull();
   });
 });

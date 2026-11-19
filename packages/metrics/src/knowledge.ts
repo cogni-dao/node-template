@@ -36,6 +36,7 @@ import {
 	readNoInlineHistoryState,
 	readWorkConvergence,
 	readWorkCount,
+	readWorkDesignLinked,
 	readWorkKpiLinked,
 } from "./sources.js";
 
@@ -126,20 +127,24 @@ export function createGoalMetrics(deps: {
 		maxResponseBytes: 65536,
 	};
 	const countParams = z.strictObject({
-		mode: z.enum(["open", "validated", "kpi-linked"]),
+		mode: z.enum(["open", "validated", "kpi-linked", "design-linked"]),
 	});
+	// The two share modes read a percent; the counts read items.
+	const isShare = (params: unknown) => {
+		const { mode } = countParams.parse(params);
+		return mode === "kpi-linked" || mode === "design-linked";
+	};
 	// Calculators share identical source statements within one refresh tick.
 	const tick = createTickReads();
 	const sourceSql = tick.share(deps.knowledgeSql);
 	registry.register({
 		id: "work.count@1",
 		unit: "items",
-		// `kpi-linked` is the percent of open work items naming a metric in `moves`.
-		unitFor: (params) =>
-			countParams.parse(params).mode === "kpi-linked" ? "%" : "items",
+		// `kpi-linked` is the percent of open work items naming a metric in `moves`;
+		// `design-linked` the percent of items past design naming a design atom in `specRefs`.
+		unitFor: (params) => (isShare(params) ? "%" : "items"),
 		display: "volume",
-		displayFor: (params) =>
-			countParams.parse(params).mode === "kpi-linked" ? "progress" : "volume",
+		displayFor: (params) => (isShare(params) ? "progress" : "volume"),
 		paramsSchema: countParams,
 		budget,
 		compute: async (params, ctx) => {
@@ -147,7 +152,9 @@ export function createGoalMetrics(deps: {
 			return ctx.read((signal) =>
 				mode === "kpi-linked"
 					? readWorkKpiLinked(sourceSql, signal)
-					: readWorkCount(sourceSql, mode, signal),
+					: mode === "design-linked"
+						? readWorkDesignLinked(sourceSql, signal)
+						: readWorkCount(sourceSql, mode, signal),
 			);
 		},
 	});

@@ -38,6 +38,12 @@ vi.mock("@/bootstrap/agent-credentials", () => ({
   getAgentCredentialStore: () => ({ everConfirmed: (...args: unknown[]) => mockEverConfirmed(...args) }),
 }));
 
+const mockVerify = vi.fn();
+const mockPrincipalOf = vi.fn();
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({ serviceAuth: { verify: mockVerify }, agentAuthority: { servicePrincipalOf: mockPrincipalOf } }),
+}));
+
 vi.mock("@/shared/env/server", () => ({
   serverEnv: () => ({ AUTH_SECRET: "test-secret-for-unit-tests-only" }),
 }));
@@ -154,5 +160,50 @@ describe("resolveRequestIdentity — via is recorded for logging (task.5456)", (
     mockHeaders.mockResolvedValue(headersFromRecord({}));
     mockGetServerSessionUser.mockResolvedValue(null);
     expect(await resolveRequestIdentity()).toBeNull();
+  });
+});
+
+describe("resolveRequestIdentity — service assertion bearer (story.0038)", () => {
+  const JWT = "eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJodHRwczovL3guaW8ifQ.c2lnbmF0dXJl";
+  const verified = { ok: true, issuer: "https://cognidao.org", service: "git-review", clientId: "https://cognidao.org#git-review", scope: "knowledge:read", jti: "j1" };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHeaders.mockResolvedValue(headersFromRecord({ authorization: `Bearer ${JWT}` }));
+  });
+
+  it("a verified assertion whose service has asked is that principal, via bearer, and never reads the session", async () => {
+    mockVerify.mockResolvedValue(verified);
+    mockPrincipalOf.mockResolvedValue("svc-user");
+    expect(await resolveRequestIdentity()).toMatchObject({ id: "svc-user", via: "bearer", displayName: "git-review@cognidao.org" });
+    expect(mockGetServerSessionUser).not.toHaveBeenCalled();
+  });
+
+  it("a service that has not asked yet, and every refused assertion, is null (401), never a session fallback", async () => {
+    mockVerify.mockResolvedValue(verified);
+    mockPrincipalOf.mockResolvedValue(null);
+    expect(await resolveRequestIdentity()).toBeNull();
+    mockHeaders.mockResolvedValue(headersFromRecord({ authorization: `Bearer ${JWT}` }));
+    mockVerify.mockResolvedValue({ ok: false, code: "replayed" });
+    expect(await resolveRequestIdentity()).toBeNull();
+    expect(mockGetServerSessionUser).not.toHaveBeenCalled();
+  });
+
+  it("an unreachable key set is an outage (ServiceAuthUnavailableError, 503), not a 401", async () => {
+    mockVerify.mockResolvedValue({ ok: false, code: "jwks_unavailable" });
+    await expect(resolveRequestIdentity()).rejects.toMatchObject({ name: "ServiceAuthUnavailableError" });
+  });
+
+  it("verifies once per request: a second resolve on the same request does not replay the single-use jti", async () => {
+    mockVerify.mockResolvedValue(verified);
+    mockPrincipalOf.mockResolvedValue("svc-user");
+    await resolveRequestIdentity();
+    await resolveRequestIdentity();
+    expect(mockVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a signed agent key (cogni_ag_sk_v1_) never reaches the assertion verifier", async () => {
+    mockHeaders.mockResolvedValue(headersFromRecord({ authorization: "Bearer cogni_ag_sk_v1_forged.sig" }));
+    expect(await resolveRequestIdentity()).toBeNull();
+    expect(mockVerify).not.toHaveBeenCalled();
   });
 });

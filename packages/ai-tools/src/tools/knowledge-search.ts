@@ -19,13 +19,14 @@
 import { z } from "zod";
 import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
 
-import type { KnowledgeCapability } from "../capabilities/knowledge";
+import type { KnowledgeCapability, KnowledgeEntry } from "../capabilities/knowledge";
+import { ACCESS_REQUESTED_MESSAGE, REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
-export const KnowledgeSearchInputSchema = z.object({
+const knowledgeSearchFields = {
   domain: z
     .string()
     .min(1)
@@ -46,6 +47,23 @@ export const KnowledgeSearchInputSchema = z.object({
     .max(20)
     .optional()
     .describe("Maximum results (1-20, default 10)"),
+};
+
+/**
+ * The input without `node`: what the model sees on a node that has no link targets. STRICT: a call that carries `node` (or any unknown key) is a validation error, never a silent read
+ * of this node's own store.
+ */
+export const KnowledgeSearchLocalInputSchema = z.strictObject(knowledgeSearchFields);
+
+export const KnowledgeSearchInputSchema = z.object({
+  ...knowledgeSearchFields,
+  node: z
+    .string()
+    .regex(REMOTE_ALIAS_PATTERN)
+    .optional()
+    .describe(
+      "Alias of another node whose knowledge to read instead of this node's own. Only aliases the server lists work."
+    ),
 });
 export type KnowledgeSearchInput = z.infer<typeof KnowledgeSearchInputSchema>;
 
@@ -59,6 +77,10 @@ export const KnowledgeSearchOutputSchema = z.object({
   domain: z.string(),
   results: z.array(KnowledgeSearchResultSchema),
   totalFound: z.number(),
+  /** Set only when this node's AI asked the named node for access: the fixed, terminal answer of a remote read the target answered 401. */
+  status: z.literal("access_requested").optional(),
+  node: z.string().optional(),
+  message: z.string().optional(),
 });
 export type KnowledgeSearchOutput = z.infer<typeof KnowledgeSearchOutputSchema>;
 export type KnowledgeSearchRedacted = KnowledgeSearchOutput;
@@ -67,6 +89,11 @@ export type KnowledgeSearchRedacted = KnowledgeSearchOutput;
 
 export const KNOWLEDGE_SEARCH_NAME = "core__knowledge_search" as const;
 
+const KNOWLEDGE_SEARCH_DESCRIPTION =
+  "Search the node's knowledge store for domain-specific facts, claims, and curated assertions. " +
+  "Returns entries with confidence scores and canonical sourceUrl provenance for the content read. Search BEFORE using web search — " +
+  "the knowledge store contains verified, curated information relevant to this node's domain.";
+
 export const knowledgeSearchContract: ToolContract<
   typeof KNOWLEDGE_SEARCH_NAME,
   KnowledgeSearchInput,
@@ -74,15 +101,12 @@ export const knowledgeSearchContract: ToolContract<
   KnowledgeSearchRedacted
 > = {
   name: KNOWLEDGE_SEARCH_NAME,
-  description:
-    "Search the node's knowledge store for domain-specific facts, claims, and curated assertions. " +
-    "Returns entries with confidence scores and canonical sourceUrl provenance for the content read. Search BEFORE using web search — " +
-    "the knowledge store contains verified, curated information relevant to this node's domain.",
+  description: `${KNOWLEDGE_SEARCH_DESCRIPTION} Pass 'node' (a configured node alias) to search that node's knowledge instead.`,
   effect: "read_only",
   inputSchema: KnowledgeSearchInputSchema,
   outputSchema: KnowledgeSearchOutputSchema,
   redact: (output) => output,
-  allowlist: ["query", "domain", "results", "totalFound"] as const,
+  allowlist: ["query", "domain", "results", "totalFound", "status", "node", "message"] as const,
 };
 
 // ─── Implementation ──────────────────────────────────────────────────────────
@@ -98,6 +122,8 @@ export interface KnowledgeSearchDeps {
   knowledgeCapability: KnowledgeCapability;
   /** Trusted node public origin supplied by server composition, never tool input. */
   readonly nodePublicOrigin?: string | undefined;
+  /** Searches another node's knowledge when the call names an alias. Absent = the `node` argument is refused. */
+  readonly remoteKnowledge?: RemoteKnowledgeCapability | undefined;
 }
 
 export function createKnowledgeSearchImplementation(
@@ -105,18 +131,38 @@ export function createKnowledgeSearchImplementation(
 ): ToolImplementation<KnowledgeSearchInput, KnowledgeSearchOutput> {
   return {
     execute: async (input) => {
-      const results = await deps.knowledgeCapability.search({
-        domain: input.domain,
-        query: input.query,
-        limit: input.limit ?? 10,
-      });
+      let origin = deps.nodePublicOrigin;
+      let results: KnowledgeEntry[];
+      if (input.node !== undefined) {
+        const remote = deps.remoteKnowledge;
+        const remoteOrigin = remote?.originOf(input.node);
+        if (!remote || remoteOrigin === undefined) throw new RemoteKnowledgeError("unknown_alias", null);
+        origin = remoteOrigin;
+        try {
+          results = await remote.search(input.node, {
+            domain: input.domain,
+            query: input.query,
+            limit: input.limit ?? 10,
+          });
+        } catch (error) {
+          if (error instanceof RemoteKnowledgeError && error.code === "access_requested")
+            return { query: input.query, domain: input.domain, results: [], totalFound: 0, status: "access_requested" as const, node: input.node, message: ACCESS_REQUESTED_MESSAGE };
+          throw error;
+        }
+      } else {
+        results = await deps.knowledgeCapability.search({
+          domain: input.domain,
+          query: input.query,
+          limit: input.limit ?? 10,
+        });
+      }
       return {
         query: input.query,
         domain: input.domain,
         results: results.map((r) => ({
           ...withoutSourceProvenance(r),
           content: truncate(r.content, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS),
-          ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", r.id),
+          ...readSourceProvenance(origin, "knowledge", r.id),
         })),
         totalFound: results.length,
       };
@@ -146,3 +192,13 @@ export const knowledgeSearchBoundTool: BoundTool<
   contract: knowledgeSearchContract,
   implementation: knowledgeSearchStubImplementation,
 };
+
+/** The same tool without the `node` argument, for a node with no link targets (see `knowledgeReadLocalBoundTool`). */
+export const knowledgeSearchLocalBoundTool = {
+  contract: {
+    ...knowledgeSearchContract,
+    description: KNOWLEDGE_SEARCH_DESCRIPTION,
+    inputSchema: KnowledgeSearchLocalInputSchema,
+  },
+  implementation: knowledgeSearchStubImplementation,
+} as unknown as typeof knowledgeSearchBoundTool;

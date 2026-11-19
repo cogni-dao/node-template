@@ -95,11 +95,19 @@ function hasMalformedRevocableBearer(req: NextRequest): boolean {
 	);
 }
 
+/**
+ * A service assertion (story.0038) is a compact JWT: three base64url segments after `Bearer `. The route's identity resolver verifies it against the trusted
+ * homes; the perimeter only lets it through to the handler, like any other agent bearer.
+ */
+const SERVICE_ASSERTION_BEARER =
+	/^Bearer [A-Za-z0-9_-]{4,2048}\.[A-Za-z0-9_-]{4,2048}\.[A-Za-z0-9_-]{4,512}$/;
+
 function hasAgentBearer(req: NextRequest): boolean {
 	const authorization = req.headers.get("authorization");
 	return (
 		authorization !== null &&
-		AGENT_BEARER_PREFIXES.some((prefix) => authorization.startsWith(prefix))
+		(AGENT_BEARER_PREFIXES.some((prefix) => authorization.startsWith(prefix)) ||
+			SERVICE_ASSERTION_BEARER.test(authorization))
 	);
 }
 

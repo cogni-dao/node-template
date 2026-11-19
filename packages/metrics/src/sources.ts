@@ -386,16 +386,49 @@ async function run(
  */
 export const WORK_KPI_LINKED_SQL = `SELECT NOW() AS as_of, (SELECT COUNT(*) FROM work_items WHERE status NOT IN ('done','cancelled') AND ${SYNTHETIC_LABELS("labels")}) AS total, (SELECT COUNT(*) FROM work_items WHERE status NOT IN ('done','cancelled') AND ${SYNTHETIC_LABELS("labels")} AND moves IS NOT NULL AND CAST(moves AS TEXT) LIKE '%"metricId"%') AS linked`;
 
+/** Open work past design: the stages after an approved design review (story.0069). */
+const PAST_DESIGN = `status IN ('needs_implement','needs_implementation_review','needs_validation','needs_merge','needs_closeout')`;
+
+/**
+ * One statement: open, non-synthetic work items past design (`total`) and those
+ * whose `spec_refs` names a `design` atom on main as `knowledge:<id>` (`linked`).
+ * `spec_refs` is a JSON array of strings, so a quoted text match on one whole
+ * element finds the link; an untyped entry or a non-design atom never counts.
+ * Scalar subqueries in the `kpi-linked` shape, joined to `knowledge` on main.
+ */
+export const WORK_DESIGN_LINKED_SQL = `SELECT NOW() AS as_of, (SELECT COUNT(*) FROM work_items WHERE ${PAST_DESIGN} AND ${SYNTHETIC_LABELS("labels")}) AS total, (SELECT COUNT(*) FROM work_items w WHERE w.${PAST_DESIGN} AND ${SYNTHETIC_LABELS("w.labels")} AND w.spec_refs IS NOT NULL AND EXISTS (SELECT 1 FROM knowledge k WHERE k.entry_type = 'design' AND CAST(w.spec_refs AS TEXT) LIKE CONCAT('%"knowledge:', k.id, '"%'))) AS linked`;
+
 /**
  * The percent of open, non-synthetic work items that name at least one
  * metric in `moves`. An empty scope is `zero_denominator` and a malformed
  * result is `incomplete_or_invalid_source`, never zero.
  */
-export async function readWorkKpiLinked(
+export function readWorkKpiLinked(
 	sql: Sql,
 	signal: AbortSignal,
 ): Promise<MetricSample> {
-	const rows = await run(sql, WORK_KPI_LINKED_SQL, signal);
+	return readWorkLinkedShare(sql, WORK_KPI_LINKED_SQL, "kpi-linked", signal);
+}
+
+/**
+ * The percent of open, non-synthetic work items past design that link a merged
+ * design atom in `specRefs`, read in the same shape as `kpi-linked`.
+ */
+export function readWorkDesignLinked(
+	sql: Sql,
+	signal: AbortSignal,
+): Promise<MetricSample> {
+	return readWorkLinkedShare(sql, WORK_DESIGN_LINKED_SQL, "design-linked", signal);
+}
+
+/** One `total`/`linked` row as a percent; the evidence names the counted mode and both counts. */
+async function readWorkLinkedShare(
+	sql: Sql,
+	text: string,
+	mode: "kpi-linked" | "design-linked",
+	signal: AbortSignal,
+): Promise<MetricSample> {
+	const rows = await run(sql, text, signal);
 	const first = rows[0];
 	const asOf = first?.as_of
 		? new Date(first.as_of as string).toISOString()
@@ -421,7 +454,7 @@ export async function readWorkKpiLinked(
 			reason: "incomplete_or_invalid_source",
 		};
 	const evidenceRefs = [
-		"node:work_items:count:kpi-linked:excludes-synthetic",
+		`node:work_items:count:${mode}:excludes-synthetic`,
 		`counts:evaluated=${total};linked=${linked}`,
 	];
 	if (total === 0)

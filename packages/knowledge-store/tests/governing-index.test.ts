@@ -16,7 +16,7 @@ import {
   governingFixture,
   GOVERNING_FIXTURE_DOMAIN,
 } from "./fixtures/governing-index.js";
-import { selectGoverningIndex } from "../src/domain/governing.js";
+import { GOVERNING_ENTRY_TYPES, selectGoverningIndex } from "../src/domain/governing.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -47,7 +47,7 @@ it("returns the oldest governing rule beyond 1,000 newer same-shelf rows with ex
   ).toBe(false);
   const actual = await store.listGoverningIndex();
   expect(actual).toEqual(selectGoverningIndex(rows, edges));
-  expect(new Set(actual.map((r) => r.entryType)).size).toBe(7);
+  expect(new Set(actual.map((r) => r.entryType)).size).toBe(GOVERNING_ENTRY_TYPES.length);
   expect(actual.some((r) => r.id === "gov-old-rule")).toBe(true);
   expect(
     actual.some((r) =>
@@ -67,6 +67,7 @@ it.each([
   "playbook",
   "rule",
   "design",
+  "roadmap",
   "decision",
   "reference",
 ])("routes the canonical governing type %s by trigger", async (entryType) => {

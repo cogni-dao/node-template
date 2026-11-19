@@ -22,8 +22,8 @@ import { edoHypothesizeBoundTool } from "./tools/edo-hypothesize";
 import { edoRecordOutcomeBoundTool } from "./tools/edo-record-outcome";
 import { getCurrentTimeBoundTool } from "./tools/get-current-time";
 import { goalListBoundTool } from "./tools/goal-list";
-import { knowledgeReadBoundTool } from "./tools/knowledge-read";
-import { knowledgeSearchBoundTool } from "./tools/knowledge-search";
+import { knowledgeReadBoundTool, knowledgeReadLocalBoundTool } from "./tools/knowledge-read";
+import { knowledgeSearchBoundTool, knowledgeSearchLocalBoundTool } from "./tools/knowledge-search";
 import { knowledgeWriteBoundTool } from "./tools/knowledge-write";
 import { METRIC_TOOL_BUNDLE } from "./tools/metric";
 import { metricsQueryBoundTool } from "./tools/metrics-query";
@@ -145,6 +145,20 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   workItemArtifactRecordBoundTool as CatalogBoundTool,
   workItemUpdateBoundTool as CatalogBoundTool,
 ];
+
+/**
+ * A bundle for a node with no link targets: `core__knowledge_read` and `core__knowledge_search` without the `node` argument, so the model is never offered an argument that cannot work.
+ * Every other tool is unchanged. Compose it only when the node's `.cogni/service-links.yaml` section lists no target.
+ */
+export function withoutRemoteNodeArgument(bundle: readonly CatalogBoundTool[]): readonly CatalogBoundTool[] {
+  return bundle.map((tool) =>
+    tool.contract.name === knowledgeReadBoundTool.contract.name
+      ? (knowledgeReadLocalBoundTool as CatalogBoundTool)
+      : tool.contract.name === knowledgeSearchBoundTool.contract.name
+        ? (knowledgeSearchLocalBoundTool as CatalogBoundTool)
+        : tool
+  );
+}
 
 /**
  * VCS_TOOL_BUNDLE: GitHub/VCS control-plane tools. The operator composes this
