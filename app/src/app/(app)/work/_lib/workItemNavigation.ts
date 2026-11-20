@@ -6,6 +6,8 @@
  * `historyCursor`, story.0058) belong to one open item: opening another item, closing it or editing the list drops them.
  */
 
+import { WORK_ITEM_SCOPED_PARAMS } from "@cogni/knowledge-base-ui";
+
 type SerializableSearchParams = Pick<URLSearchParams, "toString">;
 type WorkRouter = {
   push(href: string, options: { scroll: boolean }): void;
@@ -21,27 +23,14 @@ interface WorkListState {
 }
 
 /** URL parameters that belong to one open item (story.0058): its selected artifact and its older ref pages. */
-export const ITEM_SCOPED_PARAMS = ["artifact", "artifactsCursor", "historyCursor"] as const;
-export type ItemScopedParam = (typeof ITEM_SCOPED_PARAMS)[number];
+/** The item-scoped parameters are the shared view's (story.0085): one list, owned by the package. */
+export const ITEM_SCOPED_PARAMS = WORK_ITEM_SCOPED_PARAMS;
 
 /** The same parameters without the ones that belong to the open item; another item, or none, never inherits them. */
 export function withoutItemScopedParams(searchParams: SerializableSearchParams): URLSearchParams {
   const params = new URLSearchParams(searchParams.toString());
   for (const key of ITEM_SCOPED_PARAMS) params.delete(key);
   return params;
-}
-
-/** The open item's href with one item-scoped parameter set (a value) or cleared (null). */
-export function itemScopedHref(
-  id: string,
-  searchParams: SerializableSearchParams,
-  key: ItemScopedParam,
-  value: string | null,
-): string {
-  const params = new URLSearchParams(searchParams.toString());
-  if (value === null) params.delete(key);
-  else params.set(key, value);
-  return workItemHref(id, params);
 }
 
 export function workListHref(searchParams: SerializableSearchParams): string {

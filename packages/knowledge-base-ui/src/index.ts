@@ -187,6 +187,7 @@ export {
   type WorkGoalSubject,
 } from "./work-goals.js";
 export { WorkExpectations, type WorkExpectation, type WorkExpectationPage } from "./work-edo.js";
+export { WORK_ITEM_SCOPED_PARAMS, type WorkItemScopedParam } from "./work-item-params.js";
 export {
   DataTable,
   DataTableColumnsPicker,

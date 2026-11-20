@@ -232,3 +232,4 @@ export function createMetricHttpHandlers(ports: MetricHttpPorts) {
 
 export type MetricHttpHandlers = ReturnType<typeof createMetricHttpHandlers>;
 export * from "./refresh-http.js";
+export * from "./work-expectations-http.js";

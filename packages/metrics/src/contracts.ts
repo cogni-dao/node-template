@@ -80,6 +80,29 @@ export const KpiBindingSchema = z.strictObject({
 });
 export const KpiBindingsSchema = z.array(KpiBindingSchema).max(20);
 export type KpiBinding = z.infer<typeof KpiBindingSchema>;
+
+/** One expectation's prediction as the work-item view draws it: the binding's target and what was observed, as text. */
+export const WorkExpectationPredictionSchema = z.object({
+	metricId: z.string(),
+	expected: z.string(),
+	observed: z.string(),
+});
+/** One EDO hypothesis that names the item, its predictions and its recorded outcomes. */
+export const WorkExpectationSchema = z.object({
+	id: z.string(),
+	title: z.string(),
+	content: z.string(),
+	predictions: z.array(WorkExpectationPredictionSchema),
+	outcomes: z.array(z.object({ id: z.string(), title: z.string(), content: z.string() })),
+	truncated: z.boolean(),
+});
+/** The `GET /api/v1/work/items/{id}/expectations` body (story.0085). */
+export const WorkExpectationPageSchema = z.object({
+	items: z.array(WorkExpectationSchema),
+	truncated: z.boolean(),
+});
+export type WorkExpectation = z.infer<typeof WorkExpectationSchema>;
+export type WorkExpectationPage = z.infer<typeof WorkExpectationPageSchema>;
 /**
  * A metric's own health band: a binding without the identity, deadline or
  * baseline fields. Assessed as a synthetic binding through the one KPI path.

@@ -38,6 +38,7 @@ import type {
   WriteAttribution,
 } from "@cogni/work-items";
 import {
+  createItemRefPorts,
   composeItemEnvelope,
   judgeMoveSummaries,
   toWorkItemId,
@@ -52,7 +53,6 @@ import {
 } from "@cogni/knowledge-store";
 import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
-import { createItemRefPorts } from "@/bootstrap/capabilities/work-item-refs";
 import { getContainer } from "@/bootstrap/container";
 import { routeAttribution } from "@/bootstrap/write-attribution";
 import { toHttpWorkItem } from "../read-envelopes.server";

@@ -11,17 +11,16 @@ import type { WorkItemDto } from "@cogni/node-contracts";
 import { cleanup, fireEvent, render as renderUi, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRef, useRef, useState, type ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkItemFetchError } from "@/app/(app)/work/_api/fetchWorkItems";
 import { WorkItemDetail } from "@/app/(app)/work/_components/WorkItemDetail";
 import { WorkDetailSheet } from "@/app/(app)/work/_components/WorkDetailSheet";
 
-vi.mock("@/app/(app)/work/_components/work-item-icons", () => ({ TypeIcon: () => null, StatusPill: () => null }));
-
-vi.mock("@/app/(app)/_components/EntityCitationLinks", () => ({
-  EntityCitationLinks: () => null,
-}));
+// The view reads Links and Expectations through the package client; no node server runs here.
+beforeEach(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 503 }));
+});
 
 const item: WorkItemDto = {
   id: "task.5174",
