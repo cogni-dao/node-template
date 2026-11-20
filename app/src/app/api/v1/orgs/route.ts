@@ -3,74 +3,53 @@
 
 /**
  * Module: `@app/api/v1/orgs`
- * Purpose: Register an org for an owner source (story.0038): `{ source: { kind: "repo-spec", ref } }` returns the org's user id and its one billing account id.
- * Scope: HTTP validation, the owner check and delegation to the agent authority (`ensureOrg` in `@cogni-dao/agent-grants/orgs`). Any authenticated caller, session or bearer.
+ * Purpose: A signed-in person lists the orgs they are in (GET) and creates one (POST `{ name }`): the org's account, its `org` principal and the creator's `org:owner` (task.0181).
+ * Scope: HTTP validation and delegation to `container.orgAccounts`. A person's cookie session only (the human plane); the caller is never a body field. The org is made by the package's
+ *   `createOrg` in one transaction.
  * Invariants:
- *   - REGISTRATION_GRANTS_NOTHING: the call is idempotent per source (one org per repo and path) and gives the caller no authority.
- *   - ONLY_AN_OWNER_REGISTERS: before any row is written the caller must be one of `owners(source)` (the repo-spec's `activity_ledger.approvers`, read live through the owner
- *     source). That proves the repo exists and lists approvers and bounds the writes to real orgs: a non-owner is 403 `not_an_owner`, an unreadable owner source is
- *     503 `owner_source_unavailable`, and nothing is created in either case.
- *   - A ref or path that is not canonical is 400 `invalid_source`; a store failure is 503 `authz_unavailable`.
- * Side-effects: IO (service-role database writes)
- * Links: https://node-template.cognidao.org/knowledge/node-relationships-design
+ *   - ANYONE_CREATES: any signed-in person may create an org on any node. It grants nothing outside the org: no node permission, no data access.
+ *   - BOUNDED_CREATION: a sixth org for one owner is 409 `too_many_orgs`.
+ *   - This route replaces the retired `POST /api/v1/orgs` that registered an org for a repo-spec owner source (agent-grants 0.10.0 deletes that source).
+ * Side-effects: IO (service-role database write)
+ * Links: https://node-template.cognidao.org/knowledge/org-account-lifecycle
  * @public
  */
 
-import { canonicalRepoRef, InvalidOrgSourceError, OwnerSourceUnavailableError } from "@cogni/agent-grants/orgs";
-import { ensureOrgOperation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
-import { getSessionUser } from "@/app/_lib/auth/session";
+import { orgCreateOperation, orgListOperation } from "@cogni/node-contracts";
+import { json, orgFailure, readJson } from "@/app/api/v1/orgs/_lib/org-http";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES, failureFields } from "@/shared/observability";
+import { getServerSessionUser } from "@/lib/auth/server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const NO_STORE = { "cache-control": "no-store" } as const;
-const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: NO_STORE });
+export const GET = wrapRouteHandlerWithLogging(
+  { routeId: "orgs.list", auth: { mode: "required", getSessionUser: getServerSessionUser } },
+  async (ctx, _request, sessionUser) => {
+    try {
+      const orgs = await getContainer().orgAccounts.list(sessionUser.id);
+      return json(
+        orgListOperation.output.parse({
+          orgs: orgs.map((o) => ({ orgUserId: o.orgUserId, name: o.name, billingAccountId: o.billingAccountId, suspended: o.suspendedAt !== null, role: o.role })),
+        })
+      );
+    } catch (error) {
+      return orgFailure(ctx, "orgs.list", error);
+    }
+  }
+);
 
 export const POST = wrapRouteHandlerWithLogging(
-  {
-    routeId: "orgs.ensure",
-    bearerWrite: "registers an org for a repo whose listed approver the caller is and grants no authority; it reads or changes none of the caller's data",
-    auth: { mode: "required", getSessionUser },
-  },
+  { routeId: "orgs.create", auth: { mode: "required", getSessionUser: getServerSessionUser } },
   async (ctx, request, sessionUser) => {
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid JSON body" }, 400);
-    }
-    const parsed = ensureOrgOperation.input.safeParse(body);
+    const parsed = orgCreateOperation.input.safeParse(await readJson(request));
     if (!parsed.success) return json({ error: "invalid input" }, 400);
-    const { source } = parsed.data;
-    if (!canonicalRepoRef(source.ref, source.path)) return json({ error: "invalid_source" }, 400);
-    const container = getContainer();
     try {
-      const owners = await container.serviceAuth.owners.owners(source);
-      if (!owners.includes(sessionUser.id)) return json({ error: "not_an_owner" }, 403);
+      const org = await getContainer().orgAccounts.create(sessionUser.id, parsed.data.name);
+      return json(orgCreateOperation.output.parse(org), 201);
     } catch (error) {
-      if (error instanceof OwnerSourceUnavailableError) {
-        ctx.log.warn(
-          { event: EVENT_NAMES.AGENT_ROLES_REFUSED, routeId: "orgs.ensure", reason: error.reason },
-          EVENT_NAMES.AGENT_ROLES_REFUSED
-        );
-        return json({ error: "owner_source_unavailable" }, 503);
-      }
-      throw error;
-    }
-    try {
-      const org = await container.agentAuthority.ensureOrg(source);
-      return json(ensureOrgOperation.output.parse({ orgUserId: org.userId, billingAccountId: org.billingAccountId }));
-    } catch (error) {
-      if (error instanceof InvalidOrgSourceError) return json({ error: "invalid_source" }, 400);
-      ctx.log.error(
-        { event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "orgs.ensure", ...failureFields(error) },
-        EVENT_NAMES.AGENT_ROLES_UNAVAILABLE
-      );
-      return json({ error: "authz_unavailable" }, 503);
+      return orgFailure(ctx, "orgs.create", error);
     }
   }
 );

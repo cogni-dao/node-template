@@ -157,6 +157,7 @@ import {
 	NODE_LOCAL_TOOL_BUNDLE,
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
+import { createOrgAccounts, type OrgAccounts } from "@/bootstrap/org-accounts";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
@@ -314,6 +315,8 @@ export interface Container {
 	agentAuthority: AgentToolAuthority;
 	/** Service assertions (story.0038): the optional signer, the verifier over the trusted homes, and the org owner source. Thin wiring; the logic is in `@cogni/agent-grants`. */
 	serviceAuth: ServiceAuth;
+	/** Org accounts (task.0181): create, invite, roles, node links, suspension. Thin wiring over `@cogni/agent-grants`; one transaction per write. */
+	orgAccounts: OrgAccounts;
 	/** Calling other nodes as this node's AI (story.0038 phase 2): the remote-knowledge capability and the outbound ask. Targets come only from .cogni/service-links.yaml. */
 	serviceLinks: ServiceLinks;
 	/** ADMIN_ACTS_IN_ADMIN: the only door for node-admin writes; callable only with an `AdminSession` minted in `(admin)/`. */
@@ -1331,6 +1334,7 @@ function createContainer(): Container {
 		nodeAdmin: createAdminCheckNodeAdminAuthority(() => agentAuthority.adminCheck),
 		agentAuthority,
 		serviceAuth,
+		orgAccounts: createOrgAccounts({ sql: agentSql, log, nodeId, getSigner: () => serviceAuth.getSigner() }),
 		serviceLinks,
 		nodeAdminPort: createNodeAdminPort(agentAuthority),
 		knowledgeStorePort,

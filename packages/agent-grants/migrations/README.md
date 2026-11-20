@@ -38,3 +38,20 @@ The store needs a BYPASSRLS (service role) connection: the table has no policy, 
 2. Append the hand-written part (everything after the line `Hand-written below`): `FORCE ROW LEVEL SECURITY`. The table has no policy, so the app role sees nothing.
 3. The store needs a BYPASSRLS (service role) connection, like `agent_roles`.
 4. Run `db:check`. The journal `when` must be greater than every earlier entry.
+
+# service_assertion_jtis migration template
+
+`service_assertion_jtis.sql` is the shape a node applies for the durable replay store (`@cogni-dao/agent-grants/service-auth` `createPostgresReplayStore`, 0.10.0). node-template keeps it as `0049_service_assertion_jtis.sql`. Do not copy it blind into a fork:
+
+1. Add the `serviceAssertionJtis` table (`jti` primary key, `expires_at`, the expiry index) to the node's own schema package, then run the node's `db:generate`. drizzle-kit writes the DDL and the snapshot against the node's own prior snapshot. Never copy a snapshot.
+2. Append the hand-written part (everything after the line `Hand-written below`): `FORCE ROW LEVEL SECURITY`. The table has no policy, so the app role sees nothing; the store needs a BYPASSRLS (service role) connection.
+3. Run `db:check`. The journal `when` must be greater than every earlier entry.
+
+# org_accounts migration template
+
+`org_accounts.sql` is the shape a node applies for org accounts (`@cogni-dao/agent-grants` 0.10.0, `./org-accounts`, `./org-links`). node-template keeps it as `0050_org_accounts.sql`. Do not copy it blind into a fork:
+
+1. In the node's own schema package add: the tables `orgInvites`, `orgLinkCodes` and `orgLinks` (their CHECKs and the unique partial indexes `org_invites_open_per_wallet` and `org_links_open_per_issuer`); `suspended_at` on `agentPrincipals`; `link_id` (a foreign key to `org_links`) on `payerBindings`; and the live-row index of `agentRoles` as `(principal_user_id, scope, coalesce(account_id, ''))` where `revoked_at IS NULL` (it REPLACES `agent_roles_live_unique`). Then run the node's `db:generate`. Never copy a snapshot.
+2. Append the hand-written part (everything after the line `Hand-written below`): `FORCE ROW LEVEL SECURITY` on the three new tables. They have no policy.
+3. The index change is not additive: a pod of the previous package version names the old `ON CONFLICT (principal_user_id, scope)` target and fails an ask until it rolls. Roll the app in the same release as the migration.
+4. Run `db:check`. The journal `when` must be greater than every earlier entry. Run `runGrantConformance` over the node's real SQL store (it now expects `authorizeAccount` to honour a live grant for a session caller).

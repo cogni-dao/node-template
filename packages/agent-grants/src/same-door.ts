@@ -184,11 +184,10 @@ export async function authorizeCaller(
 ): Promise<AuthzDecision> {
   const { userId, via, requires } = input;
   if (requires.kind === "account") {
-    // ONE_ACCOUNT_DOOR: the owner, or a bearer agent with a live row for this scope and this exact account; everything else is one deny.
+    // ONE_ACCOUNT_DOOR: the owner, or any caller with a live row for this scope (or a scope that covers it) and this exact account; everything else is one deny.
     if (!input.accountId) return { decision: "deny", code: "policy_denied", reason: "no_account" };
     const access = await authorizeAccount(store, {
       callerUserId: userId,
-      via,
       scope: requires.scope,
       accountId: input.accountId,
       owners: input.owners,

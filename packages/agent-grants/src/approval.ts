@@ -11,14 +11,15 @@
  *     opens one pending row, and is used up by the decision (or replaced by a re-ask).
  *   - DECLARED_KIND_PICKS_THE_PAGE: a scope that declares kind `account` opens `/profile`; every other kind opens `/admin/ai-access`.
  *   - ONE_GATE: approve, deny and revoke all pass `canApprove`. A node row needs an admin session. An account row needs an approver who owns
- *     the row's account (or, for an ask not yet decided, owns an account at all). Both need an approver who is not the asking principal.
- *     A node-admin has no veto over an account row.
+ *     the row's account (or, for an ask not yet decided, owns an account at all). On an org's account its owners and its admins both decide (an `org:owner` row: an owner only).
+ *     Both need an approver who is not the asking principal. A node-admin has no veto over an account row.
  * Side-effects: none (store reads in `canApprove` for an account row)
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard (ONE_GATE, TWO_STARTS)
  * @public
  */
 
 import type { OrgOwners } from "./orgs";
+import { holdsAccountRight, ORG_ADMIN, ORG_OWNER } from "./rights";
 import type { AgentGrantsStore, GrantResource, ScopeKind } from "./types";
 
 /** A one-time link lives 24 hours. */
@@ -76,6 +77,8 @@ export interface ApprovalRow {
   readonly resource: GrantResource;
   readonly principalUserId: string;
   readonly accountId?: string | null | undefined;
+  /** The scope of the row decided. Only an org's `org:owner` row needs it: only an owner decides that one. */
+  readonly scope?: string | undefined;
 }
 
 /**
@@ -110,6 +113,11 @@ export async function canApprove(
 ): Promise<boolean> {
   if (me.userId === row.principalUserId) return false;
   if (row.resource === "node") return me.admin !== null;
-  if (row.accountId) return ownsAccountOrOrg(store, me.userId, row.accountId, owners);
+  if (row.accountId) {
+    if (await ownsAccountOrOrg(store, me.userId, row.accountId, owners)) return true;
+    // An org's admins also decide on the org's account (task.0181), except on an `org:owner` row: only an owner makes, demotes or removes an owner.
+    if (row.scope === ORG_OWNER || !store.orgSourceOfAccount || !(await store.orgSourceOfAccount(row.accountId))) return false;
+    return holdsAccountRight(store, me.userId, ORG_ADMIN, row.accountId);
+  }
   return (await store.accountOf(me.userId)) !== null;
 }

@@ -3,10 +3,11 @@
 
 /**
  * Module: `@tests/component/db/agent-orgs.int.test`
- * Purpose: Orgs and service principals (story.0038) against real Postgres: migration 0045's constraints, `ensureOrg` idempotency and one ordinary billing account,
- *   `principalKindOf` answering `org`, `canApprove` and `authorizeAccount` for an org-owned account over the real store, and one principal per (issuer, service).
+ * Purpose: Org accounts (task.0181) against real Postgres: migration 0050's constraints and the live-row index (principal, scope, account), `createOrg` through the real adapter
+ *   (the org's user, its `org` principal with owner source `grants`, one ordinary billing account, the creator's `org:owner`), `principalKindOf` answering `org`, the `grants` owner source,
+ *   `canApprove` and `authorizeAccount` for an org-owned account over the real store, and one principal per (issuer, service).
  * Scope: Every test runs in one transaction that is rolled back, so no row leaks to other tests.
- * Invariants: ONE_ORG_PER_SOURCE, ORG_ACCOUNT_IS_ORDINARY, KIND_IS_THE_ROW, ONE_PRINCIPAL_PER_SERVICE.
+ * Invariants: ONE_ORG_PER_SOURCE, ORG_ACCOUNT_IS_ORDINARY, KIND_IS_THE_ROW, ONE_PRINCIPAL_PER_SERVICE, ROLES_NEST, ONE_LIVE_ROW_PER_PRINCIPAL_SCOPE_ACCOUNT.
  * Side-effects: IO (testcontainers Postgres, rolled back)
  */
 
@@ -14,19 +15,20 @@ import { randomUUID } from "node:crypto";
 import {
   authorizeAccount,
   canApprove,
+  createOrg,
   createPostgresAgentGrantsStore,
+  createPostgresOrgAccountStore,
   principalKindOf,
   type SqlTag,
 } from "@cogni/agent-grants";
-import { ensureOrg, type OrgOwners, OwnerSourceUnavailableError, readOrgSource } from "@cogni/agent-grants/orgs";
+import { createGrantsOwnerSource, OwnerSourceUnavailableError, readOrgSource } from "@cogni/agent-grants/orgs";
 import { ensureServicePrincipal, findServicePrincipal } from "@cogni/agent-grants/service-auth";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const ROLLBACK = new Error("rollback");
-const SRC = { kind: "repo-spec", ref: "https://github.com/cogni-dao/test-org" } as const;
 
-describe("orgs and service principals (real Postgres)", () => {
+describe("org accounts (real Postgres)", () => {
   let service: Sql;
 
   beforeAll(() => {
@@ -48,54 +50,54 @@ describe("orgs and service principals (real Postgres)", () => {
       });
   };
 
-  it("ensureOrg is idempotent per source: one user, one org principal, one ordinary account with its default key", async () => {
+  const user = async (tx: TransactionSql, name: string): Promise<string> => {
+    const id = randomUUID();
+    await tx`INSERT INTO users (id, name) VALUES (${id}, ${name})`;
+    return id;
+  };
+
+  it("createOrg writes the user, the org principal (source grants, ref = its own id), one ordinary account with its default key and the creator's owner grant", async () => {
     await rolledBack(async (tx) => {
       const sql = tx as unknown as SqlTag;
-      const first = await ensureOrg(sql, SRC);
-      const again = await ensureOrg(sql, { kind: "repo-spec", ref: "https://github.com/Cogni-DAO/Test-Org" });
-      expect(again).toEqual(first);
-      expect(await readOrgSource(sql, first.userId)).toEqual(SRC);
-      expect(await principalKindOf(sql, first.userId)).toBe("org");
-      const accounts = await tx`SELECT id, is_system_tenant, balance_credits FROM billing_accounts WHERE owner_user_id = ${first.userId}`;
+      const creator = await user(tx, "creator");
+      const org = await createOrg(createPostgresOrgAccountStore(sql), { creatorUserId: creator, name: "  toks5  " });
+      expect(org.name).toBe("toks5");
+      expect(await readOrgSource(sql, org.orgUserId)).toEqual({ kind: "grants", ref: org.orgUserId });
+      expect(await principalKindOf(sql, org.orgUserId)).toBe("org");
+      const accounts = await tx`SELECT id, is_system_tenant, balance_credits FROM billing_accounts WHERE owner_user_id = ${org.orgUserId}`;
       expect(accounts).toHaveLength(1);
-      expect(accounts[0]).toMatchObject({ id: first.billingAccountId, is_system_tenant: false });
-      expect(await tx`SELECT 1 FROM virtual_keys WHERE billing_account_id = ${first.billingAccountId} AND is_default`).toHaveLength(1);
-      expect(await tx`SELECT 1 FROM agent_principals WHERE kind = 'org' AND owner_source_ref = ${SRC.ref}`).toHaveLength(1);
+      expect(accounts[0]).toMatchObject({ id: org.billingAccountId, is_system_tenant: false });
+      expect(await tx`SELECT 1 FROM virtual_keys WHERE billing_account_id = ${org.billingAccountId} AND is_default`).toHaveLength(1);
+      // The creator's first owner grant is approved by the org's own users id, on the org's account.
+      const grants = await tx`SELECT principal_user_id, scope, approved_by, resource, account_id FROM agent_roles WHERE account_id = ${org.billingAccountId}`;
+      expect(grants).toEqual([{ principal_user_id: creator, scope: "org:owner", approved_by: org.orgUserId, resource: "account", account_id: org.billingAccountId }]);
+      // Nothing outside the org is granted.
+      expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${creator} AND resource = 'node'`).toHaveLength(0);
+      expect(await createGrantsOwnerSource(sql).owners({ kind: "grants", ref: org.orgUserId })).toEqual([creator]);
     });
   });
 
-  it("two repo-spec paths in one repo are two orgs, and the monorepo path round-trips through the stored key", async () => {
+  it("a person owns at most five orgs: the sixth writes nothing", async () => {
     await rolledBack(async (tx) => {
-      const sql = tx as unknown as SqlTag;
-      const mono = { ...SRC, path: "nodes/operator/.cogni/repo-spec.yaml" };
-      const root = await ensureOrg(sql, SRC);
-      const node = await ensureOrg(sql, mono);
-      expect(node.userId).not.toBe(root.userId);
-      expect(node.billingAccountId).not.toBe(root.billingAccountId);
-      expect(await ensureOrg(sql, mono)).toEqual(node);
-      expect(await readOrgSource(sql, node.userId)).toEqual(mono);
-      expect(await readOrgSource(sql, root.userId)).toEqual(SRC);
-      expect(await tx`SELECT owner_source_ref FROM agent_principals WHERE user_id = ${node.userId}`).toEqual([
-        { owner_source_ref: `${SRC.ref}#${mono.path}` },
-      ]);
+      const store = createPostgresOrgAccountStore(tx as unknown as SqlTag);
+      const creator = await user(tx, "creator");
+      for (let i = 0; i < 5; i++) await createOrg(store, { creatorUserId: creator, name: `org ${i}` });
+      await expect(createOrg(store, { creatorUserId: creator, name: "six" })).rejects.toMatchObject({ code: "too_many_orgs" });
+      expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${creator} AND scope = 'org:owner' AND revoked_at IS NULL`).toHaveLength(5);
     });
   });
 
   it("the database refuses an org with no owner source, a second org for one source, and an unknown kind", async () => {
     await rolledBack(async (tx) => {
-      const mk = async () => {
-        const id = randomUUID();
-        await tx`INSERT INTO users (id, name) VALUES (${id}, 'u')`;
-        return id;
-      };
+      const mk = () => user(tx, "u");
       await tx`SAVEPOINT a`;
       await expect(tx`INSERT INTO agent_principals (kind, user_id) VALUES ('org', ${await mk()})`).rejects.toMatchObject({ constraint_name: "agent_principals_org_has_owner_source" });
       await tx`ROLLBACK TO SAVEPOINT a`;
-      await tx`INSERT INTO agent_principals (kind, user_id, owner_source_kind, owner_source_ref) VALUES ('org', ${await mk()}, 'repo-spec', 'https://github.com/x/y')`;
+      await tx`INSERT INTO agent_principals (kind, user_id, owner_source_kind, owner_source_ref) VALUES ('org', ${await mk()}, 'grants', 'same-ref')`;
       await tx`SAVEPOINT b`;
-      await expect(
-        tx`INSERT INTO agent_principals (kind, user_id, owner_source_kind, owner_source_ref) VALUES ('org', ${await mk()}, 'repo-spec', 'https://github.com/x/y')`
-      ).rejects.toMatchObject({ constraint_name: "agent_principals_org_source_unique" });
+      await expect(tx`INSERT INTO agent_principals (kind, user_id, owner_source_kind, owner_source_ref) VALUES ('org', ${await mk()}, 'grants', 'same-ref')`).rejects.toMatchObject({
+        constraint_name: "agent_principals_org_source_unique",
+      });
       await tx`ROLLBACK TO SAVEPOINT b`;
       await tx`SAVEPOINT c`;
       await expect(tx`INSERT INTO agent_principals (kind, user_id) VALUES ('wizard', ${await mk()})`).rejects.toMatchObject({ constraint_name: "agent_principals_kind_canonical" });
@@ -103,33 +105,63 @@ describe("orgs and service principals (real Postgres)", () => {
     });
   });
 
-  it("an org-owned account: the org's owners approve and read it, everyone else is refused, and an unavailable source refuses", async () => {
+  it("the live index is (principal, scope, account): one person is an owner of two orgs, but holds a scope on one account once", async () => {
+    await rolledBack(async (tx) => {
+      const store = createPostgresOrgAccountStore(tx as unknown as SqlTag);
+      const person = await user(tx, "person");
+      const a = await createOrg(store, { creatorUserId: person, name: "a" });
+      const b = await createOrg(store, { creatorUserId: person, name: "b" });
+      expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${person} AND scope = 'org:owner' AND revoked_at IS NULL`).toHaveLength(2);
+      await tx`SAVEPOINT dup`;
+      await expect(
+        tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id) VALUES (${person}, 'org:owner', ${a.orgUserId}, now(), 'account', ${a.billingAccountId})`
+      ).rejects.toMatchObject({ constraint_name: "agent_roles_live_unique" });
+      await tx`ROLLBACK TO SAVEPOINT dup`;
+      // A node row and a pending account ask (no account) stay one open row per (principal, scope), as before.
+      await tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource) VALUES (${person}, 'knowledge:read', ${a.orgUserId}, now(), 'node')`;
+      await tx`SAVEPOINT node`;
+      await expect(
+        tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource) VALUES (${person}, 'knowledge:read', ${b.orgUserId}, now(), 'node')`
+      ).rejects.toMatchObject({ constraint_name: "agent_roles_live_unique" });
+      await tx`ROLLBACK TO SAVEPOINT node`;
+    });
+  });
+
+  it("an org-owned account: owners, admins and a session caller's grant are read from the grant rows; strangers are refused; an unavailable source refuses", async () => {
     await rolledBack(async (tx) => {
       const sql = tx as unknown as SqlTag;
+      const orgs = createPostgresOrgAccountStore(sql);
       const store = createPostgresAgentGrantsStore(sql);
-      const org = await ensureOrg(sql, SRC);
-      expect(await store.orgSourceOfAccount?.(org.billingAccountId)).toEqual(SRC);
-      const owner = randomUUID();
-      const stranger = randomUUID();
-      const agent = randomUUID();
-      const owners: OrgOwners = { owners: async () => [owner] };
+      const [owner, admin, stranger, agent] = [await user(tx, "owner"), await user(tx, "admin"), await user(tx, "stranger"), await user(tx, "agent")] as [string, string, string, string];
+      const org = await createOrg(orgs, { creatorUserId: owner, name: "org" });
+      await orgs.setRole({ orgUserId: org.orgUserId, userId: admin, role: "admin", approvedBy: owner });
+      const owners = createGrantsOwnerSource(sql);
+      expect(await store.orgSourceOfAccount?.(org.billingAccountId)).toEqual({ kind: "grants", ref: org.orgUserId });
       const row = { resource: "account" as const, principalUserId: agent, accountId: org.billingAccountId };
       expect(await canApprove(store, { userId: owner, admin: null }, row, owners)).toBe(true);
+      expect(await canApprove(store, { userId: admin, admin: null }, row, owners)).toBe(true);
+      expect(await canApprove(store, { userId: admin, admin: null }, { ...row, scope: "org:owner" }, owners)).toBe(false);
       expect(await canApprove(store, { userId: stranger, admin: {} }, row, owners)).toBe(false);
-      expect(await canApprove(store, { userId: agent, admin: null }, row, { owners: async () => [agent] })).toBe(false);
-      const input = { via: "session" as const, scope: "account:read", accountId: org.billingAccountId };
-      expect(await authorizeAccount(store, { ...input, callerUserId: owner, owners })).toBe("owner");
-      expect(await authorizeAccount(store, { ...input, callerUserId: stranger, owners })).toBeNull();
-      const down: OrgOwners = { owners: async () => Promise.reject(new OwnerSourceUnavailableError("down")) };
-      await expect(canApprove(store, { userId: owner, admin: null }, row, down)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
+      expect(await canApprove(store, { userId: agent, admin: null }, row, owners)).toBe(false);
+      // authorizeAccount(caller, org:admin, account) for a session caller (no `via`), the call billing makes.
+      const ask = (callerUserId: string, scope: string) => authorizeAccount(store, { callerUserId, scope, accountId: org.billingAccountId });
+      expect(await ask(admin, "org:admin")).toBe("delegated");
+      expect(await ask(admin, "account:read")).toBe("delegated");
+      expect(await ask(admin, "org:owner")).toBeNull();
+      expect(await ask(owner, "org:admin")).toBe("delegated");
+      expect(await ask(stranger, "org:admin")).toBeNull();
+      // A removed admin reads nothing from the next call.
+      await orgs.removeRole({ orgUserId: org.orgUserId, userId: admin });
+      expect(await ask(admin, "org:admin")).toBeNull();
+      const down = { owners: async () => Promise.reject(new OwnerSourceUnavailableError("down")) };
+      await expect(canApprove(store, { userId: stranger, admin: null }, row, down)).rejects.toBeInstanceOf(OwnerSourceUnavailableError);
       // A human-owned account is unchanged by the owner sources.
-      const human = randomUUID();
+      const human = await user(tx, "h");
       const humanAccount = randomUUID();
-      await tx`INSERT INTO users (id, name) VALUES (${human}, 'h')`;
       await tx`INSERT INTO billing_accounts (id, owner_user_id, balance_credits) VALUES (${humanAccount}, ${human}, 0)`;
       expect(await store.orgSourceOfAccount?.(humanAccount)).toBeNull();
-      expect(await authorizeAccount(store, { ...input, accountId: humanAccount, callerUserId: owner, owners })).toBeNull();
-      expect(await authorizeAccount(store, { ...input, accountId: humanAccount, callerUserId: human, owners })).toBe("owner");
+      expect(await authorizeAccount(store, { scope: "account:read", accountId: humanAccount, callerUserId: owner, owners })).toBeNull();
+      expect(await authorizeAccount(store, { scope: "account:read", accountId: humanAccount, callerUserId: human, owners })).toBe("owner");
     });
   });
 

@@ -71,7 +71,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `RateLimitBypassConfig` - Test bypass config type (from `http/wrapPublicRoute`)
   - `TokenBucketRateLimiter`, `publicApiLimiter`, `extractClientIp` - Rate limiting utilities (from `http/`)
 - **Env/Config keys:** none (uses `@/shared/env`)
-- **Files considered API:** `agent-authority.ts` (tool authority wiring: principal lookup, wallet-bound `adminCheck`, role grant/revoke, `agent_tool.authz` log), `agent-credentials.ts` (the revocable agent key store over the service-role client), `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
+- **Files considered API:** `agent-authority.ts` (tool authority wiring: principal lookup, wallet-bound `adminCheck`, role grant/revoke, `agent_tool.authz` log), `agent-credentials.ts` (the revocable agent key store over the service-role client), `service-auth.ts` (the signer, and the verifier over `trusted_homes` plus the issuers with an open org link, the durable Postgres replay store, the pinned key fetch and the `grants` owner source), `org-accounts.ts` (org accounts: create, invite, roles, node links, suspension, the outbound signed link; thin wiring over `@cogni-dao/agent-grants` 0.10.0, one transaction per write), `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
 
 **Subdirectories:**
 

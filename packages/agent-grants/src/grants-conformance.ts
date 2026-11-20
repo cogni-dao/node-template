@@ -95,8 +95,10 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
       expect(await read(ids.agent as string, accounts.bob as string)).toBeNull(); // foreign account
       expect(await read(ids.other as string, accounts.alice as string)).toBeNull(); // another agent
       expect(await read(ids.agent as string, accounts.alice as string, "account:write")).toBeNull(); // wrong scope
-      // A person's session never takes the delegated path.
-      expect(await authorizeAccount(store, { callerUserId: ids.agent as string, via: "session", scope: SCOPE, accountId: accounts.alice as string })).toBeNull();
+      // Flipped on purpose in 0.10.0 (AUTHORITY_IS_NOT_KIND, task.0181): a live grant counts for any credential, so the same caller by session is delegated too. Before, a
+      // person's session never took the delegated path. A session caller with no grant is still null.
+      expect(await authorizeAccount(store, { callerUserId: ids.agent as string, via: "session", scope: SCOPE, accountId: accounts.alice as string })).toBe("delegated");
+      expect(await authorizeAccount(store, { callerUserId: ids.other as string, via: "session", scope: SCOPE, accountId: accounts.alice as string })).toBeNull();
     });
 
     it("an expired grant is null and reads as expired; it is closed before the next ask so the AI can ask again", async () => {
