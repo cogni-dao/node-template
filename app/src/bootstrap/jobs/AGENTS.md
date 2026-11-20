@@ -50,7 +50,7 @@ pnpm governance:schedules:sync  # POST /api/internal/ops/governance/schedules/sy
 
 ## Standards
 
-- Jobs use `pg_advisory_lock` for single-writer safety
+- Jobs use a transaction-scoped advisory lock (`pg_try_advisory_xact_lock`) for single-writer safety. The governance sync bounds its run with a 60s deadline and sets `idle_in_transaction_session_timeout` so a hung or dead holder cannot keep the lock
 - Jobs import services from `@cogni/scheduler-core`, not from features
 
 ## Dependencies
