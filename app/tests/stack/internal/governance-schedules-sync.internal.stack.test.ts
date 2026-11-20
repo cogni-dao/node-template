@@ -4,11 +4,11 @@
 /**
  * Module: `@tests/stack/internal/governance-schedules-sync.internal.stack`
  * Purpose: End-to-end stack test for internal governance schedules sync endpoint.
- * Scope: Calls POST /api/internal/ops/governance/schedules/sync and verifies grant+schedules were created. Does not test worker execution.
+ * Scope: Calls POST /api/internal/ops/governance/schedules/sync and verifies the grant is ready and no ledger schedule is written. Does not test worker execution.
  * Invariants:
  *   - INTERNAL_OPS_AUTH: Bearer token required
  *   - JOB_DELEGATION_ONLY: Endpoint delegates to bootstrap job
- *   - TEMPORAL_SCHEDULES_CREATED: Governance schedules appear in Temporal after call
+ *   - NO_FLAT_OR_LEDGER_SCHEDULE: The node writes neither flat nor ledger governance schedules
  * Side-effects: IO (HTTP route execution, DB writes, Temporal schedule CRUD)
  * Notes: Requires stack test environment with DB + Temporal available.
  * Links: src/app/api/internal/ops/governance/schedules/sync/route.ts
@@ -26,6 +26,7 @@ import { eq } from "drizzle-orm";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { POST } from "@/app/api/internal/ops/governance/schedules/sync/route";
+import { getNodeId } from "@/shared/config";
 
 const INTERNAL_OPS_TOKEN =
   process.env.INTERNAL_OPS_TOKEN ?? "test-internal-ops-token-min-32-chars";
@@ -92,7 +93,7 @@ describe("[internal] POST /api/internal/ops/governance/schedules/sync", () => {
     expect(response.status).toBe(401);
   });
 
-  it("creates governance schedules in Temporal via endpoint", async () => {
+  it("syncs via endpoint: grant ready, no ledger schedule written (operator-owned)", async () => {
     const response = await POST(createRequest(INTERNAL_OPS_TOKEN));
     expect(response.status).toBe(200);
 
@@ -102,7 +103,8 @@ describe("[internal] POST /api/internal/ops/governance/schedules/sync", () => {
       skipped: number;
       paused: number;
     };
-    expect(body.created).toBeGreaterThanOrEqual(1);
+    // LEDGER_COLLECT_IS_OPERATOR_OWNED: the synthesized ledger charter is skipped.
+    expect(body.created).toBe(0);
     expect(body.resumed).toBeGreaterThanOrEqual(0);
     expect(body.skipped).toBeGreaterThanOrEqual(0);
     expect(body.paused).toBeGreaterThanOrEqual(0);
@@ -117,12 +119,15 @@ describe("[internal] POST /api/internal/ops/governance/schedules/sync", () => {
     expect(grants[0]?.billingAccountId).toBe(COGNI_SYSTEM_BILLING_ACCOUNT_ID);
     expect(grants[0]?.scopes).toContain("graph:execute:ledger:ingest");
 
-    // Use getHandle directly — schedule.list() has eventual consistency
-    // and may not reflect a just-created schedule immediately
     const client = await getTestTemporalClient();
-    const handle = client.schedule.getHandle("governance:ledger_ingest");
-    const desc = await handle.describe();
-    expect(desc).toBeDefined();
-    createdScheduleIds.push("governance:ledger_ingest");
+    const ids: string[] = [];
+    for await (const summary of client.schedule.list()) {
+      if (summary.scheduleId.startsWith("governance:")) {
+        ids.push(summary.scheduleId);
+      }
+    }
+    createdScheduleIds.push(...ids);
+    expect(ids).not.toContain("governance:ledger_ingest");
+    expect(ids).not.toContain(`governance:${getNodeId()}:ledger_ingest`);
   });
 });
