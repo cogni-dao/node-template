@@ -301,6 +301,8 @@ export const HistoryEntrySchema = z.object({
   commit: z.string(),
   at: z.string(),
   actor: z.string().nullable(),
+  /** The actor's kind, added by the host when history is read (task.0133, hub activity-attribution); never stored. Same field as the work-items shape (ONE_HISTORY_SHAPE). */
+  actorKind: z.enum(["internal", "external", "human", "system", "unclassified"]).optional(),
   /** Same optional fields as the work-items shape (ONE_HISTORY_SHAPE); a node run's requester and run. */
   requestedBy: z.string().optional(),
   run: z

@@ -30,6 +30,10 @@ export const EVENT_NAMES = {
 	WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
 	// Row history reads (task.0052): one terminal event per read, counts only.
 	WORK_ITEMS_HISTORY_READ: "work.items.history_read",
+	// The classifier could not name a history actor's kind (task.0133): the read is served without it. One warn per actor; the error class only, never an id.
+	WORK_ITEMS_HISTORY_ACTOR_KIND_UNAVAILABLE: "work.items.history_actor_kind_unavailable",
+	// Every history read the host labels with actor kinds (task.0133): route, item envelope and core__work_item_read alike. Counts only, never an id.
+	WORK_ITEMS_HISTORY_ACTOR_KINDS: "work.items.history_actor_kinds",
 	// Review and validation artifacts (task.0028): a write, a refusal (400, 404, 409) and a read, each one terminal event; codes and counts only, never a body, a row or a url.
 	WORK_ITEMS_ARTIFACT_RECORDED: "work.items.artifact_recorded",
 	WORK_ITEMS_ARTIFACT_REFUSED: "work.items.artifact_refused",

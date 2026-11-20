@@ -23,6 +23,10 @@ import {
   CITE_ID_PATTERN,
 } from "./cites.js";
 
+/** What kind of actor a write came from, as the host's one classifier answers it (task.0133, hub activity-attribution). Never stored. */
+export const HISTORY_ACTOR_KINDS = ["internal", "external", "human", "system", "unclassified"] as const;
+export type HistoryActorKind = (typeof HISTORY_ACTOR_KINDS)[number];
+
 export const CHANGE_REASON_MAX_CHARS = 240;
 export const CHANGE_REASON_MAX_WORDS = 25;
 export const HISTORY_MAX_VERSIONS = 50;
@@ -107,6 +111,8 @@ export interface HistoryEntry {
   readonly commit: string;
   readonly at: string;
   readonly actor: string | null;
+  /** The actor's kind; the host adds it when history is read (task.0133), the store never sets it. */
+  readonly actorKind?: HistoryActorKind | undefined;
   /** The node run's subject, from the `Requested-by:` commit line; absent for a write that no run made. */
   readonly requestedBy?: string | undefined;
   /** The run that wrote it, from the `Run:` commit line; absent for a direct write. */

@@ -180,6 +180,7 @@ import {
 	createPrFactsPort,
 	resolveWorkItemsPrRepos,
 } from "@/bootstrap/capabilities/work-item-pr-facts";
+import { withHistoryActorKinds } from "@/bootstrap/history-actor-kind";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
 import {
@@ -895,6 +896,25 @@ function createContainer(): Container {
 				...(env.APP_BASE_URL ? { hubOrigin: new URL(env.APP_BASE_URL).origin } : {}),
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log }),
+		);
+		// task.0133: every history read names each version's actor kind through the one classifier; `agentAuthority`
+		// is assigned below and read only at call time.
+		doltgresWorkItems = withHistoryActorKinds(
+			doltgresWorkItems,
+			(userId) => agentAuthority.principalClass(userId),
+			(error) =>
+				log.warn(
+					{ event: EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KIND_UNAVAILABLE, errorName: (error as Error | undefined)?.name },
+					EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KIND_UNAVAILABLE,
+				),
+			// A read inside a graph run (core__work_item_read) carries its runId, so a tool read correlates with its run.
+			(counts) => {
+				const runId = findExecutionScope()?.runId;
+				log.info(
+					{ event: EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KINDS, ...counts, ...(runId ? { runId } : {}) },
+					EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KINDS,
+				);
+			},
 		);
 		// task.0028: artifacts go through the work-items writer path. The artifact records its author for audit; no
 		// server check compares it with the subject's author.
