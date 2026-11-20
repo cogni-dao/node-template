@@ -49,7 +49,7 @@ export function EpochLifecycleProgress({
   epoch,
   lifecycle,
 }: {
-  readonly epoch: EpochView;
+  readonly epoch: Pick<EpochView, "id" | "status" | "periodEnd">;
   readonly lifecycle: SettlementLifecycleEvidence;
 }): ReactElement {
   const periodEnded = usePeriodEnded(epoch.status, epoch.periodEnd);

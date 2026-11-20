@@ -1367,16 +1367,21 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     receiptIds: readonly string[]
   ): Promise<AttributionSelection[]> {
     if (receiptIds.length === 0) return [];
-    await this.resolveEpochScoped(epochId);
-    const rows = await this.db
-      .select()
-      .from(epochSelection)
-      .where(
-        and(
-          eq(epochSelection.epochId, epochId),
-          inArray(epochSelection.receiptId, [...receiptIds])
-        )
-      );
+    // Scope check beside the read, not before it: independent reads in parallel (at most two in
+    // flight; the service pool holds two). A failed check rejects the call, so no row from
+    // another scope returns.
+    const [, rows] = await Promise.all([
+      this.resolveEpochScoped(epochId),
+      this.db
+        .select()
+        .from(epochSelection)
+        .where(
+          and(
+            eq(epochSelection.epochId, epochId),
+            inArray(epochSelection.receiptId, [...receiptIds])
+          )
+        ),
+    ]);
     return rows.map(toSelection);
   }
 
@@ -1456,11 +1461,16 @@ export class DrizzleAttributionAdapter implements AttributionStore {
   async getUserProjectionsForEpoch(
     epochId: bigint
   ): Promise<EpochUserProjection[]> {
-    await this.resolveEpochScoped(epochId);
-    const rows = await this.db
-      .select()
-      .from(epochUserProjections)
-      .where(eq(epochUserProjections.epochId, epochId));
+    // Scope check beside the read, not before it: independent reads in parallel (at most two in
+    // flight; the service pool holds two). A failed check rejects the call, so no row from
+    // another scope returns.
+    const [, rows] = await Promise.all([
+      this.resolveEpochScoped(epochId),
+      this.db
+        .select()
+        .from(epochUserProjections)
+        .where(eq(epochUserProjections.epochId, epochId)),
+    ]);
     return rows.map(toUserProjection);
   }
 

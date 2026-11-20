@@ -1437,6 +1437,26 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       ).rejects.toThrow(EpochNotFoundError);
     });
 
+    it("getSelectionForReceipts throws EpochNotFoundError for cross-scope epochId", async () => {
+      await expect(
+        otherScopeAdapter.getSelectionForReceipts(scopeTestEpochId, ["r-1"])
+      ).rejects.toThrow(EpochNotFoundError);
+    });
+
+    it("getEpochActivityPage throws EpochNotFoundError for cross-scope epochId", async () => {
+      await expect(
+        otherScopeAdapter.getEpochActivityPage(
+          "00000000-0000-4000-8000-000000000001",
+          scopeTestEpochId,
+          {
+            periodStart: new Date("2026-01-01T00:00:00Z"),
+            periodEnd: new Date("2026-01-08T00:00:00Z"),
+          },
+          { limit: 10, offset: 0 }
+        )
+      ).rejects.toThrow(EpochNotFoundError);
+    });
+
     it("getPoolComponentsForEpoch throws EpochNotFoundError for cross-scope epochId", async () => {
       await expect(
         otherScopeAdapter.getPoolComponentsForEpoch(scopeTestEpochId)
