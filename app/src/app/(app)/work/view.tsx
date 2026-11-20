@@ -81,7 +81,7 @@ import { Button } from "@/components/startup";
 import { type WorkIntent, useWorkNavigation } from "./WorkNavigationBoundary";
 import {
   fetchWorkBoard,
-  fetchWorkItem,
+  workItemClient,
   fetchWorkItems,
 } from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
@@ -198,16 +198,12 @@ export function WorkDashboardView({
   );
   const boardView = desired.params.get("view") !== "table";
   const cursor = searchParams.get("cursor") ?? "";
-  // story.0058: page 1 of artifact and history refs, and the selected artifact in full, ride the item read.
-  const WORK_ITEM_DETAIL_INCLUDE = "artifacts,history,links";
+  // story.0058, story.0085: the package client reads every part the view draws, and the selected artifact in full.
   const selectedArtifact = searchParams.get("artifact") ?? undefined;
   const selectedItemQuery = useQuery({
-    queryKey: ["work-item", selectedItemId, WORK_ITEM_DETAIL_INCLUDE, selectedArtifact ?? null],
+    queryKey: ["work-item", selectedItemId, selectedArtifact ?? null],
     queryFn: ({ signal }) =>
-      fetchWorkItem(selectedItemId as string, signal, {
-        include: WORK_ITEM_DETAIL_INCLUDE,
-        artifact: selectedArtifact,
-      }),
+      workItemClient.fetchItem(selectedItemId as string, { artifact: selectedArtifact }, signal),
     // Selecting another artifact of the same item keeps the item on screen while it loads.
     placeholderData: (previous) => (previous?.id === selectedItemId ? previous : undefined),
     enabled: selectedItemId !== undefined,

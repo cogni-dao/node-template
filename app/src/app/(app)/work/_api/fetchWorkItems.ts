@@ -3,8 +3,8 @@
 
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems`
- * Purpose: Client-side fetch wrappers for bounded work summary pages, the work board and item detail. The item view's older ref
- *   pages, links and expectations read through the package client (story.0085).
+ * Purpose: Client-side fetch wrappers for bounded work summary pages and the work board, and the one item-view read client
+ *   (`workItemClient`, from the package, story.0085) that every host reads the item through.
  * Scope: Calls summary, board and detail endpoints with type-safe contracts. Does not implement business logic.
  * Invariants:
  *   - Returns typed summary pages, board columns or details, or throws `WorkItemFetchError` carrying the HTTP status (the package hooks retry only 5xx and network failures)
@@ -14,7 +14,8 @@
  * @internal
  */
 
-import type { WorkItemsGetOutput, WorkItemSummariesListOutput } from "@cogni/node-contracts";
+import { createWorkItemClient } from "@cogni/knowledge-base-ui/work-item";
+import type { WorkItemSummariesListOutput } from "@cogni/node-contracts";
 import type { WorkBoardColumns, WorkSummaryPage } from "@cogni/work-items";
 
 export class WorkItemFetchError extends Error {
@@ -25,12 +26,6 @@ export class WorkItemFetchError extends Error {
     this.name = "WorkItemFetchError";
     this.status = status;
   }
-}
-
-export function isWorkItemNotFoundError(
-  error: unknown,
-): error is WorkItemFetchError {
-  return error instanceof WorkItemFetchError && error.status === 404;
 }
 
 async function responseErrorMessage(
@@ -87,29 +82,9 @@ export async function fetchWorkBoard(
   return response.json() as Promise<WorkBoardColumns>;
 }
 
-export async function fetchWorkItem(
-  id: string,
-  signal?: AbortSignal,
-  options: { readonly include?: string; readonly artifact?: string | undefined } = {},
-): Promise<WorkItemsGetOutput> {
-  const params = new URLSearchParams();
-  if (options.include) params.set("include", options.include);
-  if (options.artifact) params.set("artifact", options.artifact);
-  const query = params.toString();
-  const response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}${query ? `?${query}` : ""}`, {
-    method: "GET",
-    ...(signal && { signal }),
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    const message = await responseErrorMessage(
-      response,
-      `Failed to fetch work item (HTTP ${response.status})`,
-    );
-    throw new WorkItemFetchError(message, response.status);
-  }
-  return response.json() as Promise<WorkItemsGetOutput>;
-}
+/**
+ * The item read for the item view (story.0085): the package client, every part the view draws (`WORK_ITEM_VIEW_INCLUDES`),
+ * parsed with the work-items schema. A failed read throws `WorkItemReadError` with the HTTP `status`.
+ */
+export const workItemClient = createWorkItemClient();
 

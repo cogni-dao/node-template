@@ -16,7 +16,7 @@
 "use client";
 
 import type { CitationLinkComponent } from "@cogni/knowledge-base-ui";
-import { createWorkItemClient, WorkItemView } from "@cogni/knowledge-base-ui/work-item";
+import { WorkItemView } from "@cogni/knowledge-base-ui/work-item";
 import type { WorkItemDto, WorkItemsGetOutput } from "@cogni/node-contracts";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -26,9 +26,8 @@ import { Markdown } from "@/components/markdown";
 import { SheetDescription, SheetHeader, SheetTitle } from "@/components/sheet";
 
 import { PeekLink } from "../../_components/EntityPeek";
+import { workItemClient as client } from "../_api/fetchWorkItems";
 import { workItemHref } from "../_lib/workItemNavigation";
-
-const client = createWorkItemClient();
 
 /** The view's in-page link: stays on the page, keeps scroll, never peeks (an artifact is not a knowledge entry). */
 const ScrollKeepingLink: CitationLinkComponent = ({ entityId: _entityId, href, ...props }) => (
