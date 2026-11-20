@@ -257,12 +257,22 @@ describe("LiteLlmAdapter", () => {
       });
     });
 
-    it("resolves final with usage and cost from header", async () => {
+    it("resolves final with usage and cost from the final usage event, never the stream-start header (bug.0067)", async () => {
       const headers = new Headers();
-      headers.set("x-litellm-response-cost", "0.0002");
+      // LiteLLM sends this header before any token, so on a stream it reads 0.
+      headers.set("x-litellm-response-cost", "0");
       headers.set("x-litellm-call-id", "litellm-call-abc-123");
 
-      mockFetch.mockResolvedValueOnce(makeSseResponse(successFrames, headers));
+      mockFetch.mockResolvedValueOnce(
+        makeSseResponse(
+          [
+            ...successFrames.slice(0, 2),
+            'data: {"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"cost":0.0002}}\n\n',
+            "data: [DONE]\n\n",
+          ],
+          headers
+        )
+      );
 
       const { stream, final } = await adapter.completionStream(basicParams);
       await drain(stream);
@@ -289,9 +299,11 @@ describe("LiteLlmAdapter", () => {
       });
     });
 
-    it("omits providerCostUsd when no cost in header or usage event", async () => {
-      // No cost header AND no usage.cost field → cost must be absent
-      mockFetch.mockResolvedValueOnce(makeSseResponse(successFrames));
+    it("omits providerCostUsd when the usage event has no cost, even with a cost header", async () => {
+      // A stream-start header is not the call's cost; with no usage.cost the cost must be absent
+      const headers = new Headers();
+      headers.set("x-litellm-response-cost", "0");
+      mockFetch.mockResolvedValueOnce(makeSseResponse(successFrames, headers));
 
       const { stream, final } = await adapter.completionStream(basicParams);
       await drain(stream);
