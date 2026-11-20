@@ -1266,7 +1266,6 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     window: { periodStart: Date; periodEnd: Date },
     page: { limit: number; offset: number }
   ): Promise<{ receipts: IngestionReceipt[]; total: number }> {
-    await this.resolveEpochScoped(epochId);
     // One predicate over ingestion_receipts: in the window, or selected into this epoch.
     // A receipt matching both appears once (no UNION, no in-memory dedup).
     const selectedIntoEpoch = this.db
@@ -1283,7 +1282,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         inArray(ingestionReceipts.receiptId, selectedIntoEpoch)
       )
     );
-    const [rows, counted] = await Promise.all([
+    // The scope check runs beside the page and count reads, not before them: independent reads
+    // in parallel. A failed check rejects the whole call, so no row from another scope returns.
+    const [, rows, counted] = await Promise.all([
+      this.resolveEpochScoped(epochId),
       this.db
         .select()
         .from(ingestionReceipts)
@@ -1367,16 +1369,19 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     receiptIds: readonly string[]
   ): Promise<AttributionSelection[]> {
     if (receiptIds.length === 0) return [];
-    await this.resolveEpochScoped(epochId);
-    const rows = await this.db
-      .select()
-      .from(epochSelection)
-      .where(
-        and(
-          eq(epochSelection.epochId, epochId),
-          inArray(epochSelection.receiptId, [...receiptIds])
-        )
-      );
+    // Scope check beside the read (see getEpochActivityPage): a failed check rejects the call.
+    const [, rows] = await Promise.all([
+      this.resolveEpochScoped(epochId),
+      this.db
+        .select()
+        .from(epochSelection)
+        .where(
+          and(
+            eq(epochSelection.epochId, epochId),
+            inArray(epochSelection.receiptId, [...receiptIds])
+          )
+        ),
+    ]);
     return rows.map(toSelection);
   }
 
@@ -1456,11 +1461,14 @@ export class DrizzleAttributionAdapter implements AttributionStore {
   async getUserProjectionsForEpoch(
     epochId: bigint
   ): Promise<EpochUserProjection[]> {
-    await this.resolveEpochScoped(epochId);
-    const rows = await this.db
-      .select()
-      .from(epochUserProjections)
-      .where(eq(epochUserProjections.epochId, epochId));
+    // Scope check beside the read (see getEpochActivityPage): a failed check rejects the call.
+    const [, rows] = await Promise.all([
+      this.resolveEpochScoped(epochId),
+      this.db
+        .select()
+        .from(epochUserProjections)
+        .where(eq(epochUserProjections.epochId, epochId)),
+    ]);
     return rows.map(toUserProjection);
   }
 

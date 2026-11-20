@@ -3,16 +3,15 @@
 
 /**
  * Module: `@features/governance/hooks/useEpochsPage`
- * Purpose: Unified React Query hook for the epoch page — current epoch + past epochs in one query.
- * Scope: Client-side data fetching. Single list-epochs call, partitions into current (open/review) vs past (review/finalized). Uses appropriate compose function per status. Does not access database directly.
- * Invariants: Typed with view model types from types.ts. Prefers open epoch as current, falls back to review.
+ * Purpose: React Query hooks for the epoch page: the epoch list, one settlement-lifecycle read, and one composed view per epoch the user is looking at.
+ * Scope: Client-side data fetching. The page's first load is the list plus the settlement lifecycle plus the current epoch's own reads. A past epoch is read only when its row is opened, so first-load requests do not grow with the number of epochs. Does not access database directly.
+ * Invariants: BOUNDED_FIRST_LOAD (request count independent of epoch count), CURRENT_NOT_BLOCKED_BY_PAST, LIFECYCLE_FAILURE_IS_UNKNOWN. Prefers open epoch as current, falls back to review.
  * Side-effects: IO (HTTP GET to ledger API endpoints)
- * Links: src/features/governance/types.ts, src/features/governance/lib/compose-epoch.ts
+ * Links: src/features/governance/types.ts, src/features/governance/lib/compose-epoch.ts, bug.0068
  * @public
  */
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import pLimit from "p-limit";
 import type {
   ApiIngestionReceipt,
   EpochClaimantsDto,
@@ -29,14 +28,12 @@ import {
 } from "@/features/governance/lib/epoch-lifecycle-state";
 import type { EpochView } from "@/features/governance/types";
 
-export interface EpochsPageData {
-  readonly current: EpochView | null;
-  readonly pastEpochs: readonly EpochView[];
-  /** One fail-closed page read shared by every current and historical rail. */
-  readonly settlementLifecycle: SettlementLifecycleEvidence;
+export interface EpochListData {
+  /** Open epoch, else the first review epoch; null when there is none. */
+  readonly current: EpochDto | null;
+  /** Every other non-open epoch, newest period first. Summary fields only. */
+  readonly pastEpochs: readonly EpochDto[];
 }
-
-const limit = pLimit(3);
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
@@ -53,7 +50,7 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 /** Compose an open/review epoch using user-projections (live data). */
-async function composeCurrentEpoch(epoch: EpochDto): Promise<EpochView> {
+async function composeLiveEpoch(epoch: EpochDto): Promise<EpochView> {
   const [userProjectionsRes, activityRes] = await Promise.all([
     fetchJson<{ userProjections: UserProjectionDto[] }>(
       `/api/v1/attribution/epochs/${epoch.id}/user-projections`
@@ -69,8 +66,8 @@ async function composeCurrentEpoch(epoch: EpochDto): Promise<EpochView> {
   );
 }
 
-/** Compose a finalized epoch using claimant-based attribution (frozen data). */
-async function composePastEpoch(epoch: EpochDto): Promise<EpochView> {
+/** Compose one epoch: finalized uses claimant-based attribution (frozen data), others use live projections. */
+async function composeEpoch(epoch: EpochDto): Promise<EpochView> {
   if (epoch.status === "finalized") {
     const [claimantsRes, activityRes] = await Promise.all([
       fetchJson<EpochClaimantsDto>(
@@ -86,20 +83,12 @@ async function composePastEpoch(epoch: EpochDto): Promise<EpochView> {
       activityRes.events
     );
   }
-  // Review epochs that aren't the current one — use user-projections
-  return composeCurrentEpoch(epoch);
+  // Open and review epochs use user-projections
+  return composeLiveEpoch(epoch);
 }
 
-async function fetchEpochsPage(): Promise<EpochsPageData> {
-  const [{ epochs }, settlementLifecycle] = await Promise.all([
-    fetchJson<{ epochs: EpochDto[] }>(
-      "/api/v1/attribution/epochs?limit=200"
-    ),
-    fetchJson<SettlementLifecycleEvidence>(
-      "/api/v1/attribution/settlement-lifecycle"
-    ).catch(() => UNKNOWN_SETTLEMENT_LIFECYCLE),
-  ]);
-
+/** Partition the epoch list into the current epoch and the past epochs. */
+export function partitionEpochs(epochs: readonly EpochDto[]): EpochListData {
   // Find the current epoch: prefer open, fall back to most recent review
   const current =
     epochs.find((e) => e.status === "open") ??
@@ -107,25 +96,60 @@ async function fetchEpochsPage(): Promise<EpochsPageData> {
     null;
 
   // Past = everything except the current epoch, sorted newest-first by periodEnd
-  const past = epochs
+  const pastEpochs = epochs
     .filter((e) => e !== current && e.status !== "open")
     .sort(
       (a, b) =>
         new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime()
     );
-
-  const [currentView, pastViews] = await Promise.all([
-    current ? composeCurrentEpoch(current) : null,
-    Promise.all(past.map((epoch) => limit(() => composePastEpoch(epoch)))),
-  ]);
-
-  return { current: currentView, pastEpochs: pastViews, settlementLifecycle };
+  return { current, pastEpochs };
 }
 
-export function useEpochsPage(): UseQueryResult<EpochsPageData, Error> {
+/** One list read. Never fans out per epoch. */
+export function useEpochsPage(): UseQueryResult<EpochListData, Error> {
   return useQuery({
-    queryKey: ["governance", "epochs", "page"],
-    queryFn: fetchEpochsPage,
+    queryKey: ["governance", "epochs", "list"],
+    queryFn: async () => {
+      const { epochs } = await fetchJson<{ epochs: EpochDto[] }>(
+        "/api/v1/attribution/epochs?limit=200"
+      );
+      return partitionEpochs(epochs);
+    },
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * One fail-closed settlement-lifecycle read shared by every rail. It runs beside the list and
+ * never gates the contributor table. A failed read is `unknown`, never complete.
+ */
+export function useSettlementLifecycle(): UseQueryResult<
+  SettlementLifecycleEvidence,
+  Error
+> {
+  return useQuery({
+    queryKey: ["governance", "epochs", "settlement-lifecycle"],
+    queryFn: () =>
+      fetchJson<SettlementLifecycleEvidence>(
+        "/api/v1/attribution/settlement-lifecycle"
+      ).catch(() => UNKNOWN_SETTLEMENT_LIFECYCLE),
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * The composed view of one epoch: its contributors and unresolved activity.
+ * `enabled: false` reads the cache only, so a collapsed row never starts a fetch.
+ */
+export function useEpochView(
+  epoch: EpochDto,
+  options: { readonly enabled?: boolean } = {}
+): UseQueryResult<EpochView, Error> {
+  const { enabled = true } = options;
+  return useQuery({
+    queryKey: ["governance", "epochs", "view", epoch.id, epoch.status],
+    queryFn: () => composeEpoch(epoch),
+    enabled,
     staleTime: 60_000,
   });
 }
