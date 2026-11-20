@@ -3,10 +3,10 @@
 
 /**
  * Module: `@features/layout/components/UserAvatarMenu`
- * Purpose: Authenticated user avatar dropdown with profile link, sign out, and theme toggle.
+ * Purpose: Authenticated user avatar dropdown with profile link, verified sign out, and theme toggle.
  * Scope: Client component rendering avatar trigger + dropdown menu. Does not fetch profile data (uses session).
- * Invariants: Requires session with user.id; falls back to "?" when no display name available.
- * Side-effects: IO (signOut, theme changes via next-themes, navigation)
+ * Invariants: Requires session with user.id; server session ends before wallet disconnect; logout failure stays visible and retryable.
+ * Side-effects: IO (verified logout, theme changes via next-themes, navigation)
  * Links: src/components/kit/data-display/Avatar.tsx
  * @public
  */
@@ -17,13 +17,15 @@ import { cn } from "@cogni/node-ui-kit/util/cn";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { LogOut, Monitor, Moon, Sun, User } from "lucide-react";
 import Link from "next/link";
-import { signOut, useSession } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import { useTheme } from "next-themes";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 import { useDisconnect } from "wagmi";
 import { Avatar, AvatarFallback } from "@/components/kit/data-display/Avatar";
 import { EthereumIcon } from "@/components/kit/data-display/ProviderIcons";
+
+import { logoutBrowserSession } from "../logout";
 
 /** Default avatar color when none is set */
 const DEFAULT_AVATAR_COLOR = "hsl(var(--primary))";
@@ -42,9 +44,11 @@ function truncateWallet(address: string): string {
 
 export function UserAvatarMenu(): ReactElement | null {
   const { data: session } = useSession();
-  const { disconnect } = useDisconnect();
+  const { disconnectAsync } = useDisconnect();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -59,6 +63,22 @@ export function UserAvatarMenu(): ReactElement | null {
     (user.walletAddress ? truncateWallet(user.walletAddress) : "User");
   const avatarLetter = displayName.charAt(0).toUpperCase();
   const avatarColor = user.avatarColor || DEFAULT_AVATAR_COLOR;
+
+  const handleSignOut = async (): Promise<void> => {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    setSignOutError(null);
+    try {
+      await logoutBrowserSession(disconnectAsync);
+    } catch (error) {
+      setSignOutError(
+        error instanceof Error
+          ? error.message
+          : "Sign out failed. Please try again."
+      );
+      setIsSigningOut(false);
+    }
+  };
 
   return (
     <DropdownMenuPrimitive.Root>
@@ -106,14 +126,30 @@ export function UserAvatarMenu(): ReactElement | null {
           {/* Sign out */}
           <DropdownMenuPrimitive.Item
             className={MENU_ITEM_CLASSES}
-            onClick={() => {
-              disconnect();
-              signOut({ callbackUrl: "/" });
+            disabled={isSigningOut}
+            onSelect={(event) => {
+              event.preventDefault();
+              void handleSignOut();
             }}
           >
             <LogOut className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
-            <span>Sign Out</span>
+            <span>
+              {isSigningOut
+                ? "Signing Out…"
+                : signOutError
+                  ? "Retry Sign Out"
+                  : "Sign Out"}
+            </span>
           </DropdownMenuPrimitive.Item>
+
+          {signOutError ? (
+            <div
+              role="alert"
+              className="mx-2 mb-1 text-destructive text-xs leading-snug"
+            >
+              {signOutError}
+            </div>
+          ) : null}
 
           <DropdownMenuPrimitive.Separator className="my-1 h-px bg-border" />
 
