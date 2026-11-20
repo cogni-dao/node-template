@@ -30,6 +30,7 @@ const FILES = [
   ".github/workflows/pr-lint.yaml",
   ...(HAS_PUBLISH ? [PUBLISH] : []),
   ".cogni/repo-policy.json",
+  ...(existsSync(join(REPO_ROOT, "packages/release-train.json")) ? ["packages/release-train.json"] : []),
 ];
 
 function runCheckerOn(mutate) {
@@ -332,6 +333,17 @@ const CASES = [
     expectExit: 1,
     templateOnly: true,
     expectMatch: /push trigger must include "train-v\*"/,
+  },
+  {
+    name: "a registry train entry that is not a train member would publish a non-member as one",
+    mutate: edit(
+      ".github/workflows/publish-packages.yml",
+      '"tagPrefix":"sandbox-v"}',
+      '"tagPrefix":"sandbox-v","train":true}'
+    ),
+    expectExit: 1,
+    templateOnly: true,
+    expectMatch: /registry train entries .* must equal packages\/release-train\.json members/,
   },
   {
     name: "an unparseable registry is rejected rather than silently skipped",

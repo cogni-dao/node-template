@@ -51,6 +51,16 @@ describe("assessFleetTrainLag on the real 2026-11-20 manifests", () => {
 		expect(byRepo.get("cogni-dao/toks5")).toContain("vendored:@cogni-dao/metrics@workspace");
 	});
 
+	it("counts a vendored copy under either scope, and ignores another publisher's Releases", () => {
+		const vendored = { dependencies: { "@cogni/work-items": "workspace:*" } };
+		expect(assessFleetTrainLag("0.24.0", MEMBERS, [{ repo: "cogni-dao/x", manifest: vendored }])[0]?.reasons).toContain(
+			"vendored:@cogni/work-items@workspace",
+		);
+		const foreign = { dependencies: { "@cogni/work-items": "https://github.com/someone/fork/releases/download/work-items-v0.30.0/x.tgz" } };
+		const reasons = assessFleetTrainLag("0.24.0", MEMBERS, [{ repo: "cogni-dao/x", manifest: foreign }], "cogni-dao/node-template")[0]?.reasons;
+		expect(reasons).toContain("missing:@cogni-dao/work-items@none");
+	});
+
 	it("a consumer pinned wholly to the train is not lagging", () => {
 		const url = (m: (typeof MEMBERS)[number]) =>
 			`https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.24.0/x.tgz`;
@@ -98,7 +108,7 @@ describe("readFleetTrainLag", () => {
 			"fetch",
 			vi.fn(async (url: string) => {
 				calls.push(url);
-				if (url.endsWith("/git/matching-refs/tags/train-v")) return json([{ ref: "refs/tags/train-v0.24.0" }]);
+				if (url.includes("/git/matching-refs/tags/train-v")) return json([{ ref: "refs/tags/train-v0.24.0" }]);
 				const tag = /releases\/tags\/(.+)$/.exec(url)?.[1];
 				if (tag) return json(release(decodeURIComponent(tag), "2026-11-20T00:00:00Z"));
 				const repo = /githubusercontent\.com\/([^/]+\/[^/]+)\//.exec(url)?.[1];
@@ -115,7 +125,7 @@ describe("readFleetTrainLag", () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (url: string) => {
-				if (url.endsWith("/git/matching-refs/tags/train-v")) return json([{ ref: "refs/tags/train-v0.24.0" }]);
+				if (url.includes("/git/matching-refs/tags/train-v")) return json([{ ref: "refs/tags/train-v0.24.0" }]);
 				const tag = /releases\/tags\/(.+)$/.exec(url)?.[1];
 				if (tag) return json(release(decodeURIComponent(tag), "2026-11-20T00:00:00Z"));
 				return url.includes("cogni-dao/red/") ? json({}, 500) : json({});
@@ -129,7 +139,7 @@ describe("readFleetTrainLag", () => {
 	it("no complete train is unknown, never zero", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async (url: string) => (url.endsWith("/train-v") ? json([]) : json({}, 404))),
+			vi.fn(async (url: string) => (url.includes("/tags/train-v") ? json([]) : json({}, 404))),
 		);
 		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
 		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });

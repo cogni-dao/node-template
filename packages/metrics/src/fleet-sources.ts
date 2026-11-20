@@ -9,7 +9,8 @@
  *   fixture of real manifests can prove them.
  * Invariants:
  *   - COMPLETE_TRAIN: `T` is the newest version every member has a Release for, published at least `graceHours` before the reading.
- *   - PIN_BY_RELEASE_URL: a pin counts by the Release tag it resolves to, never by its dependency key, so legacy aliases count too.
+ *   - PIN_BY_RELEASE_URL: a pin counts by the publisher's Release tag it resolves to, never by its dependency key, so legacy
+ *     aliases count too.
  *   - VENDORED_LAGS: a `workspace:` copy of a member is lagging: its bytes are not the published ones.
  *   - UNKNOWN_NOT_ZERO: a failed or malformed read is an incomplete sample naming its repo, never 0.
  * Side-effects: IO (HTTPS GET api.github.com tags and releases, at most 11 requests; raw.githubusercontent.com manifests)
@@ -107,7 +108,10 @@ export function assessFleetTrainLag(
 	train: string,
 	members: readonly TrainMember[],
 	manifests: readonly { readonly repo: string; readonly manifest: unknown }[],
+	publisher?: string,
 ): ConsumerLag[] {
+	// `@cogni/work-items` and `@cogni-dao/work-items` name one member: a vendored copy may keep either scope.
+	const base = (name: string) => name.replace(/^@[^/]+\//, "");
 	const lagging: ConsumerLag[] = [];
 	for (const { repo, manifest } of manifests) {
 		const m = (manifest ?? {}) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
@@ -116,7 +120,8 @@ export function assessFleetTrainLag(
 		const pinned = new Set<string>();
 		for (const [key, raw] of Object.entries(deps)) {
 			if (typeof raw !== "string") continue;
-			const tag = /\/releases\/download\/([^/]+)\//.exec(raw)?.[1];
+			const release = /github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\//.exec(raw);
+			const tag = release && (!publisher || release[1]?.toLowerCase() === publisher.toLowerCase()) ? release[2] : undefined;
 			if (tag) {
 				const member = members.find((x) => tag.startsWith(x.tagPrefix));
 				if (!member) continue;
@@ -131,7 +136,7 @@ export function assessFleetTrainLag(
 				const spec = raw.slice("workspace:".length);
 				const at = spec.lastIndexOf("@");
 				const target = spec.startsWith("@") ? (at > 0 ? spec.slice(0, at) : spec) : key;
-				const member = members.find((x) => x.name === target);
+				const member = members.find((x) => base(x.name) === base(target));
 				if (!member) continue;
 				pinned.add(member.name);
 				reasons.push(`vendored:${key}@workspace`);
@@ -164,8 +169,10 @@ async function getJson(url: string, signal: AbortSignal, maxResponseBytes: numbe
 	return { body: JSON.parse(text), date: date ? new Date(date).toISOString() : null };
 }
 
-const REPO = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/;
-const PATH = /^[A-Za-z0-9_./-]{1,200}\/package\.json$|^package\.json$/;
+/** `owner/repo`, the shape GitHub allows. The calculator's params schema reuses it. */
+export const GITHUB_REPO_PATTERN = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/;
+/** A manifest path: directories of safe segments ending in `package.json`, never `..`. */
+export const MANIFEST_PATH_PATTERN = /^(?:[A-Za-z0-9_-]+\/)*package\.json$/;
 
 /** Count of consumers trailing the latest complete train, with each lagging repo and reason as evidence. */
 export async function readFleetTrainLag(
@@ -174,9 +181,10 @@ export async function readFleetTrainLag(
 	signal: AbortSignal,
 	budget: Readonly<MetricBudget>,
 ): Promise<MetricSample> {
-	if (!REPO.test(p.publisher) || p.consumers.length > FLEET_TRAIN_MAX_CONSUMERS)
+	if (!GITHUB_REPO_PATTERN.test(p.publisher) || p.consumers.length > FLEET_TRAIN_MAX_CONSUMERS)
 		throw new Error("invalid_fleet_params");
-	for (const c of p.consumers) if (!REPO.test(c.repo) || !PATH.test(c.manifestPath) || c.manifestPath.includes("..")) throw new Error("invalid_fleet_params");
+	for (const c of p.consumers)
+		if (!GITHUB_REPO_PATTERN.test(c.repo) || !MANIFEST_PATH_PATTERN.test(c.manifestPath)) throw new Error("invalid_fleet_params");
 	const unknown = (counts: string, reason: "source_failed" | "incomplete_or_invalid_source", asOf: string | null): MetricSample => ({
 		value: 0,
 		unit: "nodes",
@@ -190,7 +198,7 @@ export async function readFleetTrainLag(
 	let asOf: string | null = null;
 	let candidates: string[];
 	try {
-		const refs = await getJson(`${api}/git/matching-refs/tags/train-v`, signal, budget.maxResponseBytes);
+		const refs = await getJson(`${api}/git/matching-refs/tags/train-v?per_page=100`, signal, budget.maxResponseBytes);
 		asOf = refs.date;
 		if (!Array.isArray(refs.body)) return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
 		candidates = (refs.body as { ref?: unknown }[])
@@ -231,7 +239,7 @@ export async function readFleetTrainLag(
 	const failed = p.consumers.filter((_, i) => read[i]?.status !== "fulfilled").map((c) => c.repo);
 	if (failed.length) return unknown(`train=${train};unreadable=${failed.join(",")}`, "source_failed", asOf);
 	const manifests = read.map((r) => (r as PromiseFulfilledResult<{ repo: string; manifest: unknown }>).value);
-	const lagging = assessFleetTrainLag(train, p.members, manifests);
+	const lagging = assessFleetTrainLag(train, p.members, manifests, p.publisher);
 	return {
 		value: lagging.length,
 		unit: "nodes",

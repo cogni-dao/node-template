@@ -15,6 +15,15 @@ import { checkTrain, TRAIN_FILE } from "./release-train-lib.mjs";
 const ROOT = resolve(process.env.RELEASE_TRAIN_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
 const readJson = (file) => JSON.parse(readFileSync(join(ROOT, file), "utf8"));
 if (!existsSync(join(ROOT, TRAIN_FILE))) {
+  // Deleting the train file must not switch the check off.
+  const baseRef = process.env.GITHUB_BASE_REF;
+  if (baseRef) {
+    try {
+      execFileSync("git", ["cat-file", "-e", `origin/${baseRef}:${TRAIN_FILE}`], { cwd: ROOT, stdio: "ignore" });
+      console.error(`release-train: train_file_removed: ${TRAIN_FILE} exists on ${baseRef} but not in this PR`);
+      process.exit(1);
+    } catch {}
+  }
   console.log("release-train: no train file; nothing to check");
   process.exit(0);
 }

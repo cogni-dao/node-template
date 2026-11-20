@@ -17,6 +17,8 @@ import {
 	summarizeNoInlineHistory,
 } from "./no-inline-history.js";
 
+export * from "./fleet-sources.js";
+
 export async function readWorkCount(
 	sql: Sql,
 	mode: "open" | "validated",
@@ -1086,4 +1088,3 @@ function errorClass(error: unknown): string {
 			: typeof error;
 	return `error:${(name || "unknown").slice(0, 64)}`;
 }
-export * from "./fleet-sources.js";

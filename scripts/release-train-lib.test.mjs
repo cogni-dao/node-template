@@ -59,6 +59,22 @@ assert.deepEqual(checkTrain({ train, manifests: good() }), []);
   assert.deepEqual(codes(checkTrain({ train, manifests: good() }, pr)), ["release_pr_not_version_only", "release_pr_not_version_only"]);
 }
 
+// A release PR must raise the version and may not loosen other dependencies.
+{
+  const after = good();
+  after["packages/b"].devDependencies.vitest = "^9";
+  const pr = {
+    baseTrain: train,
+    baseManifests: good(),
+    changedFiles: [TRAIN_FILE, "packages/b/package.json"],
+    manifestDiffs: { "packages/b/package.json": ["devDependencies"] },
+  };
+  assert.deepEqual(codes(checkTrain({ train, manifests: after }, pr)).sort(), [
+    "release_pr_not_version_only",
+    "release_pr_version_not_raised",
+  ]);
+}
+
 // planTrain sets every version, pins member peers to ^T and frees exact workspace pins.
 {
   const m = good();

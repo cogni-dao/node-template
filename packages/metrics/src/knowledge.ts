@@ -26,6 +26,8 @@ import { createTickReads } from "./tick-reads.js";
 import {
 	FIRST_PARENT_WALK_CAP,
 	FLEET_TRAIN_MAX_CONSUMERS,
+	GITHUB_REPO_PATTERN,
+	MANIFEST_PATH_PATTERN,
 	GITHUB_ACTIONS_MAX_PAGE_BYTES,
 	GITHUB_ACTIONS_MAX_PAGES,
 	NO_INLINE_HISTORY_MAX_BYTES,
@@ -323,7 +325,7 @@ export function createGoalMetrics(deps: {
 			);
 		},
 	});
-	const ghRepo = z.string().regex(/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/);
+	const ghRepo = z.string().regex(GITHUB_REPO_PATTERN);
 	const trainLagParams = z.strictObject({
 		publisher: ghRepo,
 		members: z
@@ -331,7 +333,7 @@ export function createGoalMetrics(deps: {
 			.min(1)
 			.max(10),
 		consumers: z
-			.array(z.strictObject({ repo: ghRepo, manifestPath: z.string().regex(/^(?:[A-Za-z0-9_-]+\/)*package\.json$/) }))
+			.array(z.strictObject({ repo: ghRepo, manifestPath: z.string().regex(MANIFEST_PATH_PATTERN) }))
 			.min(1)
 			.max(FLEET_TRAIN_MAX_CONSUMERS),
 		graceHours: z.number().int().min(0).max(168),

@@ -80,6 +80,10 @@ export function checkTrain(tree, pr) {
   if (!pr || !pr.baseTrain) return problems; // adding the train file is the bootstrap release PR
   const releasePr = pr.changedFiles.includes(TRAIN_FILE);
   if (releasePr) {
+    if (!(compareVersions(train.version, pr.baseTrain.version) > 0))
+      problems.push(`release_pr_version_not_raised: ${TRAIN_FILE} is ${train.version}, base is ${pr.baseTrain.version}`);
+    if (JSON.stringify([...train.members].sort()) !== JSON.stringify([...pr.baseTrain.members].sort()))
+      problems.push("release_pr_not_version_only: a release PR cannot change the train members");
     const memberManifests = new Set(train.members.map((dir) => `${dir}/package.json`));
     for (const file of pr.changedFiles) {
       if (file === TRAIN_FILE || file === "pnpm-lock.yaml") continue;
@@ -91,6 +95,23 @@ export function checkTrain(tree, pr) {
       for (const field of fields)
         if (!["version", "peerDependencies", "devDependencies", "dependencies"].includes(field))
           problems.push(`release_pr_not_version_only: ${file} changes ${field}`);
+      // Dependency fields may change only on member keys: peers to ^T, workspace pins to workspace:*.
+      const dir = file.slice(0, -"/package.json".length);
+      const before = pr.baseManifests[dir] ?? {};
+      const after = manifests[dir] ?? {};
+      for (const field of ["peerDependencies", "devDependencies", "dependencies"]) {
+        const keys = new Set([...Object.keys(before[field] ?? {}), ...Object.keys(after[field] ?? {})]);
+        for (const key of keys) {
+          const was = before[field]?.[key];
+          const now = after[field]?.[key];
+          if (was === now) continue;
+          const allowed =
+            memberFor(key, now, members) &&
+            was !== undefined &&
+            (field === "peerDependencies" ? now === `^${train.version}` : now === "workspace:*");
+          if (!allowed) problems.push(`release_pr_not_version_only: ${file} ${field}.${key} ${was ?? "(none)"} -> ${now ?? "(none)"}`);
+        }
+      }
     }
   } else {
     for (const { dir, name } of members)

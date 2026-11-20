@@ -12,8 +12,8 @@ name: Publish Packages
 #
 # ONE LANE, N PACKAGES. The per-package registry lives in `env.PACKAGES` below —
 # the single source of truth for name, directory, and tag prefix. A `select` job
-# resolves the pushed tag to exactly one registry entry and emits it as the
-# publish matrix, so every leg that runs is a leg that genuinely should run and no
+# resolves the pushed tag to exactly one registry entry (or, for a `train-v<T>`
+# tag, to every `"train": true` entry) and emits it as the publish matrix, so every leg that runs is a leg that genuinely should run and no
 # step needs a leg-selection `if`. That matters: `matrix` is not available in
 # `jobs.<id>.if`, so a static matrix could only be gated step-by-step, which would
 # force every mutating step's `if` into a compound expression and break the
@@ -150,8 +150,9 @@ jobs:
                   process.exit(1);
                 }
                 selected = registry.filter((p) => p.train === true);
-                if (selected.length !== train.members.length) {
-                  console.error(`registry marks ${selected.length} train entries; release-train.json lists ${train.members.length}`);
+                const dirs = selected.map((p) => p.dir).sort().join(",");
+                if (dirs !== [...train.members].sort().join(",")) {
+                  console.error(`registry train entries (${dirs}) differ from release-train.json members (${train.members.join(",")})`);
                   process.exit(1);
                 }
                 console.log(`selected: ${selected.map((p) => p.name).join(", ")}`);
@@ -304,6 +305,12 @@ jobs:
           set -euo pipefail
           if gh release view "$RELEASE_TAG" --json tagName >/dev/null 2>&1; then
             echo "::error::release $RELEASE_TAG already exists; a published version is immutable. Bump the version and tag again."
+            exit 1
+          fi
+          # A train leg writes its member tag. One that already exists (a hand-pushed tag at another commit) would
+          # make `gh release create` attach these attested bytes to that commit's tag, so it fails here.
+          if [ "$RELEASE_TAG" != "$GITHUB_REF_NAME" ] && gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "::error::tag $RELEASE_TAG already exists; a train member's tag is created only by its train."
             exit 1
           fi
           echo "$RELEASE_TAG is unpublished"

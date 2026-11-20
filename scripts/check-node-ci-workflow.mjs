@@ -791,6 +791,14 @@ if (HAS_PUBLISH_WORKFLOW) {
       if (hasTrain && !tagSet.has("train-v*")) {
         fail(PUBLISH_WORKFLOW_PATH, 'push trigger must include "train-v*": registry entries mark "train": true');
       }
+      // The train entries are exactly the train file's members, so a tag cannot publish a non-member as one.
+      const trainFile = "packages/release-train.json";
+      if (hasTrain && existsSync(trainFile)) {
+        const members = [...JSON.parse(readFileSync(trainFile, "utf8")).members].sort().join(",");
+        const dirs = publishRegistry.filter((entry) => entry?.train === true).map((entry) => entry.dir).sort().join(",");
+        if (members !== dirs)
+          fail(PUBLISH_WORKFLOW_PATH, `registry train entries (${dirs}) must equal packages/release-train.json members (${members})`);
+      }
       // Every registered package must be taggable.
       for (const entry of publishRegistry) {
         if (typeof entry?.tagPrefix !== "string") continue;
