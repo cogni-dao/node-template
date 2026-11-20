@@ -36,7 +36,12 @@ intent:
     thumbnail: "/opengraph-image"
 
 governance:
+  dao_contract: "0x717a747df71111a678202BfCD2E3B0081A9aeB56"
+  plugin_contract: "0x6b8f7c9f18b33b8ad4e8b0710dd64a27388de6c9"
+  signal_contract: "0x2479a0976B157EACf2D0c68357477a6de7E22139"
+  token_contract: "0x0166Db3d42603E790Fb685059DcAa37087B032c8"
   chain_id: "8453" # Base mainnet
+  base_url: "https://proposal.cognidao.org"
 
 # Activity ledger ingestion + approver allowlist.
 # `approvers` gates the `(admin)/` route group and write routes under
