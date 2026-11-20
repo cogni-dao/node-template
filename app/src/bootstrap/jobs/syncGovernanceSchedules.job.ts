@@ -29,15 +29,11 @@ import { schedules } from "@/shared/db/schema";
 import { serverEnv } from "@/shared/env/server-env";
 
 /**
- * Governance grant (LEDGER_INGEST's) is scoped to the graph id its schedule row
- * carries. ensureGrant matches on scope containment, so already-deployed DBs mint
- * one new grant on first sync; the schedule row is repointed by the upsert and the
- * old grant row is left unreferenced (ledger workflows never validate it).
+ * Governance grant. No schedule this node writes uses it any more (the operator owns
+ * LEDGER_INGEST; graph charters mint their own `graph:execute:{graph}` grant); the
+ * idempotent ensure is kept so the service dependency contract is unchanged.
  */
 const GOVERNANCE_GRANT_SCOPES = ["graph:execute:ledger:ingest"] as const;
-
-/** Temporal schedule ID for the ledger-ingest (epoch) schedule. */
-const LEDGER_INGEST_SCHEDULE_ID = "governance:ledger_ingest";
 
 function computeNextRun(cron: string, timezone: string): Date {
   const interval = cronParser.parseExpression(cron, {
@@ -168,13 +164,19 @@ export async function runGovernanceSchedulesSyncJob(
       systemUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
       nodeId: getNodeId(),
       scheduleControl: container.scheduleControl,
-      // Prune only this node database's system-owned governance rows. The
+      // Prune only this node database's ENABLED system-owned governance rows. The
       // Temporal namespace is shared; a prefix scan could include sibling nodes.
+      // Disabled rows are already retired, so they are not re-listed every boot.
       listGovernanceScheduleIds: async () => {
         const rows = await serviceDb
           .select({ temporalScheduleId: schedules.temporalScheduleId })
           .from(schedules)
-          .where(eq(schedules.ownerUserId, COGNI_SYSTEM_PRINCIPAL_USER_ID));
+          .where(
+            and(
+              eq(schedules.ownerUserId, COGNI_SYSTEM_PRINCIPAL_USER_ID),
+              eq(schedules.enabled, true)
+            )
+          );
         return rows
           .map((row) => row.temporalScheduleId)
           .filter(
@@ -210,27 +212,6 @@ export async function runGovernanceSchedulesSyncJob(
       },
       "Governance schedule sync complete"
     );
-
-    // Eager first epoch: when the ledger schedule is newly created, trigger one collection
-    // run now so epoch 1 opens immediately instead of waiting for the first cron fire.
-    // Idempotent: only fires on `created` (steady-state reboots see it skipped); the epoch
-    // window-unique constraint also prevents duplicates. Failure is non-fatal — cron backstops.
-    if (result.created.includes(LEDGER_INGEST_SCHEDULE_ID)) {
-      try {
-        await container.scheduleControl.triggerSchedule(
-          LEDGER_INGEST_SCHEDULE_ID
-        );
-        log.info(
-          { scheduleId: LEDGER_INGEST_SCHEDULE_ID },
-          "Eager-triggered first epoch collection"
-        );
-      } catch (err) {
-        log.warn(
-          { scheduleId: LEDGER_INGEST_SCHEDULE_ID, err },
-          "Eager epoch trigger failed — cron will open the first epoch"
-        );
-      }
-    }
 
     return {
       created: result.created.length,
