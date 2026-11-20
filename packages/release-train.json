@@ -1,0 +1,10 @@
+{
+  "version": "0.24.0",
+  "members": [
+    "packages/work-items",
+    "packages/knowledge-store",
+    "packages/knowledge-base-ui",
+    "packages/metrics",
+    "packages/ai-tools"
+  ]
+}

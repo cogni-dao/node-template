@@ -47,14 +47,11 @@ name: Publish Packages
 on:
   push:
     tags:
-      - "work-items-v*"
-      - "knowledge-store-v*"
+      # One tag publishes the five train members together (hub package-release-train); a member has no tag of its own.
+      - "train-v*"
       - "knowledge-base-v*"
-      - "knowledge-base-ui-v*"
       - "graph-execution-v*"
       - "scheduling-v*"
-      - "metrics-v*"
-      - "ai-tools-v*"
       - "langgraph-graphs-v*"
       - "money-plane-v*"
       - "agent-grants-v*"
@@ -94,18 +91,20 @@ env:
   # so the published dist and .d.ts files came off a toolchain no consumer uses.
   NODE_VERSION: "22"
   # THE PACKAGE REGISTRY. Adding a publishable package means adding one entry
-  # here AND its `<tagPrefix>*` filter to `on.push.tags` above;
+  # here AND its `<tagPrefix>*` filter to `on.push.tags` above. A `"train": true`
+  # entry has no filter of its own: the one `train-v<T>` tag publishes every
+  # train member at packages/release-train.json's version (hub package-release-train);
   # scripts/check-node-ci-workflow.mjs fails the build if those two drift apart
   # in either direction, so neither an unselectable tag nor an untaggable
   # package can ship.
   PACKAGES: >-
-    [{"name":"@cogni-dao/metrics","dir":"packages/metrics","tagPrefix":"metrics-v"},
-    {"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
-     {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
+    [{"name":"@cogni-dao/metrics","dir":"packages/metrics","tagPrefix":"metrics-v","train":true},
+    {"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v","train":true},
+     {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v","train":true},
      {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},
-     {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v"},
+     {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v","train":true},
      {"name":"@cogni-dao/graph-execution","dir":"packages/graph-execution-host","tagPrefix":"graph-execution-v"},
-     {"name":"@cogni-dao/ai-tools","dir":"packages/ai-tools","tagPrefix":"ai-tools-v"},
+     {"name":"@cogni-dao/ai-tools","dir":"packages/ai-tools","tagPrefix":"ai-tools-v","train":true},
      {"name":"@cogni-dao/langgraph-graphs","dir":"packages/langgraph-graphs","tagPrefix":"langgraph-graphs-v"},
      {"name":"@cogni-dao/money-plane","dir":"packages/money-plane","tagPrefix":"money-plane-v"},
      {"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"},
@@ -127,6 +126,9 @@ jobs:
     outputs:
       packages: ${{ steps.select.outputs.packages }}
     steps:
+      # A train tag is checked against packages/release-train.json at the tagged commit.
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
       - name: Resolve the publish matrix from the tag
         id: select
         run: |
@@ -140,7 +142,23 @@ jobs:
             let selected = registry;
             if (process.env.GITHUB_EVENT_NAME === "push") {
               const ref = process.env.GITHUB_REF_NAME;
-              const matched = registry.filter((p) => ref.startsWith(p.tagPrefix));
+              // A train tag selects every train member; it must name the version in packages/release-train.json.
+              if (ref.startsWith("train-v")) {
+                const train = JSON.parse(require("node:fs").readFileSync("packages/release-train.json", "utf8"));
+                if (ref !== `train-v${train.version}`) {
+                  console.error(`tag ${ref} does not match packages/release-train.json version ${train.version}`);
+                  process.exit(1);
+                }
+                selected = registry.filter((p) => p.train === true);
+                if (selected.length !== train.members.length) {
+                  console.error(`registry marks ${selected.length} train entries; release-train.json lists ${train.members.length}`);
+                  process.exit(1);
+                }
+                console.log(`selected: ${selected.map((p) => p.name).join(", ")}`);
+                require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `packages=${JSON.stringify(selected)}\n`);
+                process.exit(0);
+              }
+              const matched = registry.filter((p) => ref.startsWith(p.tagPrefix) && p.train !== true);
               if (matched.length !== 1) {
                 console.error(
                   `tag ${ref} matches ${matched.length} registry entries (need exactly 1): ` +
@@ -171,6 +189,19 @@ jobs:
       TAG_PREFIX: ${{ matrix.pkg.tagPrefix }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      # The Release this leg writes: the pushed tag itself, or for a train tag (`train-v<T>`) the member's own
+      # `<tagPrefix><T>`, so consumers keep one URL shape. TAG_VERSION is the version the tag certifies.
+      - name: Resolve the release tag
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF_NAME" in
+            train-v*) version="${GITHUB_REF_NAME#train-v}"; release="${TAG_PREFIX}${version}" ;;
+            *) version="${GITHUB_REF_NAME#"$TAG_PREFIX"}"; release="$GITHUB_REF_NAME" ;;
+          esac
+          echo "TAG_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$release" >> "$GITHUB_ENV"
+          echo "release tag: $release ($version)"
 
       # A published version must already be gated by this repo's required checks
       # — including the real-Doltgres lane from task.5199. The previous version
@@ -250,9 +281,9 @@ jobs:
         run: |
           set -euo pipefail
           pkg="$(node -p "require('./' + process.env.PKG_DIR + '/package.json').version")"
-          tag="${GITHUB_REF_NAME#"$TAG_PREFIX"}"
+          tag="$TAG_VERSION"
           if [ "$pkg" != "$tag" ]; then
-            echo "::error::tag ${TAG_PREFIX}${tag} does not match package version $pkg"
+            echo "::error::tag $GITHUB_REF_NAME ($tag) does not match package version $pkg"
             exit 1
           fi
           echo "publishing ${PKG_NAME}@$pkg"
@@ -271,11 +302,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if gh release view "$GITHUB_REF_NAME" --json tagName >/dev/null 2>&1; then
-            echo "::error::release $GITHUB_REF_NAME already exists; a published version is immutable. Bump the version and tag again."
+          if gh release view "$RELEASE_TAG" --json tagName >/dev/null 2>&1; then
+            echo "::error::release $RELEASE_TAG already exists; a published version is immutable. Bump the version and tag again."
             exit 1
           fi
-          echo "$GITHUB_REF_NAME is unpublished"
+          echo "$RELEASE_TAG is unpublished"
 
       - name: Pack the tarball
         id: pack
@@ -411,6 +442,8 @@ jobs:
             echo "Build provenance is attested. Verify before depending on it:"
             echo "    gh attestation verify ${tgz_name} -R ${GITHUB_REPOSITORY}"
           } > /tmp/release-notes.md
-          gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" \
-            --title "$GITHUB_REF_NAME" \
+          # --target creates a train member's own tag at the tagged commit; a pushed member tag already exists there.
+          gh release create "$RELEASE_TAG" "${{ steps.pack.outputs.tgz }}" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TAG" \
             --notes-file /tmp/release-notes.md

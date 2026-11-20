@@ -25,10 +25,12 @@ import { type GoalSourcePort, readGoalsProgress } from "./progress.js";
 import { createTickReads } from "./tick-reads.js";
 import {
 	FIRST_PARENT_WALK_CAP,
+	FLEET_TRAIN_MAX_CONSUMERS,
 	GITHUB_ACTIONS_MAX_PAGE_BYTES,
 	GITHUB_ACTIONS_MAX_PAGES,
 	NO_INLINE_HISTORY_MAX_BYTES,
 	NO_INLINE_HISTORY_MAX_ROWS,
+	readFleetTrainLag,
 	readGithubActions,
 	readGithubStars,
 	readKnowledgeMerges,
@@ -78,6 +80,7 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"github.actions@1",
 	"no-inline-history@1",
 	"knowledge.merge-review@1",
+	"fleet.train-lag@1",
 ] as const;
 /** `work.count@1` → `work.count`: the family every version of a calculator shares. */
 export function calculatorFamily(id: string): string {
@@ -318,6 +321,33 @@ export function createGoalMetrics(deps: {
 			return ctx.read((signal) =>
 				readKnowledgeMerges(sourceSql, output, ctx.window, signal),
 			);
+		},
+	});
+	const ghRepo = z.string().regex(/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/);
+	const trainLagParams = z.strictObject({
+		publisher: ghRepo,
+		members: z
+			.array(z.strictObject({ name: z.string().regex(/^@[a-z0-9-]+\/[a-z0-9-]+$/), tagPrefix: z.string().regex(/^[a-z0-9-]+-v$/) }))
+			.min(1)
+			.max(10),
+		consumers: z
+			.array(z.strictObject({ repo: ghRepo, manifestPath: z.string().regex(/^(?:[A-Za-z0-9_-]+\/)*package\.json$/) }))
+			.min(1)
+			.max(FLEET_TRAIN_MAX_CONSUMERS),
+		graceHours: z.number().int().min(0).max(168),
+	});
+	registry.register({
+		id: "fleet.train-lag@1",
+		// Consumer manifests are read at the default branch now; there is no past instant to replay.
+		unit: "nodes",
+		display: "volume",
+		paramsSchema: trainLagParams,
+		// One source call: one tag list, at most two trains of member Release reads (11 REST requests) and one raw
+		// manifest read per consumer (hub package-release-train).
+		budget: { timeoutMs: 30000, maxSourceCalls: 1, maxRows: 100, maxResponseBytes: 1_048_576 },
+		compute: async (params, ctx) => {
+			const p = trainLagParams.parse(params);
+			return ctx.read((signal, limits) => readFleetTrainLag(p, new Date(ctx.window.end), signal, limits));
 		},
 	});
 	const nodeCalculatorIds: string[] = [];

@@ -785,10 +785,25 @@ if (HAS_PUBLISH_WORKFLOW) {
       fail(PUBLISH_WORKFLOW_PATH, "push trigger must declare tag filters");
     } else {
       const tagSet = new Set(tags);
+      // Train members (hub package-release-train) publish only through one `train-v*` tag: a member tag filter
+      // would let one member publish alone and split the train.
+      const hasTrain = publishRegistry.some((entry) => entry?.train === true);
+      if (hasTrain && !tagSet.has("train-v*")) {
+        fail(PUBLISH_WORKFLOW_PATH, 'push trigger must include "train-v*": registry entries mark "train": true');
+      }
       // Every registered package must be taggable.
       for (const entry of publishRegistry) {
         if (typeof entry?.tagPrefix !== "string") continue;
         const filter = `${entry.tagPrefix}*`;
+        if (entry.train === true) {
+          if (tagSet.has(filter)) {
+            fail(
+              PUBLISH_WORKFLOW_PATH,
+              `tag filter ${JSON.stringify(filter)} lets train member ${entry.name} publish alone; train members publish only through "train-v*"`
+            );
+          }
+          continue;
+        }
         if (!tagSet.has(filter)) {
           fail(
             PUBLISH_WORKFLOW_PATH,
@@ -803,6 +818,7 @@ if (HAS_PUBLISH_WORKFLOW) {
         .map((entry) => entry?.tagPrefix)
         .filter((prefix) => typeof prefix === "string");
       for (const filter of tags) {
+        if (filter === "train-v*" && hasTrain) continue;
         if (!prefixes.some((prefix) => filter === `${prefix}*`)) {
           fail(
             PUBLISH_WORKFLOW_PATH,
