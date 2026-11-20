@@ -25,7 +25,14 @@ const fake = vi.hoisted(() => ({
     applyLink: vi.fn(),
     setSuspended: vi.fn(),
     signOutbound: vi.fn(),
+    previewOutbound: vi.fn(),
+    previewCode: vi.fn(),
     accept: vi.fn(),
+    list: vi.fn(),
+    members: vi.fn(),
+    links: vi.fn(),
+    myInvites: vi.fn(),
+    view: vi.fn(),
   },
 }));
 
@@ -45,7 +52,11 @@ vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({ agentAuthority: { adminCheck: fake.adminCheck }, orgAccounts: fake.orgAccounts }),
 }));
 
-import { POST as CREATE } from "@/app/api/v1/orgs/route";
+import { GET as LINK_PREVIEW } from "@/app/api/v1/orgs/link-preview/route";
+import { GET as LIST, POST as CREATE } from "@/app/api/v1/orgs/route";
+import { GET as MEMBERS } from "@/app/api/v1/orgs/[orgId]/members/route";
+import { GET as LINKS } from "@/app/api/v1/orgs/[orgId]/links/route";
+import { GET as MINE } from "@/app/api/v1/orgs/invites/mine/route";
 import { POST as ACCEPT } from "@/app/api/v1/orgs/invites/[inviteId]/accept/route";
 import { POST as LINK } from "@/app/api/v1/orgs/link/route";
 import { POST as OUTBOUND } from "@/app/api/v1/orgs/outbound/route";
@@ -195,18 +206,102 @@ describe("the admin-only routes run the one admin check first", () => {
     expect((await call({ suspended: false })).status).toBe(404);
   });
 
-  it("outbound: a non-admin is 403 and nothing is signed; an admin gets the target's answer; no signer is 503, an unreachable target 502", async () => {
-    const body = { act: "link", targetOrigin: "https://node-template.example", targetNodeId: "node-template", orgUserId: "o1", code: "c".repeat(43), services: ["node-ai"] };
-    const call = () => OUTBOUND(req("/api/v1/orgs/outbound", "POST", body));
+  it("outbound: a non-admin is 403 and nothing is previewed or signed; only the code is entered", async () => {
+    const call = (body: unknown) => OUTBOUND(req("/api/v1/orgs/outbound", "POST", body));
+    const CODE = `${"e".repeat(60)}.${"s".repeat(43)}`;
     fake.adminCheck.mockResolvedValueOnce("denied");
-    expect((await call()).status).toBe(403);
+    expect((await call({ step: "preview", code: CODE })).status).toBe(403);
+    fake.adminCheck.mockResolvedValueOnce("unavailable");
+    expect((await call({ step: "preview", code: CODE })).status).toBe(503);
+    expect(fake.orgAccounts.previewOutbound).not.toHaveBeenCalled();
     expect(fake.orgAccounts.signOutbound).not.toHaveBeenCalled();
+    // The old shape (an origin, a node id and an org id typed by the admin) is no longer accepted.
+    expect((await call({ act: "link", targetOrigin: "https://x.example", targetNodeId: "n", orgUserId: "o", code: CODE, services: ["node-ai"] })).status).toBe(400);
+  });
+
+  it("outbound preview returns the org name and origin; link needs the confirmed name; every refusal has its status", async () => {
+    const call = (body: unknown) => OUTBOUND(req("/api/v1/orgs/outbound", "POST", body));
+    const CODE = `${"e".repeat(60)}.${"s".repeat(43)}`;
+    fake.orgAccounts.previewOutbound.mockResolvedValueOnce({ ok: true, preview: { orgName: "toks5", origin: "https://node-template.example" } });
+    const preview = await call({ step: "preview", code: CODE });
+    expect(await preview.json()).toEqual({ step: "preview", orgName: "toks5", origin: "https://node-template.example" });
+    expect(fake.orgAccounts.previewOutbound).toHaveBeenCalledWith(CODE);
+
+    expect((await call({ step: "link", code: CODE, services: ["node-ai"] })).status).toBe(400); // no confirmed name
+    expect((await call({ step: "link", code: CODE, expectOrgName: "toks5", services: [] })).status).toBe(400);
     fake.orgAccounts.signOutbound.mockResolvedValueOnce({ ok: true, httpStatus: 201, error: null, act: "link" });
-    const ok = await call();
-    expect(await ok.json()).toEqual({ httpStatus: 201, error: null, act: "link" });
-    fake.orgAccounts.signOutbound.mockResolvedValueOnce({ ok: false, reason: "no_signer" });
-    expect((await call()).status).toBe(503);
-    fake.orgAccounts.signOutbound.mockResolvedValueOnce({ ok: false, reason: "unreachable" });
-    expect((await call()).status).toBe(502);
+    const linked = await call({ step: "link", code: CODE, expectOrgName: "toks5", services: ["node-ai"] });
+    expect(await linked.json()).toEqual({ step: "link", httpStatus: 201, error: null, act: "link" });
+    expect(fake.orgAccounts.signOutbound).toHaveBeenLastCalledWith({ act: "link", code: CODE, expectOrgName: "toks5", services: ["node-ai"] });
+    fake.orgAccounts.signOutbound.mockResolvedValueOnce({ ok: true, httpStatus: 200, error: null, act: "unlink" });
+    expect((await call({ step: "unlink", code: CODE })).status).toBe(200);
+    expect(fake.orgAccounts.signOutbound).toHaveBeenLastCalledWith({ act: "unlink", code: CODE });
+
+    for (const [reason, status] of [["invalid_code", 400], ["code_not_found", 404], ["preview_mismatch", 502], ["preview_changed", 409], ["no_signer", 503], ["unreachable", 502]] as const) {
+      fake.orgAccounts.signOutbound.mockResolvedValueOnce({ ok: false, reason });
+      expect((await call({ step: "link", code: CODE, expectOrgName: "toks5", services: ["node-ai"] })).status, reason).toBe(status);
+    }
+  });
+});
+
+describe("GET /api/v1/orgs/link-preview (public)", () => {
+  const preview = (code?: string) => LINK_PREVIEW(req(`/api/v1/orgs/link-preview${code === undefined ? "" : `?code=${encodeURIComponent(code)}`}`, "GET"));
+
+  it("a valid code answers the org's name and this node's origin and nothing else", async () => {
+    fake.orgAccounts.previewCode.mockResolvedValueOnce({ orgName: "toks5", origin: "https://node-template.example" });
+    const res = await preview("abc.def");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ orgName: "toks5", origin: "https://node-template.example" });
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("an unknown code, a missing code and an over-long code are ONE answer, 404 not_found, and the over-long one is never looked up", async () => {
+    fake.orgAccounts.previewCode.mockResolvedValueOnce(null);
+    const unknown = await preview("x.y");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "not_found" });
+    expect((await preview()).status).toBe(404);
+    fake.orgAccounts.previewCode.mockClear();
+    expect((await preview("a".repeat(701))).status).toBe(404);
+    expect(fake.orgAccounts.previewCode).not.toHaveBeenCalled();
+  });
+
+  it("a store failure is 503", async () => {
+    fake.orgAccounts.previewCode.mockRejectedValueOnce(new Error("db down"));
+    expect((await preview("a.b")).status).toBe(503);
+  });
+});
+
+describe("lists page (LISTS_PAGE)", () => {
+  it("orgs: limit and cursor go to the store, the cursor comes back, a bad limit is 400", async () => {
+    fake.orgAccounts.list.mockResolvedValueOnce({
+      items: [{ orgUserId: "o1", name: "toks5", billingAccountId: "a1", suspendedAt: null, role: "owner" }],
+      nextCursor: "o1",
+    });
+    const res = await LIST(req("/api/v1/orgs?limit=1&cursor=o0", "GET"));
+    expect(await res.json()).toEqual({ orgs: [{ orgUserId: "o1", name: "toks5", billingAccountId: "a1", suspended: false, role: "owner" }], nextCursor: "o1" });
+    expect(fake.orgAccounts.list).toHaveBeenCalledWith("caller-1", { limit: 1, cursor: "o0" });
+    expect((await LIST(req("/api/v1/orgs?limit=1000", "GET"))).status).toBe(400);
+    expect((await LIST(req("/api/v1/orgs?limit=abc", "GET"))).status).toBe(400);
+  });
+
+  it("members, links and invites answer { items, nextCursor }; a stranger is 404 and a bad cursor 400", async () => {
+    fake.orgAccounts.members.mockResolvedValueOnce({ items: [{ userId: "u1", name: "alice", role: "owner", since: "t" }], nextCursor: "c1" });
+    const members = await MEMBERS(req("/api/v1/orgs/o1/members?limit=1", "GET"), params({ orgId: "o1" }));
+    expect(await members.json()).toEqual({ items: [{ userId: "u1", name: "alice", role: "owner", since: "t" }], nextCursor: "c1" });
+    fake.orgAccounts.members.mockRejectedValueOnce(new OrgError("not_found"));
+    expect((await MEMBERS(req("/api/v1/orgs/o1/members", "GET"), params({ orgId: "o1" }))).status).toBe(404);
+    fake.orgAccounts.members.mockRejectedValueOnce(new OrgError("invalid_cursor"));
+    expect((await MEMBERS(req("/api/v1/orgs/o1/members?cursor=zzz", "GET"), params({ orgId: "o1" }))).status).toBe(400);
+    fake.orgAccounts.links.mockResolvedValueOnce({ items: [{ id: "l1", orgUserId: "o1", issuer: "https://x.example", services: ["node-ai"], createdAt: "t" }], nextCursor: null });
+    const links = await LINKS(req("/api/v1/orgs/o1/links", "GET"), params({ orgId: "o1" }));
+    expect(await links.json()).toEqual({ items: [{ id: "l1", issuer: "https://x.example", services: ["node-ai"], createdAt: "t" }], nextCursor: null });
+    fake.orgAccounts.myInvites.mockResolvedValueOnce({ items: [{ id: "i1", orgUserId: "o1", orgName: "toks5", role: "admin", invitedBy: "u1", expiresAt: "t" }], nextCursor: null });
+    expect(await (await MINE(req("/api/v1/orgs/invites/mine", "GET"))).json()).toEqual({ invites: [{ id: "i1", orgUserId: "o1", orgName: "toks5", role: "admin", expiresAt: "t" }], nextCursor: null });
+  });
+
+  it("a racing unique-index violation is 409 conflict, never a 503", async () => {
+    fake.orgAccounts.accept.mockRejectedValueOnce(Object.assign(new Error("dup"), { code: "23505" }));
+    expect((await ACCEPT(req("/api/v1/orgs/invites/i1/accept", "POST"), params({ inviteId: "i1" }))).status).toBe(409);
   });
 });

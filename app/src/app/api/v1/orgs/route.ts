@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/orgs`
- * Purpose: A signed-in person lists the orgs they are in (GET) and creates one (POST `{ name }`): the org's account, its `org` principal and the creator's `org:owner` (task.0181).
+ * Purpose: A signed-in person lists the orgs they are in, a page at a time (GET `?limit=&cursor=`), and creates one (POST `{ name }`): the org's account, its `org` principal and the creator's `org:owner` (task.0181).
  * Scope: HTTP validation and delegation to `container.orgAccounts`. A person's cookie session only (the human plane); the caller is never a body field. The org is made by the package's
  *   `createOrg` in one transaction.
  * Invariants:
@@ -16,7 +16,7 @@
  */
 
 import { orgCreateOperation, orgListOperation } from "@cogni/node-contracts";
-import { json, orgFailure, readJson } from "@/app/api/v1/orgs/_lib/org-http";
+import { json, orgFailure, pageQuery, readJson } from "@/app/api/v1/orgs/_lib/org-http";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -26,12 +26,15 @@ export const runtime = "nodejs";
 
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "orgs.list", auth: { mode: "required", getSessionUser: getServerSessionUser } },
-  async (ctx, _request, sessionUser) => {
+  async (ctx, request, sessionUser) => {
+    const query = pageQuery(request);
+    if (!query) return json({ error: "invalid input" }, 400);
     try {
-      const orgs = await getContainer().orgAccounts.list(sessionUser.id);
+      const page = await getContainer().orgAccounts.list(sessionUser.id, query);
       return json(
         orgListOperation.output.parse({
-          orgs: orgs.map((o) => ({ orgUserId: o.orgUserId, name: o.name, billingAccountId: o.billingAccountId, suspended: o.suspendedAt !== null, role: o.role })),
+          orgs: page.items.map((o) => ({ orgUserId: o.orgUserId, name: o.name, billingAccountId: o.billingAccountId, suspended: o.suspendedAt !== null, role: o.role })),
+          nextCursor: page.nextCursor,
         })
       );
     } catch (error) {

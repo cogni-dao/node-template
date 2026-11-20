@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import type { OpenInvite, OrgAccountStore, OrgLinkStore, OrgMember, OrgMembership, OrgRecord, OpenLink, OrgRole } from "../src";
+import { type OpenInvite, type OrgAccountStore, type OrgLinkStore, type OrgMember, type OrgMembership, type OrgRecord, type OpenLink, type OrgRole, type Page, pageOf } from "../src";
+
+/** The same keyset paging as the SQL: ordered by key, `after` exclusive, one extra row decides the cursor. */
+function pageBy<T>(rows: readonly T[], keyOf: (row: T) => string, input: { limit: number; after: string | null }): Page<T> {
+  const sorted = [...rows].sort((a, b) => (keyOf(a) < keyOf(b) ? -1 : keyOf(a) > keyOf(b) ? 1 : 0));
+  const rest = input.after === null ? sorted : sorted.filter((row) => keyOf(row) > (input.after as string));
+  return pageOf(rest.slice(0, input.limit + 1), input.limit, keyOf);
+}
+
+const uuidN = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 interface Role {
+  id: string;
   userId: string;
   orgUserId: string;
   role: OrgRole;
@@ -47,21 +57,23 @@ export function memoryOrgStore(init?: { wallets?: Record<string, string[]> }) {
       if (owned(creatorUserId) >= maxOwned) return "too_many_orgs";
       const orgUserId = `org-${++n}`;
       orgs.set(orgUserId, { orgUserId, name, billingAccountId: `acct-${orgUserId}`, suspendedAt: null });
-      roles.push({ userId: creatorUserId, orgUserId, role: "owner", approvedBy: orgUserId, at: clock.now, live: true });
+      roles.push({ id: uuidN(++n), userId: creatorUserId, orgUserId, role: "owner", approvedBy: orgUserId, at: clock.now, live: true });
       return { orgUserId, billingAccountId: `acct-${orgUserId}` };
     },
     async getOrg(orgUserId) {
       return orgs.get(orgUserId) ?? null;
     },
-    async listOrgsOf(userId, limit): Promise<OrgMembership[]> {
-      return [...orgs.values()].flatMap((o) => {
+    async listOrgsOf(userId, input): Promise<Page<OrgMembership>> {
+      const mine = [...orgs.values()].flatMap((o): OrgMembership[] => {
         const role = roleOf(userId, o.orgUserId);
         return role ? [{ ...o, role }] : [];
-      }).slice(0, limit);
+      });
+      return pageBy(mine, (o) => o.orgUserId, input);
     },
     roleOf: async (userId, orgUserId) => roleOf(userId, orgUserId),
-    async members(orgUserId, limit): Promise<OrgMember[]> {
-      return live(orgUserId).slice(0, limit).map((r) => ({ userId: r.userId, name: r.userId, role: r.role, since: String(r.at) }));
+    async members(orgUserId, input): Promise<Page<OrgMember>> {
+      const page = pageBy(live(orgUserId), (r) => r.id, input);
+      return { items: page.items.map((r) => ({ userId: r.userId, name: r.userId, role: r.role, since: String(r.at) })), nextCursor: page.nextCursor };
     },
     async lockOwners(orgUserId) {
       store.locks.push(`owners:${orgUserId}`);
@@ -74,7 +86,7 @@ export function memoryOrgStore(init?: { wallets?: Record<string, string[]> }) {
     async setRole({ orgUserId, userId, role, approvedBy }) {
       if (approvedBy === userId) throw new Error("agent_roles_no_self_approval");
       for (const r of roles) if (r.orgUserId === orgUserId && r.userId === userId) r.live = false;
-      roles.push({ userId, orgUserId, role, approvedBy, at: clock.now, live: true });
+      roles.push({ id: uuidN(++n), userId, orgUserId, role, approvedBy, at: clock.now, live: true });
     },
     async removeRole({ orgUserId, userId }) {
       const mine = live(orgUserId).filter((r) => r.userId === userId);
@@ -93,13 +105,17 @@ export function memoryOrgStore(init?: { wallets?: Record<string, string[]> }) {
         Object.assign(same, { role, invitedBy, expiresMs, expiresAt: String(expiresMs) });
         return { id: same.id, expiresAt: same.expiresAt };
       }
-      const invite: Invite = { id: `inv-${++n}`, orgUserId, orgName: orgs.get(orgUserId)?.name ?? "", role, invitedBy, wallet, open: true, expiresMs, expiresAt: String(expiresMs) };
+      const invite: Invite = { id: uuidN(++n), orgUserId, orgName: orgs.get(orgUserId)?.name ?? "", role, invitedBy, wallet, open: true, expiresMs, expiresAt: String(expiresMs) };
       invites.push(invite);
       return { id: invite.id, expiresAt: invite.expiresAt };
     },
-    async invitesFor(userId, inviteId, limit) {
+    async invitesFor(userId, inviteId, input) {
       const mine = wallets[userId] ?? [];
-      return invites.filter((i) => i.open && i.expiresMs > clock.now && mine.includes(i.wallet) && (inviteId === null || i.id === inviteId)).slice(0, limit);
+      return pageBy(
+        invites.filter((i) => i.open && i.expiresMs > clock.now && mine.includes(i.wallet) && (inviteId === null || i.id === inviteId)),
+        (i) => i.id,
+        input
+      );
     },
     async consumeInvite({ inviteId, userId }) {
       const invite = invites.find((i) => i.id === inviteId);
@@ -142,7 +158,8 @@ export function memoryLinkStore(orgs: { suspended?: Record<string, boolean> } = 
   const bindings: Binding[] = [];
   const principals = new Set<string>();
   let n = 0;
-  const store: OrgLinkStore & { codes: Code[]; links: typeof links; bindings: Binding[]; principals: Set<string>; clock: typeof clock; suspended: Record<string, boolean> } = {
+  const store: OrgLinkStore & { codes: Code[]; links: typeof links; bindings: Binding[]; principals: Set<string>; clock: typeof clock; suspended: Record<string, boolean>; names: Record<string, string> } = {
+    names: {},
     codes,
     links,
     bindings,
@@ -152,8 +169,8 @@ export function memoryLinkStore(orgs: { suspended?: Record<string, boolean> } = 
     async openLinkOfIssuer(issuer) {
       return links.find((l) => l.issuer === issuer && l.open) ?? null;
     },
-    async openLinksOfOrg(orgUserId) {
-      return links.filter((l) => l.orgUserId === orgUserId && l.open);
+    async openLinksOfOrg(orgUserId, input) {
+      return pageBy(links.filter((l) => l.orgUserId === orgUserId && l.open), (l) => l.id, input);
     },
     async createCode({ orgUserId, origin, codeHash, ttlMinutes, maxOpen }) {
       if (codes.filter((c) => c.orgUserId === orgUserId && !c.consumed && c.expiresMs > clock.now).length >= maxOpen) return "too_many_codes";
@@ -164,6 +181,10 @@ export function memoryLinkStore(orgs: { suspended?: Record<string, boolean> } = 
     async findCode(hash) {
       const c = codes.find((x) => x.hash === hash && !x.consumed && x.expiresMs > clock.now);
       return c ? { orgUserId: c.orgUserId, origin: c.origin } : null;
+    },
+    async codePreview(hash) {
+      const c = codes.find((x) => x.hash === hash && !x.consumed && x.expiresMs > clock.now);
+      return c ? { orgUserId: c.orgUserId, origin: c.origin, orgName: store.names[c.orgUserId] ?? c.orgUserId } : null;
     },
     async consumeCode(hash) {
       const c = codes.find((x) => x.hash === hash && !x.consumed && x.expiresMs > clock.now);
@@ -177,6 +198,13 @@ export function memoryLinkStore(orgs: { suspended?: Record<string, boolean> } = 
       links.push({ id, orgUserId, issuer, services, createdAt: "t", open: true, closedBy: null });
       return id;
     },
+    async closeLinkOfOrg({ linkId, orgUserId, closedBy }) {
+      const l = links.find((x) => x.id === linkId && x.orgUserId === orgUserId && x.open);
+      if (!l) return null;
+      l.open = false;
+      l.closedBy = closedBy;
+      return l;
+    },
     async closeLink({ linkId, closedBy }) {
       const l = links.find((x) => x.id === linkId && x.open);
       if (!l) return null;
@@ -185,6 +213,8 @@ export function memoryLinkStore(orgs: { suspended?: Record<string, boolean> } = 
       return l;
     },
     async bindPrincipals({ linkId, orgUserId, principalIds }) {
+      // The link must be open (the SQL locks it FOR SHARE and binds only then).
+      if (!links.some((l) => l.id === linkId && l.orgUserId === orgUserId && l.open)) return 0;
       let bound = 0;
       for (const subject of principalIds) {
         if (!principals.has(subject)) continue;

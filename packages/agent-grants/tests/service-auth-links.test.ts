@@ -101,6 +101,13 @@ describe("signed extra claims", () => {
     for (const junk of ["", "a.b", "a.b.c.d", "x".repeat(5000)]) expect(peekUnverifiedClaims(junk), junk).toBeNull();
   });
 
+  it("a verifier with a resolver and no fetchJwks cannot be built, and with one it can", () => {
+    const build = (fetchJwks?: () => Promise<unknown>) =>
+      createServiceAssertionVerifier({ selfNodeId: NODE, trustedHomes: [], resolveHome: async () => null, ...(fetchJwks ? { fetchJwks } : {}), replay: createMemoryReplayStore() });
+    expect(() => build()).toThrow(/fetchJwks/);
+    expect(() => build(async () => ({ keys: [] }))).not.toThrow();
+  });
+
   it("a verifier with no static home and no resolver refuses; a resolver that returns another issuer's home is refused too", async () => {
     const { signer } = await rig();
     const token = await signer.sign(base);

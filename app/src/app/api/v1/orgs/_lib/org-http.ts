@@ -14,6 +14,7 @@
 
 import { LinkError, OrgError } from "@cogni/agent-grants";
 import { OwnerSourceUnavailableError } from "@cogni/agent-grants/orgs";
+import { pageQuerySchema } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import type { RequestContext } from "@/shared/observability";
 import { EVENT_NAMES, failureFields } from "@/shared/observability";
@@ -33,6 +34,7 @@ const ORG_STATUS: Record<OrgError["code"], number> = {
   invalid_role: 400,
   invite_not_found: 404,
   invite_void: 409,
+  invalid_cursor: 400,
 };
 
 const LINK_STATUS: Record<LinkError["code"], number> = {
@@ -53,6 +55,11 @@ export function orgFailure(ctx: Pick<RequestContext, "log">, routeId: string, er
     ctx.log.info({ event: EVENT_NAMES.ORG_REFUSED, routeId, code: error.code }, EVENT_NAMES.ORG_REFUSED);
     return json({ error: error.code }, LINK_STATUS[error.code]);
   }
+  // A unique index that refused a racing second writer is a conflict, never an outage.
+  if ((error as { code?: unknown } | null)?.code === "23505") {
+    ctx.log.info({ event: EVENT_NAMES.ORG_REFUSED, routeId, code: "conflict" }, EVENT_NAMES.ORG_REFUSED);
+    return json({ error: "conflict" }, 409);
+  }
   ctx.log.error(
     {
       event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE,
@@ -63,6 +70,14 @@ export function orgFailure(ctx: Pick<RequestContext, "log">, routeId: string, er
     EVENT_NAMES.AGENT_ROLES_UNAVAILABLE
   );
   return json({ error: "authz_unavailable" }, 503);
+}
+
+/** The `?limit=&cursor=` of a list route, or null when they are not valid (the route answers 400). A page is at most 100 rows. */
+export function pageQuery(request: Request): { limit?: number; cursor?: string } | null {
+  const url = new URL(request.url);
+  const parsed = pageQuerySchema.safeParse({ limit: url.searchParams.get("limit") ?? undefined, cursor: url.searchParams.get("cursor") ?? undefined });
+  if (!parsed.success) return null;
+  return { ...(parsed.data.limit !== undefined ? { limit: parsed.data.limit } : {}), ...(parsed.data.cursor !== undefined ? { cursor: parsed.data.cursor } : {}) };
 }
 
 /** The parsed JSON body, or null when it is not JSON. */

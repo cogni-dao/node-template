@@ -63,6 +63,16 @@ describe("the Postgres payer resolver reads the subject's latest approved bindin
     expect(await payerFor(read({ ...closed, link_id: null, link_closed_at: null }), "svc")).toBeNull();
   });
 
+  it("a live binding under a closed link (a bind that raced the close) is org_link_closed, never a bill", async () => {
+    await expect(payerFor(read({ ...live, link_closed_at: "2026-11-20T00:00:00.000Z" }), "svc")).rejects.toMatchObject({ code: "org_link_closed" });
+  });
+
+  it("only a binding a link wrote can bill: the query ignores rows with no link (the retired ask flow wrote those)", async () => {
+    const sql = vi.fn(async () => []);
+    await createPostgresPayerBindingStore(sql as unknown as SqlTag).payerFor("svc");
+    expect((sql.mock.calls[0] as unknown as [TemplateStringsArray])[0].join("?")).toContain("b.link_id IS NOT NULL");
+  });
+
   it("reads only approved rows, newest first, on every call", async () => {
     const sql = vi.fn(async () => []);
     const store = createPostgresPayerBindingStore(sql as unknown as SqlTag);

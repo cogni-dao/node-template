@@ -465,13 +465,15 @@ export function createServiceAssertionVerifier(opts: {
   fetchJwks?: (jwksUri: string) => Promise<unknown>;
   /**
    * Issuers that are not in `trustedHomes`, looked up at verify time (the node's open links). `trustedHomes` wins; a null answer is `untrusted_issuer`. A lookup failure rejects
-   * (the node answers 503), never trusts.
+   * (the node answers 503), never trusts. REQUIRES `fetchJwks` (the constructor throws without it): a linked origin's keys are fetched only through the pinned fetch.
    */
   resolveHome?: (issuer: string) => Promise<TrustedHome | null>;
   replay: ReplayStore;
   /** Epoch milliseconds. Default `Date.now`. */
   now?: () => number;
 }): ServiceAssertionVerifier {
+  // A resolved home is an origin somebody typed, so its keys are an SSRF door: the unpinned default fetch is never allowed for it (`createPinnedJwksFetch` from `./jwks-fetch`).
+  if (opts.resolveHome && !opts.fetchJwks) throw new TypeError("resolveHome requires fetchJwks (use createPinnedJwksFetch)");
   const now = opts.now ?? Date.now;
   const fetchJwks = opts.fetchJwks ?? defaultFetchJwks;
   const audience = nodeAudience(opts.selfNodeId);

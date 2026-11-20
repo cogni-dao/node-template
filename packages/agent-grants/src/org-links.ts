@@ -10,10 +10,15 @@
  *   logging. No routes, no money: a link names a payer and nothing else (BILLING_CHARGES lives elsewhere).
  * Invariants:
  *   - LINK_NEEDS_BOTH_SIDES: a link needs an owner's code here and the other node's signature. Only that node's admin can make it sign; this node never acts on an unsigned claim about it.
- *   - CODE_IS_HASHED_AND_SINGLE_USE: 43 base64url characters of CSPRNG, stored as sha256, valid 15 minutes, bound to one org and one origin, burned in the same transaction that writes the link.
+ *   - CODE_IS_HASHED_AND_SINGLE_USE: a 43-character base64url CSPRNG secret, stored as sha256, valid 15 minutes, bound to one org and one https origin, burned in the same transaction that
+ *     writes the link. The code the owner hands over is `<b64url(JSON {o: this node's origin, n: its node id, g: the org id})>.<secret>`: it carries where to go and which org, so the other
+ *     node's admin enters only the code. Only the secret is hashed, and only the secret is ever signed.
+ *   - PREVIEW_SAYS_LITTLE: `previewLinkCode` answers the org's name and this node's origin for a code that is still valid and unused, and nothing else; every other case is null.
  *   - KEYS_ONLY_FROM_THE_BOUND_ORIGIN: a link is verified against `<origin>/.well-known/jwks.json` of the origin the code names (the assertion's `iss` must equal it), fetched through the
  *     injected `fetchJwks` (`createPinnedJwksFetch`: https, no redirect, 5 s, 64 KB, private ranges refused, address pinned).
  *   - ONE_OPEN_LINK_PER_ISSUER: a second link for an issuer is `issuer_already_linked`. A closed link is kept.
+ *   - UNLINK_BIND_RACE: a bind locks its link row `FOR SHARE` and writes only while the link is open, so a close (which updates that row) and a bind serialise: the binding either never
+ *     lands or the close that follows ends it.
  *   - ONE_PAYER_PATH: a link writes bindings (approved by the org's own `users` id, so it never depends on which owner made the code); an unlink closes them. A service principal that
  *     appears after the link is bound when it is created (`bindLinkedService`).
  *   - NO_TOKEN_IN_ERRORS: a refusal is a short code; nothing carries the assertion or the code.
@@ -23,7 +28,7 @@
  */
 
 import { hashLinkToken, isLinkTokenShape, newLinkToken } from "./approval";
-import { type OrgAccountStore, requireRole } from "./org-accounts";
+import { type OrgAccountStore, type Page, pageOf, requireRole } from "./org-accounts";
 import type { SqlTag } from "./postgres";
 import {
   isCanonicalHttpsOrigin,
@@ -61,17 +66,25 @@ export interface OpenLink {
 /** Persistence port. Every method runs on a service-role connection; the decisions that write run inside `inTransaction`. */
 export interface OrgLinkStore {
   openLinkOfIssuer(issuer: string): Promise<OpenLink | null>;
-  openLinksOfOrg(orgUserId: string, limit: number): Promise<OpenLink[]>;
+  /** One page of the org's open links, by link id. `after` is the previous page's `nextCursor`. */
+  openLinksOfOrg(orgUserId: string, input: { limit: number; after: string | null }): Promise<Page<OpenLink>>;
   createCode(input: { orgUserId: string; origin: string; codeHash: string; createdBy: string; ttlMinutes: number; maxOpen: number }): Promise<{ expiresAt: string } | "too_many_codes">;
   /** The org and origin of a code that is unconsumed and unexpired, else null. */
   findCode(codeHash: string): Promise<{ orgUserId: string; origin: string } | null>;
+  /** The same lookup for a preview: the org's id and name too. */
+  codePreview(codeHash: string): Promise<{ orgUserId: string; orgName: string; origin: string } | null>;
   /** Burns the code (unconsumed and unexpired only) and returns its org, else null. */
   consumeCode(codeHash: string): Promise<string | null>;
   /** Writes the open link; null when the issuer already has one. */
   insertLink(input: { orgUserId: string; issuer: string; services: readonly string[] }): Promise<string | null>;
   /** Closes the open link and returns it, else null. */
   closeLink(input: { linkId: string; closedBy: string }): Promise<OpenLink | null>;
-  /** Writes one approved binding per EXISTING external principal in `principalIds` (replacing any open binding of it), approved by the org's `users` id. Returns how many. */
+  /** Closes the open link `linkId` of exactly this org (`WHERE id = $1 AND org_user_id = $2`, no page window) and returns it, else null. */
+  closeLinkOfOrg(input: { linkId: string; orgUserId: string; closedBy: string }): Promise<OpenLink | null>;
+  /**
+   * Writes one approved binding per EXISTING external principal in `principalIds` (replacing any open binding of it), approved by the org's `users` id, ONLY while the link is open
+   * (the link row is locked `FOR SHARE` first, so a concurrent close cannot be missed). Returns how many.
+   */
   bindPrincipals(input: { linkId: string; orgUserId: string; principalIds: readonly string[] }): Promise<number>;
   /** Ends the link's open bindings. Returns how many. */
   closeBindings(input: { linkId: string; orgUserId: string }): Promise<number>;
@@ -116,33 +129,115 @@ export function signLinkAssertion(
   signer: ServiceAssertionSigner,
   input: { audienceNodeId: string; act: "link" | "unlink"; orgUserId: string; code?: string; services?: readonly string[] }
 ): Promise<string> {
-  return signer.sign({ service: NODE_CONNECT_SERVICE, audienceNodeId: input.audienceNodeId, scope: LINK_SCOPE, claims: linkClaims(input) });
+  // The full code or its bare secret: only the secret is signed.
+  const secret = input.code === undefined ? undefined : linkCodeSecret(input.code);
+  if (input.code !== undefined && !secret) throw new TypeError("code is not a link code");
+  return signer.sign({
+    service: NODE_CONNECT_SERVICE,
+    audienceNodeId: input.audienceNodeId,
+    scope: LINK_SCOPE,
+    claims: linkClaims({ ...input, ...(secret ? { code: secret } : {}) }),
+  });
+}
+
+const toB64Url = (text: string): string => btoa(text).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const fromB64Url = (text: string): string | null => {
+  if (!/^[A-Za-z0-9_-]+$/.test(text)) return null;
+  try {
+    return atob(text.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch {
+    return null;
+  }
+};
+
+const NODE_ID = /^[A-Za-z0-9._-]{1,100}$/;
+const MAX_LINK_CODE_CHARS = 700;
+
+export interface ParsedLinkCode {
+  /** The node that made the code (where the link is signed to). */
+  readonly origin: string;
+  /** That node's id: the audience of the signed assertion. */
+  readonly nodeId: string;
+  readonly orgUserId: string;
+  /** The 43-character secret: the only part that is hashed and the only part that is signed. */
+  readonly secret: string;
+}
+
+/** The code an owner hands over: where to go, which org, and the secret. */
+export function encodeLinkCode(input: { origin: string; nodeId: string; orgUserId: string; secret: string }): string {
+  return `${toB64Url(JSON.stringify({ o: input.origin, n: input.nodeId, g: input.orgUserId }))}.${input.secret}`;
+}
+
+/** The parts of a link code, or null when it is not one (wrong shape, a bad origin or node id, a secret that is not 43 base64url characters). */
+export function parseLinkCode(code: unknown): ParsedLinkCode | null {
+  if (typeof code !== "string" || code.length === 0 || code.length > MAX_LINK_CODE_CHARS) return null;
+  const dot = code.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const secret = code.slice(dot + 1);
+  if (!isLinkTokenShape(secret)) return null;
+  const json = fromB64Url(code.slice(0, dot));
+  if (!json) return null;
+  let body: { o?: unknown; n?: unknown; g?: unknown };
+  try {
+    body = JSON.parse(json) as typeof body;
+  } catch {
+    return null;
+  }
+  if (typeof body.o !== "string" || !isCanonicalHttpsOrigin(body.o) || typeof body.n !== "string" || !NODE_ID.test(body.n) || typeof body.g !== "string" || body.g.length === 0 || body.g.length > 100 || /\s/.test(body.g))
+    return null;
+  return { origin: body.o, nodeId: body.n, orgUserId: body.g, secret };
+}
+
+/** The secret of a link code, given the full code or the bare secret. Null for anything else. */
+export function linkCodeSecret(code: string): string | null {
+  return isLinkTokenShape(code) ? code : (parseLinkCode(code)?.secret ?? null);
+}
+
+/** What the other node shows its admin before it signs: the org's name and this node's origin. Nothing else. */
+export interface LinkPreview {
+  readonly orgName: string;
+  readonly origin: string;
+}
+
+/**
+ * The public preview of a link code: the org's name and this node's origin, for a code that is still valid and unused and that THIS node made (its origin and node id match). Every other
+ * case is null: unknown, used, expired, another node's, malformed. The route is public and rate limited; the answer leaks nothing a person holding the code does not already hold.
+ */
+export async function previewLinkCode(
+  deps: { links: OrgLinkStore; self: { origin: string; nodeId: string } },
+  code: unknown
+): Promise<LinkPreview | null> {
+  const parsed = parseLinkCode(code);
+  if (!parsed || parsed.origin !== deps.self.origin || parsed.nodeId !== deps.self.nodeId) return null;
+  const found = await deps.links.codePreview(await hashLinkToken(parsed.secret));
+  if (!found || found.orgUserId !== parsed.orgUserId) return null;
+  return { orgName: found.orgName, origin: deps.self.origin };
 }
 
 /**
  * An org owner makes a one-time code for another node's https origin. Only an owner links or unlinks; an admin gets `not_allowed`, anyone else `not_found`. A suspended org links
  * nothing (`org_suspended`), an origin that is not a canonical https origin is `invalid_origin`, and an origin that already has an open link is `issuer_already_linked`.
- * Returns the code ONCE (only its hash is kept).
+ * Returns the code ONCE (only the hash of its secret is kept). The code carries this node's origin and id and the org's id, so the other node's admin enters only the code.
  */
 export async function createLinkCode(
-  deps: { orgs: OrgAccountStore; links: OrgLinkStore },
+  deps: { orgs: OrgAccountStore; links: OrgLinkStore; self: { origin: string; nodeId: string } },
   input: { actorUserId: string; orgUserId: string; origin: string }
 ): Promise<{ code: string; expiresAt: string; origin: string }> {
   await requireRole(deps.orgs, input.actorUserId, input.orgUserId, "owner");
   if (!isCanonicalHttpsOrigin(input.origin)) throw new LinkError("invalid_origin");
   if ((await deps.links.orgSuspended(input.orgUserId)) !== false) throw new LinkError("org_suspended");
   if (await deps.links.openLinkOfIssuer(input.origin)) throw new LinkError("issuer_already_linked");
-  const code = newLinkToken();
+  const secret = newLinkToken();
   const made = await deps.links.createCode({
     orgUserId: input.orgUserId,
     origin: input.origin,
-    codeHash: await hashLinkToken(code),
+    codeHash: await hashLinkToken(secret),
     createdBy: input.actorUserId,
     ttlMinutes: LINK_CODE_TTL_MINUTES,
     maxOpen: MAX_OPEN_LINK_CODES,
   });
   if (made === "too_many_codes") throw new LinkError("too_many_codes");
-  return { code, expiresAt: made.expiresAt, origin: input.origin };
+  return { code: encodeLinkCode({ origin: deps.self.origin, nodeId: deps.self.nodeId, orgUserId: input.orgUserId, secret }), expiresAt: made.expiresAt, origin: input.origin };
 }
 
 /** A refusal of an owner-side link action. */
@@ -162,8 +257,8 @@ export async function closeLinkByOwner(
 ): Promise<{ linkId: string; issuer: string; services: readonly string[]; closedBindings: number }> {
   await requireRole(deps.orgs, input.actorUserId, input.orgUserId, "owner");
   return deps.inTransaction(async (links) => {
-    const open = (await links.openLinksOfOrg(input.orgUserId, 50)).find((l) => l.id === input.linkId);
-    const closed = open ? await links.closeLink({ linkId: open.id, closedBy: input.actorUserId }) : null;
+    // The link is named by id and org: no page window decides whether it can be closed.
+    const closed = await links.closeLinkOfOrg({ linkId: input.linkId, orgUserId: input.orgUserId, closedBy: input.actorUserId });
     if (!closed) throw new LinkError("link_not_found");
     const closedBindings = await links.closeBindings({ linkId: closed.id, orgUserId: closed.orgUserId });
     return { linkId: closed.id, issuer: closed.issuer, services: closed.services, closedBindings };
@@ -302,14 +397,15 @@ export function createPostgresOrgLinkStore(sql: SqlTag): OrgLinkStore {
       const rows = await sql`SELECT id, org_user_id, issuer, services, created_at FROM org_links WHERE issuer = ${issuer} AND closed_at IS NULL LIMIT 1`;
       return toLink(rows[0]);
     },
-    async openLinksOfOrg(orgUserId, limit) {
+    async openLinksOfOrg(orgUserId, { limit, after }) {
       const rows = await sql`
         SELECT id, org_user_id, issuer, services, created_at FROM org_links
-        WHERE org_user_id = ${orgUserId} AND closed_at IS NULL ORDER BY created_at DESC LIMIT ${limit}`;
-      return rows.flatMap((row) => {
+        WHERE org_user_id = ${orgUserId} AND closed_at IS NULL AND (${after}::text IS NULL OR id > ${after}::uuid)
+        ORDER BY id LIMIT ${limit + 1}`;
+      return pageOf(rows.flatMap((row) => {
         const link = toLink(row);
         return link ? [link] : [];
-      });
+      }), limit, (link) => link.id);
     },
     async createCode({ orgUserId, origin, codeHash, createdBy, ttlMinutes, maxOpen }) {
       const open = await sql`
@@ -329,6 +425,15 @@ export function createPostgresOrgLinkStore(sql: SqlTag): OrgLinkStore {
       const orgUserId = str(rows[0]?.org_user_id);
       const origin = str(rows[0]?.origin);
       return orgUserId && origin ? { orgUserId, origin } : null;
+    },
+    async codePreview(codeHash) {
+      const rows = await sql`
+        SELECT c.org_user_id, c.origin, u.name AS org_name FROM org_link_codes c
+        JOIN users u ON u.id = c.org_user_id
+        WHERE c.code_hash = ${codeHash} AND c.consumed_at IS NULL AND c.expires_at > now() LIMIT 1`;
+      const orgUserId = str(rows[0]?.org_user_id);
+      const origin = str(rows[0]?.origin);
+      return orgUserId && origin ? { orgUserId, origin, orgName: str(rows[0]?.org_name) ?? "" } : null;
     },
     async consumeCode(codeHash) {
       const rows = await sql`
@@ -351,18 +456,30 @@ export function createPostgresOrgLinkStore(sql: SqlTag): OrgLinkStore {
         RETURNING id, org_user_id, issuer, services, created_at`;
       return toLink(rows[0]);
     },
+    async closeLinkOfOrg({ linkId, orgUserId, closedBy }) {
+      const rows = await sql`
+        UPDATE org_links SET closed_at = now(), closed_by = ${closedBy}
+        WHERE id::text = ${linkId} AND org_user_id = ${orgUserId} AND closed_at IS NULL
+        RETURNING id, org_user_id, issuer, services, created_at`;
+      return toLink(rows[0]);
+    },
     async bindPrincipals({ linkId, orgUserId, principalIds }) {
       if (principalIds.length === 0) return 0;
       const ids = principalIds as string[];
+      // UNLINK_BIND_RACE: lock the link row first and bind only while it is open. A close updates this row, so it waits for this transaction (and its binding is then ended by the
+      // close's own `closeBindings`) or has already committed (and this finds no open link, so it binds nothing).
+      const open = await sql`SELECT 1 AS ok FROM org_links WHERE id = ${linkId}::uuid AND org_user_id = ${orgUserId} AND closed_at IS NULL FOR SHARE`;
+      if (open.length === 0) return 0;
       // An open binding the subject already holds is replaced by the link's: the owner's consent plus the other node's signature is the decision.
       await sql`
         UPDATE payer_bindings SET revoked_at = now(), revoked_by = ${orgUserId}
         WHERE subject_user_id = ANY(${ids}) AND revoked_at IS NULL AND link_id IS DISTINCT FROM ${linkId}::uuid`;
       const rows = await sql`
         INSERT INTO payer_bindings (subject_user_id, billing_account_id, approved_by, approved_at, link_id, created_at)
-        SELECT ap.user_id, b.id, ${orgUserId}, now(), ${linkId}::uuid, clock_timestamp()
-        FROM agent_principals ap, billing_accounts b
+        SELECT ap.user_id, b.id, ${orgUserId}, now(), l.id, clock_timestamp()
+        FROM agent_principals ap, billing_accounts b, org_links l
         WHERE ap.user_id = ANY(${ids}) AND ap.kind = 'external' AND b.owner_user_id = ${orgUserId}
+          AND l.id = ${linkId}::uuid AND l.closed_at IS NULL
         ON CONFLICT (subject_user_id) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       return rows.length;

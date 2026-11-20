@@ -8,7 +8,9 @@
  *   `org:owner` or `org:admin`). The decisions are pure functions over `OrgAccountStore`; `createPostgresOrgAccountStore` is its Postgres adapter.
  * Scope: Decisions and one adapter over an injected service-role tag. No routes, no logging, no money: the node wraps each call in ONE transaction and logs the outcome.
  * Invariants:
- *   - ORG_IS_AN_ACCOUNT: no members table. A role is a grant row; `holdsAccountRight` (`./rights`) is the one check, and `roleOf` reads the same rows.
+ *   - ORG_IS_AN_ACCOUNT: no members table. A role is a grant row; `holdsAccountRight` (`./rights`) is the ONE check: the adapter's `roleOf` (and so `requireRole`) asks it, so expiry and
+ *     revocation are judged in one place.
+ *   - LISTS_PAGE: orgs, members, invites and links are read a page at a time with an opaque `nextCursor` (by row id); a list is never cut silently. A page is at most `MAX_PAGE_SIZE`.
  *   - ANYONE_CREATES: `createOrg` needs only a signed-in identity and writes the creator's `org:owner`, approved by the org's own `users` id. It grants nothing outside the org.
  *   - BOUNDED_CREATION: one person owns at most `MAX_OWNED_ORGS` (5) orgs on a node, counted under a per-person lock, because each org mints a billing account.
  *   - INVITE_GRANTS_NOTHING: an invite names a wallet and a role and lives 7 days, single use. The grant row is written only when the person signed in with that wallet accepts, and
@@ -22,8 +24,8 @@
  * @public
  */
 
-import type { SqlTag } from "./postgres";
-import { ORG_ADMIN, ORG_OWNER, type OrgRole, roleOfScope, scopeOfRole } from "./rights";
+import { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
+import { holdsAccountRight, ORG_ADMIN, ORG_OWNER, type OrgRole, roleOfScope, scopeOfRole } from "./rights";
 
 /** One person owns at most this many orgs on a node. */
 export const MAX_OWNED_ORGS = 5;
@@ -31,8 +33,41 @@ export const MAX_OWNED_ORGS = 5;
 export const INVITE_TTL_DAYS = 7;
 /** Unexpired open invites one org holds at most. */
 export const MAX_OPEN_INVITES = 50;
-/** The most rows a list returns. */
-export const MAX_ORG_ROWS = 200;
+/** A page of a list holds this many rows unless the caller asks for fewer. */
+export const DEFAULT_PAGE_SIZE = 50;
+/** The most rows one page holds. */
+export const MAX_PAGE_SIZE = 100;
+
+/** One page of a list and the cursor of the next, or null when it is the last. */
+export interface Page<T> {
+  readonly items: T[];
+  readonly nextCursor: string | null;
+}
+
+/** What a caller may ask of a list: a page size and the previous page's cursor. */
+export interface PageQuery {
+  readonly limit?: number | undefined;
+  readonly cursor?: string | null | undefined;
+}
+
+/** A page size inside 1..MAX_PAGE_SIZE (a missing or bad one is the default). */
+export const clampLimit = (limit: number | undefined): number =>
+  typeof limit === "number" && Number.isFinite(limit) ? Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(limit))) : DEFAULT_PAGE_SIZE;
+
+/** One page from `limit + 1` fetched rows: the first `limit`, and the cursor (the last kept row's key) only when a row was left over. */
+export function pageOf<T>(rows: readonly T[], limit: number, keyOf: (row: T) => string): Page<T> {
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
+  return { items, nextCursor: rows.length > limit && last !== undefined ? keyOf(last) : null };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A cursor the store may use: null (the first page) or a well-formed key. `invalid_cursor` otherwise. */
+function cleanCursor(cursor: string | null | undefined, kind: "uuid" | "text"): string | null {
+  if (cursor === null || cursor === undefined || cursor === "") return null;
+  if (kind === "uuid" ? !UUID.test(cursor) : !/^[A-Za-z0-9._-]{1,100}$/.test(cursor)) throw new OrgError("invalid_cursor");
+  return cursor;
+}
 
 export type OrgErrorCode =
   | "not_found"
@@ -45,7 +80,8 @@ export type OrgErrorCode =
   | "invalid_wallet"
   | "invalid_role"
   | "invite_not_found"
-  | "invite_void";
+  | "invite_void"
+  | "invalid_cursor";
 
 /** A domain refusal. The node maps the code to a status; a store failure is a plain `Error`, never this. */
 export class OrgError extends Error {
@@ -93,11 +129,12 @@ export interface OrgAccountStore {
   /** Writes the org's rows and the creator's `org:owner`. `too_many_orgs` when the creator already owns `maxOwned`; the count and the insert run under one per-person lock. */
   createOrg(input: { creatorUserId: string; name: string; maxOwned: number }): Promise<{ orgUserId: string; billingAccountId: string } | "too_many_orgs">;
   getOrg(orgUserId: string): Promise<OrgRecord | null>;
-  /** The orgs this person holds a live role on, with the highest role, newest first, bounded. */
-  listOrgsOf(userId: string, limit: number): Promise<OrgMembership[]>;
+  /** One page of the orgs this person holds a live role on, with the highest role, by org id. `after` is the previous page's cursor. */
+  listOrgsOf(userId: string, input: { limit: number; after: string | null }): Promise<Page<OrgMembership>>;
   /** The highest live role this person holds on the org, or null. */
   roleOf(userId: string, orgUserId: string): Promise<OrgRole | null>;
-  members(orgUserId: string, limit: number): Promise<OrgMember[]>;
+  /** One page of the org's people, by grant row id. */
+  members(orgUserId: string, input: { limit: number; after: string | null }): Promise<Page<OrgMember>>;
   /** Locks the org's live `org:owner` rows (`FOR UPDATE`, by id) and returns their holders. Held until the transaction ends. */
   lockOwners(orgUserId: string): Promise<string[]>;
   /** Locks per person (a transaction advisory lock) and returns how many orgs they own. */
@@ -110,8 +147,8 @@ export interface OrgAccountStore {
   usersOfWallet(wallet: string): Promise<string[]>;
   /** An open invite for (org, wallet) is renewed (new role, inviter and 7 days); otherwise one is written. `too_many_invites` at the org's cap. */
   upsertInvite(input: { orgUserId: string; wallet: string; role: OrgRole; invitedBy: string; ttlDays: number; maxOpen: number }): Promise<{ id: string; expiresAt: string } | "too_many_invites">;
-  /** Unexpired open invites whose wallet is one of this person's bound wallets (or only `inviteId`). */
-  invitesFor(userId: string, inviteId: string | null, limit: number): Promise<OpenInvite[]>;
+  /** One page of the unexpired open invites whose wallet is one of this person's bound wallets (or only `inviteId`), by invite id. */
+  invitesFor(userId: string, inviteId: string | null, input: { limit: number; after: string | null }): Promise<Page<OpenInvite>>;
   /** Marks the invite accepted by this person if it is still open and unexpired. False when it is not. */
   consumeInvite(input: { inviteId: string; userId: string }): Promise<boolean>;
   setSuspended(orgUserId: string, suspended: boolean): Promise<boolean>;
@@ -151,20 +188,26 @@ export async function createOrg(store: OrgAccountStore, input: { creatorUserId: 
   return { ...created, name };
 }
 
-/** The orgs this person is in, with their role. */
-export function listOrgs(store: OrgAccountStore, userId: string): Promise<OrgMembership[]> {
-  return store.listOrgsOf(userId, MAX_ORG_ROWS);
+/** One page of the orgs this person is in, with their role. */
+export async function listOrgs(store: OrgAccountStore, userId: string, query: PageQuery = {}): Promise<Page<OrgMembership>> {
+  return store.listOrgsOf(userId, { limit: clampLimit(query.limit), after: cleanCursor(query.cursor, "text") });
 }
 
-/** An org's page for its owners and admins: the record, the caller's role and its people. `not_found` for anyone else. */
+/** An org's page for its owners and admins: the record, the caller's role and the first page of its people. `not_found` for anyone else. */
 export async function getOrgView(
   store: OrgAccountStore,
-  input: { actorUserId: string; orgUserId: string }
-): Promise<{ org: OrgRecord; role: OrgRole; members: OrgMember[] }> {
+  input: { actorUserId: string; orgUserId: string } & PageQuery
+): Promise<{ org: OrgRecord; role: OrgRole; members: Page<OrgMember> }> {
   const role = await requireRole(store, input.actorUserId, input.orgUserId, "admin");
   const org = await store.getOrg(input.orgUserId);
   if (!org) throw new OrgError("not_found");
-  return { org, role, members: await store.members(input.orgUserId, MAX_ORG_ROWS) };
+  return { org, role, members: await store.members(input.orgUserId, { limit: clampLimit(input.limit), after: cleanCursor(input.cursor, "uuid") }) };
+}
+
+/** One page of an org's people, for an owner or admin. `not_found` for anyone else, `invalid_cursor` for a cursor that is not one. */
+export async function listMembers(store: OrgAccountStore, input: { actorUserId: string; orgUserId: string } & PageQuery): Promise<Page<OrgMember>> {
+  await requireRole(store, input.actorUserId, input.orgUserId, "admin");
+  return store.members(input.orgUserId, { limit: clampLimit(input.limit), after: cleanCursor(input.cursor, "uuid") });
 }
 
 /**
@@ -193,9 +236,9 @@ export async function inviteMember(
   return { ...invite, wallet, role: input.role };
 }
 
-/** The open invites for the wallets this person has signed in with. */
-export function listMyInvites(store: OrgAccountStore, userId: string): Promise<OpenInvite[]> {
-  return store.invitesFor(userId, null, MAX_ORG_ROWS);
+/** One page of the open invites for the wallets this person has signed in with. */
+export async function listMyInvites(store: OrgAccountStore, userId: string, query: PageQuery = {}): Promise<Page<OpenInvite>> {
+  return store.invitesFor(userId, null, { limit: clampLimit(query.limit), after: cleanCursor(query.cursor, "uuid") });
 }
 
 /**
@@ -207,7 +250,9 @@ export async function acceptInvite(
   store: OrgAccountStore,
   input: { userId: string; inviteId: string }
 ): Promise<{ orgUserId: string; role: OrgRole }> {
-  const [invite] = await store.invitesFor(input.userId, input.inviteId, 1);
+  const {
+    items: [invite],
+  } = await store.invitesFor(input.userId, input.inviteId, { limit: 1, after: null });
   if (!invite) throw new OrgError("invite_not_found");
   if (await store.roleOf(input.userId, invite.orgUserId)) throw new OrgError("already_member");
   const inviterRole = await store.roleOf(invite.invitedBy, invite.orgUserId);
@@ -278,15 +323,20 @@ const iso = (value: unknown): string => {
  * `org:admin`; `agent_roles` has no policy for an org member under row-level security, so the connection must be a BYPASSRLS service role.
  */
 export function createPostgresOrgAccountStore(sql: SqlTag): OrgAccountStore {
+  // ONE_CHECK: a role is read through `holdsAccountRight`, the same check `authorizeAccount` makes, so expiry and revocation are judged in one place.
+  const grants = createPostgresAgentGrantsStore(sql);
+  const orgAccountOf = async (orgUserId: string): Promise<string | null> => {
+    const rows = await sql`
+      SELECT b.id FROM billing_accounts b
+      JOIN agent_principals p ON p.user_id = b.owner_user_id AND p.kind = 'org'
+      WHERE b.owner_user_id = ${orgUserId} LIMIT 1`;
+    return str(rows[0]?.id);
+  };
   const toOrg = (row: Record<string, unknown>): OrgRecord | null => {
     const orgUserId = str(row.org_user_id);
     const billingAccountId = str(row.billing_account_id);
     if (!orgUserId || !billingAccountId) return null;
     return { orgUserId, name: str(row.name) ?? "", billingAccountId, suspendedAt: row.suspended_at ? iso(row.suspended_at) : null };
-  };
-  const roleFrom = (scopes: ReadonlyArray<Record<string, unknown>>): OrgRole | null => {
-    const set = new Set(scopes.map((r) => str(r.scope)));
-    return set.has(ORG_OWNER) ? "owner" : set.has(ORG_ADMIN) ? "admin" : null;
   };
   const ownedCount = async (userId: string): Promise<number> => {
     const rows = await sql`
@@ -295,7 +345,7 @@ export function createPostgresOrgAccountStore(sql: SqlTag): OrgAccountStore {
       JOIN billing_accounts b ON b.id = r.account_id
       JOIN agent_principals p ON p.user_id = b.owner_user_id AND p.kind = 'org'
       WHERE r.principal_user_id = ${userId} AND r.resource = 'account' AND r.scope = ${ORG_OWNER}
-        AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL`;
+        AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now())`;
     return Number(rows[0]?.n ?? 0);
   };
   return {
@@ -325,54 +375,59 @@ export function createPostgresOrgAccountStore(sql: SqlTag): OrgAccountStore {
         WHERE p.user_id = ${orgUserId} AND p.kind = 'org' LIMIT 1`;
       return rows[0] ? toOrg(rows[0]) : null;
     },
-    async listOrgsOf(userId, limit) {
+    async listOrgsOf(userId, { limit, after }) {
       const rows = await sql`
         SELECT p.user_id AS org_user_id, u.name, b.id AS billing_account_id, p.suspended_at,
-               bool_or(r.scope = ${ORG_OWNER}) AS is_owner, max(r.created_at) AS since
+               bool_or(r.scope = ${ORG_OWNER}) AS is_owner
         FROM agent_roles r
         JOIN billing_accounts b ON b.id = r.account_id
         JOIN agent_principals p ON p.user_id = b.owner_user_id AND p.kind = 'org'
         JOIN users u ON u.id = p.user_id
         WHERE r.principal_user_id = ${userId} AND r.resource = 'account' AND r.scope IN (${ORG_OWNER}, ${ORG_ADMIN})
-          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL
+          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now())
+          AND (${after}::text IS NULL OR p.user_id > ${after})
         GROUP BY p.user_id, u.name, b.id, p.suspended_at
-        ORDER BY max(r.created_at) DESC
-        LIMIT ${limit}`;
-      return rows.flatMap((row) => {
-        const org = toOrg(row);
-        return org ? [{ ...org, role: (row.is_owner === true ? "owner" : "admin") as OrgRole }] : [];
-      });
+        ORDER BY p.user_id
+        LIMIT ${limit + 1}`;
+      return pageOf(
+        rows.flatMap((row) => {
+          const org = toOrg(row);
+          return org ? [{ ...org, role: (row.is_owner === true ? "owner" : "admin") as OrgRole }] : [];
+        }),
+        limit,
+        (org) => org.orgUserId
+      );
     },
     async roleOf(userId, orgUserId) {
-      const rows = await sql`
-        SELECT r.scope FROM agent_roles r
-        JOIN billing_accounts b ON b.id = r.account_id
-        WHERE b.owner_user_id = ${orgUserId} AND r.principal_user_id = ${userId} AND r.resource = 'account'
-          AND r.scope IN (${ORG_OWNER}, ${ORG_ADMIN}) AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL`;
-      return roleFrom(rows);
+      const account = await orgAccountOf(orgUserId);
+      if (!account) return null;
+      if (await holdsAccountRight(grants, userId, ORG_OWNER, account)) return "owner";
+      return (await holdsAccountRight(grants, userId, ORG_ADMIN, account)) ? "admin" : null;
     },
-    async members(orgUserId, limit) {
+    async members(orgUserId, { limit, after }) {
       const rows = await sql`
-        SELECT r.principal_user_id, u.name, r.scope, r.created_at
+        SELECT r.id, r.principal_user_id, u.name, r.scope, r.created_at
         FROM agent_roles r
         JOIN billing_accounts b ON b.id = r.account_id
         JOIN users u ON u.id = r.principal_user_id
         WHERE b.owner_user_id = ${orgUserId} AND r.resource = 'account' AND r.scope IN (${ORG_OWNER}, ${ORG_ADMIN})
-          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL
-        ORDER BY (r.scope = ${ORG_OWNER}) DESC, r.created_at
-        LIMIT ${limit}`;
-      return rows.flatMap((row) => {
+          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now())
+          AND (${after}::text IS NULL OR r.id > ${after}::uuid)
+        ORDER BY r.id
+        LIMIT ${limit + 1}`;
+      const items = rows.slice(0, limit).flatMap((row) => {
         const userId = str(row.principal_user_id);
         const role = roleOfScope(str(row.scope) ?? "");
         return userId && role ? [{ userId, name: str(row.name), role, since: iso(row.created_at) }] : [];
       });
+      return { items, nextCursor: rows.length > limit ? str(rows[limit - 1]?.id) : null };
     },
     async lockOwners(orgUserId) {
       const rows = await sql`
         SELECT r.principal_user_id FROM agent_roles r
         JOIN billing_accounts b ON b.id = r.account_id
         WHERE b.owner_user_id = ${orgUserId} AND r.resource = 'account' AND r.scope = ${ORG_OWNER}
-          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL
+          AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now())
         ORDER BY r.id
         FOR UPDATE OF r`;
       return rows.flatMap((row) => {
@@ -390,10 +445,16 @@ export function createPostgresOrgAccountStore(sql: SqlTag): OrgAccountStore {
         FROM billing_accounts b
         WHERE b.id = r.account_id AND b.owner_user_id = ${orgUserId} AND r.principal_user_id = ${userId}
           AND r.resource = 'account' AND r.scope IN (${ORG_OWNER}, ${ORG_ADMIN}) AND r.revoked_at IS NULL`;
-      await sql`
-        INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id)
-        SELECT ${userId}, ${scopeOfRole(role)}, ${approvedBy}, now(), 'account', b.id
-        FROM billing_accounts b WHERE b.owner_user_id = ${orgUserId}`;
+      try {
+        await sql`
+          INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id)
+          SELECT ${userId}, ${scopeOfRole(role)}, ${approvedBy}, now(), 'account', b.id
+          FROM billing_accounts b WHERE b.owner_user_id = ${orgUserId}`;
+      } catch (error) {
+        // Two writers raced for the same (person, scope, org): the live-row index refused the second. That is a conflict (409), never an outage (503).
+        if ((error as { code?: unknown } | null)?.code === "23505") throw new OrgError("already_member");
+        throw error;
+      }
     },
     async removeRole({ orgUserId, userId }) {
       const rows = await sql`
@@ -429,23 +490,28 @@ export function createPostgresOrgAccountStore(sql: SqlTag): OrgAccountStore {
       if (!id) throw new Error("invite_not_written");
       return { id, expiresAt: iso(rows[0]?.expires_at) };
     },
-    async invitesFor(userId, inviteId, limit) {
+    async invitesFor(userId, inviteId, { limit, after }) {
       const rows = await sql`
         SELECT i.id, i.org_user_id, o.name AS org_name, i.scope, i.invited_by, i.expires_at
         FROM org_invites i
         JOIN users o ON o.id = i.org_user_id
         WHERE i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > now()
           AND (${inviteId}::text IS NULL OR i.id::text = ${inviteId})
+          AND (${after}::text IS NULL OR i.id > ${after}::uuid)
           AND EXISTS (SELECT 1 FROM user_bindings b WHERE b.user_id = ${userId} AND b.provider = 'wallet' AND lower(b.external_id) = i.wallet)
-        ORDER BY i.created_at DESC
-        LIMIT ${limit}`;
-      return rows.flatMap((row) => {
-        const id = str(row.id);
-        const orgUserId = str(row.org_user_id);
-        const invitedBy = str(row.invited_by);
-        const role = roleOfScope(str(row.scope) ?? "");
-        return id && orgUserId && invitedBy && role ? [{ id, orgUserId, orgName: str(row.org_name) ?? "", role, invitedBy, expiresAt: iso(row.expires_at) }] : [];
-      });
+        ORDER BY i.id
+        LIMIT ${limit + 1}`;
+      return pageOf(
+        rows.flatMap((row) => {
+          const id = str(row.id);
+          const orgUserId = str(row.org_user_id);
+          const invitedBy = str(row.invited_by);
+          const role = roleOfScope(str(row.scope) ?? "");
+          return id && orgUserId && invitedBy && role ? [{ id, orgUserId, orgName: str(row.org_name) ?? "", role, invitedBy, expiresAt: iso(row.expires_at) }] : [];
+        }),
+        limit,
+        (invite) => invite.id
+      );
     },
     async consumeInvite({ inviteId, userId }) {
       const rows = await sql`

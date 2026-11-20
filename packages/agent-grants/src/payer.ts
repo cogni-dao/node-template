@@ -9,11 +9,12 @@
  * Scope: One read over a service-role tag plus the two pure decisions a node's run path composes (`selectRunPayer`, `payerScopeUserFor`). No routes, no logging, no money: the
  *   node asks `payerFor(subject)` and bills the account it names through its own pipeline. Identity picks the account and stops (IDENTITY_PICKS_ACCOUNT, BILLING_CHARGES).
  * Invariants:
- *   - PAYER_IS_AUTHORIZED: `payerFor` answers only for a binding with an approver and no revoke.
+ *   - PAYER_IS_AUTHORIZED: `payerFor` answers only for a binding with an approver, no revoke, and a LINK that wrote it (`link_id` set). A binding with no link (the retired ask and
+ *     approve flow wrote such rows) bills nothing: only a link is a payer path.
  *   - NEVER_CACHED: `payerFor` reads the table on every call, so an unlink, a suspension or a revoke refuses the very next run.
  *   - ORG_SUSPENDED: a live binding to an org the node's admin suspended is refused with `PayerRefusedError("org_suspended")`, never billed to the caller's own account.
- *   - ORG_LINK_CLOSED: a subject whose latest binding was written by a link that is now closed is refused with `PayerRefusedError("org_link_closed")`. A subject that never had a
- *     link binding is unchanged: no binding means its own account pays.
+ *   - ORG_LINK_CLOSED: a binding whose link is closed is refused with `PayerRefusedError("org_link_closed")`, live or revoked: a live binding under a closed link can only be a bind that
+ *     raced the close, and it must not bill. A subject that never had a link binding is unchanged: no binding means its own account pays.
  *   - A subject is any principal: a person, an agent or a service principal minted from another node's signed assertion.
  *   - The ask, decide and revoke functions and the `POST /api/v1/payer-bindings` routes are gone (0.10.0): a binding exists only because an org link wrote it.
  * Side-effects: IO (one store read)
@@ -101,17 +102,20 @@ export function createPostgresPayerBindingStore(sql: SqlTag): PayerBindingStore 
         LEFT JOIN org_links l ON l.id = b.link_id
         LEFT JOIN billing_accounts a ON a.id = b.billing_account_id
         LEFT JOIN agent_principals p ON p.user_id = a.owner_user_id AND p.kind = 'org'
-        WHERE b.subject_user_id = ${subjectUserId} AND b.approved_by IS NOT NULL
+        WHERE b.subject_user_id = ${subjectUserId} AND b.approved_by IS NOT NULL AND b.link_id IS NOT NULL
         ORDER BY (b.revoked_at IS NULL) DESC, b.created_at DESC, b.id DESC
         LIMIT 1`;
       const row = rows[0];
       if (!row) return null;
       const live = row.revoked_at === null || row.revoked_at === undefined;
+      const linkClosed = row.link_closed_at !== null && row.link_closed_at !== undefined;
       if (live) {
+        // A live binding under a closed link (a bind that raced the close) never bills.
+        if (linkClosed) throw new PayerRefusedError("org_link_closed");
         if (row.suspended_at !== null && row.suspended_at !== undefined) throw new PayerRefusedError("org_suspended");
         return str(row.billing_account_id);
       }
-      if (row.link_id && row.link_closed_at !== null && row.link_closed_at !== undefined) throw new PayerRefusedError("org_link_closed");
+      if (linkClosed) throw new PayerRefusedError("org_link_closed");
       return null;
     },
   };

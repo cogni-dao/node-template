@@ -12,7 +12,7 @@
  */
 
 import { orgMyInvitesOperation } from "@cogni/node-contracts";
-import { json, orgFailure } from "@/app/api/v1/orgs/_lib/org-http";
+import { json, orgFailure, pageQuery } from "@/app/api/v1/orgs/_lib/org-http";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -22,12 +22,15 @@ export const runtime = "nodejs";
 
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "orgs.invites.mine", auth: { mode: "required", getSessionUser: getServerSessionUser } },
-  async (ctx, _request, sessionUser) => {
+  async (ctx, request, sessionUser) => {
+    const query = pageQuery(request);
+    if (!query) return json({ error: "invalid input" }, 400);
     try {
-      const invites = await getContainer().orgAccounts.myInvites(sessionUser.id);
+      const page = await getContainer().orgAccounts.myInvites(sessionUser.id, query);
       return json(
         orgMyInvitesOperation.output.parse({
-          invites: invites.map((i) => ({ id: i.id, orgUserId: i.orgUserId, orgName: i.orgName, role: i.role, expiresAt: i.expiresAt })),
+          invites: page.items.map((i) => ({ id: i.id, orgUserId: i.orgUserId, orgName: i.orgName, role: i.role, expiresAt: i.expiresAt })),
+          nextCursor: page.nextCursor,
         })
       );
     } catch (error) {

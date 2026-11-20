@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import { describe, expect, it, vi } from "vitest";
-import { createPinnedJwksFetch, isPrivateAddress, JwksFetchError, type PinnedTransport } from "../src/jwks-fetch";
+import { createPinnedHttp, createPinnedJwksFetch, isPrivateAddress, JwksFetchError, type PinnedTransport } from "../src/jwks-fetch";
 
 describe("isPrivateAddress (refuse private, loopback, link-local and reserved ranges)", () => {
   it("refuses every private IPv4 range, loopback, link-local (cloud metadata), CGNAT, multicast and reserved", () => {
@@ -20,8 +20,28 @@ describe("isPrivateAddress (refuse private, loopback, link-local and reserved ra
     for (const ip of ["2606:4700:4700::1111", "2a00:1450:4001:81b::200e", "::ffff:8.8.8.8"]) expect(isPrivateAddress(ip), ip).toBe(false);
   });
 
+  it("refuses 6to4, Teredo, IPv4-compatible, site-local, NAT64 local-use and everything outside global unicast, however it is written", () => {
+    for (const ip of [
+      "2002:c000:204::1", // 6to4
+      "2002:0808:0808::1", // 6to4 of a public IPv4: still refused
+      "2001:0:4136:e378:8000:63bf:3fff:fdd2", // Teredo
+      "2001::1",
+      "::10.0.0.1", // IPv4-compatible, dotted
+      "::a00:1", // IPv4-compatible, hex
+      "::808:808", // IPv4-compatible of a public address: still refused
+      "0:0:0:0:0:0:a00:1",
+      "fec0::1", // site-local
+      "feff::1",
+      "64:ff9b:1::1", // NAT64 local-use
+      "100::1", // discard
+      "4000::1", // outside 2000::/3
+    ])
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    for (const ip of ["2001:4860:4860::8888", "2606:4700::1111", "3fff::1"]) expect(isPrivateAddress(ip), ip).toBe(false);
+  });
+
   it("an unparseable address is private (fail closed)", () => {
-    for (const ip of ["", "example.com", "999.1.1.1", "1.2.3", "gggg::1"]) expect(isPrivateAddress(ip), ip).toBe(true);
+    for (const ip of ["", "example.com", "999.1.1.1", "1.2.3", "gggg::1", "1::2::3", "1:2:3:4:5:6:7", "::1::"]) expect(isPrivateAddress(ip), ip).toBe(true);
   });
 });
 
@@ -30,7 +50,7 @@ describe("createPinnedJwksFetch", () => {
   const build = (over: { addresses?: Array<{ address: string; family: number }>; transport?: PinnedTransport } = {}) => {
     const resolve = vi.fn(async () => over.addresses ?? [{ address: "93.184.216.34", family: 4 }]);
     const transport = over.transport ?? (vi.fn(ok) as unknown as PinnedTransport);
-    return { fetchJwks: createPinnedJwksFetch({ resolve, transport }), resolve, transport: transport as ReturnType<typeof vi.fn> };
+    return { fetchJwks: createPinnedJwksFetch({ resolve, transport, now: () => 0 }), resolve, transport: transport as ReturnType<typeof vi.fn> };
   };
   const reason = (p: Promise<unknown>) => p.then(() => "ok", (e: unknown) => (e instanceof JwksFetchError ? e.reason : `other:${String(e)}`));
   const URI = "https://toks5.example.org/.well-known/jwks.json";
@@ -73,7 +93,7 @@ describe("createPinnedJwksFetch", () => {
     let answers = [{ address: "93.184.216.34", family: 4 }];
     const resolve = vi.fn(async () => answers);
     const transport = vi.fn(ok);
-    const fetchJwks = createPinnedJwksFetch({ resolve, transport });
+    const fetchJwks = createPinnedJwksFetch({ resolve, transport, now: () => 0 });
     await fetchJwks(URI);
     answers = [{ address: "10.0.0.1", family: 4 }];
     expect((transport.mock.calls[0]?.[0] as { address: string }).address).toBe("93.184.216.34");
@@ -88,14 +108,68 @@ describe("createPinnedJwksFetch", () => {
     expect(await reason(respond(404))).toBe("bad_status");
     expect(await reason(respond(200, "x".repeat(64 * 1024 + 1)))).toBe("too_large");
     expect(await reason(respond(200, "<html>"))).toBe("not_json");
-    const gone = createPinnedJwksFetch({ resolve: async () => Promise.reject(new Error("ENOTFOUND")), transport: ok });
+    const gone = createPinnedJwksFetch({ resolve: async () => Promise.reject(new Error("ENOTFOUND")), transport: ok, now: () => 0 });
     expect(await reason(gone(URI))).toBe("unresolvable");
-    const none = createPinnedJwksFetch({ resolve: async () => [], transport: ok });
+    const none = createPinnedJwksFetch({ resolve: async () => [], transport: ok, now: () => 0 });
     expect(await reason(none(URI))).toBe("unresolvable");
   });
 
   it("a transport failure (timeout, socket error) passes through as a JwksFetchError", async () => {
     const { fetchJwks } = build({ transport: (async () => Promise.reject(new JwksFetchError("timeout"))) as PinnedTransport });
     expect(await reason(fetchJwks(URI))).toBe("timeout");
+  });
+});
+
+describe("createPinnedHttp (the one request path to another node)", () => {
+  const reason = (p: Promise<unknown>) => p.then(() => "ok", (e: unknown) => (e instanceof JwksFetchError ? e.reason : `other:${String(e)}`));
+
+  it("the DNS lookup is inside the 5 s budget: a resolver that never answers times out, and nothing is requested", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = vi.fn(async () => ({ status: 200, body: "{}" }));
+      const http = createPinnedHttp({ resolve: () => new Promise(() => undefined), transport });
+      const pending = reason(http("https://slow.example.org/x"));
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(await pending).toBe("timeout");
+      expect(transport).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the request gets only what is left of the budget after the lookup", async () => {
+    let clock = 1_000;
+    const transport = vi.fn(async () => ({ status: 200, body: "{}" }));
+    const http = createPinnedHttp({
+      resolve: async () => {
+        clock += 3_000;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      transport,
+      now: () => clock,
+    });
+    await http("https://slow.example.org/x");
+    expect((transport.mock.calls[0] as unknown as [{ timeoutMs: number }])[0].timeoutMs).toBe(2_000);
+    clock = 10_000;
+    const spent = createPinnedHttp({
+      resolve: async () => {
+        clock += 5_000;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      transport,
+      now: () => clock,
+    });
+    expect(await reason(spent("https://slow.example.org/x"))).toBe("timeout");
+  });
+
+  it("a POST carries its method, headers and body to the pinned address; a redirect is refused; a non-2xx status is returned to the caller", async () => {
+    const transport = vi.fn(async () => ({ status: 409, body: '{"error":"x"}' }));
+    const http = createPinnedHttp({ resolve: async () => [{ address: "93.184.216.34", family: 4 }], transport, now: () => 0 });
+    expect(await http("https://node.example.org/api/v1/orgs/link", { method: "POST", headers: { authorization: "Bearer t" }, body: "{}" })).toEqual({ status: 409, body: '{"error":"x"}' });
+    expect(transport.mock.calls[0]?.[0]).toMatchObject({ method: "POST", headers: { authorization: "Bearer t" }, body: "{}", address: "93.184.216.34" });
+    const redirect = createPinnedHttp({ resolve: async () => [{ address: "93.184.216.34", family: 4 }], transport: async () => ({ status: 307, body: "" }), now: () => 0 });
+    expect(await reason(redirect("https://node.example.org/x", { method: "POST", body: "{}" }))).toBe("redirect");
+    const huge = createPinnedHttp({ resolve: async () => [{ address: "93.184.216.34", family: 4 }], transport: async () => ({ status: 200, body: "x".repeat(64 * 1024 + 1) }), now: () => 0 });
+    expect(await reason(huge("https://node.example.org/x"))).toBe("too_large");
   });
 });

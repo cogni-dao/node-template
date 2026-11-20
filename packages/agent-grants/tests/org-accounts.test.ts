@@ -10,6 +10,7 @@ import {
   createOrg,
   getOrgView,
   inviteMember,
+  listMembers,
   listMyInvites,
   listOrgs,
   MAX_OPEN_INVITES,
@@ -35,8 +36,8 @@ describe("create (ANYONE_CREATES, BOUNDED_CREATION)", () => {
     const { store, org } = await fixture();
     expect(org).toMatchObject({ name: "toks5", orgUserId: "org-1" });
     expect(store.roles).toEqual([expect.objectContaining({ userId: "alice", role: "owner", approvedBy: "org-1" })]);
-    expect(await listOrgs(store, "alice")).toEqual([expect.objectContaining({ orgUserId: "org-1", role: "owner" })]);
-    expect(await listOrgs(store, "stranger")).toEqual([]);
+    expect((await listOrgs(store, "alice")).items).toEqual([expect.objectContaining({ orgUserId: "org-1", role: "owner" })]);
+    expect(await listOrgs(store, "stranger")).toEqual({ items: [], nextCursor: null });
   });
 
   it("a name is trimmed, single-spaced and printable; empty, long and control-character names are refused", async () => {
@@ -62,8 +63,8 @@ describe("invite and accept (INVITE_GRANTS_NOTHING)", () => {
     const invite = await inviteMember(store, { actorUserId: "alice", orgUserId: org.orgUserId, wallet: W1.toUpperCase().replace("0X", "0x"), role: "admin" });
     expect(invite).toMatchObject({ wallet: W1, role: "admin" });
     expect(await store.roleOf("bob", org.orgUserId)).toBeNull();
-    expect((await listMyInvites(store, "bob")).map((i) => i.id)).toEqual([invite.id]);
-    expect(await listMyInvites(store, "carol")).toEqual([]);
+    expect((await listMyInvites(store, "bob")).items.map((i) => i.id)).toEqual([invite.id]);
+    expect((await listMyInvites(store, "carol")).items).toEqual([]);
     expect(await acceptInvite(store, { userId: "bob", inviteId: invite.id })).toEqual({ orgUserId: org.orgUserId, role: "admin" });
     expect(await store.roleOf("bob", org.orgUserId)).toBe("admin");
     // Single use.
@@ -200,6 +201,50 @@ describe("change role and remove (ONE_OWNER_MINIMUM, ONLY_AN_OWNER_MAKES_AN_OWNE
     expect(await code(changeRole(store, { actorUserId: "alice", orgUserId: org.orgUserId, targetUserId: "ghost", role: "admin" }))).toBe("not_found");
     expect(await code(getOrgView(store, { actorUserId: "stranger", orgUserId: org.orgUserId }))).toBe("not_found");
     expect(await code(getOrgView(store, { actorUserId: "alice", orgUserId: "no-such-org" }))).toBe("not_found");
-    expect((await getOrgView(store, { actorUserId: "alice", orgUserId: org.orgUserId })).members).toEqual([expect.objectContaining({ userId: "alice", role: "owner" })]);
+    expect((await getOrgView(store, { actorUserId: "alice", orgUserId: org.orgUserId })).members.items).toEqual([expect.objectContaining({ userId: "alice", role: "owner" })]);
+  });
+});
+
+describe("lists page and never cut silently (LISTS_PAGE)", () => {
+  it("orgs, members and invites come a page at a time with a cursor that reaches every row exactly once", async () => {
+    const store = memoryOrgStore();
+    const orgIds: string[] = [];
+    for (let i = 0; i < 5; i++) orgIds.push((await createOrg(store, { creatorUserId: "alice", name: `o${i}` })).orgUserId);
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const page = await listOrgs(store, "alice", { limit: 2, cursor });
+      expect(page.items.length).toBeLessThanOrEqual(2);
+      seen.push(...page.items.map((o) => o.orgUserId));
+      cursor = page.nextCursor;
+      pages++;
+    } while (cursor);
+    expect(pages).toBe(3);
+    expect(seen.sort()).toEqual([...orgIds].sort());
+
+    // Members of one org: add three admins, page by two.
+    const org = orgIds[0] as string;
+    for (const [i, user] of ["b", "c", "d"].entries()) {
+      store.addWallet(user, `0x${String(i + 1).repeat(40)}`);
+      const invite = await inviteMember(store, { actorUserId: "alice", orgUserId: org, wallet: `0x${String(i + 1).repeat(40)}`, role: "admin" });
+      await acceptInvite(store, { userId: user, inviteId: invite.id });
+    }
+    const first = await listMembers(store, { actorUserId: "alice", orgUserId: org, limit: 3 });
+    expect(first.items).toHaveLength(3);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await listMembers(store, { actorUserId: "alice", orgUserId: org, limit: 3, cursor: first.nextCursor });
+    expect(second.items).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.items, ...second.items].map((m) => m.userId))).toEqual(new Set(["alice", "b", "c", "d"]));
+  });
+
+  it("a page size is clamped to 1..100, a bad cursor is invalid_cursor, and a stranger still gets not_found", async () => {
+    const { store, org } = await fixture();
+    expect((await listOrgs(store, "alice", { limit: 0 })).items).toHaveLength(1);
+    expect((await listOrgs(store, "alice", { limit: 10_000 })).items).toHaveLength(1);
+    expect(await code(listMembers(store, { actorUserId: "alice", orgUserId: org.orgUserId, cursor: "not a uuid" }))).toBe("invalid_cursor");
+    expect(await code(listMyInvites(store, "alice", { cursor: "../etc" }))).toBe("invalid_cursor");
+    expect(await code(listMembers(store, { actorUserId: "stranger", orgUserId: org.orgUserId }))).toBe("not_found");
   });
 });

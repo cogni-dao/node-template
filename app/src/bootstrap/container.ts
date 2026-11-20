@@ -1334,7 +1334,21 @@ function createContainer(): Container {
 		nodeAdmin: createAdminCheckNodeAdminAuthority(() => agentAuthority.adminCheck),
 		agentAuthority,
 		serviceAuth,
-		orgAccounts: createOrgAccounts({ sql: agentSql, log, nodeId, getSigner: () => serviceAuth.getSigner() }),
+		orgAccounts: createOrgAccounts({
+			sql: agentSql,
+			log,
+			nodeId,
+			// A link code carries this node's own https origin; a node with no usable one (a local http dev server) makes no code.
+			selfOrigin: (() => {
+				try {
+					const origin = new URL(env.APP_BASE_URL ?? "").origin;
+					return origin.startsWith("https://") ? origin : null;
+				} catch {
+					return null;
+				}
+			})(),
+			getSigner: () => serviceAuth.getSigner(),
+		}),
 		serviceLinks,
 		nodeAdminPort: createNodeAdminPort(agentAuthority),
 		knowledgeStorePort,

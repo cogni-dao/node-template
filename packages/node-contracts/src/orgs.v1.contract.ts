@@ -7,7 +7,8 @@
  *   suspend, and the signed link a node sends another node.
  * Scope: Bodies and outputs only. The caller is always the authenticated session user, never a body field; the link route's credential is the signed assertion in the
  *   `Authorization` header, never the body.
- * Invariants: CONTRACTS_ARE_TRUTH. P1 has two roles only, `owner` and `admin`. A link code and an assertion appear in a body once, to the person or node that made them, and never in a
+ * Invariants: CONTRACTS_ARE_TRUTH. LISTS_PAGE: every list is a page, `{ items, nextCursor }`; `nextCursor` is the opaque value to send back as `?cursor=` (null on the last page), `?limit=` is 1..100.
+ *   P1 has two roles only, `owner` and `admin`. A link code and an assertion appear in a body once, to the person or node that made them, and never in a
  *   log. An unknown org and an org the caller is not in are indistinguishable (`not_found`).
  * Side-effects: none
  * Links: https://node-template.cognidao.org/knowledge/org-account-lifecycle
@@ -17,6 +18,16 @@
 import { z } from "zod";
 
 export const orgRoleSchema = z.enum(["owner", "admin"]);
+
+/** The query every list route takes. A page is at most 100 rows; a cursor is whatever the previous page returned. */
+export const pageQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  cursor: z.string().min(1).max(100).optional(),
+});
+
+const nextCursor = z.string().nullable();
+const memberSchema = z.object({ userId: z.string(), name: z.string().nullable(), role: orgRoleSchema, since: z.string() });
+const linkSchema = z.object({ id: z.string(), issuer: z.string(), services: z.array(z.string()), createdAt: z.string() });
 
 const orgRefSchema = z.object({
   orgUserId: z.string().min(1),
@@ -34,7 +45,7 @@ export const orgCreateOperation = {
 
 export const orgListOperation = {
   id: "orgs.list.v1",
-  output: z.object({ orgs: z.array(orgRefSchema.extend({ role: orgRoleSchema })) }),
+  output: z.object({ orgs: z.array(orgRefSchema.extend({ role: orgRoleSchema })), nextCursor }),
 } as const;
 
 export const orgViewOperation = {
@@ -42,9 +53,19 @@ export const orgViewOperation = {
   output: z.object({
     org: orgRefSchema,
     role: orgRoleSchema,
-    members: z.array(z.object({ userId: z.string(), name: z.string().nullable(), role: orgRoleSchema, since: z.string() })),
-    links: z.array(z.object({ id: z.string(), issuer: z.string(), services: z.array(z.string()), createdAt: z.string() })),
+    members: z.object({ items: z.array(memberSchema), nextCursor }),
+    links: z.object({ items: z.array(linkSchema), nextCursor }),
   }),
+} as const;
+
+export const orgMembersListOperation = {
+  id: "orgs.members.list.v1",
+  output: z.object({ items: z.array(memberSchema), nextCursor }),
+} as const;
+
+export const orgLinksListOperation = {
+  id: "orgs.links.list.v1",
+  output: z.object({ items: z.array(linkSchema), nextCursor }),
 } as const;
 
 export const orgInviteOperation = {
@@ -57,6 +78,7 @@ export const orgMyInvitesOperation = {
   id: "orgs.invites.mine.v1",
   output: z.object({
     invites: z.array(z.object({ id: z.string(), orgUserId: z.string(), orgName: z.string(), role: orgRoleSchema, expiresAt: z.string() })),
+    nextCursor,
   }),
 } as const;
 
@@ -80,7 +102,10 @@ export const orgLinkCodeOperation = {
   id: "orgs.link-codes.create.v1",
   /** The https origin of the node to link, such as `https://toks5.cognidao.org`. */
   input: z.object({ origin: z.string().min(1).max(200) }),
-  /** The code is returned once and only its hash is kept. It lives 15 minutes and is single use. */
+  /**
+   * The code is returned once and only the hash of its secret is kept. It lives 15 minutes and is single use. It carries this node's origin and id and the org's id, so the other node's
+   * admin enters only the code.
+   */
   output: z.object({ code: z.string(), origin: z.string(), expiresAt: z.string() }),
 } as const;
 
@@ -107,19 +132,37 @@ export const orgLinkOperation = {
   }),
 } as const;
 
-/** This node's admin makes this node sign a link or unlink for another node (the node-admin side of a link). */
+/**
+ * The public preview of a link code (`GET /api/v1/orgs/link-preview?code=`): the org's name and this node's origin, for a code that is valid and unused, and nothing else. Any other
+ * case is 404 `not_found`. Public and rate limited.
+ */
+export const orgLinkPreviewOperation = {
+  id: "orgs.link-preview.v1",
+  input: z.object({ code: z.string().min(1).max(700) }),
+  output: z.object({ orgName: z.string(), origin: z.string() }),
+} as const;
+
+/**
+ * This node's admin makes THIS node preview and sign a link for an org on another node. The admin enters only the code: the other node's origin, node id and the org id come from it.
+ * `preview` asks that node what the code is for and returns its org name and origin. `link` signs only if a fresh preview still names `expectOrgName` (the name the admin confirmed).
+ * `unlink` signs the close for the org and node the original code names.
+ */
 export const orgOutboundLinkOperation = {
   id: "orgs.outbound-link.v1",
-  input: z.object({
-    act: z.enum(["link", "unlink"]),
-    /** The other node's https origin and node id (its assertion audience). */
-    targetOrigin: z.string().min(1).max(200),
-    targetNodeId: z.string().min(1).max(100),
-    orgUserId: z.string().min(1).max(100),
-    /** The one-time code the org's owner made there. Required for a link. */
-    code: z.string().min(1).max(100).optional(),
-    /** The services this node offers to act through, such as `node-ai`. Required for a link. */
-    services: z.array(z.string().min(1).max(64)).max(8).optional(),
-  }),
-  output: z.object({ httpStatus: z.number().int(), error: z.string().nullable(), act: z.enum(["link", "unlink"]).nullable() }),
+  input: z.discriminatedUnion("step", [
+    z.object({ step: z.literal("preview"), code: z.string().min(1).max(700) }),
+    z.object({
+      step: z.literal("link"),
+      code: z.string().min(1).max(700),
+      /** The org name the preview returned and the admin confirmed. */
+      expectOrgName: z.string().min(1).max(200),
+      /** The services this node offers to act through, such as `node-ai`. */
+      services: z.array(z.string().min(1).max(64)).min(1).max(8),
+    }),
+    z.object({ step: z.literal("unlink"), code: z.string().min(1).max(700) }),
+  ]),
+  output: z.union([
+    z.object({ step: z.literal("preview"), orgName: z.string(), origin: z.string() }),
+    z.object({ step: z.enum(["link", "unlink"]), httpStatus: z.number().int(), error: z.string().nullable(), act: z.enum(["link", "unlink"]).nullable() }),
+  ]),
 } as const;
