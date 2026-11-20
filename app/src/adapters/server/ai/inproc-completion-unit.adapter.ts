@@ -340,8 +340,12 @@ export class InProcCompletionUnitAdapter {
         inputTokens: result.usage?.promptTokens,
         outputTokens: result.usage?.completionTokens,
         ...(result.model && { model: result.model }),
-        // BYO_ZERO_PLATFORM_COST: respect any cost the adapter reports, default to 0.
-        costUsd: result.providerCostUsd ?? 0,
+        // BYO_ZERO_PLATFORM_COST: a BYO run with no reported cost costs the platform 0.
+        // COST_AUTHORITY_IS_LITELLM: a platform run with no cost stays unknown, so
+        // billing defers to the LiteLLM callback instead of writing a $0 receipt (bug.0067).
+        ...(result.providerCostUsd !== undefined
+          ? { costUsd: result.providerCostUsd }
+          : usageSource !== "litellm" && { costUsd: 0 }),
       };
       const usageEvent: UsageReportEvent = { type: "usage_report", fact };
       yield usageEvent;
