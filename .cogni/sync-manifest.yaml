@@ -25,8 +25,8 @@ node_local:
   # Home/landing feature surface (components, copy, hero).
   - "app/src/features/home/**"
   # The brand hue: a node's visual identity, so node-template must never overwrite it.
-  # The shared design system (neutrals, status, chrome, @theme colour mappings) is published in
-  # @cogni-dao/knowledge-base-ui (theme.css); a token fix reaches nodes by package release.
+  # The shared design system (neutrals, status, chrome, @theme colour mappings) is published as
+  # @cogni-dao/ui-theme (theme.css); a token fix reaches nodes by package release.
   - "app/src/styles/tailwind.css"
   # Branding assets / theme extensions.
   - "app/src/styles/branding/**"

@@ -1,6 +1,6 @@
 /*
  * Shared design tokens for Cogni nodes: semantic colour roles, light and dark values, the
- * @theme colour mappings and the base surface. Each node imports this file once from its
+ * @theme colour mappings and the base surface. Each node imports `@cogni/ui-theme/theme.css` once from its
  * tailwind.css and overrides only its brand variables after it. Roles and contrast floors:
  * https://node-template.cognidao.org/knowledge/ui-token-system
  */

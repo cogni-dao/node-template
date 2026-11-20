@@ -9,7 +9,7 @@
  * Scope: Pure string builders — no I/O, no React.
  * Invariants:
  *   - LIGHT_TOKEN_BLOCK / DARK_TOKEN_BLOCK are snapshots of
- *     `packages/knowledge-base-ui/theme.css` + `tailwind.css` (brand) `:root { … }` / `.dark { … }`.
+ *     `packages/ui-theme/theme.css` + `tailwind.css` (brand) `:root { … }` / `.dark { … }`.
  *     Drift = visual regressions. Bump in the same commit per spec TOKEN_BLOCK_PAIRED.
  *     Status colours keep the `--color-success/-warning/-danger` names here: authored html atoms read them.
  *   - UTILITY_CSS is ≤15 classes per spec UTILITY_LIB_IS_CAPPED.
@@ -18,7 +18,7 @@
  * @internal
  */
 
-// SOURCE: packages/knowledge-base-ui/theme.css + tailwind.css (brand) `:root { ... }` (light mode).
+// SOURCE: packages/ui-theme/theme.css + tailwind.css (brand) `:root { ... }` (light mode).
 // Mirror here when the source block changes.
 const LIGHT_TOKEN_BLOCK = `:root {
   --background: 210 40% 96.1%;
@@ -52,7 +52,7 @@ const LIGHT_TOKEN_BLOCK = `:root {
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }`;
 
-// SOURCE: packages/knowledge-base-ui/theme.css + tailwind.css (brand) `.dark { ... }`.
+// SOURCE: packages/ui-theme/theme.css + tailwind.css (brand) `.dark { ... }`.
 // Applied when the parent app's resolved theme is "dark".
 const DARK_TOKEN_BLOCK = `.dark {
   --background: 240 10% 3.9%;

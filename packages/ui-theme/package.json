@@ -1,0 +1,32 @@
+{
+  "name": "@cogni-dao/ui-theme",
+  "version": "0.1.0",
+  "license": "LicenseRef-PolyForm-Shield-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cogni-dao/node-template.git",
+    "directory": "packages/ui-theme"
+  },
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "exports": {
+    ".": {
+      "default": "./index.js"
+    },
+    "./theme.css": "./theme.css"
+  },
+  "bin": {
+    "ui-theme-check": "./check.js"
+  },
+  "files": [
+    "index.js",
+    "check.js",
+    "theme.css",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  }
+}

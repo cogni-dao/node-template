@@ -165,6 +165,9 @@ importers:
       '@cogni/substrate-health':
         specifier: workspace:@cogni-dao/substrate-health@*
         version: link:../packages/substrate-health
+      '@cogni/ui-theme':
+        specifier: workspace:@cogni-dao/ui-theme@*
+        version: link:../packages/ui-theme
       '@cogni/work-items':
         specifier: workspace:@cogni-dao/work-items@*
         version: link:../packages/work-items
@@ -1419,6 +1422,8 @@ importers:
       vitest:
         specifier: ^4.0.9
         version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@22.19.19)(happy-dom@20.10.2(bufferutil@4.1.0)(utf-8-validate@5.0.10))(jsdom@27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))(vite@7.3.5(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  packages/ui-theme: {}
 
   packages/work-items:
     dependencies:

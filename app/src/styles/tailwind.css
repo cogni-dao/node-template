@@ -3,8 +3,8 @@
 @import "@cogni/node-ui-kit/tailwind-source.css";
 @import "@cogni/knowledge-base-ui/tailwind-source.css";
 @import "@cogni/money-plane/tailwind-source.css";
-/* Shared design tokens (published in @cogni-dao/knowledge-base-ui). Never copy them here. */
-@import "@cogni/knowledge-base-ui/theme.css";
+/* Shared design tokens (published as @cogni-dao/ui-theme). Never copy them here. */
+@import "@cogni/ui-theme/theme.css";
 /* The shared FinanceReport ships as built JS; scan it so its utilities are emitted (Turbopack inlines the import above). */
 @source "../../node_modules/@cogni/money-plane/dist/react";
 
@@ -151,7 +151,7 @@
 
 /*
  * Node identity: the brand hue, in both themes. This file is node_local and fork-sync never
- * overwrites it. Everything else (neutrals, status, chrome, mappings) comes from @cogni/knowledge-base-ui/theme.css.
+ * overwrites it. Everything else (neutrals, status, chrome, mappings) comes from @cogni/ui-theme/theme.css.
  * Change the hue (217 here) in both blocks; keep each pair's contrast floor per ui-token-system.
  * Every variable set in :root must also be set in .dark, or the light value leaks into dark.
  */
