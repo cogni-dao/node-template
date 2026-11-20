@@ -4,12 +4,8 @@
 /**
  * Module: `@app/(app)/work/_components/WorkItemDetailBody`
  * Purpose: Helps a human decide what the item is, whether its latest review lets it move, and why it moved.
- * Scope: Binding only (story.0085). The whole view is `WorkItemView` from `@cogni/knowledge-base-ui/work-item`; this file passes
- *   the node's read client, URL state, links, markdown renderer and sheet header parts.
- * Invariants:
- *   - ONE_VIEW: no section, field or read lives here; a fork renders the same view from the same release.
- * Side-effects: none (the view reads older pages through the client)
- * Links: hub work-item-view-capability, ../_lib/workItemNavigation.ts
+ * Scope: Binding only (story.0085, ONE_VIEW): the whole view is `WorkItemView` from `@cogni/knowledge-base-ui/work-item`.
+ * Side-effects: none (the view reads older pages through the client). Links: hub work-item-view-capability
  * @internal
  */
 
