@@ -18,6 +18,7 @@
  * @public
  */
 
+import { countActorKinds } from "@cogni/work-items";
 import type {
   HistoryActorKind,
   HistoryEntry,
@@ -70,11 +71,7 @@ async function withKinds(
     const kind = entry.actor === null ? undefined : kinds.get(entry.actor);
     return kind === undefined ? entry : { ...entry, actorKind: kind };
   });
-  const actorKinds: Record<string, number> = {};
-  for (const entry of labelled) {
-    if (entry.actorKind !== undefined) actorKinds[entry.actorKind] = (actorKinds[entry.actorKind] ?? 0) + 1;
-  }
-  onLabelled({ versionCount: labelled.length, actorKinds });
+  onLabelled({ versionCount: labelled.length, actorKinds: countActorKinds(labelled) });
   return labelled;
 }
 

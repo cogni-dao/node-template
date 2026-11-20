@@ -192,7 +192,7 @@ export type {
   WorkItemHistoryResult,
   WorkItemHistoryStore,
 } from "./history-read.js";
-export { readHistoryRefsPage, readWorkItemHistory, toHistoryRef } from "./history-read.js";
+export { countActorKinds, readHistoryRefsPage, readWorkItemHistory, toHistoryRef } from "./history-read.js";
 export { HISTORY_ACTOR_KINDS } from "./history.js";
 export type { HistoryActorKind } from "./history.js";
 export {

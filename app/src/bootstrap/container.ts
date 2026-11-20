@@ -907,8 +907,14 @@ function createContainer(): Container {
 					{ event: EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KIND_UNAVAILABLE, errorName: (error as Error | undefined)?.name },
 					EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KIND_UNAVAILABLE,
 				),
-			(counts) =>
-				log.info({ event: EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KINDS, ...counts }, EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KINDS),
+			// A read inside a graph run (core__work_item_read) carries its runId, so a tool read correlates with its run.
+			(counts) => {
+				const runId = findExecutionScope()?.runId;
+				log.info(
+					{ event: EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KINDS, ...counts, ...(runId ? { runId } : {}) },
+					EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KINDS,
+				);
+			},
 		);
 		// task.0028: artifacts go through the work-items writer path. The artifact records its author for audit; no
 		// server check compares it with the subject's author.

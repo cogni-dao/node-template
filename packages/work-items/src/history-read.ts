@@ -50,7 +50,7 @@ export function toHistoryRef(entry: HistoryEntry): HistoryRef {
 }
 
 /** Counts of versions by their actor's kind; a version with no kind counts under none. Counts only, no ids. */
-function countActorKinds(entries: readonly { readonly actorKind?: string | undefined }[]): Record<string, number> {
+export function countActorKinds(entries: readonly { readonly actorKind?: string | undefined }[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const entry of entries) {
     if (entry.actorKind !== undefined) counts[entry.actorKind] = (counts[entry.actorKind] ?? 0) + 1;
