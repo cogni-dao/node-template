@@ -68,7 +68,6 @@ export interface WorkItemReadResult {
   readonly event: WorkItemReadEvent;
 }
 
-/** Fixed response text: store and error internals never reach the client. */
 
 /** The envelope options a node's store read takes. */
 export interface WorkItemEnvelopeOptions {
