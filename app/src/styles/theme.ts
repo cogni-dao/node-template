@@ -5,14 +5,14 @@
  * Module: `@styles/theme`
  * Purpose: Design token keys and types for type-safe component styling. No values - CSS is source of truth.
  * Scope: Provides typed token names for spacing, radius, colors. Does not define CSS values or styles.
- * Invariants: Keys match CSS custom properties; all values defined in tailwind.css @theme block; maintains strict typing.
+ * Invariants: Keys match CSS custom properties; all values defined in system.css (brand hue in tailwind.css); maintains strict typing.
  * Side-effects: none
  * Notes: Single source of typed keys for ui.ts and kit components.
- * Links: src/styles/tailwind.css (values), https://node-template.cognidao.org/knowledge/frontend-development
+ * Links: src/styles/system.css (values), src/styles/tailwind.css (brand), https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 
-// Color token keys (match CSS custom properties in tailwind.css)
+// Color token keys (match CSS custom properties in system.css)
 export const colorKeys = [
   "background",
   "foreground",
@@ -33,6 +33,11 @@ export const colorKeys = [
   "border",
   "input",
   "ring",
+  "success",
+  "warning",
+  "danger",
+  "invert",
+  "invert-foreground",
   "syntax-property",
   "syntax-operator",
   "syntax-punctuation",
@@ -77,7 +82,7 @@ export type BasicSpacingKey = (typeof basicSpacingKeys)[number];
 export type SpacingSemanticKey = (typeof spacingSemanticKeys)[number];
 export type SizeKey = (typeof sizeKeys)[number];
 
-// Font family keys (match tailwind.css font definitions)
+// Font family keys (match system.css font definitions)
 export const fontFamilyKeys = ["sans", "mono", "display"] as const;
 export type FontFamilyKey = (typeof fontFamilyKeys)[number];
 

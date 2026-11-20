@@ -9,69 +9,73 @@
  * Scope: Pure string builders — no I/O, no React.
  * Invariants:
  *   - LIGHT_TOKEN_BLOCK / DARK_TOKEN_BLOCK are snapshots of
- *     `nodes/operator/app/src/styles/tailwind.css :root { … }` / `.dark { … }`.
+ *     `app/src/styles/system.css` + `tailwind.css` (brand) `:root { … }` / `.dark { … }`.
  *     Drift = visual regressions. Bump in the same commit per spec TOKEN_BLOCK_PAIRED.
+ *     Status colours keep the `--color-success/-warning/-danger` names here: authored html atoms read them.
  *   - UTILITY_CSS is ≤15 classes per spec UTILITY_LIB_IS_CAPPED.
  *   - Shell never references external `<link>` or `<script>` per spec SHELL_IS_INLINE.
  * Links: https://node-template.cognidao.org/knowledge/knowledge-human-visuals
  * @internal
  */
 
-// SOURCE: nodes/operator/app/src/styles/tailwind.css `:root { ... }` (light mode).
+// SOURCE: app/src/styles/system.css + tailwind.css (brand) `:root { ... }` (light mode).
 // Mirror here when the source block changes.
 const LIGHT_TOKEN_BLOCK = `:root {
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
+  --background: 210 40% 96.1%;
+  --foreground: 222 47% 11%;
   --card: 0 0% 100%;
-  --card-foreground: 222.2 84% 4.9%;
-  --popover: 210 40% 96.1%;
-  --popover-foreground: 215.4 16.3% 20%;
-  --primary: 222.2 47.4% 11.2%;
-  --primary-foreground: 210 40% 98%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 217 91% 45%;
+  --primary-foreground: 0 0% 100%;
   --secondary: 210 40% 96.1%;
-  --secondary-foreground: 222.2 47.4% 11.2%;
-  --muted: 210 40% 96.1%;
-  --muted-foreground: 215.4 16.3% 20%;
-  --accent: 210 40% 96.1%;
-  --accent-foreground: 222.2 47.4% 11.2%;
-  --destructive: 0 84.2% 60.2%;
-  --border: 214.3 31.8% 91.4%;
-  --input: 214.3 31.8% 91.4%;
-  --ring: 222.2 84% 4.9%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 214 32% 91.4%;
+  --muted-foreground: 215 19% 31%;
+  --accent: 212 39% 93.5%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 74% 39%;
+  --border: 213 23% 80%;
+  --input: 216 15% 55%;
+  --ring: 217 91% 45%;
   --chart-1: 220 70% 50%;
   --chart-2: 160 60% 45%;
   --chart-3: 30 80% 55%;
   --chart-4: 280 65% 60%;
   --chart-5: 340 75% 55%;
-  --color-success: 142 71% 45%;
-  --color-warning: 43 74% 66%;
-  --color-danger: 0 84.2% 60.2%;
-  --radius: 0.75rem;
+  --color-success: 142 72% 23.5%;
+  --color-warning: 26 90% 30%;
+  --color-danger: 0 74% 39%;
+  --radius: 0.5rem;
   --font-sans: "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }`;
 
-// SOURCE: nodes/operator/app/src/styles/tailwind.css `.dark { ... }`.
+// SOURCE: app/src/styles/system.css + tailwind.css (brand) `.dark { ... }`.
 // Applied when the parent app's resolved theme is "dark".
 const DARK_TOKEN_BLOCK = `.dark {
-  --background: 0 0% 0%;
-  --foreground: 210 40% 98%;
-  --card: 0 0% 0%;
-  --card-foreground: 210 40% 98%;
-  --popover: 217.2 32.6% 9%;
-  --popover-foreground: 215 20.2% 76.1%;
-  --primary: 217 71% 40%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 217.2 32.6% 17.5%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 217.2 32.6% 9%;
-  --muted-foreground: 215 20.2% 76.1%;
-  --accent: 217.2 32.6% 17.5%;
-  --accent-foreground: 210 40% 98%;
-  --destructive: 0 62.8% 30.6%;
-  --border: 217.2 32.6% 17.5%;
-  --input: 217.2 32.6% 17.5%;
-  --ring: 217 71% 40%;
+  --background: 240 10% 3.9%;
+  --foreground: 220 9% 93.5%;
+  --card: 240 6% 7.1%;
+  --card-foreground: 220 9% 93.5%;
+  --popover: 240 6% 7.1%;
+  --popover-foreground: 220 9% 93.5%;
+  --primary: 217 91% 65%;
+  --primary-foreground: 240 10% 3.9%;
+  --secondary: 225 6% 13.7%;
+  --secondary-foreground: 220 9% 93.5%;
+  --muted: 220 6% 10%;
+  --muted-foreground: 216 7% 71%;
+  --accent: 225 6% 13.7%;
+  --accent-foreground: 220 9% 93.5%;
+  --destructive: 0 84% 60%;
+  --border: 220 6% 18.4%;
+  --input: 212 8% 38%;
+  --ring: 217 91% 65%;
+  --color-success: 142 71% 45%;
+  --color-warning: 43 74% 66%;
+  --color-danger: 0 84% 60%;
 }`;
 
 const BASE_CSS = `*, *::before, *::after { box-sizing: border-box; }
