@@ -10,6 +10,7 @@ import {
 	createGoalProgressReader,
 	createGoalSource,
 } from "@cogni-dao/metrics/knowledge";
+import { createKnowledgeUsageCalculator } from "@cogni-dao/metrics/usage";
 import type { Sql } from "postgres";
 import { z } from "zod";
 import {
@@ -119,6 +120,7 @@ export function createGoalMetrics(deps: {
 		node: getNodeId(),
 		nodeCalculators: [
 			createRunsCountCalculator(deps.observationsSql),
+			createKnowledgeUsageCalculator(deps.observationsSql),
 			createValidatedByAuthorCalculator(deps.knowledgeSql, deps.observationsSql),
 		],
 	});

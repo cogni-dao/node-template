@@ -337,6 +337,13 @@
       "when": 1795047243323,
       "tag": "0047_dark_oracle",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1795055807556,
+      "tag": "0048_dusty_bastion",
+      "breakpoints": true
     }
   ]
 }

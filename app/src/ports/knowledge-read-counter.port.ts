@@ -11,16 +11,9 @@
  * @public
  */
 
-/** Mirrors the `knowledge_read_daily` CHECK constraint in `@cogni/db-schema`. */
-export type KnowledgeReaderClass = "internal_run" | "external_agent";
+import type { KnowledgeRead } from "@cogni-dao/metrics/usage";
 
-export interface KnowledgeRead {
-  readonly atomId: string;
-  /** `fail` only when the id does not exist (a 404 or a null get). */
-  readonly outcome: "ok" | "fail";
-  readonly principalId: string;
-  readonly principalClass: KnowledgeReaderClass;
-}
+export type { KnowledgeRead, KnowledgeReaderClass } from "@cogni-dao/metrics/usage";
 
 export interface KnowledgeReadCounter {
   count(read: KnowledgeRead): void;
