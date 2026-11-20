@@ -601,10 +601,8 @@ export class LiteLlmAdapter implements LlmService {
 
             // STREAM_COST_IS_USAGE_COST: usage.cost or undefined, so billing defers
             // to the LiteLLM callback instead of recording a guessed cost.
-            const derivedCost = usageCost;
-
-            if (typeof derivedCost === "number") {
-              result.providerCostUsd = derivedCost;
+            if (typeof usageCost === "number") {
+              result.providerCostUsd = usageCost;
             }
 
             // USAGE_UNIT_IS_LITELLM_CALL_ID: header is the ONLY source.
@@ -627,7 +625,7 @@ export class LiteLlmAdapter implements LlmService {
                 provider: resolvedProvider,
                 tokensUsed: finalUsage?.totalTokens,
                 finishReason,
-                hasCost: typeof derivedCost === "number",
+                hasCost: typeof usageCost === "number",
                 hasCallId: !!result.litellmCallId,
                 contentLength: fullContent.length,
                 toolCallCount: assembledToolCalls?.length ?? 0,
