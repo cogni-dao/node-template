@@ -31,10 +31,6 @@ vi.mock("@/features/payments/services/creditsConfirm", () => ({
 	confirmCreditsPayment: vi.fn(),
 }));
 
-vi.mock("@/shared/env", () => ({
-	serverEnv: () => ({ SYSTEM_TENANT_REVENUE_SHARE: 0.75 }),
-}));
-
 const mockConfirmCreditsPayment = vi.mocked(confirmCreditsPayment);
 
 const mockLog = {
@@ -50,6 +46,7 @@ describe("features/payments/application/confirmCreditsPurchase", () => {
 		defaultVirtualKeyId: "vk-123",
 		amountUsdCents: 1000,
 		clientPaymentId: "payment-1",
+		revenueShare: 0,
 	};
 
 	let accountService: ReturnType<typeof createMockAccountService>;
