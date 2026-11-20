@@ -26,15 +26,17 @@ export const BRAND_VARIABLES = Object.freeze([
   "--sidebar-accent-foreground",
 ]);
 
+// Shared tokens owned by theme.css, by exact name (so layout variables such as --sidebar-width stay free).
 const COLOUR_ROLE =
-  /^--(background|foreground|card|popover|primary|secondary|muted|accent|destructive|border|input|ring|chart-\d|syntax-|danger|warning|success|info|invert|sidebar|radius)/;
+  /^--(?:(?:background|foreground|border|input|ring|radius|danger|warning|success|info|done|invert)|(?:card|popover|primary|secondary|muted|accent|destructive|invert)(?:-foreground)?|sidebar(?:-foreground|-primary|-primary-foreground|-accent|-accent-foreground|-border|-ring)?|accent-(?:from|to|glow)|chart-\d+|syntax-[a-z-]+|color-[a-z0-9-]+)$/;
 
 /** Returns every rule a node tailwind.css breaks; an empty list means it is on the shared theme. */
 export function checkTailwindCss(source) {
   const css = source.replace(/\/\*[\s\S]*?\*\//g, "");
   const brand = new Set(BRAND_VARIABLES);
   const errors = [];
-  if (!css.includes(THEME_IMPORT)) errors.push(`missing ${THEME_IMPORT}`);
+  const importAt = css.indexOf(THEME_IMPORT);
+  if (importAt < 0) errors.push(`missing ${THEME_IMPORT}`);
 
   const root = new Set();
   const dark = new Set();
@@ -44,7 +46,7 @@ export function checkTailwindCss(source) {
   }
   for (const name of new Set([...root, ...dark])) {
     if (COLOUR_ROLE.test(name) && !brand.has(name)) {
-      errors.push(`${name} is a shared colour role; it belongs in theme.css`);
+      errors.push(`${name} is a shared token; it belongs in theme.css`);
     }
   }
   for (const name of root) {
@@ -52,7 +54,11 @@ export function checkTailwindCss(source) {
       errors.push(`${name} is set in :root but not in .dark, so the light value leaks into dark`);
     }
   }
-  for (const block of css.matchAll(/@theme\s+inline\s*\{([^}]*)\}/g)) {
+  const firstBlock = css.search(/(:root|\.dark)\s*\{/);
+  if (importAt >= 0 && firstBlock >= 0 && firstBlock < importAt) {
+    errors.push("the brand block comes before the theme import, so theme.css would override it");
+  }
+  for (const block of css.matchAll(/@theme(?:\s+[a-z]+)*\s*\{([^}]*)\}/g)) {
     for (const decl of block[1].matchAll(/(--color-[a-z0-9-]+)\s*:/g)) {
       if (decl[1] !== "--color-transparent" && decl[1] !== "--color-current") {
         errors.push(`${decl[1]} is a colour mapping; it belongs in theme.css`);
