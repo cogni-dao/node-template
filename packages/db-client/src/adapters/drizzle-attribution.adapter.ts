@@ -1266,6 +1266,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     window: { periodStart: Date; periodEnd: Date },
     page: { limit: number; offset: number }
   ): Promise<{ receipts: IngestionReceipt[]; total: number }> {
+    await this.resolveEpochScoped(epochId);
     // One predicate over ingestion_receipts: in the window, or selected into this epoch.
     // A receipt matching both appears once (no UNION, no in-memory dedup).
     const selectedIntoEpoch = this.db
@@ -1282,10 +1283,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         inArray(ingestionReceipts.receiptId, selectedIntoEpoch)
       )
     );
-    // The scope check runs beside the page and count reads, not before them: independent reads
-    // in parallel. A failed check rejects the whole call, so no row from another scope returns.
-    const [, rows, counted] = await Promise.all([
-      this.resolveEpochScoped(epochId),
+    const [rows, counted] = await Promise.all([
       this.db
         .select()
         .from(ingestionReceipts)
@@ -1369,7 +1367,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     receiptIds: readonly string[]
   ): Promise<AttributionSelection[]> {
     if (receiptIds.length === 0) return [];
-    // Scope check beside the read (see getEpochActivityPage): a failed check rejects the call.
+    // Scope check beside the read, not before it: independent reads in parallel (at most two in
+    // flight; the service pool holds two). A failed check rejects the call, so no row from
+    // another scope returns.
     const [, rows] = await Promise.all([
       this.resolveEpochScoped(epochId),
       this.db
@@ -1461,7 +1461,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
   async getUserProjectionsForEpoch(
     epochId: bigint
   ): Promise<EpochUserProjection[]> {
-    // Scope check beside the read (see getEpochActivityPage): a failed check rejects the call.
+    // Scope check beside the read, not before it: independent reads in parallel (at most two in
+    // flight; the service pool holds two). A failed check rejects the call, so no row from
+    // another scope returns.
     const [, rows] = await Promise.all([
       this.resolveEpochScoped(epochId),
       this.db
