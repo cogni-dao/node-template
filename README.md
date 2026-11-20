@@ -71,3 +71,4 @@ Every supported harness receives the node's cognition automatically; contributor
 copy per-node prompt configuration.
 
 [PolyForm Shield license](https://polyformproject.org/licenses/shield/1.0.0)
+Proof: node-template AI opened this PR via an operator-minted push token (story.0064).
