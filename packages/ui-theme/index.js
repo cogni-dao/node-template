@@ -26,9 +26,12 @@ export const BRAND_VARIABLES = Object.freeze([
   "--sidebar-accent-foreground",
 ]);
 
-// Shared tokens owned by theme.css, by exact name (so layout variables such as --sidebar-width stay free).
-const COLOUR_ROLE =
-  /^--(?:(?:background|foreground|border|input|ring|radius|danger|warning|success|info|done|invert)|(?:card|popover|primary|secondary|muted|accent|destructive|invert)(?:-foreground)?|sidebar(?:-foreground|-primary|-primary-foreground|-accent|-accent-foreground|-border|-ring)?|accent-(?:from|to|glow)|chart-\d+|syntax-[a-z-]+|color-[a-z0-9-]+)$/;
+// Shared tokens owned by theme.css, by exact name. Node-specific colours (poly's --color-up) and
+// layout variables (--radius, --sidebar-width) stay free for the node.
+const SHARED =
+  "(?:(?:background|foreground|border|input|ring|danger|warning|success|info|done|invert)|(?:card|popover|primary|secondary|muted|accent|destructive|invert)(?:-foreground)?|sidebar(?:-foreground|-primary|-primary-foreground|-accent|-accent-foreground|-border|-ring)?|accent-(?:from|to|glow)|chart-\\d+|syntax-[a-z-]+)";
+const SHARED_TOKEN = new RegExp(`^--(?:color-)?${SHARED}$`);
+const SHARED_MAPPING = new RegExp(`^--color-${SHARED}$`);
 
 /** Returns every rule a node tailwind.css breaks; an empty list means it is on the shared theme. */
 export function checkTailwindCss(source) {
@@ -45,7 +48,7 @@ export function checkTailwindCss(source) {
     for (const decl of block[2].matchAll(/(--[a-z0-9-]+)\s*:/g)) target.add(decl[1]);
   }
   for (const name of new Set([...root, ...dark])) {
-    if (COLOUR_ROLE.test(name) && !brand.has(name)) {
+    if (SHARED_TOKEN.test(name) && !brand.has(name)) {
       errors.push(`${name} is a shared token; it belongs in theme.css`);
     }
   }
@@ -60,7 +63,7 @@ export function checkTailwindCss(source) {
   }
   for (const block of css.matchAll(/@theme(?:\s+[a-z]+)*\s*\{([^}]*)\}/g)) {
     for (const decl of block[1].matchAll(/(--color-[a-z0-9-]+)\s*:/g)) {
-      if (decl[1] !== "--color-transparent" && decl[1] !== "--color-current") {
+      if (SHARED_MAPPING.test(decl[1])) {
         errors.push(`${decl[1]} is a colour mapping; it belongs in theme.css`);
       }
     }

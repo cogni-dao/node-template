@@ -34,10 +34,12 @@ test("theme.css carries both themes", () => {
   assert.match(css, /\.dark \{[\s\S]*--background:/);
 });
 
-test("layout variables stay free; legacy and new colour names fail", () => {
-  const css = `${THEME_IMPORT}\n@layer base { :root { --sidebar-width: 16rem; --color-danger: 0 0% 0%; --done: 0 0% 0%; } }`;
+test("layout and node-specific colours stay free; shared names fail", () => {
+  const css = `${THEME_IMPORT}\n@theme inline { --color-up: hsl(var(--color-up)); }\n@layer base { :root { --sidebar-width: 16rem; --radius: 0.75rem; --color-up: 152 60% 48%; --color-danger: 0 0% 0%; --done: 0 0% 0%; } }`;
   const errors = checkTailwindCss(css);
-  assert.ok(!errors.some((e) => e.startsWith("--sidebar-width")));
+  for (const free of ["--sidebar-width", "--radius", "--color-up"]) {
+    assert.ok(!errors.some((e) => e.startsWith(free)), free);
+  }
   assert.ok(errors.some((e) => e.startsWith("--color-danger")));
   assert.ok(errors.some((e) => e.startsWith("--done")));
 });
