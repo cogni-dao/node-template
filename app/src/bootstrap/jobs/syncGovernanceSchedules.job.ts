@@ -94,6 +94,8 @@ async function logLockHolder(
       LEFT JOIN pg_stat_activity a ON a.pid = l.pid
       WHERE l.locktype = 'advisory'
         AND l.granted
+        AND l.objsubid = 1
+        AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
         AND ((l.classid::bigint << 32) | l.objid::bigint) = hashtext('governance_sync')::bigint
       LIMIT 5`;
     log.warn(
