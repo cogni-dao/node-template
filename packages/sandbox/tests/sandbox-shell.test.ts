@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni-dao/sandbox` sandbox-shell
- * Purpose: Guards the three defects the sandbox shell must not have: model text inside a shell string,
- *   a run folder that is not a UUID, and one run's calls overlapping.
+ * Purpose: Guards the defects the sandbox shell must not have: model text inside a shell string, a call env that
+ *   replaces the wrapper's values, a run folder that is not a UUID, and one run's calls overlapping.
  * Scope: SandboxShell over a fake client. No network.
  * Side-effects: none
  * Links: src/sandbox-shell.ts
@@ -46,6 +46,30 @@ describe("SandboxShell", () => {
       SB_SECS: "120",
     });
     expect(call?.timeoutMs).toBe(130_000);
+  });
+
+  it("passes a call's extra env but never lets it replace the wrapper's SB_* values", async () => {
+    const seen: SandboxCommandRequest[] = [];
+    const shell = new SandboxShell({
+      runCommand: async (req) => {
+        seen.push(req);
+        return done();
+      },
+    });
+    await shell.run({
+      runId: RUN_A,
+      command: "git push",
+      timeoutMs: 5000,
+      env: async () => ({ GH_TOKEN: "ghs_x", SB_CMD: "rm -rf /", SB_DIR: "/" }),
+    });
+
+    const call = seen.find((r) => r.envs?.SB_CMD !== undefined);
+    expect(call?.envs).toEqual({
+      GH_TOKEN: "ghs_x",
+      SB_DIR: `/workspace/${RUN_A}`,
+      SB_CMD: "git push",
+      SB_SECS: "5",
+    });
   });
 
   it("refuses a run id that is not a UUID, an oversized command and a bad limit", async () => {

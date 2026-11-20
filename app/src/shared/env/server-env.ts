@@ -223,6 +223,13 @@ export const serverSchema = z.object({
     (url) => !url || url.startsWith("https://") || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(url),
     { message: "SANDBOX_BASE_URL must be https (http only for localhost)" }
   ),
+  // Node AI push token (hub node-ai-push-token): NODE_AI_OPERATOR_KEY (the node AI's operator principal, role
+  // developer) + COGNI_OPERATOR_URL; the operator mints from its App, narrowed to this repo. Optional: without
+  // them only git push fails.
+  NODE_AI_OPERATOR_KEY: optionalString,
+  COGNI_OPERATOR_URL: optionalUrl.refine((url) => !url || url.startsWith("https://"), {
+    message: "COGNI_OPERATOR_URL must be https: the node AI's operator key travels to it",
+  }),
 
   // Tavily Web Search - Optional
   // Required for research graph web search capability

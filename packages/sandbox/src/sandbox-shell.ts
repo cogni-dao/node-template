@@ -9,6 +9,8 @@
  * Invariants:
  *   - USER_TEXT_NEVER_IN_A_SHELL_STRING: the `command` execd runs is fixed; the model's text, the folder and the limit
  *     travel in `envs` (SB_CMD, SB_DIR, SB_SECS).
+ *   - CALL_ENV_NEVER_OVERRIDES: a call's extra `env` (e.g. a short-lived GH_TOKEN) is merged under SB_*, never over it.
+ *   - CALL_ENV_AT_START: the env provider runs when the call starts, after the run's queue, never at enqueue time.
  *   - ONE_AFTER_ANOTHER: calls with the same runId run in arrival order; different runs run at once. No app-side cap.
  *   - RUN_ID_IS_A_UUID: the folder name is checked before it reaches the sandbox.
  *   - TIMEOUT_ONLY_AT_THE_LIMIT: `timeout` is reported only when the call ran to its limit; any other failure is `nonzero_exit`.
@@ -77,6 +79,9 @@ export interface SandboxShellResult {
 export interface SandboxShellRun extends SandboxShellParams {
   /** The calling run's id; its folder is `/workspace/<runId>`. */
   readonly runId: string;
+  /** Extra environment for this call only, e.g. a short-lived GH_TOKEN. Resolved when the call starts, after any
+   *  earlier calls of the run, so a token is fresh at run time. Never logged. */
+  readonly env?: () => Promise<Readonly<Record<string, string>>>;
 }
 
 /** One cleanup tick: the lease's readings, or `errorCode` when the tick failed. Counts and sizes only. */
@@ -104,7 +109,7 @@ export class SandboxShell {
   ) {}
 
   async run(call: SandboxShellRun): Promise<SandboxShellResult> {
-    const { runId, command, timeoutMs } = call;
+    const { runId, command, timeoutMs, env } = call;
     if (!UUID.test(runId)) {
       throw new SandboxRequestError("run id is not a UUID", null);
     }
@@ -120,7 +125,7 @@ export class SandboxShell {
     }
     this.maybeTick();
     return this.afterEarlierCallsOf(runId, () =>
-      this.runOne(runId, command, Math.ceil(timeoutMs / 1000))
+      this.runOne(runId, command, Math.ceil(timeoutMs / 1000), env)
     );
   }
 
@@ -143,13 +148,16 @@ export class SandboxShell {
   private async runOne(
     runId: string,
     command: string,
-    seconds: number
+    seconds: number,
+    envProvider?: () => Promise<Readonly<Record<string, string>>>
   ): Promise<SandboxShellResult> {
+    const env = envProvider ? await envProvider().catch(() => ({})) : {};
     const startedAt = this.now();
     const result = await this.client.runCommand({
       command: CALL_WRAPPER,
       timeoutMs: seconds * 1000 + EXECD_MARGIN_MS,
       envs: {
+        ...env,
         SB_DIR: `/workspace/${runId}`,
         SB_CMD: command,
         SB_SECS: String(seconds),
