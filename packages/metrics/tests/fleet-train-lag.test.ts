@@ -46,16 +46,39 @@ describe("assessFleetTrainLag on the real 2026-11-20 manifests", () => {
 		expect(byRepo.get("cogni-dao/cogni")).toContain("behind:@cogni/shared-knowledge-store@0.20.0");
 	});
 
-	it("names toks5's workspace copies as vendored", () => {
+	it("names toks5's explicit public workspace targets as vendored", () => {
 		expect(byRepo.get("cogni-dao/toks5")).toContain("vendored:@cogni/work-items@workspace");
 		expect(byRepo.get("cogni-dao/toks5")).toContain("vendored:@cogni-dao/metrics@workspace");
 	});
 
-	it("counts a vendored copy under either scope, and ignores another publisher's Releases", () => {
-		const vendored = { dependencies: { "@cogni/work-items": "workspace:*" } };
-		expect(assessFleetTrainLag("0.24.0", MEMBERS, [{ repo: "cogni-dao/x", manifest: vendored }])[0]?.reasons).toContain(
-			"vendored:@cogni/work-items@workspace",
-		);
+	it("keeps current Release pins current alongside private same-basename wrappers", () => {
+		const url = (m: (typeof MEMBERS)[number]) =>
+			`https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.24.0/x.tgz`;
+		const manifest = {
+			dependencies: {
+				...Object.fromEntries(MEMBERS.map((m) => [`shared-${m.tagPrefix}`, url(m)])),
+				"@cogni/ai-tools": "workspace:*",
+				"private-alias": "workspace:@cogni/work-items@*",
+			},
+			devDependencies: { "@cogni/knowledge-store": "workspace:*" },
+		};
+		expect(assessFleetTrainLag("0.24.0", MEMBERS, [{ repo: "cogni-dao/x", manifest }], "cogni-dao/node-template")).toEqual([]);
+	});
+
+	it("counts exact public workspace targets and leaves private targets missing", () => {
+		const manifest = { dependencies: {
+			"@cogni-dao/metrics": "workspace:*",
+			"public-alias": "workspace:@cogni-dao/work-items@*",
+			"private-alias": "workspace:@cogni/knowledge-store@*",
+		} };
+		const reasons = assessFleetTrainLag("0.24.0", MEMBERS, [{ repo: "cogni-dao/x", manifest }])[0]?.reasons;
+		expect(reasons).toContain("vendored:@cogni-dao/metrics@workspace");
+		expect(reasons).toContain("vendored:public-alias@workspace");
+		expect(reasons).not.toContain("vendored:private-alias@workspace");
+		expect(reasons).toContain("missing:@cogni-dao/knowledge-store@none");
+	});
+
+	it("ignores another publisher's Releases", () => {
 		const foreign = { dependencies: { "@cogni/work-items": "https://github.com/someone/fork/releases/download/work-items-v0.30.0/x.tgz" } };
 		const reasons = assessFleetTrainLag("0.24.0", MEMBERS, [{ repo: "cogni-dao/x", manifest: foreign }], "cogni-dao/node-template")[0]?.reasons;
 		expect(reasons).toContain("missing:@cogni-dao/work-items@none");

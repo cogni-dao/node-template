@@ -11,7 +11,7 @@
  *   - COMPLETE_TRAIN: `T` is the newest version every member has a Release for, published at least `graceHours` before the reading.
  *   - PIN_BY_RELEASE_URL: a pin counts by the publisher's Release tag it resolves to, never by its dependency key, so legacy
  *     aliases count too.
- *   - VENDORED_LAGS: a `workspace:` copy of a member is lagging: its bytes are not the published ones.
+ *   - VENDORED_LAGS: a `workspace:` target exactly naming a published member is lagging.
  *   - UNKNOWN_NOT_ZERO: a failed or malformed read is an incomplete sample naming its repo, never 0.
  * Side-effects: IO (HTTPS GET api.github.com tags and releases, at most 11 requests; raw.githubusercontent.com manifests)
  * Links: hub package-release-train, publish-shared-runtime-core
@@ -110,8 +110,6 @@ export function assessFleetTrainLag(
 	manifests: readonly { readonly repo: string; readonly manifest: unknown }[],
 	publisher?: string,
 ): ConsumerLag[] {
-	// `@cogni/work-items` and `@cogni-dao/work-items` name one member: a vendored copy may keep either scope.
-	const base = (name: string) => name.replace(/^@[^/]+\//, "");
 	const lagging: ConsumerLag[] = [];
 	for (const { repo, manifest } of manifests) {
 		const m = (manifest ?? {}) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
@@ -136,7 +134,7 @@ export function assessFleetTrainLag(
 				const spec = raw.slice("workspace:".length);
 				const at = spec.lastIndexOf("@");
 				const target = spec.startsWith("@") ? (at > 0 ? spec.slice(0, at) : spec) : key;
-				const member = members.find((x) => base(x.name) === base(target));
+				const member = members.find((x) => x.name === target);
 				if (!member) continue;
 				pinned.add(member.name);
 				reasons.push(`vendored:${key}@workspace`);
