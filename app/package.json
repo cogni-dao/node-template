@@ -46,6 +46,7 @@
     "@cogni/node-shared": "workspace:*",
     "@cogni/node-streams": "workspace:*",
     "@cogni/node-ui-kit": "workspace:*",
+    "@cogni/ui-theme": "workspace:@cogni-dao/ui-theme@*",
     "@cogni/operator-wallet": "workspace:*",
     "@cogni/repo-spec": "workspace:*",
     "@cogni/sandbox": "workspace:@cogni-dao/sandbox@*",

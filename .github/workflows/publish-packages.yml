@@ -62,6 +62,7 @@ on:
       - "sandbox-v*"
       - "node-declarations-v*"
       - "attribution-v*"
+      - "ui-theme-v*"
   # Rehearsal only. Every publishing step below is gated on `push`, so a
   # dispatch packs the tarball and runs the artifact assertions against it
   # without creating a Release, attesting anything, or moving a version. A
@@ -112,7 +113,8 @@ env:
      {"name":"@cogni-dao/substrate-health","dir":"packages/substrate-health","tagPrefix":"substrate-health-v"},
      {"name":"@cogni-dao/sandbox","dir":"packages/sandbox","tagPrefix":"sandbox-v"},
      {"name":"@cogni-dao/node-declarations","dir":"packages/node-declarations","tagPrefix":"node-declarations-v"},
-     {"name":"@cogni-dao/attribution","dir":"packages/attribution-ledger","tagPrefix":"attribution-v"}]
+     {"name":"@cogni-dao/attribution","dir":"packages/attribution-ledger","tagPrefix":"attribution-v"},
+     {"name":"@cogni-dao/ui-theme","dir":"packages/ui-theme","tagPrefix":"ui-theme-v"}]
 
 jobs:
   # Resolve WHICH packages this run acts on, before anything is built. A push

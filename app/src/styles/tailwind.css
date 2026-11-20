@@ -1,10 +1,157 @@
 @import "tailwindcss";
-/* Shared design system (synced shell). Never copy its tokens here. */
-@import "./system.css";
+@import "tw-animate-css";
+@import "@cogni/node-ui-kit/tailwind-source.css";
+@import "@cogni/knowledge-base-ui/tailwind-source.css";
+@import "@cogni/money-plane/tailwind-source.css";
+/* Shared design tokens (published as @cogni-dao/ui-theme). Never copy them here. */
+@import "@cogni/ui-theme/theme.css";
+/* The shared FinanceReport ships as built JS; scan it so its utilities are emitted (Turbopack inlines the import above). */
+@source "../../node_modules/@cogni/money-plane/dist/react";
+
+@theme inline {
+  /* Font families */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
+
+  /* Spacing - icon sizes */
+  --spacing-icon-sm: 1rem;
+  --spacing-icon-md: 1.25rem;
+  --spacing-icon-lg: 1.5rem;
+  --spacing-icon-xl: 2rem;
+  --spacing-icon-2xl: 3rem;
+  --spacing-icon-3xl: 4rem;
+  --spacing-icon-4xl: 5rem;
+
+  /* Container max-widths (generates max-w-container-* utilities) */
+  --max-width-container-sm: 42rem;
+  --max-width-container-md: 48rem;
+  --max-width-container-lg: 56rem;
+  --max-width-container-xl: 64rem;
+  --max-width-container-2xl: 72rem;
+  --max-width-container-3xl: 80rem;
+  --max-width-container-screen: 1280px;
+  --min-width-table-scroll: 800px;
+
+  /* Flex proportions (extends Tailwind's built-in flex-1) */
+  --flex-2: 2 1 0%;
+
+  /* Z-index layers */
+  --z-index-overlay: 50;
+  --z-index-modal: 100;
+
+  /* Composer-specific sizing */
+  --size-composer-icon-btn: 34px;
+  --size-composer-spacer: 42px;
+  --max-width-model-trigger: 120px;
+  --max-height-dialog: 80vh;
+  --max-height-dialog-mobile: 70vh;
+
+  /* Knowledge graph sizing */
+  --height-knowledge-graph: 70vh;
+  --width-knowledge-graph-legend: 13rem;
+  --text-knowledge-graph-section: 0.625rem;
+  --text-knowledge-graph-stat: 0.6875rem;
+
+  /* Positioning - centering transforms */
+  --center-50: 50%;
+  --center-neg-50: -50%;
+}
+
+@utility min-w-measure {
+  min-width: min(100%, var(--measure));
+}
+
+@utility max-w-measure {
+  max-width: min(100%, var(--measure));
+}
+
+@layer base {
+  :root {
+    /* Single source of truth for font stacks */
+    --font-sans:
+      "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Arial, sans-serif;
+    --font-mono:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+      "Courier New", monospace;
+    /* For now reuse sans; you can swap to a display font later */
+    --font-display: var(--font-sans);
+
+    /* Dropdown widths - used with w-(--dropdown-sm) syntax */
+    --dropdown-sm: 8rem;
+    --dropdown-md: 9rem;
+    --dropdown-lg: 10rem;
+    --dropdown-xl: 12rem;
+  }
+
+  /* Hero animation tokens (isolated, code.ts only) */
+  :root {
+    --hero-spacing-xs: 0.3125rem;
+    --hero-spacing-xl: 1.25rem;
+    --hero-spacing-rainbow: 8.4375rem;
+    --width-action-words: 11.6875rem;
+
+    /* App layout dimensions - used by route-specific layouts for viewport height calculations */
+    --app-header-h: 4rem; /* Header.tsx py-3 + border = ~4rem total height */
+  }
+}
+
+/* @theme inline block deleted - tokens migrated to tailwind.config.ts */
+/* Keep hero animation vars above (isolated to code.ts) */
+
+@layer utilities {
+  .brain-loading-orbit {
+    mask: url("/brain-loading-arc.svg") center / contain no-repeat;
+  }
+
+  /* Counter-rotation keeps the logo's color map anchored while the SVG arc travels. */
+  .brain-loading-orbit > .brain-loading-spectrum {
+    animation-direction: reverse;
+    background: conic-gradient(
+      #4070ff 0deg,
+      #00e8d5 45deg,
+      #00f563 135deg,
+      #00aaff 180deg,
+      #594cff 225deg,
+      #9700ff 270deg,
+      #f400e9 315deg,
+      #4070ff 360deg
+    );
+  }
+
+  /* Desktop-only wallet button fill - scoped to data-wallet-slot to avoid affecting mobile */
+  [data-wallet-slot="desktop"] button {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Accent gradient text utility - uses same tokens as button variant */
+  .text-gradient-accent {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--accent-from)),
+      hsl(var(--accent-to))
+    );
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 0 20px hsl(var(--accent-glow) / 0.15);
+  }
+
+  /* Chat-specific viewport height (full viewport minus header) */
+  /* Used by src/app/(app)/chat/layout.tsx to create fixed-height container for pinned composer */
+  .chat-viewport {
+    height: calc(
+      100dvh - var(--app-header-h)
+    ); /* Full viewport minus header = available chat area */
+  }
+}
+
 
 /*
  * Node identity: the brand hue, in both themes. This file is node_local and fork-sync never
- * overwrites it. Everything else (neutrals, status, chrome, mappings) comes from system.css.
+ * overwrites it. Everything else (neutrals, status, chrome, mappings) comes from @cogni/ui-theme/theme.css.
  * Change the hue (217 here) in both blocks; keep each pair's contrast floor per ui-token-system.
  * Every variable set in :root must also be set in .dark, or the light value leaks into dark.
  */
