@@ -50,6 +50,11 @@ function fakeSql(state: {
     if (text.includes("INSERT INTO agent_roles")) return [{ id: "row-1" }]; // an ask's insert lands
     if (text.includes("FROM billing_accounts") && text.includes("owner_user_id"))
       return state.owners?.has(`${values[0]}|${values[1]}`) ? [{ ok: 1 }] : [];
+    // `authorizeAccount` reads every scope that covers the asked one in ONE statement (`liveAccountScopes`): principal, the scopes, the account.
+    if (text.includes("SELECT DISTINCT scope") && text.includes("resource = 'account'")) {
+      const [principal, scopes, account] = values as [string, string[], string];
+      return scopes.filter((scope) => state.grants?.has(`${principal}|${scope}|${account}`)).map((scope) => ({ scope }));
+    }
     if (text.includes("FROM agent_roles") && text.includes("resource = 'account'"))
       return state.grants?.has(`${values[0]}|${values[1]}|${values[2]}`) ? [{ ok: 1 }] : [];
     if (text.includes("FROM agent_roles"))

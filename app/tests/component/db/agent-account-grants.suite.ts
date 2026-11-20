@@ -452,14 +452,24 @@ describe("account grants (real Postgres, real roles)", () => {
       await expect(service`INSERT INTO agent_roles (principal_user_id, scope, requested_by, link_consumed_at, link_hash) VALUES (${agent}, 's6', ${agent}, now(), 'h')`).rejects.toThrow(/agent_roles_link_consumed_has_no_hash/);
     });
 
-    it("keeps the old live-row index, so an old pod's ON CONFLICT (principal, scope) still works", async () => {
+    it("the live-row index is (principal, scope, account) (task.0181): the new ON CONFLICT target holds, one scope may sit on two accounts, a node row stays one open row", async () => {
       const agent = await makeUser();
       const admin = await makeUser();
+      const first = await makeOwner();
+      const second = await makeOwner();
       await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${agent}, 'edo:write', ${admin}, now())`;
       const again = await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${agent}, 'edo:write', ${admin})
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
+        ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
       expect(again).toHaveLength(0);
-      expect(await service`SELECT indexname FROM pg_indexes WHERE indexname = 'agent_roles_live_unique'`).toHaveLength(1);
+      const onAccount = (accountId: string) =>
+        service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id) VALUES (${agent}, 'org:owner', ${admin}, now(), 'account', ${accountId})
+          ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
+      expect(await onAccount(first.accountId)).toHaveLength(1);
+      expect(await onAccount(second.accountId)).toHaveLength(1);
+      expect(await onAccount(first.accountId)).toHaveLength(0);
+      expect(await service`SELECT indexdef FROM pg_indexes WHERE indexname = 'agent_roles_live_unique'`).toEqual([
+        { indexdef: expect.stringContaining("COALESCE(account_id, ''::text)") },
+      ]);
     });
   });
 

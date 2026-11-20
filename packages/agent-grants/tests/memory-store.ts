@@ -292,7 +292,8 @@ export function memoryStore(init?: {
       const account = init?.accounts?.[approvedBy];
       if (!account || principalUserId === approvedBy || !isInternal(principalUserId)) return false;
       closeExpired(principalUserId, scope);
-      if (openRow(principalUserId, scope)) return false;
+      // One open row per (principal, scope, account) since 0.10.0; a pending ask (no account yet) still holds the slot.
+      if (roles.some((r) => r.principal === principalUserId && r.scope === scope && !r.revoked && (r.accountId === account || (r.resource === "account" && r.accountId === null)))) return false;
       roles.push(mk({ principal: principalUserId, scope, approvedBy, resource: "account", accountId: account, grantedAt: clock.now, expiresAt: null }));
       return true;
     },

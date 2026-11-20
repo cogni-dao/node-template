@@ -392,6 +392,9 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         WHERE b.owner_user_id = ${approvedBy}
           AND ${principalUserId} <> ${approvedBy}
           AND EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = ${principalUserId} AND ap.kind = 'internal')
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_roles w
+            WHERE w.principal_user_id = ${principalUserId} AND w.scope = ${scope} AND w.resource = 'account' AND w.account_id IS NULL AND w.revoked_at IS NULL)
         ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       return rows.length > 0;
