@@ -1245,8 +1245,8 @@ function createContainer(): Container {
 					expectedAddress: operatorWalletConfig.address,
 					splitAddress: paymentConfig.receivingAddress,
 					treasuryAddress,
-					markupPpm: numberToPpm(env.USER_PRICE_MARKUP_FACTOR),
-					revenueSharePpm: numberToPpm(env.SYSTEM_TENANT_REVENUE_SHARE),
+					markupPpm: numberToPpm(paymentConfig.markupFactor),
+					revenueSharePpm: numberToPpm(paymentConfig.revenueShare),
 					maxTopUpUsd: env.OPERATOR_MAX_TOPUP_USD,
 					rpcUrl: env.EVM_RPC_URL,
 					...(stewardWalletConfig
