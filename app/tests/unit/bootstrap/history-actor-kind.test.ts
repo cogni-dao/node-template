@@ -46,7 +46,8 @@ function fakeStore() {
 describe("withHistoryActorKinds", () => {
   it("labels every version by its actor's kind, once per distinct actor, on items and refs", async () => {
     const classify = vi.fn(async (userId: string) => KINDS[userId] ?? "unclassified");
-    const store = withHistoryActorKinds(fakeStore(), classify, () => {});
+    const onLabelled = vi.fn();
+    const store = withHistoryActorKinds(fakeStore(), classify, () => {}, onLabelled);
 
     const full = await readWorkItemHistory(store, "task.0001");
     expect(full.status).toBe(200);
@@ -59,6 +60,8 @@ describe("withHistoryActorKinds", () => {
     ]);
     expect(classify).toHaveBeenCalledTimes(3);
     expect(full.log.actorKinds).toEqual({ internal: 2, external: 1, human: 1 });
+    // A tool or envelope read has no route log, so the store reports every labelled read itself.
+    expect(onLabelled).toHaveBeenCalledWith({ versionCount: 5, actorKinds: { internal: 2, external: 1, human: 1 } });
 
     const refs = await readWorkItemHistory(store, "task.0001", { view: "refs" });
     expect((refs.body as { refs: HistoryEntry[] }).refs.map((v) => v.actorKind)).toEqual([

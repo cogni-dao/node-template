@@ -11,6 +11,7 @@
  *   - ONE_HISTORY_SHAPE: the route, the item envelope and `core__work_item_read` read the same wrapped store, so they agree.
  *   - KIND_NEVER_BLOCKS_A_READ: a classifier failure leaves that actor's versions without `actorKind` and logs one warning; the read succeeds.
  *   - ONE_CALL_PER_ACTOR: each read classifies each distinct actor once.
+ *   - EVERY_READ_IS_SEEN: each labelled read reports its version count and counts by kind (no ids), so a tool read is as visible in logs as a route read.
  *   - BOUNDED_WAIT: a classifier answer slower than CLASSIFY_TIMEOUT_MS counts as a failure, so a slow service database never stalls a history read.
  * Side-effects: IO (classifier reads through the caller's port)
  * Links: hub activity-attribution, change-history-design, @cogni/agent-grants classifyPrincipal
@@ -42,13 +43,17 @@ function withinDeadline<T>(work: Promise<T>): Promise<T> {
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }
 
+/** Called once per labelled read with counts only: how many versions, and how many of each kind. */
+export type HistoryLabelled = (counts: { versionCount: number; actorKinds: Record<string, number> }) => void;
+
 /** Called once per actor the classifier could not answer for; ids are not logged. */
 export type ClassifyFailed = (error: unknown) => void;
 
 async function withKinds(
   entries: readonly HistoryEntry[],
   classify: ClassifyActor,
-  onFailure: ClassifyFailed
+  onFailure: ClassifyFailed,
+  onLabelled: HistoryLabelled
 ): Promise<HistoryEntry[]> {
   const actors = [...new Set(entries.map((entry) => entry.actor).filter((actor): actor is string => actor !== null))];
   const kinds = new Map<string, HistoryActorKind>();
@@ -61,17 +66,24 @@ async function withKinds(
       }
     })
   );
-  return entries.map((entry) => {
+  const labelled = entries.map((entry) => {
     const kind = entry.actor === null ? undefined : kinds.get(entry.actor);
     return kind === undefined ? entry : { ...entry, actorKind: kind };
   });
+  const actorKinds: Record<string, number> = {};
+  for (const entry of labelled) {
+    if (entry.actorKind !== undefined) actorKinds[entry.actorKind] = (actorKinds[entry.actorKind] ?? 0) + 1;
+  }
+  onLabelled({ versionCount: labelled.length, actorKinds });
+  return labelled;
 }
 
 /** The same store, with each history version carrying its actor's kind. */
 export function withHistoryActorKinds<T extends Pick<WorkItemHistoryStore, "history" | "historyPage">>(
   store: T,
   classify: ClassifyActor,
-  onFailure: ClassifyFailed
+  onFailure: ClassifyFailed,
+  onLabelled: HistoryLabelled = () => {}
 ): T {
   const { history, historyPage } = store;
   return {
@@ -79,7 +91,7 @@ export function withHistoryActorKinds<T extends Pick<WorkItemHistoryStore, "hist
     ...(history
       ? {
           history: async (id: Parameters<NonNullable<WorkItemHistoryStore["history"]>>[0]) =>
-            withKinds(await history.call(store, id), classify, onFailure),
+            withKinds(await history.call(store, id), classify, onFailure, onLabelled),
         }
       : {}),
     ...(historyPage
@@ -88,7 +100,7 @@ export function withHistoryActorKinds<T extends Pick<WorkItemHistoryStore, "hist
             ...args: Parameters<NonNullable<WorkItemHistoryStore["historyPage"]>>
           ): Promise<HistoryPage> => {
             const page = await historyPage.apply(store, args);
-            return { ...page, entries: await withKinds(page.entries, classify, onFailure) };
+            return { ...page, entries: await withKinds(page.entries, classify, onFailure, onLabelled) };
           },
         }
       : {}),
