@@ -117,6 +117,7 @@ export const CitationLinksPageSchema = z.object({
 	links: z.array(CitationLinkDtoSchema).max(CITATION_LINKS_PAGE_MAX),
 	nextCursor: z.string().nullable(),
 });
+export type CitationLinksPage = z.infer<typeof CitationLinksPageSchema>;
 
 /** An item's first page of citation links (`?include=links`); `unavailable` is never an empty list. */
 export const WorkItemLinksSchema = z.object({

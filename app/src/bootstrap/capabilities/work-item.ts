@@ -50,6 +50,7 @@ import type {
   WorkItemHistoryStore,
 } from "@cogni/work-items";
 import {
+  createItemRefPorts,
   type ArtifactLog,
   type WorkItemArtifactDeps,
   artifactsNotConfigured,
@@ -67,7 +68,6 @@ import {
   type WorkItemsDoltgresPort,
 } from "@cogni/work-items/adapters/doltgres";
 
-import { createItemRefPorts } from "./work-item-refs";
 
 /**
  * Dependencies for creating the work item capability.

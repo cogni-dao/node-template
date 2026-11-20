@@ -312,6 +312,17 @@ export {
   WORK_ITEM_CREATE_FIELDS,
 } from "./write-input.js";
 export { withWorkItemLeases } from "./with-leases.js";
+export type {
+  NodeReadRefusal,
+  WorkItemEnvelopeOptions,
+  WorkItemGetInput,
+  WorkItemInclude,
+  WorkItemReadEvent,
+  WorkItemReadResult,
+} from "./read-http.js";
+export { handleWorkItemGet, WORK_ITEM_INCLUDES, WORK_ITEM_READ_EVENTS, WorkItemGetInputSchema } from "./read-http.js";
+export type { ItemRefPorts } from "./item-ref-ports.js";
+export { createItemRefPorts } from "./item-ref-ports.js";
 
 export {
   WORK_ITEM_SORT_FIELDS,

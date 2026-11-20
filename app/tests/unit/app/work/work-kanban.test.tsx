@@ -79,10 +79,10 @@ vi.mock("@/components/kit/data-display/ActivityChart", () => ({
 vi.mock("@/app/(app)/work/_api/fetchWorkItems", () => ({
   fetchWorkItems: vi.fn(),
   fetchWorkBoard: vi.fn(),
-  fetchWorkItem: vi.fn(),
+  workItemClient: { fetchItem: vi.fn(), fetchArtifactRefs: vi.fn(), fetchHistoryRefs: vi.fn(), fetchCitationLinks: vi.fn(), fetchExpectations: vi.fn() },
 }));
 
-import { fetchWorkBoard, fetchWorkItem, fetchWorkItems } from "@/app/(app)/work/_api/fetchWorkItems";
+import { fetchWorkBoard, fetchWorkItems, workItemClient } from "@/app/(app)/work/_api/fetchWorkItems";
 import { DashboardView } from "@/app/(app)/dashboard/view";
 import { WorkKanban } from "@/app/(app)/work/_components/WorkKanban";
 import { WorkDashboardView as Dashboard } from "@/app/(app)/work/view";
@@ -267,7 +267,7 @@ describe("Work Kanban", () => {
     vi.clearAllMocks();
     navigation.router.push.mockReset();
     navigation.router.replace.mockReset();
-    vi.mocked(fetchWorkItem).mockResolvedValue(fixture[0] as WorkItemDto);
+    vi.mocked(workItemClient.fetchItem).mockResolvedValue(fixture[0] as WorkItemDto);
     vi.mocked(fetchWorkItems).mockResolvedValue({
       items: fixture.filter((_, i) => i % 2 === 0).slice(0, 10),
       pageInfo: { endCursor: "next", hasMore: true },
