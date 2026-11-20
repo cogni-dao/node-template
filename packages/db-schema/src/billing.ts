@@ -142,7 +142,7 @@ export const chargeReceipts = pgTable(
     litellmCallId: text("litellm_call_id"),
     /** Credits debited from user balance */
     chargedCredits: bigint("charged_credits", { mode: "bigint" }).notNull(),
-    /** Observational USD cost from LiteLLM (header or usage.cost) */
+    /** Observational USD cost from LiteLLM (stream usage.cost or the callback's response_cost) */
     responseCostUsd: numeric("response_cost_usd"),
     /** How this receipt was generated: 'response' | 'stream' */
     provenance: text("provenance").notNull(),
