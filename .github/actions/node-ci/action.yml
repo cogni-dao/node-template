@@ -148,6 +148,13 @@ runs:
       shell: bash
       run: pnpm check:declarations
 
+    # story.0079: a node's tailwind.css imports the shared theme and sets only brand variables.
+    # --if-present keeps nodes that have not adopted the script green until their cohort PR.
+    - name: Design tokens check
+      if: inputs.lane == 'static' && steps.scope.outputs.scope != 'docs-only'
+      shell: bash
+      run: pnpm run --if-present check:design-tokens
+
     # Never scoped out. A docs-only PR runs only this: Markdown can break no build, type, schema,
     # workflow or declaration, so the one check a Markdown edit can fail is its own reference
     # policy. It needs only git and node, so a docs-only run does no install. story.0046.

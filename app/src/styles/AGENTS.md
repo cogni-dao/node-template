@@ -72,7 +72,7 @@ pnpm typecheck
 
 - Update this file when **Exports** change
 - Bump **Last reviewed** date
-- Token names must match CSS variables in src/styles/system.css (shared system, synced to forks); src/styles/tailwind.css (node_local) holds only the brand hue
+- Token names must match CSS variables in @cogni/knowledge-base-ui/theme.css (shared, published); src/styles/tailwind.css (node_local) imports it and holds the brand variables plus app-only layout tokens
 - CVA factory changes require updating components that use them
 
 ## Notes
