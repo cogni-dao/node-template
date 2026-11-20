@@ -30,6 +30,7 @@ const FILES = [
   ".github/workflows/pr-lint.yaml",
   ...(HAS_PUBLISH ? [PUBLISH] : []),
   ".cogni/repo-policy.json",
+  ...(existsSync(join(REPO_ROOT, "packages/release-train.json")) ? ["packages/release-train.json"] : []),
 ];
 
 function runCheckerOn(mutate) {
@@ -221,8 +222,8 @@ const CASES = [
     name: "a --clobber in the publish lane makes a published version mutable",
     mutate: edit(
       ".github/workflows/publish-packages.yml",
-      'gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" \\',
-      'gh release upload "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" --clobber \\'
+      'gh release create "$RELEASE_TAG" "${{ steps.pack.outputs.tgz }}" \\',
+      'gh release upload "$RELEASE_TAG" "${{ steps.pack.outputs.tgz }}" --clobber \\'
     ),
     expectExit: 1,
     templateOnly: true,
@@ -285,12 +286,12 @@ const CASES = [
     name: "a registered package with no tag filter can never be published",
     mutate: edit(
       ".github/workflows/publish-packages.yml",
-      '      - "knowledge-store-v*"\n',
+      '      - "sandbox-v*"\n',
       ""
     ),
     expectExit: 1,
     templateOnly: true,
-    expectMatch: /must include the tag filter "knowledge-store-v\*"/,
+    expectMatch: /must include the tag filter "sandbox-v\*"/,
   },
   {
     name: "a tag filter with no registry entry fires a run that selects nothing",
@@ -314,6 +315,36 @@ const CASES = [
     templateOnly: true,
     expectMatch: /tag filter "knowledge-base-v\*" matches no env\.PACKAGES entry/,
   },
+  // The release train (hub package-release-train): five members publish only through one train tag.
+  {
+    name: "a train member with its own tag filter can publish alone and split the train",
+    mutate: edit(
+      ".github/workflows/publish-packages.yml",
+      '      - "train-v*"\n',
+      '      - "train-v*"\n      - "work-items-v*"\n'
+    ),
+    expectExit: 1,
+    templateOnly: true,
+    expectMatch: /lets train member @cogni-dao\/work-items publish alone/,
+  },
+  {
+    name: "train members with no train tag filter can never be published",
+    mutate: edit(".github/workflows/publish-packages.yml", '      - "train-v*"\n', ""),
+    expectExit: 1,
+    templateOnly: true,
+    expectMatch: /push trigger must include "train-v\*"/,
+  },
+  {
+    name: "a registry train entry that is not a train member would publish a non-member as one",
+    mutate: edit(
+      ".github/workflows/publish-packages.yml",
+      '"tagPrefix":"sandbox-v"}',
+      '"tagPrefix":"sandbox-v","train":true}'
+    ),
+    expectExit: 1,
+    templateOnly: true,
+    expectMatch: /registry train entries .* must equal packages\/release-train\.json members/,
+  },
   {
     name: "an unparseable registry is rejected rather than silently skipped",
     mutate: edit(
@@ -329,8 +360,8 @@ const CASES = [
     name: "a registry entry missing its dir cannot locate the package to pack",
     mutate: edit(
       ".github/workflows/publish-packages.yml",
-      '{"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"}',
-      '{"name":"@cogni-dao/work-items","tagPrefix":"work-items-v"}'
+      '{"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v","train":true}',
+      '{"name":"@cogni-dao/work-items","tagPrefix":"work-items-v","train":true}'
     ),
     expectExit: 1,
     templateOnly: true,

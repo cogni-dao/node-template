@@ -17,6 +17,8 @@ import {
 	summarizeNoInlineHistory,
 } from "./no-inline-history.js";
 
+export * from "./fleet-sources.js";
+
 export async function readWorkCount(
 	sql: Sql,
 	mode: "open" | "validated",
