@@ -11,6 +11,7 @@ export default defineConfig({
 		"src/adapters/postgres.ts",
 		"src/contracts.ts",
 		"src/http.ts",
+		"src/fleet-train-lag.ts",
 		"src/knowledge.ts",
 		"src/prometheus.ts",
 		"src/schema.ts",
