@@ -3,18 +3,24 @@
 
 "use client";
 /** Selected-epoch reads only: overview + lifecycle + summary + activity. No historical fanout. */
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { useEpochContext, withEpochQuery, type EpochsClient } from "../context";
+import { EpochContributorSummaryPageSchema } from "@cogni/attribution-ledger/contracts";
+import type { ContributorSummaryPage } from "@cogni/attribution-ledger/http";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { type EpochsClient, useEpochContext, withEpochQuery } from "../context";
 import {
+  type ApiIngestionReceipt,
   composeEpochViewFromSummary,
   type EpochDto,
-  type ApiIngestionReceipt,
 } from "../lib/compose-epoch";
 import {
-  UNKNOWN_SETTLEMENT_LIFECYCLE,
   type SettlementLifecycleEvidence,
+  UNKNOWN_SETTLEMENT_LIFECYCLE,
 } from "../lib/epoch-lifecycle-state";
-import type { ContributorSummaryPage } from "@cogni/attribution-ledger/http";
+import {
+  ReviewRefusal,
+  reviewResponseError,
+  safeReviewError,
+} from "../review-errors";
 
 export interface EpochListData {
   readonly current: EpochDto | null;
@@ -24,22 +30,22 @@ export interface EpochListData {
 export async function epochJson<T>(
   client: EpochsClient,
   url: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<T> {
-  const response = await client.request(url, {
-    method: "GET",
-    credentials: "same-origin",
-    cache: "no-store",
-    signal,
-  });
-  if (!response.ok)
-    throw Object.assign(
-      new Error(
-        `HTTP ${response.status}: ${await response.text().catch(() => "")}`
-      ),
-      { status: response.status }
-    );
-  return response.json() as Promise<T>;
+  try {
+    const response = await client.request(url, {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) throw await reviewResponseError(response, "read");
+    const data = (await response.json()) as T;
+    signal?.throwIfAborted();
+    return data;
+  } catch (error) {
+    throw safeReviewError(error, "read");
+  }
 }
 export function partitionEpochs(epochs: readonly EpochDto[]): EpochListData {
   const current =
@@ -52,14 +58,14 @@ export function partitionEpochs(epochs: readonly EpochDto[]): EpochListData {
       .filter((epoch) => epoch !== current && epoch.status !== "open")
       .sort((a, b) => Date.parse(b.periodEnd) - Date.parse(a.periodEnd)),
     historyTotal: epochs.filter(
-      (epoch) => epoch !== current && epoch.status !== "open"
+      (epoch) => epoch !== current && epoch.status !== "open",
     ).length,
   };
 }
 export function useEpochsPage() {
-  const { client, state } = useEpochContext();
+  const { client, state, queryKeyPrefix } = useEpochContext();
   return useQuery({
-    queryKey: ["governance", "epochs", "list", state.historyOffset],
+    queryKey: [...queryKeyPrefix, "epochs", "list", state.historyOffset],
     staleTime: 60_000,
     retry: false,
     placeholderData: keepPreviousData,
@@ -75,7 +81,7 @@ export function useEpochsPage() {
           limit: 200,
           offset: state.historyOffset,
         }),
-        signal
+        signal,
       );
       return {
         current: result.current,
@@ -86,16 +92,16 @@ export function useEpochsPage() {
   });
 }
 export function useSettlementLifecycle() {
-  const { client } = useEpochContext();
+  const { client, queryKeyPrefix } = useEpochContext();
   return useQuery({
-    queryKey: ["governance", "epochs", "settlement-lifecycle"],
+    queryKey: [...queryKeyPrefix, "epochs", "settlement-lifecycle"],
     staleTime: 60_000,
     retry: false,
     queryFn: ({ signal }) =>
       epochJson<SettlementLifecycleEvidence>(
         client,
         client.endpoints.lifecycle,
-        signal
+        signal,
       ).catch(() => UNKNOWN_SETTLEMENT_LIFECYCLE),
   });
 }
@@ -103,7 +109,7 @@ export async function fetchEpochView(
   client: EpochsClient,
   epoch: EpochDto,
   signal?: AbortSignal,
-  offset = 0
+  offset = 0,
 ) {
   const [summary, activity] = await Promise.all([
     epochJson<ContributorSummaryPage>(
@@ -112,29 +118,47 @@ export async function fetchEpochView(
         epoch.status === "finalized"
           ? client.endpoints.claimants(epoch.id)
           : client.endpoints.projections(epoch.id),
-        { view: "summary", limit: 200, offset }
+        { view: "summary", limit: 200, offset },
       ),
-      signal
+      signal,
     ),
-    epochJson<{ events: ApiIngestionReceipt[] }>(
+    epochJson<{ epochId: string; events: ApiIngestionReceipt[] }>(
       client,
       withEpochQuery(client.endpoints.activity(epoch.id), {
         limit: 200,
         offset: 0,
       }),
-      signal
+      signal,
     ),
   ]);
-  return composeEpochViewFromSummary(epoch, summary, activity.events);
+  const parsed = EpochContributorSummaryPageSchema.safeParse(summary);
+  if (
+    !parsed.success ||
+    parsed.data.epochId !== epoch.id ||
+    parsed.data.offset !== offset ||
+    activity.epochId !== epoch.id ||
+    !/^\d+$/.test(parsed.data.totalUnits) ||
+    !/^\d+$/.test(parsed.data.totalPoints) ||
+    parsed.data.items.some((item) => !/^\d+$/.test(item.units))
+  )
+    throw new ReviewRefusal("unexpected", "read");
+  return composeEpochViewFromSummary(epoch, parsed.data, activity.events);
 }
 export function useEpochView(
   epoch: EpochDto,
-  options: { readonly enabled?: boolean } = {}
+  options: { readonly enabled?: boolean } = {},
 ) {
-  const { client, state } = useEpochContext();
+  const { client, state, queryKeyPrefix } = useEpochContext();
   const offset = state.contributorPages?.[epoch.id] ?? 0;
   return useQuery({
-    queryKey: ["governance", "epochs", "view", epoch.id, epoch.status, offset],
+    queryKey: [
+      ...queryKeyPrefix,
+      "epochs",
+      "view",
+      epoch.id,
+      epoch.status,
+      offset,
+    ],
     staleTime: 60_000,
     retry: false,
     enabled: options.enabled ?? true,

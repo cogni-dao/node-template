@@ -2,37 +2,54 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 "use client";
+import { CUMULATIVE_MERKLE_DISTRIBUTOR_ABI } from "@cogni/cogni-contracts";
 /** Bind node endpoints, session transport, URL state and wallet IO to the public epoch capability. */
 import {
-  EpochsProvider,
-  type EpochsClient,
   type EpochNavigationState,
+  type EpochsClient,
+  EpochsProvider,
 } from "@cogni/knowledge-base-ui/epochs";
-import { CUMULATIVE_MERKLE_DISTRIBUTOR_ABI } from "@cogni/cogni-contracts";
 import { getTransactionExplorerUrl } from "@cogni/node-shared/browser";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMemo, type ReactNode } from "react";
+import { useSession } from "next-auth/react";
+import { type ReactNode, useId, useMemo, useRef } from "react";
 import {
   useAccount,
   useChainId,
   useReadContract,
+  useSignTypedData,
   useSwitchChain,
   useWaitForTransactionReceipt,
   useWriteContract,
-  useSignTypedData,
 } from "wagmi";
 import { WalletConnectButton } from "@/components";
 import { getChainName } from "../lib/proposal-utils";
+
 const epochEndpoint = (id: string, suffix: string) =>
   `/api/v1/attribution/epochs/${encodeURIComponent(id)}/${suffix}`;
 
 export function EpochsBoundary({ children }: { readonly children: ReactNode }) {
+  const { data: session, status } = useSession();
+  // This host has fixed same-origin node endpoints. Rotate on the authenticated
+  // principal/session boundary, independently of wallet or transport identity.
+  const boundaryId = useId();
+  const principal = session?.user?.id ?? null;
+  const scope = useRef({ status, principal, generation: 0 });
+  if (scope.current.status !== status || scope.current.principal !== principal)
+    scope.current = {
+      status,
+      principal,
+      generation: scope.current.generation + 1,
+    };
+  // The cache sees only this opaque generation, never the session identity.
+  const dataScope = `${boundaryId}:${scope.current.generation}`;
   const { signTypedDataAsync } = useSignTypedData();
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
   const client = useMemo<EpochsClient>(
     () => ({
+      dataScope,
       request: (url, init) => fetch(url, init),
       signTypedData: (typedData) => signTypedDataAsync(typedData),
       endpoints: {
@@ -62,7 +79,7 @@ export function EpochsBoundary({ children }: { readonly children: ReactNode }) {
           getTransactionExplorerUrl(chainId, hash),
       },
     }),
-    [signTypedDataAsync]
+    [signTypedDataAsync, dataScope],
   );
   const rawOffset = params.get("epochOffset");
   const offset = rawOffset && /^\d+$/.test(rawOffset) ? Number(rawOffset) : 0;
@@ -76,8 +93,8 @@ export function EpochsBoundary({ children }: { readonly children: ReactNode }) {
             /^\d+$/.test(key) &&
             typeof value === "number" &&
             Number.isSafeInteger(value) &&
-            value >= 0
-        )
+            value >= 0,
+        ),
       ) as Record<string, number>;
   } catch {
     /* Invalid URL state uses the first page. */

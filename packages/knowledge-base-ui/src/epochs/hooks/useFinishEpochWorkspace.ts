@@ -11,58 +11,49 @@
  * @public
  */
 
-import { useEpochContext, type EpochsClient } from "../context";
+import { type UseQueryResult, useQuery } from "@tanstack/react-query";
+import { type EpochsClient, useEpochContext } from "../context";
+import type { EpochView } from "../types";
 import { epochJson, fetchEpochView } from "./useEpochsPage";
 
-import { type UseQueryResult, useQuery } from "@tanstack/react-query";
+export { isEligibleForFinishEpochWork } from "@cogni/attribution-ledger/presentation";
 
 import type {
-  ApiIngestionReceipt,
-  EpochDto,
-  UserProjectionDto,
-} from "../lib/compose-epoch";
-import { composeEpochView } from "../lib/compose-epoch";
-import type { EpochView } from "../types";
+  AdminEpochDto,
+  FinishEpochSelection,
+  SettlementLifecycle,
+} from "@cogni/attribution-ledger/presentation";
 
-export {
-  selectFinishEpochWork,
-  isEligibleForFinishEpochWork,
-} from "@cogni/attribution-ledger/presentation";
-import {
-  selectFinishEpochWork,
-  type AdminEpochDto,
-  type SettlementLifecycle,
-  type FinishEpochSelection,
-} from "@cogni/attribution-ledger/presentation";
 export type {
   AdminEpochDto,
-  SettlementLifecycle,
+  EpochSettlementLifecycle,
   FinishEpochSelection,
   FinishEpochWorkKind,
-  EpochSettlementLifecycle,
+  SettlementLifecycle,
 } from "@cogni/attribution-ledger/presentation";
 export interface FinishEpochWorkspaceData {
   readonly selection: FinishEpochSelection | null;
   readonly epochView: EpochView | null;
   readonly lifecycleUnavailable: boolean;
+  readonly readId: string;
 }
 
 async function fetchFinishEpochWorkspace(
   client: EpochsClient,
   contributorPages: Readonly<Record<string, number>>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<FinishEpochWorkspaceData> {
-  const [epochResponse, lifecycleResponse] = await Promise.all([
+  const [, lifecycleResponse] = await Promise.all([
     epochJson<{ epochs: AdminEpochDto[] }>(
       client,
-      client.endpoints.epochs + "?limit=200",
-      signal
+      `${client.endpoints.epochs}?limit=200`,
+      signal,
     ),
     epochJson<
       SettlementLifecycle & { finishSelection?: FinishEpochSelection | null }
     >(client, client.endpoints.lifecycle, signal).then(
       (value) => ({ value, unavailable: false as const }),
-      () => ({ value: null, unavailable: true as const })
+      () => ({ value: null, unavailable: true as const }),
     ),
   ]);
 
@@ -73,13 +64,15 @@ async function fetchFinishEpochWorkspace(
           client,
           selection.epoch,
           signal,
-          contributorPages[selection.epoch.id] ?? 0
+          contributorPages[selection.epoch.id] ?? 0,
         )
       : null;
 
+  signal?.throwIfAborted();
   return {
     selection,
     epochView,
+    readId: crypto.randomUUID(),
     lifecycleUnavailable:
       lifecycleResponse.unavailable ||
       lifecycleResponse.value?.finishSelection === undefined ||
@@ -87,16 +80,23 @@ async function fetchFinishEpochWorkspace(
   };
 }
 
+export const finishWorkspaceKey = (
+  prefix: readonly string[],
+  pages: Readonly<Record<string, number>>,
+) => [...prefix, "finish-epoch", pages] as const;
+
 export function useFinishEpochWorkspace(): UseQueryResult<
   FinishEpochWorkspaceData,
   Error
 > {
-  const { client, state } = useEpochContext();
+  const { client, state, queryKeyPrefix } = useEpochContext();
   const contributorPages = state.contributorPages ?? {};
   return useQuery({
-    queryKey: ["governance", "finish-epoch", contributorPages],
+    queryKey: finishWorkspaceKey(queryKeyPrefix, contributorPages),
     queryFn: ({ signal }) =>
       fetchFinishEpochWorkspace(client, contributorPages, signal),
     staleTime: 15_000,
+    retry: false,
+    refetchOnMount: "always",
   });
 }

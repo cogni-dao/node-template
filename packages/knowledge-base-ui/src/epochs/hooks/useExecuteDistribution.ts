@@ -28,18 +28,17 @@
  * @public
  */
 
-import { useEpochContext, type EpochsClient } from "../context";
-
-import { useQuery } from "@tanstack/react-query";
-import { parseAbi } from "viem";
-
 import {
   buildPublishProbeData,
   classifyPublishPermission,
-  type PublishPermissionState,
   DAO_ABI,
   EXECUTE_PERMISSION_ID,
+  type PublishPermissionState,
 } from "@cogni/attribution-ledger/distribution/publish-permission";
+
+import { useQuery } from "@tanstack/react-query";
+import { parseAbi } from "viem";
+import { type EpochsClient, useEpochContext } from "../context";
 
 const DISTRIBUTOR_ROOT_ABI = parseAbi([
   "function merkleRoot() view returns (bytes32)",
@@ -82,7 +81,7 @@ interface ExecuteDistributionResult {
 
 async function fetchExecutePayload(
   client: EpochsClient,
-  epochId: string
+  epochId: string,
 ): Promise<ExecuteDistributionResult> {
   const res = await client.request(client.endpoints.distribution(epochId), {
     method: "GET",
@@ -117,13 +116,13 @@ export interface UseExecuteDistribution {
  */
 export function useExecuteDistribution(
   epochId: string | undefined,
-  enabled = true
+  enabled = true,
 ): UseExecuteDistribution {
-  const { client } = useEpochContext();
+  const { client, queryKeyPrefix } = useEpochContext();
   const active = enabled && Boolean(epochId);
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ["governance", "execute-distribution", epochId],
+    queryKey: [...queryKeyPrefix, "execute-distribution", epochId],
     queryFn: () => fetchExecutePayload(client, epochId as string),
     enabled: active,
     staleTime: 30_000,
@@ -195,7 +194,7 @@ export function useHasExecutePermission(params: {
           tokenAddress,
           distributorAddress,
           expectedRoot,
-          0n
+          0n,
         )
       : "0x";
   const invalidFailureProbeData =
@@ -204,7 +203,7 @@ export function useHasExecutePermission(params: {
           tokenAddress,
           distributorAddress,
           expectedRoot,
-          1n
+          1n,
         )
       : "0x";
 
@@ -238,7 +237,7 @@ export function useHasExecutePermission(params: {
 
   const permissionState = classifyPublishPermission(
     validProbe.data as boolean | undefined,
-    invalidFailureProbe.data as boolean | undefined
+    invalidFailureProbe.data as boolean | undefined,
   );
 
   return {
