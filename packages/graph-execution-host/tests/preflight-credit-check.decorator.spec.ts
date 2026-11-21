@@ -14,7 +14,7 @@
 import type { AiEvent } from "@cogni/ai-core";
 import type {
   GraphExecutorPort,
-  GraphRunRequest,
+  GraphRunRequest
 } from "@cogni/graph-execution-core";
 import { describe, expect, it, vi } from "vitest";
 
@@ -27,7 +27,7 @@ function makeRequest(overrides?: Partial<GraphRunRequest>): GraphRunRequest {
     graphId: "langgraph:test",
     messages: [{ role: "user", content: "hello" }],
     modelRef: { providerKey: "platform", modelId: "gpt-4o" },
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -37,23 +37,139 @@ function makeInnerExecutor(events: AiEvent[]): GraphExecutorPort {
       stream: (async function* () {
         for (const e of events) yield e;
       })(),
-      final: Promise.resolve({ ok: true, runId: "run-1", requestId: "run-1" }),
-    }),
+      final: Promise.resolve({ ok: true, runId: "run-1", requestId: "run-1" })
+    })
   };
 }
 
 describe("PreflightCreditCheckDecorator", () => {
+  it("waits for policy and credit approval before starting one shared run", async () => {
+    let approvePolicy!: (value: boolean) => void;
+    let approveCredit!: () => void;
+    const policy = new Promise<boolean>((resolve) => {
+      approvePolicy = resolve;
+    });
+    const credit = new Promise<void>((resolve) => {
+      approveCredit = resolve;
+    });
+    const checkFn = vi.fn(() => credit);
+    const inner = makeInnerExecutor([{ type: "done" }]);
+    const run = vi.spyOn(inner, "runGraph");
+    const req = makeRequest();
+    const ctx = { actorUserId: "actor" };
+    const decorator = new PreflightCreditCheckDecorator(
+      inner,
+      checkFn,
+      "ba-1",
+      {
+        resolve: () => ({ requiresPlatformCredits: () => policy })
+      },
+      createMockLogger()
+    );
+    const result = decorator.runGraph(req, ctx);
+    const events = (async () => {
+      const found: AiEvent[] = [];
+      for await (const event of result.stream) found.push(event);
+      return found;
+    })();
+    const final = result.final;
+    expect(run).not.toHaveBeenCalled();
+    approvePolicy(true);
+    await Promise.resolve();
+    expect(checkFn).toHaveBeenCalledOnce();
+    expect(run).not.toHaveBeenCalled();
+    approveCredit();
+    expect(await events).toEqual([{ type: "done" }]);
+    expect((await final).ok).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledWith(req, ctx);
+  });
+
+  it.each(["policy", "credit"] as const)(
+    "never starts the executor on %s denial, even for stream-only consumption",
+    async (denied) => {
+      const error = new Error(`${denied} denied`);
+      const inner = makeInnerExecutor([{ type: "done" }]);
+      const run = vi.spyOn(inner, "runGraph");
+      const checkFn = vi.fn().mockRejectedValue(error);
+      const decorator = new PreflightCreditCheckDecorator(
+        inner,
+        checkFn,
+        "ba-1",
+        {
+          resolve: () => ({
+            requiresPlatformCredits: () =>
+              denied === "policy"
+                ? Promise.reject(error)
+                : Promise.resolve(true)
+          })
+        },
+        createMockLogger()
+      );
+      const result = decorator.runGraph(makeRequest());
+      await expect(async () => {
+        for await (const _event of result.stream) {
+          /* drain */
+        }
+      }).rejects.toBe(error);
+      expect(run).not.toHaveBeenCalled();
+      if (denied === "policy") expect(checkFn).not.toHaveBeenCalled();
+    }
+  );
+
+  it("starts exactly once for a final-only consumer", async () => {
+    const inner = makeInnerExecutor([{ type: "done" }]);
+    const run = vi.spyOn(inner, "runGraph");
+    const decorator = new PreflightCreditCheckDecorator(
+      inner,
+      vi.fn(),
+      "ba-1",
+      makeChecker(false),
+      createMockLogger()
+    );
+    expect((await decorator.runGraph(makeRequest()).final).ok).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("propagates stream cancellation to the inner iterator", async () => {
+    const close = vi.fn();
+    const inner: GraphExecutorPort = {
+      runGraph: () => ({
+        stream: (async function* () {
+          try {
+            yield { type: "done" } as AiEvent;
+          } finally {
+            close();
+          }
+        })(),
+        final: Promise.resolve({
+          ok: true,
+          runId: "run-1",
+          requestId: "run-1"
+        })
+      })
+    };
+    const decorator = new PreflightCreditCheckDecorator(
+      inner,
+      vi.fn(),
+      "ba-1",
+      makeChecker(false),
+      createMockLogger()
+    );
+    for await (const _event of decorator.runGraph(makeRequest()).stream) break;
+    expect(close).toHaveBeenCalledOnce();
+  });
   const makeChecker = (requiresCredits: boolean) => ({
     resolve: () => ({
-      requiresPlatformCredits: vi.fn().mockResolvedValue(requiresCredits),
-    }),
+      requiresPlatformCredits: vi.fn().mockResolvedValue(requiresCredits)
+    })
   });
 
   it("passes through when credits are sufficient", async () => {
     const checkFn = vi.fn().mockResolvedValue(undefined);
     const inner = makeInnerExecutor([
       { type: "text_delta", delta: "hi" },
-      { type: "done" },
+      { type: "done" }
     ]);
 
     const decorator = new PreflightCreditCheckDecorator(
@@ -85,7 +201,9 @@ describe("PreflightCreditCheckDecorator", () => {
     );
 
     const result = decorator.runGraph(
-      makeRequest({ modelRef: { providerKey: "codex", modelId: "codex-mini" } })
+      makeRequest({
+        modelRef: { providerKey: "codex", modelId: "codex-mini" }
+      })
     );
     const events: AiEvent[] = [];
     for await (const e of result.stream) events.push(e);
