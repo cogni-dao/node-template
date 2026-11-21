@@ -1,22 +1,22 @@
 {
   "name": "@cogni-dao/graph-execution",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "type": "module",
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/bundled/index.d.ts",
+      "import": "./dist/bundled/index.js"
     }
   },
-  "types": "./dist/index.d.ts",
+  "types": "./dist/bundled/index.d.ts",
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsup",
-    "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/index.js')){console.error('ERROR: dist/index.js missing'); process.exit(1)}\"",
+    "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/bundled/index.js')){console.error('ERROR: dist/bundled/index.js missing'); process.exit(1)}\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
