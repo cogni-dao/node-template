@@ -14,6 +14,8 @@
  * @public
  */
 
+import { createMissionResearchGraph } from "./graphs/mission-research/graph";
+import { MISSION_RESEARCH_TOOL_IDS } from "./graphs/mission-research/tools";
 import {
   COGNI_DECIDE_PROMPT,
   COGNI_DECIDE_TOOL_IDS,
@@ -52,7 +54,7 @@ export interface CatalogEntry {
   /** Canonical full graph card, required before the coordinator schedules this workflow. */
   readonly guidanceId?: string;
   /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
-  readonly program?: "cogni" | "work-review" | "work-closeout";
+  readonly program?: "cogni" | "work-review" | "work-closeout" | "mission-research";
   /**
    * Recurring duty this workflow can own. The node coordinator reads it to decide, from goals and evidence,
    * which jobs to keep: no duty is named in the operator prompt. `purpose` is the stable job purpose.
@@ -89,6 +91,7 @@ export interface CatalogEntry {
 /** CatalogEntry.report: the registered event name for the graph's telemetry. */
 export interface GraphReportDecl {
   readonly event: string;
+  readonly echoToStream?: boolean;
 }
 
 /** Delimiters of a catalog-declared run report on the run stream (CatalogEntry.report). */
@@ -114,7 +117,9 @@ export function graphReportLogFields(
 /** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */
 export function graphReportDelta(
   structuredOutput: Record<string, unknown> | undefined,
+  report?: GraphReportDecl,
 ): string | null {
+  if (report?.echoToStream === false) return null;
   const telemetry = structuredOutput?.telemetry;
   return telemetry && typeof telemetry === "object"
     ? `\n${GRAPH_REPORT_OPEN}${JSON.stringify(telemetry)}${GRAPH_REPORT_CLOSE}\n`
@@ -147,6 +152,7 @@ createCatalogCogniGraph.createRunHooks = createCoordinatorGraph.createRunHooks;
  * Operator lifecycle graphs (PR review and management) are operator services, not node graphs.
  */
 export const NODE_LANGGRAPH_CATALOG = {
+  "mission-research": { displayName: "Mission Research", description: "Researches mission questions and proposes sourced knowledge", principal: NODE_AI_PRINCIPAL, toolIds: MISSION_RESEARCH_TOOL_IDS, graphFactory: createMissionResearchGraph, program: "mission-research", report: { event: "ai.mission_research.cycle", echoToStream: false } },
   /**
    * Work Prioritizer (story.5108 / story.5116) — every node runs it: a node schedules
    * `langgraph:work-prioritizer` in its own repo-spec, and a node with no approved goals changes
@@ -245,6 +251,7 @@ export const LANGGRAPH_PROVIDER_ID = "langgraph" as const;
  * Per GRAPH_ID_NAMESPACED: format is ${providerId}:${graphName}
  */
 export const NODE_LANGGRAPH_GRAPH_IDS = {
+  "mission-research": `${LANGGRAPH_PROVIDER_ID}:mission-research`,
   cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
   "work-closeout": `${LANGGRAPH_PROVIDER_ID}:${WORK_CLOSEOUT_GRAPH_NAME}`,

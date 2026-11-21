@@ -8,36 +8,22 @@
  * Invariants:
  *   - AUTH_VIA_ADAPTER: API key resolved from config, never from context
  *   - STRUCTURED_RESULTS: Returns typed WebSearchResult
- *   - HARD_CAPS_ENFORCED_AT_TOOL_BOUNDARY: maxResults=5 max, title≤120, content≤160
+ *   - BOUNDED_RESPONSE: 1 MiB transport; five results and bounded serialized passages
  * Side-effects: IO (HTTP requests to api.tavily.com)
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/tool-use.md
  * @internal
  */
 
-import type {
-  WebSearchCapability,
-  WebSearchParams,
-  WebSearchResult,
+import {
+  projectWebSearchResponse,
+  type WebSearchCapability,
+  type WebSearchParams,
+  type WebSearchResult,
 } from "@cogni/ai-tools";
 
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 const logger = makeLogger({ component: "TavilyWebSearchAdapter" });
-
-/**
- * Tavily API response shape.
- * Note: Optional fields may be null or undefined depending on request params.
- */
-interface TavilySearchResponse {
-  results: Array<{
-    title: string;
-    url: string;
-    content: string;
-    score?: number | null;
-    raw_content?: string | null;
-  }>;
-  query: string;
-}
 
 /**
  * Configuration for TavilyWebSearchAdapter.
@@ -69,7 +55,7 @@ export class TavilyWebSearchAdapter implements WebSearchCapability {
    *
    * Per HARD_CAPS_ENFORCED_AT_TOOL_BOUNDARY:
    * - maxResults capped at 5 (model request is a hint, not authority)
-   * - include_raw_content always false
+   * - raw content is requested only when explicitly selected
    * - title truncated to 120 chars
    * - content truncated to 160 chars
    */
@@ -91,8 +77,8 @@ export class TavilyWebSearchAdapter implements WebSearchCapability {
           query: params.query,
           max_results: maxResults,
           topic: params.topic ?? "general",
-          // Hard cap: never request raw content (token savings)
-          include_raw_content: false,
+          // Snippet-only remains the default.
+          include_raw_content: params.includeRawContent === true,
         }),
         signal: controller.signal,
       });
@@ -107,24 +93,36 @@ export class TavilyWebSearchAdapter implements WebSearchCapability {
           },
           EVENT_NAMES.ADAPTER_TAVILY_ERROR
         );
-        const errorText = await response.text();
-        throw new Error(`Tavily API error (${response.status}): ${errorText}`);
+        throw new Error("web_search_http_error");
       }
 
-      const data = (await response.json()) as TavilySearchResponse;
-
-      return {
-        query: data.query,
-        results: data.results.map((r) => ({
-          url: r.url,
-          // Hard cap: title max 120 chars
-          title: r.title.slice(0, 120),
-          // Hard cap: content max 160 chars for token efficiency
-          content: r.content?.slice(0, 160) ?? "",
-          // Conditionally include optional fields to satisfy exactOptionalPropertyTypes
-          ...(r.score != null && { score: r.score }),
-        })),
-      };
+      if (!response.body) throw new Error("web_search_invalid_response");
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > 1_048_576) {
+          controller.abort();
+          throw new Error("web_search_response_too_large");
+        }
+        chunks.push(part.value);
+      }
+      const body = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      let data: unknown;
+      try {
+        data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+      } catch {
+        throw new Error("web_search_invalid_response");
+      }
+      return projectWebSearchResponse(data, params.query, params.includeRawContent === true, maxResults);
     } catch (error) {
       // Log network-level errors (timeout, DNS, connection refused, etc.)
       if (error instanceof Error && error.name === "AbortError") {
@@ -139,7 +137,7 @@ export class TavilyWebSearchAdapter implements WebSearchCapability {
         );
       } else if (
         error instanceof Error &&
-        error.message.startsWith("Tavily API error")
+        error.message === "web_search_http_error"
       ) {
         // Already logged above, just re-throw
       } else {
@@ -156,7 +154,8 @@ export class TavilyWebSearchAdapter implements WebSearchCapability {
           EVENT_NAMES.ADAPTER_TAVILY_ERROR
         );
       }
-      throw error;
+      if (error instanceof Error && error.message.startsWith("web_search_")) throw error;
+      throw new Error(error instanceof Error && error.name === "AbortError" ? "web_search_timeout" : "web_search_unavailable");
     } finally {
       clearTimeout(timeoutId);
     }

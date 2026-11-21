@@ -49,6 +49,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `getCurrentTimeBoundTool`, `GET_CURRENT_TIME_NAME` - Time tool
   - `metricsQueryBoundTool`, `METRICS_QUERY_NAME`, `createMetricsQueryImplementation` - Metrics query tool
   - `webSearchBoundTool`, `WEB_SEARCH_NAME`, `createWebSearchImplementation` - Web search tool
+  - `projectWebSearchResponse` and passage limits provide bounded UTF-8 web result projection, including raw-content availability.
   - `WebSearchCapability`, `WebSearchParams`, `WebSearchResult`, `WebSearchResultItem` - Web search types
   - `repoSearchBoundTool`, `REPO_SEARCH_NAME`, `createRepoSearchImplementation` - Repo search tool
   - `repoOpenBoundTool`, `REPO_OPEN_NAME`, `createRepoOpenImplementation` - Repo open tool
