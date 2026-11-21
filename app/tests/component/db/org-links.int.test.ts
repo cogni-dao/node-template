@@ -647,13 +647,18 @@ describe("two real connections (committed data, row locks)", () => {
 });
 
 describe("the forward migration 0051 (real Postgres, rolled back)", () => {
+  let owner: Sql;
   let service: Sql;
 
+  // DDL needs the table owner, which is the app's own connection (`DATABASE_URL`), not the service role; every DDL statement and every `agent_roles` row below rolls back with its
+  // transaction. The users and accounts the rows point at are committed through the service role first (so the DDL transaction locks `agent_roles` alone) and removed afterwards.
   beforeAll(() => {
-    if (!process.env.DATABASE_SERVICE_URL) throw new Error("component PostgreSQL required");
-    service = postgres(process.env.DATABASE_SERVICE_URL, { max: 2 });
+    if (!process.env.DATABASE_URL || !process.env.DATABASE_SERVICE_URL) throw new Error("component PostgreSQL required");
+    owner = postgres(process.env.DATABASE_URL, { max: 1 });
+    service = postgres(process.env.DATABASE_SERVICE_URL, { max: 1 });
   });
   afterAll(async () => {
+    await owner?.end({ timeout: 1 });
     await service?.end({ timeout: 1 });
   });
 
@@ -668,17 +673,23 @@ describe("the forward migration 0051 (real Postgres, rolled back)", () => {
   };
 
   it("repairs the database the rejected first 0050 left: keeps the oldest live row per (principal, scope) with no human revoker, restores the old index, adds the new one, and is safe to run again", async () => {
-    await service
-      .begin(async (tx) => {
-        const user = async (name: string) => {
-          const id = randomUUID();
-          await tx`INSERT INTO users (id, name) VALUES (${id}, ${name})`;
-          return id;
-        };
-        const sqlTag = tx as unknown as SqlTag;
-        const orgs = createPostgresOrgAccountStore(sqlTag);
-        const [p, q, bob, carol] = [await user("p"), await user("q"), await user("bob"), await user("carol")] as [string, string, string, string];
-        const [a1, a2, a3] = [await createOrg(orgs, { creatorUserId: bob, name: "one" }), await createOrg(orgs, { creatorUserId: carol, name: "two" }), await createOrg(orgs, { creatorUserId: q, name: "three" })];
+    const user = async (name: string) => {
+      const id = randomUUID();
+      await service`INSERT INTO users (id, name) VALUES (${id}, ${name})`;
+      return id;
+    };
+    const account = async (ownerUserId: string) => {
+      const id = randomUUID();
+      await service`INSERT INTO billing_accounts (id, owner_user_id, balance_credits) VALUES (${id}, ${ownerUserId}, 0)`;
+      return id;
+    };
+    const [p, q, approver, o1, o2, o3] = [await user("p"), await user("q"), await user("approver"), await user("o1"), await user("o2"), await user("o3")] as [string, string, string, string, string, string];
+    const [a1, a2, a3] = [await account(o1), await account(o2), await account(o3)] as [string, string, string];
+    try {
+      await owner
+        .begin(async (tx) => {
+          // The owner connection is subject to FORCE row-level security on `agent_roles`; lift it for this transaction (the DDL is transactional, so it comes back on rollback).
+          await tx.unsafe("ALTER TABLE agent_roles NO FORCE ROW LEVEL SECURITY");
         // The state the rejected 0050 left: the old index replaced by the account-aware one under the OLD NAME, and the new one absent.
         await tx.unsafe("DROP INDEX agent_roles_live_unique");
         await tx.unsafe("DROP INDEX IF EXISTS agent_roles_live_account_unique");
@@ -686,36 +697,38 @@ describe("the forward migration 0051 (real Postgres, rolled back)", () => {
         const give = (principal: string, accountId: string, ago: string) =>
           tx.unsafe(
             `INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, created_at, resource, account_id)
-             VALUES ('${principal}', 'org:owner', '${bob}', now(), now() - interval '${ago}', 'account', '${accountId}')`
+             VALUES ('${principal}', 'org:owner', '${approver}', now(), now() - interval '${ago}', 'account', '${accountId}')`
           );
-        await give(p, a1.billingAccountId, "2 days"); // the oldest: kept
-        await give(p, a2.billingAccountId, "1 day"); // a duplicate the bad state allowed: ended
-        await give(p, a3.billingAccountId, "1 hour"); // another duplicate: ended
-        const before = await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`;
-        expect(before).toHaveLength(3);
+        await give(p, a1, "2 days"); // the oldest: kept
+        await give(p, a2, "1 day"); // a duplicate the bad state allowed: ended
+        await give(p, a3, "1 hour"); // another duplicate: ended
+        await give(q, a1, "3 hours"); // a principal with one live row: untouched
+        expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`).toHaveLength(3);
 
         for (const statement of repairStatements()) await tx.unsafe(statement);
         for (const statement of repairStatements()) await tx.unsafe(statement); // safe to run again
 
-        const live = await tx`SELECT account_id FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`;
-        expect(live).toEqual([{ account_id: a1.billingAccountId }]);
+        expect(await tx`SELECT account_id FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`).toEqual([{ account_id: a1 }]);
         // The ended rows name no person: the migration, not an actor, ended them.
-        const ended = await tx`SELECT account_id, revoked_by FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NOT NULL ORDER BY account_id`;
+        const ended = await tx`SELECT revoked_by FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NOT NULL`;
         expect(ended).toHaveLength(2);
         expect(ended.every((row) => row.revoked_by === null)).toBe(true);
-        // A principal with one live row, and the org owners of other orgs, are untouched.
         expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${q} AND scope = 'org:owner' AND revoked_at IS NULL`).toHaveLength(1);
         const defs = await tx`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'agent_roles' AND indexname IN ('agent_roles_live_unique', 'agent_roles_live_account_unique') ORDER BY indexname`;
         expect(defs.map((d) => d.indexname)).toEqual(["agent_roles_live_account_unique", "agent_roles_live_unique"]);
         expect(String(defs[1]?.indexdef)).not.toContain("COALESCE");
+        expect(String(defs[0]?.indexdef)).toContain("COALESCE");
         // The previous release's writer works again: its ON CONFLICT infers the restored index and finds the live row.
-        const old = await tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${p}, 'org:owner', ${bob}) ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
+        const old = await tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${p}, 'org:owner', ${approver}) ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
         expect(old).toHaveLength(0);
         throw new Error("rollback");
-      })
-      .catch((error: unknown) => {
-        if ((error as Error).message !== "rollback") throw error;
-      });
+        })
+        .catch((error: unknown) => {
+          if ((error as Error).message !== "rollback") throw error;
+        });
+    } finally {
+      await service`DELETE FROM billing_accounts WHERE id IN (${a1}, ${a2}, ${a3})`.catch(() => undefined);
+      await service`DELETE FROM users WHERE id IN (${p}, ${q}, ${approver}, ${o1}, ${o2}, ${o3})`.catch(() => undefined);
+    }
   });
 });
-
