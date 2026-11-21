@@ -468,6 +468,16 @@ function denseContributors(): ApiIngestionReceipt[] {
   }));
 }
 
+// Dense pages make role/name scans expensive in jsdom. Locate the unique visible
+// identity first, then assert and interact with its actual table row.
+async function contributorRow(name: string) {
+  const label = await screen.findByText(name, { selector: "td span" }, { timeout: 12_000 });
+  const row = label.closest("tr");
+  expect(row).not.toBeNull();
+  expect(row).toHaveAccessibleName(new RegExp(name));
+  return row as HTMLTableRowElement;
+}
+
 describe("public epochs capability", () => {
   it("round-trips controlled navigation and toggles disclosure from the keyboard", async () => {
     const f = fixture();
@@ -516,14 +526,14 @@ describe("public epochs capability", () => {
       />,
       { wrapper: f.wrapper }
     );
-    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
+    await contributorRow("Alpha");
     expect(
       screen.queryByRole("row", { name: /Late contributor/ })
     ).not.toBeInTheDocument();
     const more = screen.getByRole("button", { name: "More contributors" });
     more.focus();
     await user.keyboard("{Enter}");
-    const late = await screen.findByRole("row", { name: /Late contributor/ });
+    const late = await contributorRow("Late contributor");
     expect(within(late).getByText("201")).toBeVisible();
     expect(
       f.requests.some((r) =>
@@ -571,9 +581,9 @@ describe("public epochs capability", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Previous contributors" })
     );
-    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
+    await contributorRow("Alpha");
     expect(f.getNavigation().contributorPages?.["15"]).toBe(0);
-  });
+  }, 20_000);
 
   it.each([null, "a"])(
     "keeps a zero override reset reachable for fallback identity %s",
@@ -691,11 +701,7 @@ describe("public epochs capability", () => {
     f.state.events = denseContributors();
     const user = userEvent.setup();
     render(<CurrentEpochView />, { wrapper: f.wrapper });
-    const row = await screen.findByRole(
-      "row",
-      { name: /Alpha/ },
-      { timeout: 5000 }
-    );
+    const row = await contributorRow("Alpha");
     expect(within(row).getByText("Alpha")).toBeVisible();
     const expand = within(row).getByRole("button", { name: "Expand details" });
     expand.focus();
@@ -704,13 +710,13 @@ describe("public epochs capability", () => {
     expect(
       await screen.findByRole("link", { name: "Contribution dense-0" })
     ).toBeVisible();
-  });
+  }, 20_000);
 
   it("loads four reads regardless of history and fetches a past epoch only on expansion", async () => {
     const f = fixture();
     f.state.history = denseHistory();
     render(<CurrentEpochView />, { wrapper: f.wrapper });
-    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
+    await contributorRow("Alpha");
     expect(
       f.requests.filter((request) => request.method === "GET")
     ).toHaveLength(4);
@@ -730,14 +736,14 @@ describe("public epochs capability", () => {
     expect(
       screen.getByRole("button", { name: "Collapse details" })
     ).toHaveAttribute("aria-expanded", "true");
-  });
+  }, 20_000);
 
   it("keeps the current epoch while changing the history page and exposes contributor pages", async () => {
     const f = fixture();
     f.state.events = denseContributors();
     f.state.history = denseHistory();
     render(<CurrentEpochView />, { wrapper: f.wrapper });
-    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
+    await contributorRow("Alpha");
     fireEvent.click(screen.getByRole("button", { name: "More epochs" }));
     await waitFor(() =>
       expect(
@@ -752,12 +758,12 @@ describe("public epochs capability", () => {
       screen.getByRole("button", { name: "Sync contributions" })
     ).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "More contributors" }));
-    await screen.findByRole("row", { name: /Late contributor/ });
+    await contributorRow("Late contributor");
     expect(screen.getByText("201 contributors")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Previous epochs" }));
     await screen.findByText("14");
     expect(f.getNavigation().historyOffset).toBe(0);
-  }, 15_000);
+  }, 20_000);
 
   it("expands a contributor to bounded receipt pages and real receipt links", async () => {
     const f = fixture();
