@@ -339,7 +339,7 @@ describe("source qualification against six current consumers", () => {
 		expect(cancelled).toBe(true);
 	});
 
-	it("enforces the two-train request cap and exact grace boundary", async () => {
+	it("rejects a young train early and preserves the exact grace boundary", async () => {
 		const calls: string[] = [];
 		vi.stubGlobal(
 			"fetch",
@@ -374,7 +374,7 @@ describe("source qualification against six current consumers", () => {
 		expect(sample.evidenceRefs[1]).toContain("train=0.24.0");
 		expect(
 			calls.filter((x) => x.startsWith("https://api.github.com")),
-		).toHaveLength(11);
+		).toHaveLength(7);
 		expect(
 			calls.filter((x) => x.startsWith("https://raw.githubusercontent.com")),
 		).toHaveLength(6);
@@ -532,20 +532,85 @@ describe("source qualification against six current consumers", () => {
 	});
 
 
-	it("never exceeds eleven REST requests for larger admitted member sets", async () => {
+	it.each([false, true])("bounds ten-member discovery, including exact REST11 completion (first rejected: %s)", async (firstRejected) => {
 		const extended = [...MEMBERS, ...Array.from({ length: 5 }, (_, n) => ({ name: `@example/member-${n}`, tagPrefix: `member-${n}-v` }))];
 		const calls: string[] = [];
 		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
 			calls.push(address);
 			if (address.includes("matching-refs")) return response([{ ref: "refs/tags/train-v0.25.0" }, { ref: "refs/tags/train-v0.24.0" }]);
 			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			if (firstRejected && tag?.endsWith("0.25.0")) return response({}, 404);
 			return tag ? response(release(decodeURIComponent(tag), "2026-11-20T00:00:00Z")) : response(current());
 		}));
 		const sample = await readFleetTrainLag({ ...params, members: extended }, at, new AbortController().signal, budget);
-		expect(sample).toMatchObject({ complete: false });
-		expect(sample.evidenceRefs[0]).toContain("request_budget");
+		expect(sample).toMatchObject({ complete: !firstRejected });
+		if (firstRejected) expect(sample.evidenceRefs[0]).toContain("request_budget");
 		expect(calls.filter((address) => address.startsWith("https://api.github.com"))).toHaveLength(11);
-		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com"))).toHaveLength(0);
+		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com"))).toHaveLength(firstRejected ? 0 : 6);
+	});
+
+	it.each(["missing", "draft", "unpublished", "young"] as const)("rejects a %s member early before trying an older train", async (fault) => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response(["0.24.0", "0.25.0"].map((v) => ({ ref: `refs/tags/train-v${v}` })));
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			if (!tag) return response(current());
+			if (tag.endsWith("0.25.0")) {
+				if (fault === "missing") return response({}, 404);
+				return response({ tag_name: decodeURIComponent(tag), draft: fault === "draft", published_at: fault === "unpublished" ? null : fault === "young" ? "2026-11-21T00:00:00.001Z" : "2026-11-20T00:00:00Z" });
+			}
+			return response(release(decodeURIComponent(tag), "2026-11-21T00:00:00.000Z"));
+		}));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: true, value: 0 });
+		expect(sample.evidenceRefs[1]).toContain("train=0.24.0");
+		expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(7);
+		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(6);
+	});
+
+	it.each([false, true])("allows a fifth-member rejection but never exceeds REST11 (second rejected: %s)", async (secondRejected) => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response(["0.26.0", "0.25.0", "0.24.0"].map((v) => ({ ref: `refs/tags/train-v${v}` })));
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			if (!tag) return response(current());
+			if (tag === "ai-tools-v0.26.0" || (secondRejected && tag === "ai-tools-v0.25.0")) return response({}, 404);
+			return response(release(decodeURIComponent(tag), "2026-11-20T00:00:00Z"));
+		}));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample.complete).toBe(!secondRejected);
+		if (secondRejected) expect(sample.evidenceRefs[0]).toContain("request_budget");
+		else expect(sample.evidenceRefs[1]).toContain("train=0.25.0");
+		expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(11);
+		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(secondRejected ? 0 : 6);
+	});
+
+	it("visits at most ten candidates within the eleven REST cap", async () => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response(Array.from({ length: 11 }, (_, n) => ({ ref: `refs/tags/train-v0.${24 + n}.0` })));
+			return response({}, 404);
+		}));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+		expect(sample.evidenceRefs[0]).toContain("request_budget");
+		expect(calls).toHaveLength(11);
+		expect(calls.slice(1).map((address) => address.split("/releases/tags/")[1])).toEqual(Array.from({ length: 10 }, (_, n) => `work-items-v0.${34 - n}.0`));
+	});
+
+	it.each(["malformed", 403, 429] as const)("does not skip failed or malformed Release %s to claim an older train", async (fault) => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response(["0.25.0", "0.24.0"].map((v) => ({ ref: `refs/tags/train-v${v}` })));
+			return fault === "malformed" ? response({ tag_name: "wrong", published_at: null }) : response({}, fault);
+		}));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: false, reason: fault === "malformed" ? "incomplete_or_invalid_source" : "source_failed" });
+		expect(calls).toHaveLength(2);
 	});
 
 });

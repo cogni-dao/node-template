@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni-dao/metrics/sources` (fleet train lag)
  * Purpose: Count the consumer nodes whose pins trail the latest complete package train (story.0085, hub package-release-train).
- * Scope: The publisher's `train-v*` tags, the member Releases of the two newest trains and one raw manifest read per consumer,
+ * Scope: The publisher's `train-v*` tags, newest-first member Releases within eleven REST requests and one raw manifest per consumer,
  *   without credentials, at fixed provider origins. The pure `latestCompleteTrain` and `assessFleetTrainLag` do the counting so a
  *   fixture of real manifests can prove them.
  * Invariants:
@@ -51,8 +51,9 @@ export interface ReleaseLike {
 
 /** Most consumers one reading evaluates; each is one manifest read. */
 export const FLEET_TRAIN_MAX_CONSUMERS = 20;
-/** Newest trains whose member Releases one reading checks: the newest, and the one before it while the newest is in its grace. */
-export const FLEET_TRAIN_CANDIDATES = 2;
+const FLEET_TRAIN_MAX_REST_REQUESTS = 11;
+/** Maximum candidate visits: one tag-list request leaves at most ten member probes. Early rejection permits older trains. */
+export const FLEET_TRAIN_CANDIDATES = FLEET_TRAIN_MAX_REST_REQUESTS - 1;
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
@@ -72,30 +73,28 @@ function validManifest(value: unknown): boolean {
 	});
 }
 
-function releaseTag(raw: string, publisher?: string): string | undefined {
+// Recognition and trust share native URL normalization. An untrusted identity is
+// only a reporting hint; manifest pins never supply network destinations.
+function releaseIdentity(raw: string, publisher?: string): { tag: string | undefined; trusted: boolean } {
+	let url: URL | undefined;
 	try {
-		const url = new URL(raw);
-		if (url.origin !== "https://github.com" || url.username || url.password) return undefined;
-		const match = /^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/([^/]+)$/.exec(url.pathname);
-		if (!match || (publisher && match[1]?.toLowerCase() !== publisher.toLowerCase())) return undefined;
-		const tag = decodeURIComponent(match[2] ?? "");
-		const asset = decodeURIComponent(match[3] ?? "");
-		if ([tag, asset].some((part) => !part || part === "." || part === ".." || /[/\\]/.test(part))) return undefined;
-		return tag;
+		url = new URL(raw);
 	} catch {
-		return undefined;
+		// Malformed-but-recognizable pins still need reporting below.
 	}
-}
-
-// Recognition is deliberately untrusted: it only identifies a Release-shaped
-// member pin for reporting, and never supplies an address for network access.
-function recognizableReleaseTag(raw: string): string | undefined {
-	const match = /^[a-z][a-z\d+.-]*:\/\/[^/]*\/[^/]+\/[^/]+\/releases\/download\/([^/?#]+)/i.exec(raw);
-	if (!match) return undefined;
+	const match = url && /^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
+	// Retain refusals for malformed authorities or paths normalized out of shape.
+	const rawTag = match?.[2] ?? /^[a-z][a-z\d+.-]*:\/\/[^/]*\/[^/]+\/[^/]+\/releases\/download\/([^/?#]+)/i.exec(raw)?.[1];
+	let tag = rawTag;
 	try {
-		return decodeURIComponent(match[1] ?? "");
+		if (tag !== undefined) tag = decodeURIComponent(tag);
+		if (!url || !match || url.origin !== "https://github.com" || url.username || url.password ||
+			(publisher && match[1]?.toLowerCase() !== publisher.toLowerCase())) return { tag, trusted: false };
+		const asset = decodeURIComponent(match[3] ?? "");
+		const trusted = [tag, asset].every((part) => part && part !== "." && part !== ".." && !/[/\\]/.test(part));
+		return { tag, trusted };
 	} catch {
-		return match[1];
+		return { tag, trusted: false };
 	}
 }
 
@@ -175,8 +174,8 @@ export function assessFleetTrainLag(
 		for (const [key, raw] of deps) {
 			if (typeof raw !== "string") continue;
 			const namedMember = members.find((x) => x.name === key);
-			const tag = releaseTag(raw, publisher);
-			if (tag) {
+			const { tag, trusted } = releaseIdentity(raw, publisher);
+			if (trusted && tag) {
 				const member = members.find((x) => tag.startsWith(x.tagPrefix));
 				if (namedMember && member !== namedMember) reasons.push(`invalid:${key}@release`);
 				if (!member) continue;
@@ -196,7 +195,7 @@ export function assessFleetTrainLag(
 				if (!member) continue;
 				pinned.add(member.name);
 				reasons.push(`vendored:${key}@workspace`);
-			} else if (namedMember || members.some((x) => recognizableReleaseTag(raw)?.startsWith(x.tagPrefix))) {
+			} else if (namedMember || members.some((x) => tag?.startsWith(x.tagPrefix))) {
 				reasons.push(`invalid:${key}@pin`);
 			}
 		}
@@ -297,12 +296,14 @@ export async function readFleetTrainLag(
 		signal.throwIfAborted();
 		return unknown(`tags=${(error as Error).message}`, "source_failed", null);
 	}
-	const releases: ReleaseLike[] = [];
+	let train: string | null = null;
+	const cutoff = at.getTime() - p.graceHours * 3600_000;
 	try {
-		for (const version of candidates)
+		for (const version of candidates) {
+			const releases: ReleaseLike[] = [];
 			for (const member of p.members) {
 				const tag = `${member.tagPrefix}${version}`;
-				if (restRequests >= 11) return unknown("releases=request_budget", "incomplete_or_invalid_source", asOf);
+				if (restRequests >= FLEET_TRAIN_MAX_REST_REQUESTS) return unknown("releases=request_budget", "incomplete_or_invalid_source", asOf);
 				restRequests++;
 				const got = await getJson(`${api}/releases/tags/${encodeURIComponent(tag)}`, signal, budget.maxResponseBytes).catch(
 					(error: Error) => {
@@ -310,31 +311,34 @@ export async function readFleetTrainLag(
 						throw error;
 					},
 				);
-				if (got) {
-					if (++sourceRows > budget.maxRows) return unknown("releases=row_budget", "incomplete_or_invalid_source", asOf);
-					const body = got.body;
-					if (
-						!isRecord(body) ||
-						body.tag_name !== tag ||
-						(body.published_at !== null &&
-							(typeof body.published_at !== "string" ||
-								!validPublishedAt(body.published_at))) ||
-						(body.draft !== undefined && typeof body.draft !== "boolean")
-					)
-						return unknown(
-							`releases=malformed:${tag}`,
-							"incomplete_or_invalid_source",
-							asOf,
-						);
-					releases.push(body as unknown as ReleaseLike);
-				}
+				if (!got) break;
+				if (++sourceRows > budget.maxRows) return unknown("releases=row_budget", "incomplete_or_invalid_source", asOf);
+				const body = got.body;
+				if (
+					!isRecord(body) ||
+					body.tag_name !== tag ||
+					(body.published_at !== null &&
+						(typeof body.published_at !== "string" ||
+							!validPublishedAt(body.published_at))) ||
+					(body.draft !== undefined && typeof body.draft !== "boolean")
+				)
+					return unknown(
+						`releases=malformed:${tag}`,
+						"incomplete_or_invalid_source",
+						asOf,
+					);
+				const release = body as unknown as ReleaseLike;
+				if (release.draft || !release.published_at || Date.parse(release.published_at) > cutoff) break;
+				releases.push(release);
 			}
+			train = latestCompleteTrain(releases, p.members, at, p.graceHours);
+			if (train !== null) break;
+		}
 	} catch (error) {
 		signal.throwIfAborted();
 		return unknown(`releases=${(error as Error).message}`, "source_failed", asOf);
 	}
-	const train = latestCompleteTrain(releases, p.members, at, p.graceHours);
-	if (train === null) return unknown("train=none", "incomplete_or_invalid_source", asOf);
+	if (train === null) return unknown(restRequests >= FLEET_TRAIN_MAX_REST_REQUESTS ? "releases=request_budget" : "train=none", "incomplete_or_invalid_source", asOf);
 
 	if (sourceRows + p.consumers.length > budget.maxRows)
 		return unknown(`train=${train};manifests=row_budget`, "incomplete_or_invalid_source", asOf);
