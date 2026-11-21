@@ -9,10 +9,10 @@
  * Scope: Presentation over `useOrg`. The server decides every right; the section only hides what the caller's role can never do (an admin sees no owner actions and no link controls).
  * Invariants:
  *   - ONLY_OWNERS_TOUCH_OWNERS: an admin has no menu on an owner row and no Make owner; only an owner invites an owner. The server refuses it too.
- *   - ONLY_OWNERS_LINK: Unlink and Link a node render for an owner only.
+ *   - ONLY_OWNERS_LINK: the whole Linked nodes block (heading, rows, Unlink, Link a node) renders for an owner only; an admin never sees an empty heading.
  *   - CODE_IS_SHOWN_ONCE: the link code appears after the origin is accepted, with Copy; typing a new origin removes it.
  *   - NON_DISCLOSING: an unknown org and an org the caller is not in read the same one line.
- *   - MONEY_IS_DOLLARS: balance and spend read through the injected `formatMoney` (the package holds no rate). A spend still loading or failed reads "—", never 0; a spend that may be cut by the ledger page reads with a trailing "+".
+ *   - MONEY_IS_DOLLARS: balance and spend (both from the org read, summed by the server) read through the injected `formatMoney`; the package holds no rate.
  * Side-effects: IO (through the hook)
  * Links: https://node-template.cognidao.org/knowledge/org-account-lifecycle
  * @public
@@ -26,7 +26,7 @@ import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
 import { Skeleton } from "../ui/skeleton.js";
 import { memberLabel, type OrgEndpoints, type OrgMember, type OrgRole, ORG_ERROR_COPY, UNAVAILABLE_COPY } from "./org-client.js";
-import { ErrorLine, OrgHeading, Pill, type RowMenuItem, RoleSelect, RolePill, RowMenu } from "./org-parts.js";
+import { ErrorLine, OrgHeading, Pill, RetryButton, type RowMenuItem, RoleSelect, RolePill, RowMenu } from "./org-parts.js";
 import { useOrg } from "./use-org.js";
 
 export interface OrgSectionProps {
@@ -67,9 +67,7 @@ export function OrgSection({ endpoints, orgId, formatMoney, className }: OrgSect
     return (
       <p className="flex items-center gap-3 py-3 text-destructive text-sm" role="alert">
         {UNAVAILABLE_COPY}
-        <button type="button" className="text-foreground underline" onClick={() => void org.reload()}>
-          Try again
-        </button>
+        <RetryButton onClick={() => void org.reload()} />
       </p>
     );
   }
@@ -114,8 +112,6 @@ export function OrgSection({ endpoints, orgId, formatMoney, className }: OrgSect
     }
   };
 
-  const { spend } = state;
-
   return (
     <section aria-labelledby="org-heading" className={className}>
       <div className="flex items-center gap-3 pt-8">
@@ -133,7 +129,7 @@ export function OrgSection({ endpoints, orgId, formatMoney, className }: OrgSect
         </div>
         <div>
           <dt className="text-muted-foreground text-sm">Spent this month</dt>
-          <dd className="font-semibold text-foreground text-lg tabular-nums">{spend ? `${formatMoney(spend.spent)}${spend.partial ? "+" : ""}` : spend === undefined ? <Skeleton className="h-6 w-16" /> : "—"}</dd>
+          <dd className="font-semibold text-foreground text-lg tabular-nums">{formatMoney(state.org.spentThisMonthCredits)}</dd>
         </div>
       </dl>
 
@@ -163,50 +159,52 @@ export function OrgSection({ endpoints, orgId, formatMoney, className }: OrgSect
         )}
       </form>
 
-      <OrgHeading id="org-links-heading">Linked nodes</OrgHeading>
-      {state.links.length > 0 && (
-        <ul className="divide-y divide-border">
-          {state.links.map((l) => (
-            <li key={l.id} className="flex min-h-12 items-center gap-3 py-2">
-              <span className="min-w-0 flex-1 break-all font-medium text-foreground">{l.issuer}</span>
-              <Pill tone="ok">Linked</Pill>
-              {busy === `unlink:${l.id}` ? (
-                <Skeleton className="h-9 w-9" />
-              ) : (
-                isOwner && <RowMenu label={`Actions for ${l.issuer}`} items={locked ? [] : [{ label: "Unlink", onSelect: () => void org.unlink(l.id) }]} />
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
       {isOwner && (
-        <form onSubmit={onLink} className="flex items-center gap-2 py-3">
-          <Input
-            aria-label="Node origin"
-            placeholder="https://…"
-            value={origin}
-            onChange={(e) => {
-              setOrigin(e.target.value);
-              if (org.linkCode) org.clearCode();
-            }}
-            className="min-w-0 flex-1"
-          />
-          {busy === "code" ? (
-            <Skeleton className="h-9 w-28" />
-          ) : (
-            <Button type="submit" disabled={!origin.trim() || locked} className="shrink-0">
-              Link a node
-            </Button>
+        <>
+          <OrgHeading id="org-links-heading">Linked nodes</OrgHeading>
+          {state.links.length > 0 && (
+            <ul className="divide-y divide-border">
+              {state.links.map((l) => (
+                <li key={l.id} className="flex min-h-12 items-center gap-3 py-2">
+                  <span className="min-w-0 flex-1 break-all font-medium text-foreground">{l.issuer}</span>
+                  <Pill tone="ok">Linked</Pill>
+                  {busy === `unlink:${l.id}` ? (
+                    <Skeleton className="h-9 w-9" />
+                  ) : (
+                    <RowMenu label={`Actions for ${l.issuer}`} items={locked ? [] : [{ label: "Unlink", onSelect: () => void org.unlink(l.id) }]} />
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
-        </form>
-      )}
-      {isOwner && org.linkCode && (
-        <div className="flex items-center gap-2 pb-3">
-          <Input aria-label="Link code" readOnly value={org.linkCode.code} onFocus={(e) => e.currentTarget.select()} className="min-w-0 flex-1 font-mono" />
-          <Button variant="outline" className="shrink-0" onClick={() => void onCopy(org.linkCode?.code ?? "")}>
-            {copied ? "Copied" : "Copy"}
-          </Button>
-        </div>
+          <form onSubmit={onLink} className="flex items-center gap-2 py-3">
+            <Input
+              aria-label="Node origin"
+              placeholder="https://…"
+              value={origin}
+              onChange={(e) => {
+                setOrigin(e.target.value);
+                if (org.linkCode) org.clearCode();
+              }}
+              className="min-w-0 flex-1"
+            />
+            {busy === "code" ? (
+              <Skeleton className="h-9 w-28" />
+            ) : (
+              <Button type="submit" disabled={!origin.trim() || locked} className="shrink-0">
+                Link a node
+              </Button>
+            )}
+          </form>
+          {org.linkCode && (
+            <div className="flex items-center gap-2 pb-3">
+              <Input aria-label="Link code" readOnly value={org.linkCode.code} onFocus={(e) => e.currentTarget.select()} className="min-w-0 flex-1 font-mono" />
+              <Button variant="outline" className="shrink-0" onClick={() => void onCopy(org.linkCode?.code ?? "")}>
+                {copied ? "Copied" : "Copy"}
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </section>
   );

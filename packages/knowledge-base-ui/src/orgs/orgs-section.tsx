@@ -8,6 +8,7 @@
  * Scope: Presentation over `useOrgList`. Shown to every signed-in person; a signed-out caller (401) sees nothing.
  * Invariants:
  *   - ONE_SURFACE_PER_ROW: the whole org row is the link (stretched anchor); the balance is text inside it.
+ *   - ROW_AT_360: below the `sm` breakpoint a row shows its name and badge; the balance moves into the row menu (above the stretched link).
  *   - MONEY_IS_DOLLARS: the balance reads through the injected `formatMoney`; the package holds no rate.
  *   - REFUSAL_IN_PLAIN_WORDS: a refused create (a second org, `org_role_limit`) shows the server's refusal as one sentence under the form.
  *   - A click in flight replaces its button with a Skeleton and locks the other buttons.
@@ -24,7 +25,7 @@ import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
 import { Skeleton } from "../ui/skeleton.js";
 import { type OrgEndpoints, UNAVAILABLE_COPY } from "./org-client.js";
-import { ErrorLine, OrgHeading, RolePill } from "./org-parts.js";
+import { ErrorLine, OrgHeading, RetryButton, RolePill, RowMenu } from "./org-parts.js";
 import { useOrgList } from "./use-org-list.js";
 
 export interface OrgLinkProps {
@@ -70,9 +71,7 @@ export function OrgsSection({ endpoints, formatMoney, hrefFor = (id) => `/orgs/$
       <section aria-label="Orgs" className={className}>
         <p className="flex items-center gap-3 py-3 text-destructive text-sm" role="alert">
           {UNAVAILABLE_COPY}
-          <button type="button" className="text-foreground underline" onClick={() => void reload()}>
-            Try again
-          </button>
+          <RetryButton onClick={() => void reload()} />
         </p>
       </section>
     );
@@ -95,8 +94,11 @@ export function OrgsSection({ endpoints, formatMoney, hrefFor = (id) => `/orgs/$
                 {o.name}
               </LinkComponent>
               <RolePill role={o.role} />
-              <span className="shrink-0 whitespace-nowrap text-right text-foreground tabular-nums" aria-label="Balance">
+              <span className="hidden shrink-0 whitespace-nowrap text-right text-foreground tabular-nums sm:inline" aria-label="Balance">
                 {formatMoney(o.balanceCredits)}
+              </span>
+              <span className="relative z-10 sm:hidden">
+                <RowMenu label={`Actions for ${o.name}`} items={[{ label: `Balance ${formatMoney(o.balanceCredits)}`, onSelect: () => {} }]} />
               </span>
             </li>
           ))}

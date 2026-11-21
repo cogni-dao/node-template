@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * A fake of the org routes the sections call (`/api/v1/orgs/**`, `/api/v1/accounts/{id}/credits`, `/api/v1/admin/orgs`), holding one small world in memory.
+ * A fake of the org routes the sections call (`/api/v1/orgs/**`, `/api/v1/admin/orgs`), holding one small world in memory.
  * It answers the way the routes in `app/src/app/api/v1/orgs` do (`{ error: code }` with the route's status), so a section is driven end to end without a network.
  */
 
@@ -30,12 +30,6 @@ export interface FxOrg {
   members: FxMember[];
   links: FxLink[];
 }
-export interface FxLedger {
-  amount: number;
-  reason: string;
-  createdAt: string;
-}
-
 export interface Call {
   method: string;
   path: string;
@@ -45,7 +39,7 @@ export interface Call {
 export interface OrgsWorld {
   orgs: FxOrg[];
   invites: Array<{ id: string; orgUserId: string; orgName: string; role: Role; expiresAt: string }>;
-  balances: Record<string, { balance: number; ledger: FxLedger[] }>;
+  balances: Record<string, { balance: number; spent: number }>;
   /** Every org on the node, for the admin list. */
   allOrgs: Array<{ orgUserId: string; name: string; suspended: boolean }>;
   /** When set, the next write answers this refusal once. */
@@ -54,15 +48,17 @@ export interface OrgsWorld {
   statusFor: Record<string, number>;
   /** Page size for the members list, to prove the sections follow cursors. */
   memberPage: number;
+  /** Page size for the admin org list, to prove "More". */
+  adminPage: number;
   calls: Call[];
 }
 
-export const ENDPOINTS = { orgs: "/api/v1/orgs", accounts: "/api/v1/accounts", adminOrgs: "/api/v1/admin/orgs" } as const;
+export const ENDPOINTS = { orgs: "/api/v1/orgs", adminOrgs: "/api/v1/admin/orgs" } as const;
 
 export const member = (userId: string, role: Role, name: string | null = null, wallet: string | null = null): FxMember => ({ userId, name, wallet, role, since: "2026-11-01T00:00:00.000Z" });
 
 export function newWorld(): OrgsWorld {
-  return { orgs: [], invites: [], balances: {}, allOrgs: [], refuse: null, statusFor: {}, memberPage: 100, calls: [] };
+  return { orgs: [], invites: [], balances: {}, allOrgs: [], refuse: null, statusFor: {}, memberPage: 100, adminPage: 100, calls: [] };
 }
 
 const reply = (status: number, body: unknown) => Promise.resolve({ status, ok: status >= 200 && status < 300, json: async () => body }) as unknown as Promise<Response>;
@@ -84,20 +80,13 @@ export function serve(w: OrgsWorld) {
       return reply(r.status, { error: r.error });
     }
 
-    // Credits: GET /api/v1/accounts/{id}/credits?limit=
-    const credits = path.match(/^\/api\/v1\/accounts\/([^/]+)\/credits$/);
-    if (credits) {
-      const b = w.balances[decodeURIComponent(credits[1] as string)];
-      if (!b) return reply(404, { error: "not_found" });
-      const limit = Number(url.searchParams.get("limit") ?? 20);
-      return reply(200, {
-        billingAccountId: credits[1],
-        balanceCredits: b.balance,
-        ledger: b.ledger.slice(0, limit).map((l, i) => ({ id: `l${i}`, balanceAfter: 0, reference: null, metadata: null, ...l })),
-      });
+    if (path === "/api/v1/admin/orgs") {
+      const after = url.searchParams.get("cursor");
+      const start = after ? w.allOrgs.findIndex((o) => o.orgUserId === after) + 1 : 0;
+      const orgs = w.allOrgs.slice(start, start + w.adminPage);
+      const last = orgs[orgs.length - 1];
+      return reply(200, { orgs, nextCursor: start + w.adminPage < w.allOrgs.length && last ? last.orgUserId : null });
     }
-
-    if (path === "/api/v1/admin/orgs") return reply(200, { orgs: w.allOrgs, nextCursor: null });
 
     if (path === "/api/v1/orgs" && method === "GET") {
       return reply(200, { orgs: w.orgs.map(({ members: _m, links: _l, ...o }) => ({ ...o, balanceCredits: w.balances[o.billingAccountId]?.balance ?? 0 })), nextCursor: null });
@@ -106,7 +95,7 @@ export function serve(w: OrgsWorld) {
       const name = String((body as { name: string }).name);
       const o: FxOrg = { orgUserId: `org-${w.orgs.length + 1}`, name, billingAccountId: `ba-${w.orgs.length + 1}`, suspended: false, role: "owner", members: [member("me", "owner", "Me")], links: [] };
       w.orgs.push(o);
-      w.balances[o.billingAccountId] = { balance: 0, ledger: [] };
+      w.balances[o.billingAccountId] = { balance: 0, spent: 0 };
       return reply(201, { orgUserId: o.orgUserId, billingAccountId: o.billingAccountId, name });
     }
     if (path === "/api/v1/orgs/invites/mine") return reply(200, { invites: w.invites, nextCursor: null });
@@ -116,7 +105,7 @@ export function serve(w: OrgsWorld) {
       if (!i) return reply(404, { error: "invite_not_found" });
       w.invites = w.invites.filter((x) => x !== i);
       w.orgs.push({ orgUserId: i.orgUserId, name: i.orgName, billingAccountId: `ba-${i.orgUserId}`, suspended: false, role: i.role, members: [member("me", i.role, "Me")], links: [] });
-      w.balances[`ba-${i.orgUserId}`] = { balance: 0, ledger: [] };
+      w.balances[`ba-${i.orgUserId}`] = { balance: 0, spent: 0 };
       return reply(200, { orgUserId: i.orgUserId, role: i.role });
     }
 
@@ -144,7 +133,7 @@ export function serve(w: OrgsWorld) {
     if (!kind && method === "GET") {
       const { members, links, ...record } = org;
       const { role, ...rec } = record;
-      return reply(200, { org: { ...rec, balanceCredits: w.balances[rec.billingAccountId]?.balance ?? 0 }, role, members: page(members, (m) => m.userId, w.memberPage), links: page(links, (l) => l.id, 100) });
+      return reply(200, { org: { ...rec, balanceCredits: w.balances[rec.billingAccountId]?.balance ?? 0, spentThisMonthCredits: w.balances[rec.billingAccountId]?.spent ?? 0 }, role, members: page(members, (m) => m.userId, w.memberPage), links: page(links, (l) => l.id, 100) });
     }
     if (kind === "members" && !target && method === "GET") return reply(200, page(org.members, (m) => m.userId, w.memberPage));
     if (kind === "links" && !target && method === "GET") return reply(200, page(org.links, (l) => l.id, 100));

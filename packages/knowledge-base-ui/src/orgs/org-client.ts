@@ -20,8 +20,6 @@ export type OrgRole = "owner" | "admin";
 export interface OrgEndpoints {
   /** The org routes: list and create, `/{id}`, `/{id}/members`, `/{id}/invites`, `/{id}/link-codes`, `/{id}/links`, `/{id}/suspension`, `/invites/mine`, `/invites/{id}/accept` (`/api/v1/orgs`). */
   readonly orgs: string;
-  /** The account door; "spent this month" is read from `GET {accounts}/{billingAccountId}/credits` (`/api/v1/accounts`). */
-  readonly accounts: string;
   /** The node admin's list of every org, a page at a time (`/api/v1/admin/orgs`). Needed only by `OrgAdminSection`. */
   readonly adminOrgs?: string;
 }
@@ -40,6 +38,8 @@ export interface OrgRecord {
   readonly name: string;
   readonly billingAccountId: string;
   readonly balanceCredits: number;
+  /** Credits spent this UTC month, summed by the server. */
+  readonly spentThisMonthCredits: number;
   readonly suspended: boolean;
 }
 
@@ -123,7 +123,10 @@ export function readPage<T>(reply: OrgReply, key: string): Page<T> | null {
   return { items, nextCursor: typeof next === "string" ? next : null };
 }
 
-/** Every page of one list, in order, starting from `first` when the caller already has page one. Stops at a null cursor or a repeated one. Null when a page fails. */
+/** The most pages one walk follows; the route's page size (100 when asked) makes this far more rows than any org list holds. */
+export const MAX_PAGE_WALK = 20;
+
+/** Every page of one list, in order, starting from `first` when the caller already has page one. Stops at a null cursor or a repeated one. Null when a page fails or the walk passes `MAX_PAGE_WALK` pages (a list never silently loses its tail). */
 export async function fetchAllPages<T>(url: string, key: string, first?: Page<T> | null): Promise<Page<T> | null> {
   const items: T[] = [];
   let page: Page<T> | null = first ?? readPage<T>(await orgRequest(url), key);
@@ -132,15 +135,15 @@ export async function fetchAllPages<T>(url: string, key: string, first?: Page<T>
     items.push(...page.items);
     const cursor = page.nextCursor;
     if (cursor === null || seen.has(cursor)) return { items, nextCursor: null };
+    if (seen.size >= MAX_PAGE_WALK) return null;
     seen.add(cursor);
-    page = readPage<T>(await orgRequest(withCursor(url, cursor)), key);
+    page = readPage<T>(await orgRequest(`${withCursor(url, cursor)}&limit=100`), key);
   }
   return null;
 }
 
 export const ORG_ERROR_COPY: Readonly<Record<string, string>> = {
   org_role_limit: "You already have a role in an org. Only one is allowed for now.",
-  too_many_orgs: "You already own the most orgs allowed.",
   last_owner: "An org keeps at least one owner.",
   not_allowed: "Only an owner can do that.",
   authz_denied: "Only an owner can do that.",
@@ -149,7 +152,7 @@ export const ORG_ERROR_COPY: Readonly<Record<string, string>> = {
   invalid_wallet: "Enter a wallet address.",
   invalid_role: "Choose owner or admin.",
   invite_not_found: "That invite is gone.",
-  invite_void: "That invite has expired or was used.",
+  invite_void: "That invite is no longer valid.",
   too_many_invites: "Too many open invites. Wait for some to be used.",
   invalid_origin: "Enter an https address, like https://node.example.",
   issuer_already_linked: "That node is already linked.",
@@ -169,39 +172,6 @@ export function orgErrorCopy(reply: OrgReply): string {
   return reply.status === 503 || reply.status === 0 ? UNAVAILABLE_COPY : SAVE_FAILED_COPY;
 }
 
-
-interface LedgerRow {
-  readonly amount: number;
-  readonly reason: string;
-  readonly createdAt: string;
-}
-
-export interface OrgSpend {
-  /** Credits charged since the first of this UTC month. */
-  readonly spent: number;
-  /** True when the ledger page ended inside the month, so `spent` is a floor. */
-  readonly partial: boolean;
-}
-
-/** The ledger rows one spend read asks for. */
-export const LEDGER_PAGE = 100;
-
-/** Reads this month's spend out of `{ ledger }`; null when the reply is not a credits summary. */
-export function readSpend(reply: OrgReply, now: Date): OrgSpend | null {
-  if (!reply.ok || !isRecord(reply.body)) return null;
-  const ledger = asArray<LedgerRow>(reply.body.ledger);
-  if (!ledger) return null;
-  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  let spent = 0;
-  let oldest = Number.POSITIVE_INFINITY;
-  for (const row of ledger) {
-    const at = Date.parse(row.createdAt);
-    if (Number.isNaN(at)) continue;
-    oldest = Math.min(oldest, at);
-    if (at >= monthStart && row.reason === "charge_receipt" && row.amount < 0) spent += -row.amount;
-  }
-  return { spent, partial: ledger.length >= LEDGER_PAGE && oldest >= monthStart };
-}
 
 /** A person's name, else their wallet in short form, else a short id. */
 export function memberLabel(m: { name: string | null; wallet: string | null; userId: string }): string {

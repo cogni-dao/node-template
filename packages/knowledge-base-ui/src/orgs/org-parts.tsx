@@ -73,6 +73,19 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
   );
 }
 
+/** The "Try again" after a failed load: at least 32px tall, so it is a real tap target. */
+export function RetryButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="inline-flex min-h-8 items-center px-2 text-foreground underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      onClick={onClick}
+    >
+      Try again
+    </button>
+  );
+}
+
 export function ErrorLine({ message }: { message: string | null }) {
   if (!message) return null;
   return (

@@ -6,6 +6,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrgAdminSection } from "../src/orgs/org-admin-section.js";
+import { fetchAllPages, MAX_PAGE_WALK, ORG_ERROR_COPY } from "../src/orgs/org-client.js";
 import { OrgSection } from "../src/orgs/org-section.js";
 import { OrgsSection } from "../src/orgs/orgs-section.js";
 import { ENDPOINTS, type FxOrg, member, newWorld, type OrgsWorld, serve } from "./_fixtures/orgs-server.js";
@@ -24,9 +25,9 @@ const org = (o: Partial<FxOrg> & Pick<FxOrg, "orgUserId" | "name">): FxOrg => ({
   ...o,
 });
 
-const addOrg = (o: FxOrg, balance = 0, ledger: OrgsWorld["balances"][string]["ledger"] = []) => {
+const addOrg = (o: FxOrg, balance = 0, spent = 0) => {
   world.orgs.push(o);
-  world.balances[o.billingAccountId] = { balance, ledger };
+  world.balances[o.billingAccountId] = { balance, spent };
 };
 
 const writes = () => world.calls.filter((c) => c.method !== "GET");
@@ -132,32 +133,23 @@ const owner = () =>
 const menu = async (user: ReturnType<typeof userEvent.setup>, name: string) => user.click(await screen.findByRole("button", { name }));
 
 describe("OrgSection (/orgs/[id])", () => {
-  it("shows the balance and what was spent this month, counting only this month's charges", async () => {
-    // Defect: spent-this-month that counts top-ups, last month's charges or an unknown as zero.
-    const now = new Date();
-    const thisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 1)).toISOString();
-    const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15)).toISOString();
-    addOrg(owner(), 9000, [
-      { amount: -300, reason: "charge_receipt", createdAt: thisMonth },
-      { amount: -200, reason: "charge_receipt", createdAt: thisMonth },
-      { amount: 5000, reason: "widget_payment", createdAt: thisMonth },
-      { amount: -900, reason: "charge_receipt", createdAt: lastMonth },
-    ]);
+  it("shows the balance and the month's spend the server sent, with no ledger read", async () => {
+    // Defect: spend summed in the browser from a page of ledger rows (a floor that reads as exact), or an extra credits request on every visit.
+    addOrg(owner(), 9000, 500);
     render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
-    const balance = (await screen.findByText("Balance")).closest("div") as HTMLElement;
-    await waitFor(() => expect(within(balance).getByText("¤9000")).toBeInTheDocument());
-    expect((screen.getByText("Spent this month").closest("div") as HTMLElement)).toHaveTextContent("¤500");
+    expect((await screen.findByText("Balance")).closest("div")).toHaveTextContent("¤9000");
+    expect(screen.getByText("Spent this month").closest("div")).toHaveTextContent("¤500");
+    expect(screen.getByText("Spent this month").closest("div")).not.toHaveTextContent("+");
+    expect(world.calls.filter((c) => c.path.includes("/credits"))).toEqual([]);
   });
 
-  it("a ledger read that fails shows a dash for spend, never 0, and keeps the balance", async () => {
-    // Defect: a failed ledger read drawn as "spent 0", or one failed read hiding the balance the org read already carried.
-    addOrg(owner(), 777);
-    world.statusFor["/api/v1/accounts"] = 503;
+  it("a spend of zero reads as zero, not as a dash", async () => {
+    // Defect: a real zero (no runs yet) hidden as "unknown".
+    addOrg(owner(), 777, 0);
     render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
-    const spent = (await screen.findByText("Spent this month")).closest("div") as HTMLElement;
-    await waitFor(() => expect(spent).toHaveTextContent("—"));
-    expect(screen.getByText("Balance").closest("div")).toHaveTextContent("¤777");
+    expect((await screen.findByText("Spent this month")).closest("div")).toHaveTextContent("¤0");
   });
+
 
   it("a person with no name is shown by wallet, in short form", async () => {
     // Defect: an unnamed person shown as an opaque id when the wallet is what the owner invited by.
@@ -363,5 +355,90 @@ describe("OrgAdminSection (/admin)", () => {
     await waitFor(() => expect(world.calls.length).toBeGreaterThan(0));
     await new Promise((r) => setTimeout(r, 20));
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("pages the node's orgs: More appears only while the server names a next page, and adds the next rows", async () => {
+    // Defect: the admin list walked to its end on load (unbounded requests on a big node), or a More button with nothing behind it.
+    const user = userEvent.setup();
+    world.adminPage = 2;
+    world.allOrgs = ["a", "b", "c"].map((id) => ({ orgUserId: id, name: `Org ${id}`, suspended: false }));
+    render(<OrgAdminSection endpoints={ENDPOINTS} />);
+    expect(await screen.findByText("Org b")).toBeInTheDocument();
+    expect(screen.queryByText("Org c")).toBeNull();
+    expect(world.calls.filter((c) => c.path === "/api/v1/admin/orgs")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "More" }));
+    expect(await screen.findByText("Org c")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+  });
+
+  it("with one page there is no More", async () => {
+    // Defect: a dead More control under a complete list.
+    world.allOrgs = [{ orgUserId: "a", name: "Org a", suspended: false }];
+    render(<OrgAdminSection endpoints={ENDPOINTS} />);
+    await screen.findByText("Org a");
+    expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+  });
+
+  it("the row menu carries Suspend, which asks Confirm in the row, for a small screen", async () => {
+    // Defect: below 640px (where the Suspend button is hidden) an admin with no way to suspend, or a suspend with no second step.
+    const user = userEvent.setup();
+    render(<OrgAdminSection endpoints={ENDPOINTS} />);
+    await menu(user, "Actions for Acme");
+    await user.click(await screen.findByRole("menuitem", { name: "Suspend" }));
+    expect(writes()).toHaveLength(0);
+    await user.click(await screen.findByRole("button", { name: "Confirm suspend Acme" }));
+    await waitFor(() => expect(writes()).toEqual([{ method: "POST", path: "/api/v1/orgs/o1/suspension", body: { suspended: true } }]));
+  });
+
+  it("Try again is at least 32px tall", async () => {
+    // Defect: a retry link only as tall as its text (under 24px), hard to tap.
+    world.statusFor["/api/v1/admin/orgs"] = 503;
+    render(<OrgAdminSection endpoints={ENDPOINTS} />);
+    expect(await screen.findByRole("button", { name: "Try again" })).toHaveClass("min-h-8");
+  });
+});
+
+describe("shared rules", () => {
+  it("fetchAllPages stops with a failure past MAX_PAGE_WALK pages, never a silently cut list", async () => {
+    // Defect: an endless cursor walk, or a walk that returns the first pages as if they were the whole list.
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ items: [n], nextCursor: `c${++n}` }) }) as unknown as Response),
+    );
+    expect(await fetchAllPages<number>("/x", "items")).toBeNull();
+    expect(n).toBeLessThanOrEqual(MAX_PAGE_WALK + 2);
+  });
+
+  it("an invite that is no longer valid says so, and the dead too_many_orgs copy is gone", () => {
+    // Defect: telling a person their invite "expired or was used" when the inviter lost the right; copy for a code the server never sends.
+    expect(ORG_ERROR_COPY.invite_void).toBe("That invite is no longer valid.");
+    expect(ORG_ERROR_COPY).not.toHaveProperty("too_many_orgs");
+  });
+});
+
+describe("OrgSection by role", () => {
+  it("an admin sees no Linked nodes heading at all, an owner sees it", async () => {
+    // Defect: an empty "Linked nodes" heading for an admin, who can never link.
+    addOrg({ ...owner(), role: "admin" });
+    const { unmount } = render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
+    await screen.findByText("Bo");
+    expect(screen.queryByText("Linked nodes")).toBeNull();
+    unmount();
+    world.orgs = [];
+    addOrg(owner());
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
+    expect(await screen.findByText("Linked nodes")).toBeInTheDocument();
+  });
+});
+
+describe("OrgsSection on a small screen", () => {
+  it("the balance is also in the row menu, over the whole-row link", async () => {
+    // Defect: below 640px (where the balance text is hidden) the balance reachable nowhere.
+    const user = userEvent.setup();
+    addOrg(org({ orgUserId: "o1", name: "Acme" }), 4200);
+    render(<OrgsSection endpoints={ENDPOINTS} formatMoney={formatMoney} />);
+    await menu(user, "Actions for Acme");
+    expect(await screen.findByRole("menuitem", { name: "Balance ¤4200" })).toBeInTheDocument();
   });
 });
