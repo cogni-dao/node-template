@@ -49,7 +49,7 @@ Server-side logging and metrics utilities. Pino logging with sync mode; Promethe
   - `setBuildInfo(version, commitSha)` - Set build info at runtime
   - `statusBucket(status)`, `classifyLlmError(error)` - Metric helpers
   - `LlmErrorCode` - Error code type
-- **Env/Config keys:** `PINO_LOG_LEVEL`, `NODE_ENV`, `SERVICE_NAME`, `VITEST`, `APP_BUILD_SHA`; lease log push (bug.5127, operator-injected only): `LOKI_PUSH_URL` (gate), `LOKI_PUSH_USER`, `LOKI_PUSH_PASSWORD`, `LOKI_PUSH_SOURCE`, `NODE_NAME`, `DEPLOY_ENVIRONMENT`, `COGNI_NODE_ID`
+- **Env/Config keys:** `PINO_LOG_LEVEL`, `NODE_ENV`, `SERVICE_NAME`, `VITEST`, `APP_BUILD_SHA`; log identity base fields (bug.0040): `APP_BUILD_SHA`/`COGNI_REPO_SHA` -> buildSha, `COGNI_WORKLOAD` -> workload, `APP_BASE_URL` hostname -> host; lease log push (bug.5127, operator-injected only): `LOKI_PUSH_URL` (gate), `LOKI_PUSH_USER`, `LOKI_PUSH_PASSWORD`, `LOKI_PUSH_SOURCE`, `NODE_NAME`, `DEPLOY_ENVIRONMENT`, `COGNI_NODE_ID`
 - **Files considered API:** `index.ts`, `logger.ts`, `logEvent.ts`, `helpers.ts`, `metrics.ts`, `loki-push-stream.ts`
 
 ## Ports
