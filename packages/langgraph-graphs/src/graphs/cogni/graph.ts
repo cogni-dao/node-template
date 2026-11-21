@@ -27,6 +27,13 @@ import {
 	toolCallLimitMiddleware,
 } from "langchain";
 import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
+
+export class ChildBoundaryError extends Error {
+	constructor(readonly code: "assignment_invalid" | "output_limit") {
+		super(`cogni_child_${code}`);
+	}
+}
+
 import type { CreateReactAgentGraphOptions } from "../types";
 import {
 	composeCogniPrompt,
@@ -142,7 +149,7 @@ export function createCogniProgram(
 				? RunnableLambda.from(
 						async (state: { messages: unknown[] }, config) => {
 							if (state.messages.length !== 1)
-								throw new Error("cogni_child_assignment_invalid");
+								throw new ChildBoundaryError("assignment_invalid");
 							const result = await compiled.invoke(
 								{ messages: state.messages as never },
 								{ ...config, recursionLimit: 30 },
@@ -337,7 +344,7 @@ export function createCogniProgram(
 										.length > 16_384,
 							)
 						)
-							throw new Error("cogni_child_output_exceeds_limit");
+							throw new ChildBoundaryError("output_limit");
 					}
 					return result;
 				},

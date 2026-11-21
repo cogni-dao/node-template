@@ -25,13 +25,13 @@ const Atom = z
 		sourceUrls: z.array(z.string().url()).min(1),
 	})
 	.strict();
-export const Packet = z
+const PartialPacket = z
 	.object({
 		missionScope: text,
 		decision: text,
-		sources: z.array(Source).min(1),
-		atoms: z.array(Atom).min(1),
-		principles: z.array(Claim).min(1),
+		sources: z.array(Source),
+		atoms: z.array(Atom),
+		principles: z.array(Claim),
 		contradictions: z.array(text),
 		unknowns: z.array(text),
 		critiqueResolutions: z.array(
@@ -42,25 +42,29 @@ export const Packet = z
 				})
 				.strict(),
 		),
-		kpiHypotheses: z
-			.array(
-				z
-					.object({
-						id: text,
-						outcome: text,
-						metric: text,
-						rationale: text,
-						source: text,
-						window: text,
-						guardrails: z.array(text).min(1),
-						gamingRisk: text,
-						measurementGap: text,
-					})
-					.strict(),
-			)
-			.min(1),
+		kpiHypotheses: z.array(
+			z
+				.object({
+					id: text,
+					outcome: text,
+					metric: text,
+					rationale: text,
+					source: text,
+					window: text,
+					guardrails: z.array(text).min(1),
+					gamingRisk: text,
+					measurementGap: text,
+				})
+				.strict(),
+		),
 	})
 	.strict();
+export const Packet = PartialPacket.extend({
+	sources: z.array(Source).min(1),
+	atoms: z.array(Atom).min(1),
+	principles: z.array(Claim).min(1),
+	kpiHypotheses: PartialPacket.shape.kpiHypotheses.min(1),
+});
 const Critique = z
 	.object({
 		fingerprint: text,
@@ -77,7 +81,7 @@ const Critique = z
 		),
 	})
 	.strict();
-type Draft = z.infer<typeof Packet>;
+type Draft = z.infer<typeof PartialPacket>;
 const size = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
 const obj = (v: unknown): Record<string, unknown> | undefined =>
 	v && typeof v === "object" && !Array.isArray(v)
@@ -104,7 +108,8 @@ export class ResearchReceipts {
 	observe(name: string, args: unknown, value: unknown) {
 		if (
 			size(value) > 48 * 1024 ||
-			this.evidenceBytes + size(value) > 128 * 1024
+			// Reserve the entire maximum draft size, even before one is admitted.
+			this.evidenceBytes + size(value) > 104 * 1024
 		) {
 			this.reasons.add("evidence_limit");
 			return;
@@ -164,7 +169,6 @@ export class ResearchReceipts {
 		const urls = new Set(draft.sources.map((s) => s.url));
 		return (
 			urls.size === draft.sources.length &&
-			[...urls].some((url) => this.webSources.has(url)) &&
 			new Set(
 				[...draft.atoms, ...draft.principles, ...draft.kpiHypotheses].map(
 					(claim) => claim.id,
@@ -202,7 +206,7 @@ export class ResearchReceipts {
 			this.reasons.add("invalid_draft");
 			return undefined;
 		}
-		const parsed = Packet.safeParse(data);
+		const parsed = PartialPacket.safeParse(data);
 		if (!parsed.success || !this.validDraft(parsed.data)) {
 			this.reasons.add("unverified_draft");
 			return undefined;
@@ -263,7 +267,7 @@ export class ResearchReceipts {
 		} catch {
 			this.reasons.add("invalid_packet");
 		}
-		const parsed = Packet.safeParse(data);
+		const parsed = PartialPacket.safeParse(data);
 		const packet =
 			parsed.success &&
 			size(parsed.data) <= 28 * 1024 &&
@@ -271,6 +275,13 @@ export class ResearchReceipts {
 				? parsed.data
 				: undefined;
 		if (!packet) this.reasons.add("unverified_packet");
+		else if (!Packet.safeParse(packet).success)
+			this.reasons.add("incomplete_packet");
+		if (
+			packet &&
+			!packet.sources.some((source) => this.webSources.has(source.url))
+		)
+			this.reasons.add("missing_primary_source");
 		if (
 			!this.guidance.has("knowledge-syntropy-expert") ||
 			!this.guidance.has("mission-loop-expert")

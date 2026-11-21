@@ -566,6 +566,79 @@ describe("critic and evidence failures", () => {
 		expect(handoff.reasons).toContain("step_budget");
 		expect(handoff.packet).toEqual(draft);
 	});
+	it("retains validated partial claims and the actual KPI question", () => {
+		const { r, draft } = setup();
+		const partial = {
+			...draft,
+			kpiHypotheses: [],
+			unknowns: ["Which outcome can be measured?"],
+		};
+		expect(r.prepare(JSON.stringify(partial), "partial")).toBeDefined();
+		const handoff = r.project(JSON.stringify(partial)).output;
+		expect(handoff.status).toBe("incomplete");
+		expect(handoff.packet).toEqual(partial);
+		expect(handoff.reasons).toContain("incomplete_packet");
+		const forged = {
+			...partial,
+			sources: [{ url: "https://invented.example" }],
+		};
+		expect(r.prepare(JSON.stringify(forged), "forged")).toBeUndefined();
+		const noSource = {
+			...partial,
+			sources: [],
+			atoms: [],
+			principles: [],
+			unknowns: ["Where is the primary evidence?"],
+		};
+		expect(r.prepare(JSON.stringify(noSource), "no-source")).toBeDefined();
+		expect(r.project(JSON.stringify(noSource)).output.packet).toEqual(noSource);
+		const hubUrl = "https://node.example/knowledge/knowledge-syntropy-expert";
+		const hubOnly = {
+			...partial,
+			sources: [{ url: hubUrl }],
+			atoms: [{ ...partial.atoms[0], sourceUrls: [hubUrl] }],
+			principles: [{ ...partial.principles[0], sourceUrls: [hubUrl] }],
+			unknowns: ["Where is the primary evidence?"],
+		};
+		expect(r.prepare(JSON.stringify(hubOnly), "hub-only")).toBeDefined();
+		const hubHandoff = r.project(JSON.stringify(hubOnly)).output;
+		expect(hubHandoff.packet).toEqual(hubOnly);
+		expect(hubHandoff.reasons).toContain("missing_primary_source");
+	});
+	it("reserves draft capacity within the combined evidence budget", () => {
+		const { draft } = setup();
+		const r = new ResearchReceipts("https://node.example");
+		r.domains.add("strategy");
+		for (let i = 0; i < 4; i++)
+			r.observe(
+				"core__knowledge_read",
+				{ id: `owner${i}` },
+				{
+					mode: "get",
+					entries: [
+						{ id: `owner${i}`, domain: "strategy", content: "x".repeat(30000) },
+					],
+				},
+			);
+		r.observe(
+			"core__web_search",
+			{},
+			{
+				results: [
+					{
+						url: draft.sources[0].url,
+						rawContent: "actual passage",
+						rawContentState: "available",
+					},
+				],
+			},
+		);
+		expect(r.prepare(JSON.stringify(draft), "task")).toBeDefined();
+		const draftBytes = new TextEncoder().encode(JSON.stringify(r.draft)).length;
+		expect(r.evidenceBytes + draftBytes).toBeLessThanOrEqual(128 * 1024);
+		expect(r.reasons.has("evidence_limit")).toBe(true);
+		expect(r.project("", "step_budget").output.packet).toEqual(draft);
+	});
 	it("retains a verified draft when its expanded critic input is too large", () => {
 		const { draft } = setup();
 		const r = new ResearchReceipts("https://node.example");
@@ -664,178 +737,231 @@ describe("critic and evidence failures", () => {
 });
 
 describe("child recursion bound", () => {
-	it.each(["recursion", "transport"])(
-		"handles child %s failures",
-		async (failure) => {
-			let rootTurns = 0;
-			let childTurns = 0;
-			const url = "https://evidence.example/source";
-			const draft = {
-				missionScope: "mission",
-				decision: "decision",
-				sources: [{ url }],
-				atoms: [
-					{
-						id: "a",
-						action: "create",
-						domain: "strategy",
-						title: "t",
-						useWhen: "use",
-						content: "claim",
-						relationships: [],
-						ownerId: null,
-						sourceUrls: [url],
-					},
-				],
-				principles: [{ id: "p", content: "claim", sourceUrls: [url] }],
-				contradictions: [],
-				unknowns: [],
-				critiqueResolutions: [],
-				kpiHypotheses: [
-					{
-						id: "k1",
-						outcome: "outcome",
-						metric: "metric",
-						rationale: "rationale",
-						source: "source",
-						window: "7d",
-						guardrails: ["safety"],
-						gamingRisk: "risk",
-						measurementGap: "gap",
-					},
-				],
-			};
-			const call = (id: string, name: string, args: unknown) => ({
-				id,
-				type: "function" as const,
-				function: { name, arguments: JSON.stringify(args) },
+	it.each([
+		"recursion",
+		"transport",
+		"output8",
+		"output16",
+		"escaped16",
+		"empty",
+		"no-kpi",
+	])("handles child %s failures", async (failure) => {
+		let rootTurns = 0;
+		let childTurns = 0;
+		const url = "https://evidence.example/source";
+		const draft = {
+			missionScope: "mission",
+			decision: "decision",
+			sources: [{ url }],
+			atoms: [
+				{
+					id: "a",
+					action: "create",
+					domain: "strategy",
+					title: "t",
+					useWhen: "use",
+					content: "claim",
+					relationships: [],
+					ownerId: null,
+					sourceUrls: [url],
+				},
+			],
+			principles: [{ id: "p", content: "claim", sourceUrls: [url] }],
+			contradictions: [],
+			unknowns: [],
+			critiqueResolutions: [],
+			kpiHypotheses: [
+				{
+					id: "k1",
+					outcome: "outcome",
+					metric: "metric",
+					rationale: "rationale",
+					source: "source",
+					window: "7d",
+					guardrails: ["safety"],
+					gamingRisk: "risk",
+					measurementGap: "gap",
+				},
+			],
+		};
+		const call = (id: string, name: string, args: unknown) => ({
+			id,
+			type: "function" as const,
+			function: { name, arguments: JSON.stringify(args) },
+		});
+		if (failure === "no-kpi") {
+			draft.kpiHypotheses = [];
+			draft.unknowns = ["Which outcome can be measured?"];
+		}
+		const completionFn: CompletionFn = (req) => {
+			const names = (req.tools ?? []).map((tool) => {
+				const t = tool as { name?: string; function?: { name?: string } };
+				return t.function?.name ?? t.name;
 			});
-			const completionFn: CompletionFn = (req) => {
-				const names = (req.tools ?? []).map((tool) => {
-					const t = tool as { name?: string; function?: { name?: string } };
-					return t.function?.name ?? t.name;
-				});
-				const root = names.includes("task");
-				let calls: ReturnType<typeof call>[] | undefined;
-				if (root && ++rootTurns === 1)
-					calls = [
-						call("goals", "core__goal_list", {}),
-						call("g1", "core__knowledge_read", {
-							id: "knowledge-syntropy-expert",
-						}),
-						call("g2", "core__knowledge_read", { id: "mission-loop-expert" }),
-						call("web", "core__web_search", {
-							query: "q",
-							includeRawContent: true,
-						}),
-					];
-				else if (root && rootTurns === 2)
-					calls = [
-						call("task", "task", {
-							subagent_type: "critic",
-							description: JSON.stringify(draft),
-						}),
-					];
-				else if (!root) {
-					childTurns++;
-					if (failure === "transport")
-						return {
-							stream: (async function* (): AsyncIterable<AiEvent> {})(),
-							final: Promise.resolve({
-								ok: false as const,
-								error: "provider_unavailable" as const,
-							}),
-						};
-					calls = [
-						call(`loop-${childTurns}`, "write_file", {
-							file_path: "/loop.txt",
-							content: "loop",
-						}),
-					];
-				}
-				return {
-					stream: (async function* (): AsyncIterable<AiEvent> {})(),
-					final: Promise.resolve({
-						ok: true as const,
-						content: calls ? "" : JSON.stringify(draft),
-						...(calls ? { toolCalls: calls } : {}),
-						finishReason: calls ? ("tool_calls" as const) : ("stop" as const),
+			const root = names.includes("task");
+			let calls: ReturnType<typeof call>[] | undefined;
+			if (root && ++rootTurns === 1)
+				calls = [
+					call("goals", "core__goal_list", {}),
+					call("g1", "core__knowledge_read", {
+						id: "knowledge-syntropy-expert",
 					}),
-				};
+					call("g2", "core__knowledge_read", { id: "mission-loop-expert" }),
+					call("web", "core__web_search", {
+						query: "q",
+						includeRawContent: true,
+					}),
+				];
+			else if (root && rootTurns === 2)
+				calls = [
+					call("task", "task", {
+						subagent_type: "critic",
+						description: JSON.stringify(draft),
+					}),
+				];
+			else if (!root) {
+				childTurns++;
+				if (failure === "transport")
+					return {
+						stream: (async function* (): AsyncIterable<AiEvent> {})(),
+						final: Promise.resolve({
+							ok: false as const,
+							error: "provider_unavailable" as const,
+						}),
+					};
+				if (
+					failure === "output8" ||
+					failure === "output16" ||
+					failure === "escaped16" ||
+					failure === "empty" ||
+					failure === "no-kpi"
+				)
+					return {
+						stream: (async function* (): AsyncIterable<AiEvent> {})(),
+						final: Promise.resolve({
+							ok: true as const,
+							content:
+								failure === "empty"
+									? ""
+									: failure === "no-kpi"
+										? JSON.stringify({
+												fingerprint: JSON.stringify(req.messages).match(
+													/[a-f0-9]{64}/,
+												)?.[0],
+												explanation:
+													"The evidence and constraints were reviewed carefully.",
+												findings: [],
+											})
+										: failure === "escaped16"
+											? "\\".repeat(9000)
+											: "x".repeat(failure === "output8" ? 9000 : 17000),
+							finishReason: "stop" as const,
+						}),
+					};
+				calls = [
+					call(`loop-${childTurns}`, "write_file", {
+						file_path: "/loop.txt",
+						content: "loop",
+					}),
+				];
+			}
+			return {
+				stream: (async function* (): AsyncIterable<AiEvent> {})(),
+				final: Promise.resolve({
+					ok: true as const,
+					content: calls ? "" : JSON.stringify(draft),
+					...(calls ? { toolCalls: calls } : {}),
+					finishReason: calls ? ("tool_calls" as const) : ("stop" as const),
+				}),
 			};
-			const entry = LANGGRAPH_CATALOG["mission-research"];
-			if (!entry) throw new Error("missing graph");
-			const exec: ToolExecFn = async (name, args) =>
-				name === "core__goal_list"
-					? { ok: true, value: { goals: [] } }
-					: name === "core__knowledge_read"
-						? {
-								ok: true,
-								value: {
-									mode: "get",
-									entries: [
-										{
-											id: (args as { id: string }).id,
-											domain: "meta",
-											content: "guidance",
-										},
-									],
-								},
-							}
-						: {
-								ok: true,
-								value: {
-									results: [
-										{
-											url,
-											rawContent: "passage",
-											rawContentState: "available",
-										},
-									],
-								},
-							};
-			const run = createInProcGraphRunner({
-				program: "mission-research",
-				sourceContext: {
-					nodeId: "test",
-					origin: "https://node.example",
-					mission: { content: "A mission", sourceRef: "test", buildSha: null },
-					governingIndex: [
-						{
-							id: "owner",
-							domain: "strategy",
-							entryType: "reference",
-							useWhen: "research",
-						},
-					],
-				},
-				createGraph: entry.graphFactory,
-				completionFn,
-				createToolExecFn: () => exec,
-				toolContracts: [
-					goalListContract,
-					knowledgeReadContract,
-					webSearchContract,
+		};
+		const entry = LANGGRAPH_CATALOG["mission-research"];
+		if (!entry) throw new Error("missing graph");
+		const exec: ToolExecFn = async (name, args) =>
+			name === "core__goal_list"
+				? { ok: true, value: { goals: [] } }
+				: name === "core__knowledge_read"
+					? {
+							ok: true,
+							value: {
+								mode: "get",
+								entries: [
+									{
+										id: (args as { id: string }).id,
+										domain: "meta",
+										content: "guidance",
+									},
+								],
+							},
+						}
+					: {
+							ok: true,
+							value: {
+								results: [
+									{
+										url,
+										rawContent: "passage",
+										rawContentState: "available",
+									},
+								],
+							},
+						};
+		const run = createInProcGraphRunner({
+			program: "mission-research",
+			sourceContext: {
+				nodeId: "test",
+				origin: "https://node.example",
+				mission: { content: "A mission", sourceRef: "test", buildSha: null },
+				governingIndex: [
+					{
+						id: "owner",
+						domain: "strategy",
+						entryType: "reference",
+						useWhen: "research",
+					},
 				],
-				request: {
-					runId: "bounded-child",
-					messages: [{ role: "user", content: "research" }],
-					configurable: { model: "test", toolIds: [...entry.toolIds] },
-				},
-			});
-			for await (const _ of run.stream) {
-				/* drain */
-			}
-			const result = await run.final;
-			if (failure === "transport") {
-				expect(result.ok).toBe(false);
-				expect(result.error).toBe("provider_unavailable");
-				return;
-			}
-			expect(result.ok).toBe(true);
+			},
+			createGraph: entry.graphFactory,
+			completionFn,
+			createToolExecFn: () => exec,
+			toolContracts: [
+				goalListContract,
+				knowledgeReadContract,
+				webSearchContract,
+			],
+			request: {
+				runId: "bounded-child",
+				messages: [{ role: "user", content: "research" }],
+				configurable: { model: "test", toolIds: [...entry.toolIds] },
+			},
+		});
+		for await (const _ of run.stream) {
+			/* drain */
+		}
+		const result = await run.final;
+		if (failure === "transport") {
+			expect(result.ok).toBe(false);
+			expect(result.error).toBe("provider_unavailable");
+			return;
+		}
+		expect(result.ok).toBe(true);
+		if (failure === "recursion") {
 			expect(childTurns).toBeGreaterThan(1);
 			expect(childTurns).toBeLessThanOrEqual(30);
-			expect(JSON.parse(result.content ?? "{}").status).toBe("incomplete");
-		},
-	);
+		}
+		const output = JSON.parse(result.content ?? "{}");
+		expect(output.status).toBe("incomplete");
+		expect(output.packet).toEqual(draft);
+		expect(result.structuredOutput).toEqual(output);
+		if (
+			failure === "output8" ||
+			failure === "output16" ||
+			failure === "escaped16"
+		)
+			expect(output.reasons).toContain("critic_output_limit");
+		if (failure === "no-kpi")
+			expect(output.packet.unknowns).toContain(
+				"Which outcome can be measured?",
+			);
+	});
 });

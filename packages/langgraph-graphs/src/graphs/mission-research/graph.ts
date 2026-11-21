@@ -7,7 +7,12 @@ import {
 } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 import { createMiddleware, MiddlewareError } from "langchain";
-import { cogniProfile, createCogniProgram } from "../cogni/graph";
+import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
+import {
+	ChildBoundaryError,
+	cogniProfile,
+	createCogniProgram,
+} from "../cogni/graph";
 import type { CreateReactAgentGraphOptions } from "../types";
 import {
 	BUDGET_PROMPT,
@@ -137,15 +142,29 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 			} catch (error) {
 				if (call.name !== "task") return reject("tool_failed");
 				let cause: unknown = error;
+				const seen = new Set<unknown>();
 				while (
 					MiddlewareError.isInstance(cause) &&
 					"cause" in cause &&
-					cause.cause !== cause
-				)
+					!seen.has(cause)
+				) {
+					seen.add(cause);
 					cause = cause.cause;
+				}
+				if (cause instanceof ChildBoundaryError)
+					return reject(
+						cause.code === "output_limit"
+							? "critic_output_limit"
+							: "critic_failed",
+					);
 				if (cause instanceof Error && cause.name === "GraphRecursionError")
 					return reject("critic_failed");
-				throw cause;
+				if (
+					cause instanceof InvalidCompletionError &&
+					cause.message === "empty_model_completion"
+				)
+					return reject("critic_failed");
+				throw error;
 			}
 		},
 	});
