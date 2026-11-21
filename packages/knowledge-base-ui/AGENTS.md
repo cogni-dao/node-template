@@ -10,7 +10,7 @@
 
 ## Purpose
 
-Published React components and hooks every node renders for knowledge (Browse, Graph), goals (Goals board) and work surfaces (`@cogni-dao/knowledge-base-ui`, aliased `@cogni/knowledge-base-ui`). The package ships the whole capability: views, controls, their state contract and the bounded data hooks. A node supplies only its endpoints, auth, URL state and routing.
+Published React components and hooks every node renders for knowledge (Browse, Graph), goals (Goals board), work surfaces and identity surfaces (AI access, orgs) (`@cogni-dao/knowledge-base-ui`, aliased `@cogni/knowledge-base-ui`). The package ships the whole capability: views, controls, their state contract and the bounded data hooks. A node supplies only its endpoints, auth, URL state and routing.
 
 ## Host requirements
 
@@ -93,6 +93,13 @@ Published React components and hooks every node renders for knowledge (Browse, G
 
 - `AgentAccessSection` is the ONE table where an approver says yes or no to what each AI can do (Who · Can do · Until · On). `mode="admin"` (default): a node-admin's node permissions on `/admin/ai-access`, rendered only for a confirmed admin. `mode="account"`: the AIs that may act on a person's OWN account on `/profile`, rendered for every signed-in person. Both modes render the same table: a grant lasts until Off, and a row that carries an end date (an old one) shows it. The section drops any row of the other resource. Endpoints: `{ roles, preview? }`; the node owns the routes and their auth (session only).
 - `useApprovalFragment()` (the two pages that open an AI's one-time link) reads `#agent-request=<token>` once and removes it from the address bar at once; the page passes the token to the section, which previews it (POST body, never a URL), highlights the row it opens and sends the token back to decide it. `ApprovalFragmentScrub` (root layout) removes the fragment on every other path. Only the `agent-request` key is touched; `#attestation=` and any other value survive.
+
+## Public Surface (orgs, task.0181; root entry)
+
+- `OrgsSection` (`/orgs`: org name · my role badge · balance, one whole-row link; open invites with Accept; Create org by name), `OrgSection` (`/orgs/[id]`: balance · spent this month; people with a row menu Make owner / Make admin / Remove and Invite by wallet and role; linked nodes with a row menu Unlink and "Link a node": origin in, link code out with Copy), `OrgAdminSection` (the node admin's org rows: name · status badge · Suspend, asked once more; there is no Resume). Hooks: `useOrgList`, `useOrg`, `useOrgAdmin`. Endpoints: `{ orgs, accounts, adminOrgs? }` (`/api/v1/orgs`, `/api/v1/accounts`, `/api/v1/admin/orgs`); the node owns the routes and their auth (session only). `LinkComponent` / `hrefFor` on `OrgsSection` carry the router link.
+- **The server decides every right.** The sections hide only what a role can never do (an admin has no menu on an owner row, no Make owner, no owner choice on Invite, no link controls) and show a refusal as one sentence from `ORG_ERROR_COPY` (`org_role_limit`, `last_owner`, ...), never a raw code.
+- Lists follow `nextCursor` to the end (`fetchAllPages`), so a long org is never cut. A balance that is unknown reads "—", never 0. "Spent this month" sums this UTC month's `charge_receipt` rows in one 100-row ledger page and reads with a trailing "+" when that page ends inside the month. The member list carries no wallet, so a person without a name reads as a short id.
+- The package defines the wire shapes it reads locally; it does not import `@cogni/node-contracts` or `@cogni/agent-grants`.
 
 ## Boundaries
 
