@@ -19,6 +19,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useSignEpoch } from "@/features/governance/hooks/useSignEpoch";
 
+import { epochTestProvider } from "./epoch-test-provider";
+
 const wallet = vi.hoisted(() => ({
   signTypedDataAsync: vi.fn(),
 }));
@@ -68,7 +70,7 @@ function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return createElement(QueryClientProvider, { client }, children);
+  return createElement(QueryClientProvider, { client }, epochTestProvider(children, wallet.signTypedDataAsync));
 }
 
 describe("useSignEpoch", () => {

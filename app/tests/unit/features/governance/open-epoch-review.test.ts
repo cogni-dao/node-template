@@ -19,6 +19,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useOpenEpochReview } from "@/features/governance/hooks/useOpenEpochReview";
 
+import { epochTestProvider } from "./epoch-test-provider";
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -34,7 +36,7 @@ describe("useOpenEpochReview", () => {
       json: async () => ({ epoch: { id: "epoch-7", status: "review" } }),
     } as Response);
     const wrapper = ({ children }: { children: ReactNode }) =>
-      createElement(QueryClientProvider, { client: queryClient }, children);
+      createElement(QueryClientProvider, { client: queryClient }, epochTestProvider(children));
     const { result } = renderHook(() => useOpenEpochReview(), { wrapper });
 
     await act(async () => {
