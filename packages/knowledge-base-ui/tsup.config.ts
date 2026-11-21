@@ -4,13 +4,26 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/knowledge.ts", "src/goals.ts", "src/work-item.ts", "src/graph-3d.tsx"],
+  entry: [
+    "src/index.ts",
+    "src/knowledge.ts",
+    "src/goals.ts",
+    "src/work-item.ts",
+    "src/graph-3d.tsx",
+    "src/epochs.ts",
+  ],
   format: ["esm"],
   dts: false,
   clean: false,
   sourcemap: true,
   platform: "browser",
   external: [
+    "@cogni/attribution-ledger",
+    "@cogni/attribution-ledger/contracts",
+    "viem",
+    "wagmi",
+    "@cogni/attribution-ledger/distribution",
+    "@cogni/attribution-ledger/presentation",
     "react",
     "react/jsx-runtime",
     "react-dom",

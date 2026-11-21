@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni-dao/knowledge-base-ui/epochs/hooks/useOpenEpochReview`
+ * Purpose: Client mutation for moving an ended epoch from open to review.
+ * Scope: Calls the approver-gated review route and refreshes governance queries. Does not decide authorization.
+ * Invariants: Server remains the authorization and epoch-state authority; double submission is prevented in the UI.
+ * Side-effects: IO (HTTP POST, React Query invalidation)
+ * Links: src/app/api/v1/attribution/epochs/[id]/review/route.ts, work item bug.5042
+ * @public
+ */
+
+"use client";
+
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { type EpochsClient, useEpochContext } from "../context";
+
+interface ReviewEpochResponse {
+  readonly epoch: {
+    readonly id: string;
+    readonly status: "review";
+  };
+}
+
+async function openEpochReview(
+  client: EpochsClient,
+  epochId: string,
+): Promise<ReviewEpochResponse> {
+  const response = await client.request(client.endpoints.review(epochId), {
+    method: "POST",
+    credentials: "same-origin",
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      readonly error?: string;
+    } | null;
+    throw new Error(
+      body?.error ?? `Unable to open review (HTTP ${response.status})`,
+    );
+  }
+
+  return (await response.json()) as ReviewEpochResponse;
+}
+
+export function useOpenEpochReview() {
+  const { client, queryKeyPrefix } = useEpochContext();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (epochId: string) => openEpochReview(client, epochId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeyPrefix });
+    },
+  });
+}

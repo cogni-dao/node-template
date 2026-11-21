@@ -18,7 +18,7 @@ import {
   type RunReconcileSettlementsDeps,
   runReconcileSettlements,
   type SettlementLogger,
-} from "@cogni/attribution-pipeline-plugins";
+} from "@cogni/attribution-ledger/pipeline";
 import {
   DrizzleAttributionAdapter,
   DrizzleClaimantWalletResolver,

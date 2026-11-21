@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Pure domain logic for the attribution ledger — shared between the Next.js app (`src/`) and the Temporal `scheduler-worker` service. Contains model types, attribution statement line computation (BIGINT, largest-remainder), hashing (allocation sets, weight configs, artifacts), versioned allocation algorithm framework, pool estimation, artifact envelope validation, enricher inputs hashing, validated store wrapper, port interface (`AttributionStore`), and domain error classes.
+Published attribution runtime shared by node apps and workers. Contains model types, attribution statement line computation (BIGINT, largest-remainder), hashing (allocation sets, weight configs, artifacts), versioned allocation algorithm framework, pool estimation, artifact envelope validation, enricher inputs hashing, validated store wrapper, port interface (`AttributionStore`), and domain error classes.
 
 ## Pointers
 
@@ -34,7 +34,7 @@ Pure domain logic for the attribution ledger — shared between the Next.js app 
 }
 ```
 
-**External deps:** none (pure TypeScript, Node `crypto` for SHA-256).
+**External deps:** viem, Zod, OpenZeppelin Merkle trees; optional Drizzle and pino peers. The pure root and workflow-safe subpaths never import adapters or HTTP contracts.
 
 ## Public Surface
 
@@ -81,16 +81,21 @@ Pure domain logic for the attribution ledger — shared between the Next.js app 
   - `SelectedReceiptForAttribution` — Receipt type for attribution reads (includes platform identity fields)
   - `SelectedReceiptWithMetadata` — Receipt-with-metadata type for evaluation inputs
 
+- **Subpaths:** `collect`, `collect/contract` (workflow-safe), `collect/sources`, `pipeline`, `pipeline/contracts`, `distribution`, `contracts`, `schema`, `adapters/postgres`, `http`, `presentation` (browser-safe).
+- Summary reads retain zero review overrides. `unresolvedCount` and `unresolvedActivityTotal` describe the complete epoch; `unresolvedActivities` is an independent, capped immutable-identity breakdown. Contributor and activity offsets cannot change these facts.
+- Schema factory binds the node-owned user column. Migrations stay in the node.
+- Legacy private modules bind or re-export these entries; no mechanism copies.
+
 ## Ports
 
-- **Uses ports:** none
-- **Implements ports:** none
+- **Uses ports:** attribution store, source adapters, wallet/signing and logger seams
+- **Implements ports:** Drizzle attribution adapter, bound to node-owned database and identity tables
 - **Defines ports:** `AttributionStore` (implemented by `DrizzleAttributionAdapter` in `@cogni/db-client`) plus narrow sub-interfaces for scoped consumers. Includes identity resolution (`resolveIdentities`, `getSelectionCandidates`, `updateSelectionUserId`, `insertSelectionDoNothing`), claimant lifecycle (`upsertDraftClaimants`, `lockClaimantsForEpoch`, `loadLockedClaimants`), projection computation (`getSelectedReceiptsForAllocation`, `insertUserProjections`, `deleteStaleUserProjections`), canonical attribution reads (`getSelectedReceiptsForAttribution`, `getUserDisplayNames`, `getEvaluation`, `getReviewSubjectOverridesForEpoch`, `getFinalClaimantAllocationsForEpoch`), evaluation lifecycle (`upsertDraftEvaluation`, `closeIngestionWithEvaluations`, `getEvaluationsForEpoch`, `getSelectedReceiptsWithMetadata`), receipt display (`getReceiptsForEpoch` for cross-epoch selected receipts), and atomic epoch sealing (`finalizeEpochAtomic`).
 
 ## Responsibilities
 
 - This directory **does**: Define ledger domain types, port interface, compute deterministic attribution statement lines, compute allocation set/config/artifact hashes, versioned allocation algorithm dispatch, pool estimation, artifact envelope validation, enricher inputs hashing, validated store wrapper, define domain errors, serve the bounded epoch read views and wire mappers (`src/read/`, published as `@cogni-dao/attribution`, story.0076)
-- This directory **does not**: Perform I/O other than calls on an injected store port, access databases, import from `src/` or `services/`, or ship concrete enricher plugin implementations
+- This directory **does not**: Own node auth, configuration, wallet custody, migration journals or database connections; import app or worker internals
 
 ## Usage
 
@@ -101,14 +106,14 @@ pnpm --filter @cogni-dao/attribution build
 
 ## Standards
 
-- Pure functions and types only — no I/O, no framework deps
+- No framework imports. Pure root; concrete IO stays in explicit adapter subpaths.
 - ALL_MATH_BIGINT: No floating point in credit/unit calculations
 - STATEMENT_DETERMINISTIC: Same inputs → byte-for-byte identical output
 
 ## Dependencies
 
 - **Internal:** none (standalone package)
-- **External:** none
+- **External:** viem, Zod, OpenZeppelin; Drizzle and pino peers
 
 ## Change Protocol
 

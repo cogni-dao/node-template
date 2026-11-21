@@ -26,7 +26,7 @@ import type {
 	WebSearchCapability,
 } from "@cogni/ai-tools";
 import { CORE_TOOL_BUNDLE, withoutRemoteNodeArgument } from "@cogni/ai-tools";
-import type { AttributionStore } from "@cogni/attribution-ledger";
+import type { AttributionRuntimeStore as AttributionStore } from "@cogni/attribution-ledger/http";
 import {
 	createDefaultRegistries,
 	type DefaultRegistries,
@@ -35,7 +35,7 @@ import {
 	type FinalizeLogger,
 	type RunFinalizeEpochDeps,
 	runFinalizeEpoch,
-} from "@cogni/attribution-pipeline-plugins";
+} from "@cogni/attribution-ledger/pipeline";
 import {
 	DrizzleAttributionAdapter,
 	DrizzleClaimantWalletResolver,

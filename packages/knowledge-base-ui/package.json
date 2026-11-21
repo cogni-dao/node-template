@@ -35,7 +35,12 @@
       "import": "./dist/graph-3d.js",
       "default": "./dist/graph-3d.js"
     },
-    "./tailwind-source.css": "./tailwind-source.css"
+    "./tailwind-source.css": "./tailwind-source.css",
+    "./epochs": {
+      "types": "./dist/epochs.d.ts",
+      "import": "./dist/epochs.js",
+      "default": "./dist/epochs.js"
+    }
   },
   "types": "./dist/index.d.ts",
   "files": [
@@ -66,7 +71,10 @@
     "react-force-graph-3d": ">=1.29.1 <2",
     "@cogni-dao/metrics": "^0.24.0",
     "recharts": "^2.15.4",
-    "@cogni/agent-grants": ">=0.6.0"
+    "@cogni/agent-grants": ">=0.6.0",
+    "@cogni/attribution-ledger": "^0.2.0",
+    "viem": "^2.21.0",
+    "wagmi": "^2.19.0"
   },
   "peerDependenciesMeta": {
     "@cogni/knowledge-store": {
@@ -79,6 +87,15 @@
       "optional": true
     },
     "@cogni/agent-grants": {
+      "optional": true
+    },
+    "@cogni/attribution-ledger": {
+      "optional": true
+    },
+    "viem": {
+      "optional": true
+    },
+    "wagmi": {
       "optional": true
     }
   },
@@ -109,6 +126,9 @@
     "react-force-graph-3d": "^1.29.1",
     "@cogni-dao/metrics": "workspace:*",
     "recharts": "^2.15.4",
-    "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*"
+    "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*",
+    "@cogni/attribution-ledger": "workspace:@cogni-dao/attribution@*",
+    "viem": "^2.21.0",
+    "wagmi": "^2.19.0"
   }
 }
