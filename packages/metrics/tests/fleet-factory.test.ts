@@ -11,6 +11,33 @@ const params = {
 };
 
 describe("public fleet calculator", () => {
+	it("does not let an official alias mask a foreign canonical pin", async () => {
+		const calculator = createFleetTrainLagCalculator();
+		const official = "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/metrics.tgz";
+		const foreign = "https://github.com/other/fork/releases/download/metrics-v0.1.0/metrics.tgz";
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			const body = address.includes("matching-refs")
+				? [{ ref: "refs/tags/train-v0.25.0" }]
+				: address.includes("releases/tags/")
+					? { tag_name: "metrics-v0.25.0", published_at: "2026-11-20T00:00:00Z" }
+					: { dependencies: { "@cogni/metrics": official, "@cogni-dao/metrics": foreign } };
+			return new Response(JSON.stringify(body));
+		});
+		const controller = new AbortController();
+		try {
+			const result = await calculator.compute(params, {
+				window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+				signal: controller.signal,
+				budget: calculator.budget,
+				read: async (source) => source(controller.signal, calculator.budget),
+			});
+			expect(result).toMatchObject({ complete: true, value: 1 });
+		} finally {
+			fetchMock.mockRestore();
+		}
+	});
+
 	it("owns the existing descriptor and strictly validates its parameters", () => {
 		const calculator = createFleetTrainLagCalculator();
 		expect(calculator).toMatchObject({

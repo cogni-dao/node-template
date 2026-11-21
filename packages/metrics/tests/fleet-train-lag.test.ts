@@ -187,6 +187,26 @@ describe("source qualification against six current consumers", () => {
 	const assess = (rows: ReturnType<typeof cohort>) =>
 		assessFleetTrainLag("0.24.0", MEMBERS, rows, publisher);
 
+	it.each(["dependencies", "devDependencies"] as const)("flags invalid known pins in %s even with a valid alias", (section) => {
+		const member = MEMBERS[0] as (typeof MEMBERS)[number];
+		for (const bad of [url(member, "0.1.8").replace(publisher, "someone/fork"), "not a URL", "workspace:@other/package@*"]) {
+			const rows = cohort();
+			const manifest = (rows[0] as (typeof rows)[number]).manifest;
+			manifest.dependencies["@legacy/current"] = url(member);
+			manifest[section][member.name] = bad;
+			expect(assess(rows)[0]?.reasons.some((reason) => reason.startsWith(`invalid:${member.name}@`))).toBe(true);
+		}
+	});
+
+	it("flags a recognizable foreign legacy alias while retaining private wrappers", () => {
+		const rows = cohort();
+		const manifest = (rows[0] as (typeof rows)[number]).manifest;
+		const member = MEMBERS[0] as (typeof MEMBERS)[number];
+		manifest.devDependencies["@legacy/old"] = url(member, "0.1.8").replace(publisher, "someone/fork");
+		manifest.devDependencies["@cogni/knowledge-store"] = "workspace:*";
+		expect(assess(rows)[0]?.reasons).toEqual(["invalid:@legacy/old@pin"]);
+	});
+
 	it("detects each individual fault without private-wrapper false positives", () => {
 		expect(assess(cohort())).toEqual([]);
 		const shadow = cohort();

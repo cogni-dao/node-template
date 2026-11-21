@@ -143,7 +143,7 @@ export function latestCompleteTrain(
 
 export interface ConsumerLag {
 	readonly repo: string;
-	/** Each reason the consumer trails: `<reason>:<key>@<version>`, reason `behind`, `vendored` or `missing`. */
+	/** Each reason the consumer trails: `<reason>:<key>@<version>`, reason `behind`, `vendored`, `invalid` or `missing`. */
 	readonly reasons: readonly string[];
 }
 
@@ -162,9 +162,11 @@ export function assessFleetTrainLag(
 		const pinned = new Set<string>();
 		for (const [key, raw] of deps) {
 			if (typeof raw !== "string") continue;
+			const namedMember = members.find((x) => x.name === key);
 			const tag = releaseTag(raw, publisher);
 			if (tag) {
 				const member = members.find((x) => tag.startsWith(x.tagPrefix));
+				if (namedMember && member !== namedMember) reasons.push(`invalid:${key}@release`);
 				if (!member) continue;
 				pinned.add(member.name);
 				const version = tag.slice(member.tagPrefix.length);
@@ -178,9 +180,12 @@ export function assessFleetTrainLag(
 				const at = spec.lastIndexOf("@");
 				const target = spec.startsWith("@") ? (at > 0 ? spec.slice(0, at) : spec) : key;
 				const member = members.find((x) => x.name === target);
+				if (namedMember && member !== namedMember) reasons.push(`invalid:${key}@workspace`);
 				if (!member) continue;
 				pinned.add(member.name);
 				reasons.push(`vendored:${key}@workspace`);
+			} else if (namedMember || members.some((x) => releaseTag(raw)?.startsWith(x.tagPrefix))) {
+				reasons.push(`invalid:${key}@pin`);
 			}
 		}
 		for (const member of members) if (!pinned.has(member.name)) reasons.push(`missing:${member.name}@none`);
