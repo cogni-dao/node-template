@@ -198,8 +198,18 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 		memoryNamespace: _memoryNamespace,
 		...isolated
 	} = opts;
+	const readSkill = opts.readSkill;
 	return createCogniProgram({
 		...isolated,
+		...(readSkill && {
+			readSkill: (id: string) => {
+				if (exhausted()) {
+					receipts.reasons.add("research_budget");
+					throw new Error("research_budget");
+				}
+				return readSkill(id);
+			},
+		}),
 		program: "mission-research",
 		profile: { ...profile, limits: { maxTaskCalls: 1, maxDepth: 1 } },
 		childStatePolicy: "messages-only",

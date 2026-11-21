@@ -250,6 +250,167 @@ describe("native invalid argument boundary", () => {
 });
 
 describe("native child isolation", () => {
+	it.each(["search_budget", "evidence_limit"])(
+		"blocks native skill reads after %s while retaining scratch and evidence",
+		async (limit) => {
+			let turn = 0;
+			let searches = 0;
+			let knowledgeReads = 0;
+			let finalMessages = "";
+			const url = "https://evidence.example/source";
+			const draft = {
+				missionScope: "mission",
+				decision: "decision",
+				sources: [{ url }],
+				atoms: [],
+				principles: [],
+				contradictions: [],
+				unknowns: ["More evidence needed"],
+				critiqueResolutions: [],
+				kpiHypotheses: [],
+			};
+			const call = (id: string, name: string, args: unknown) => ({
+				id,
+				type: "function" as const,
+				function: { name, arguments: JSON.stringify(args) },
+			});
+			const completionFn: CompletionFn = (req) => {
+				turn++;
+				const calls =
+					turn === 1
+						? [
+								call("skill-before", "read_file", {
+									file_path: "/skills/strategy-owner/SKILL.md",
+								}),
+								call("source", "core__web_search", { query: "useful" }),
+							]
+						: turn === 2
+							? limit === "search_budget"
+								? Array.from({ length: 6 }, (_, i) =>
+										call(`search-${i}`, "core__web_search", { query: "q" }),
+									)
+								: [
+										call("oversized", "core__web_search", {
+											query: "oversized",
+										}),
+									]
+							: turn === 3
+								? [
+										call("skill-after", "read_file", {
+											file_path: "/skills/strategy-owner/SKILL.md",
+										}),
+										call("scratch-write", "write_file", {
+											file_path: "/notes.txt",
+											content: "scratch survives",
+										}),
+									]
+								: turn === 4
+									? [
+											call("scratch-read", "read_file", {
+												file_path: "/notes.txt",
+											}),
+										]
+									: undefined;
+				if (turn === 5) finalMessages = JSON.stringify(req.messages);
+				return {
+					stream: (async function* (): AsyncIterable<AiEvent> {})(),
+					final: Promise.resolve({
+						ok: true as const,
+						content: calls ? "" : JSON.stringify(draft),
+						...(calls ? { toolCalls: calls } : {}),
+						finishReason: calls ? ("tool_calls" as const) : ("stop" as const),
+					}),
+				};
+			};
+			const entry = LANGGRAPH_CATALOG["mission-research"];
+			if (!entry) throw new Error("missing graph");
+			const run = createInProcGraphRunner({
+				program: "mission-research",
+				sourceContext: {
+					nodeId: "test",
+					origin: "https://node.example",
+					mission: { content: "A mission", sourceRef: "test", buildSha: null },
+					governingIndex: [
+						{
+							id: "strategy-owner",
+							domain: "strategy",
+							entryType: "reference",
+							useWhen: "research",
+						},
+					],
+				},
+				createGraph: entry.graphFactory,
+				completionFn,
+				createToolExecFn: (): ToolExecFn => async (name, args) => {
+					if (name === "core__knowledge_read") {
+						knowledgeReads++;
+						return {
+							ok: true,
+							value: {
+								mode: "get",
+								entries: [
+									{ id: "strategy-owner", content: "governing guidance" },
+								],
+							},
+						};
+					}
+					searches++;
+					return {
+						ok: true,
+						value: {
+							results: [
+								{
+									url,
+									rawContent:
+										(args as { query?: string }).query === "oversized"
+											? "x".repeat(50000)
+											: "retained passage",
+									rawContentState: "available",
+								},
+							],
+						},
+					};
+				},
+				toolContracts: [knowledgeReadContract, webSearchContract],
+				request: {
+					runId: `skill-${limit}`,
+					messages: [{ role: "user", content: "research" }],
+					configurable: { model: "test", toolIds: [...entry.toolIds] },
+				},
+			});
+			for await (const _ of run.stream) {
+				/* drain */
+			}
+			const result = await run.final;
+			expect(result.ok).toBe(true);
+			const output = JSON.parse(result.content ?? "{}");
+			expect(knowledgeReads).toBe(1);
+			expect(searches).toBe(limit === "search_budget" ? 6 : 2);
+			const messages = JSON.parse(finalMessages) as Array<{
+				role: string;
+				toolCallId?: string;
+				content: string;
+			}>;
+			const toolResult = (id: string) =>
+				messages.find(
+					(message) => message.role === "tool" && message.toolCallId === id,
+				)?.content;
+			expect(toolResult("skill-before")).toContain("governing guidance");
+			expect(toolResult("skill-after")).toBe("Error: research_budget");
+			expect(toolResult("scratch-write")).toContain("Successfully wrote");
+			expect(toolResult("scratch-read")).toContain("scratch survives");
+			expect(finalMessages).toContain("The research budget is exhausted");
+			expect(output.status).toBe("incomplete");
+			expect(output.reasons).toEqual(
+				expect.arrayContaining([limit, "research_budget"]),
+			);
+			expect(output.observedSources).toContainEqual({
+				url,
+				state: "available",
+			});
+			expect(output.packet).toEqual(draft);
+		},
+	);
 	it("latches search exhaustion across concurrent and subsequent capability calls", async () => {
 		let turn = 0;
 		let searches = 0;
