@@ -4,6 +4,7 @@
 // @vitest-environment jsdom
 /** Public-entry fixtures exercise the whole epoch capability without node app imports or real wallet actions. */
 import "@testing-library/jest-dom/vitest";
+import type { FinalizeEpochOutput } from "@cogni/attribution-ledger/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -100,6 +101,23 @@ const typedData: SignDataResponse = {
   },
 };
 
+const finalizeResponse = {
+  statementId: "fixture-statement",
+  poolTotalCredits: "100",
+  finalAllocationSetHash: "fixed-hash",
+  statementLineCount: 1,
+  cumulativeDistribution: {
+    distributionId: "fixture-distribution",
+    merkleRoot: ROOT,
+    mintDelta: "100",
+    cumulativeTotal: "100",
+    leafCount: 1,
+    tokenAddress: WALLET,
+    chainId: 8453,
+    distributorAddress: WALLET,
+  },
+} satisfies FinalizeEpochOutput;
+
 function fixture(initialNavigation?: EpochNavigationState) {
   let savedNavigation: EpochNavigationState = initialNavigation ?? {
     historyOffset: 0,
@@ -113,6 +131,7 @@ function fixture(initialNavigation?: EpochNavigationState) {
     events: [event("r1"), event("r2")] as ApiIngestionReceipt[],
     history: [past],
     failReceipts: false,
+    failOverrideMethod: null as "GET" | "PATCH" | "DELETE" | null,
     collectStatus: 200,
     kind: "finalize" as "open_review" | "finalize" | "publish",
     isNodeAdmin: true,
@@ -380,6 +399,8 @@ function fixture(initialNavigation?: EpochNavigationState) {
         });
       }
       if (path.endsWith("/overrides")) {
+        if (method === state.failOverrideMethod)
+          return json({ error: "fixture override failure" }, 503);
         if (method === "PATCH") {
           const body = JSON.parse(String(init?.body));
           state.overrides = body.overrides.map(
@@ -398,8 +419,7 @@ function fixture(initialNavigation?: EpochNavigationState) {
         return json({ epoch: { id: "15", status: "review" } });
       }
       if (path.endsWith("/sign-data")) return json(typedData);
-      if (path.endsWith("/finalize"))
-        return json({ workflowId: "fixture-finalize" });
+      if (path.endsWith("/finalize")) return json(finalizeResponse);
       if (path.endsWith("/distribution"))
         return json({
           epochId: "15",
@@ -1004,7 +1024,7 @@ describe("public epochs capability", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Sign & Finalize" }));
     await screen.findByText(
-      "Finalization started (workflow: fixture-finalize)"
+      "Epoch finalized. Statement fixture-statement. Settlement ready to publish."
     );
     expect(f.client.signTypedData).toHaveBeenCalledWith(typedData);
     expect(
@@ -1014,6 +1034,128 @@ describe("public epochs capability", () => {
       )
     ).toBe(true);
   });
+
+  it("blocks unverified override weights after a rejected read and retries", async () => {
+    const f = fixture();
+    f.state.failOverrideMethod = "GET";
+    f.state.overrides = [
+      {
+        id: "saved",
+        subjectRef: "r1",
+        overrideUnits: "0",
+        overrideReason: "Saved zero",
+      },
+    ];
+    render(
+      <ReviewView
+        walletAddress={WALLET}
+        isNodeAdmin
+        operatorSetupUrl="https://example.com/setup"
+      />,
+      { wrapper: f.wrapper }
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not load weight overrides"
+    );
+    expect(
+      screen.queryByRole("button", { name: "Sign & Finalize" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Adjust weight" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/active weight override/)
+    ).not.toBeInTheDocument();
+    f.state.failOverrideMethod = null;
+    fireEvent.click(screen.getByRole("button", { name: "Retry overrides" }));
+    await screen.findByText("1 active weight override");
+    expect(
+      screen.getByRole("button", { name: "Sign & Finalize" })
+    ).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])(
+    "keeps editor inputs and saved overrides through rejected writes and successful retries (existing: %s)",
+    async (existing) => {
+      const f = fixture();
+      f.state.failOverrideMethod = "PATCH";
+      if (existing)
+        f.state.overrides = [
+          {
+            id: "saved",
+            subjectRef: "r1",
+            overrideUnits: "500",
+            overrideReason: "Prior correction",
+          },
+        ];
+      const savedOverrides = [...f.state.overrides];
+      render(
+        <ReviewView
+          walletAddress={WALLET}
+          isNodeAdmin
+          operatorSetupUrl="https://example.com/setup"
+        />,
+        { wrapper: f.wrapper }
+      );
+      await screen.findByRole("button", { name: "Sign & Finalize" });
+      fireEvent.click(
+        within(screen.getByRole("row", { name: /Alpha/ })).getByRole("button", {
+          name: "Expand details",
+        })
+      );
+      fireEvent.click(
+        (await screen.findAllByRole("button", { name: "Adjust weight" }))[0]!
+      );
+      fireEvent.change(screen.getByLabelText("Override weight (units)"), {
+        target: { value: "0" },
+      });
+      fireEvent.change(screen.getByLabelText("Reason (optional)"), {
+        target: { value: "Keep my correction" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Could not save weight"
+      );
+      expect(screen.getByLabelText("Override weight (units)")).toHaveValue("0");
+      expect(screen.getByLabelText("Reason (optional)")).toHaveValue(
+        "Keep my correction"
+      );
+      expect(f.state.overrides).toEqual(savedOverrides);
+      f.state.failOverrideMethod = null;
+      fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+      await waitFor(() =>
+        expect(screen.queryByLabelText("Override weight (units)")).not.toBeInTheDocument()
+      );
+      await screen.findByText("1 active weight override");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(f.state.overrides[0]).toMatchObject({
+        overrideUnits: "0",
+        overrideReason: "Keep my correction",
+      });
+      f.state.failOverrideMethod = "DELETE";
+      fireEvent.click(
+        screen.getByRole("button", { name: "Reset to original weight" })
+      );
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Could not reset weight"
+      );
+      expect(screen.getByText("1 active weight override")).toBeInTheDocument();
+      expect(f.state.overrides[0]).toMatchObject({
+        overrideUnits: "0",
+        overrideReason: "Keep my correction",
+      });
+      f.state.failOverrideMethod = null;
+      fireEvent.click(screen.getByRole("button", { name: "Retry reset" }));
+      await waitFor(() =>
+        expect(
+          screen.queryByText("1 active weight override")
+        ).not.toBeInTheDocument()
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(f.state.overrides).toEqual([]);
+    }
+  );
 
   it("offers open review only to an eligible admin and retains pinned signer denial", async () => {
     const f = fixture();
