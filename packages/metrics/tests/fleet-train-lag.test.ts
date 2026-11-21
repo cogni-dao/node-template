@@ -169,3 +169,284 @@ describe("readFleetTrainLag", () => {
 		expect(sample.evidenceRefs[0]).toBe("fleet:train-lag:train=none");
 	});
 });
+
+describe("source qualification against six current consumers", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const publisher = "cogni-dao/node-template";
+	const url = (m: (typeof MEMBERS)[number], version = "0.24.0") =>
+		`https://github.com/${publisher}/releases/download/${m.tagPrefix}${version}/x.tgz`;
+	const current = () => ({
+		dependencies: {
+			...Object.fromEntries(MEMBERS.map((m) => [m.name, url(m)])),
+			"@cogni/ai-tools": "workspace:*",
+		},
+		devDependencies: {} as Record<string, string>,
+	});
+	const cohort = () =>
+		manifests.map(({ repo }) => ({ repo, manifest: current() }));
+	const assess = (rows: ReturnType<typeof cohort>) =>
+		assessFleetTrainLag("0.24.0", MEMBERS, rows, publisher);
+
+	it("detects each individual fault without private-wrapper false positives", () => {
+		expect(assess(cohort())).toEqual([]);
+		const shadow = cohort();
+		(shadow[0] as (typeof shadow)[number]).manifest.devDependencies[(MEMBERS[0] as (typeof MEMBERS)[number]).name] = url(
+			(MEMBERS[0] as (typeof MEMBERS)[number]),
+			"0.1.8",
+		);
+		expect(assess(shadow)).toEqual([
+			{ repo: (shadow[0] as (typeof shadow)[number]).repo, reasons: [`behind:${(MEMBERS[0] as (typeof MEMBERS)[number]).name}@0.1.8`] },
+		]);
+		for (const bad of [
+			url((MEMBERS[0] as (typeof MEMBERS)[number])).replace("github.com", "notgithub.com"),
+			url((MEMBERS[0] as (typeof MEMBERS)[number])).replace("https:", "http:"),
+			url((MEMBERS[0] as (typeof MEMBERS)[number])).replace(publisher, "someone/fork"),
+		]) {
+			const rows = cohort();
+			(rows[0] as (typeof rows)[number]).manifest.dependencies[(MEMBERS[0] as (typeof MEMBERS)[number]).name] = bad;
+			expect(assess(rows)[0]?.reasons).toContain(
+				`missing:${(MEMBERS[0] as (typeof MEMBERS)[number]).name}@none`,
+			);
+		}
+		const vendor = cohort();
+		(vendor[0] as (typeof vendor)[number]).manifest.dependencies[(MEMBERS[0] as (typeof MEMBERS)[number]).name] = "workspace:*";
+		expect(assess(vendor)[0]?.reasons).toContain(
+			`vendored:${(MEMBERS[0] as (typeof MEMBERS)[number]).name}@workspace`,
+		);
+		const missing = cohort();
+		delete (missing[0] as (typeof missing)[number]).manifest.dependencies[(MEMBERS[0] as (typeof MEMBERS)[number]).name];
+		expect(assess(missing)[0]?.reasons).toContain(
+			`missing:${(MEMBERS[0] as (typeof MEMBERS)[number]).name}@none`,
+		);
+	});
+
+	const params = {
+		publisher,
+		members: MEMBERS,
+		consumers: manifests.map(({ repo }) => ({
+			repo,
+			manifestPath: "app/package.json",
+		})),
+		graceHours: 24,
+	};
+	const budget = {
+		timeoutMs: 30000,
+		maxSourceCalls: 1,
+		maxRows: 100,
+		maxResponseBytes: 1_048_576,
+	};
+	const response = (value: unknown, status = 200) =>
+		new Response(JSON.stringify(value), { status });
+	function fakeFetch(manifest: unknown) {
+		return vi.fn(async (address: string) => {
+			if (address.includes("matching-refs"))
+				return response([{ ref: "refs/tags/train-v0.24.0" }]);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			if (tag)
+				return response(
+					release(decodeURIComponent(tag), "2026-11-20T00:00:00Z"),
+				);
+			return response(
+				address.includes("cogni-dao/poly/") ? manifest : current(),
+			);
+		});
+	}
+
+	it.each([
+		null,
+		[],
+		{ dependencies: null },
+		{ dependencies: [] },
+		{ dependencies: { bad: 42 } },
+	])("rejects malformed manifest %#", async (manifest) => {
+		vi.stubGlobal("fetch", fakeFetch(manifest));
+		const sample = await readFleetTrainLag(
+			params,
+			at,
+			new AbortController().signal,
+			budget,
+		);
+		expect(sample).toMatchObject({
+			complete: false,
+			reason: "incomplete_or_invalid_source",
+		});
+		expect(sample.evidenceRefs[0]).toContain("cogni-dao/poly");
+	});
+
+	it("bounds multibyte responses while streaming and cancels excess", async () => {
+		let cancelled = false;
+		const bytes = new TextEncoder().encode(
+			JSON.stringify({ padding: "界".repeat(300) }),
+		);
+		const fetcher = fakeFetch(current());
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (address: string) => {
+				if (!address.includes("cogni-dao/poly/")) return fetcher(address);
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(bytes);
+						},
+						cancel() {
+							cancelled = true;
+						},
+					}),
+				);
+			}),
+		);
+		const sample = await readFleetTrainLag(
+			params,
+			at,
+			new AbortController().signal,
+			{ ...budget, maxResponseBytes: 600 },
+		);
+		expect(sample.complete).toBe(false);
+		expect(cancelled).toBe(true);
+	});
+
+	it("enforces the two-train request cap and exact grace boundary", async () => {
+		const calls: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (address: string) => {
+				calls.push(address);
+				if (address.includes("matching-refs"))
+					return response([
+						{ ref: "refs/tags/train-v0.25.0" },
+						{ ref: "refs/tags/train-v0.24.0" },
+						{ ref: "refs/tags/train-v0.23.0" },
+					]);
+				const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+				if (tag)
+					return response(
+						release(
+							decodeURIComponent(tag),
+							tag.endsWith("0.25.0")
+								? "2026-11-21T00:00:00.001Z"
+								: "2026-11-20T00:00:00Z",
+						),
+					);
+				return response(current());
+			}),
+		);
+		const sample = await readFleetTrainLag(
+			params,
+			at,
+			new AbortController().signal,
+			budget,
+		);
+		expect(sample).toMatchObject({ complete: true, value: 0 });
+		expect(sample.evidenceRefs[1]).toContain("train=0.24.0");
+		expect(
+			calls.filter((x) => x.startsWith("https://api.github.com")),
+		).toHaveLength(11);
+		expect(
+			calls.filter((x) => x.startsWith("https://raw.githubusercontent.com")),
+		).toHaveLength(6);
+		const exact = MEMBERS.map((m) =>
+			release(`${m.tagPrefix}0.25.0`, "2026-11-21T00:00:00.000Z"),
+		);
+		expect(latestCompleteTrain(exact, MEMBERS, at, 24)).toBe("0.25.0");
+		expect(
+			latestCompleteTrain(exact, MEMBERS, new Date(at.getTime() - 1), 24),
+		).toBeNull();
+	});
+
+	it.each([403, 429])(
+		"reports provider refusal %i as unavailable",
+		async (status) => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => response({}, status)),
+			);
+			const sample = await readFleetTrainLag(
+				params,
+				at,
+				new AbortController().signal,
+				budget,
+			);
+			expect(sample).toMatchObject({
+				complete: false,
+				reason: "source_failed",
+			});
+			expect(sample.evidenceRefs[0]).toContain("provider_rate_limited");
+		},
+	);
+
+	it("reports interrupted manifest streams as failed with their repository", async () => {
+		const fetcher = fakeFetch(current());
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (address: string) =>
+				address.includes("cogni-dao/poly/")
+					? new Response(
+							new ReadableStream({
+								start(controller) {
+									controller.error(new Error("stream_interrupted"));
+								},
+							}),
+						)
+					: fetcher(address),
+			),
+		);
+		const sample = await readFleetTrainLag(
+			params,
+			at,
+			new AbortController().signal,
+			budget,
+		);
+		expect(sample).toMatchObject({ complete: false, reason: "source_failed" });
+		expect(sample.evidenceRefs[0]).toContain("cogni-dao/poly");
+	});
+
+	it("propagates caller cancellation while reading a manifest", async () => {
+		const abort = new AbortController();
+		const fetcher = fakeFetch(current());
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (address: string) => {
+				if (!address.includes("cogni-dao/poly/")) return fetcher(address);
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							abort.signal.addEventListener("abort", () =>
+								controller.error(abort.signal.reason),
+							);
+							queueMicrotask(() => abort.abort(new Error("timeout")));
+						},
+					}),
+				);
+			}),
+		);
+		await expect(
+			readFleetTrainLag(params, at, abort.signal, budget),
+		).rejects.toThrow("timeout");
+	});
+
+	it.each([
+		null,
+		[],
+		{},
+		{ tag_name: "wrong", published_at: "2026-11-20T00:00:00Z" },
+	])("rejects malformed Release response %#", async (value) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (address: string) =>
+				address.includes("matching-refs")
+					? response([{ ref: "refs/tags/train-v0.24.0" }])
+					: response(value),
+			),
+		);
+		const sample = await readFleetTrainLag(
+			params,
+			at,
+			new AbortController().signal,
+			budget,
+		);
+		expect(sample).toMatchObject({
+			complete: false,
+			reason: "incomplete_or_invalid_source",
+		});
+	});
+});

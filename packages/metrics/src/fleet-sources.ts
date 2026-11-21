@@ -56,6 +56,22 @@ export const FLEET_TRAIN_CANDIDATES = 2;
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validManifest(value: unknown): boolean {
+	if (!isRecord(value)) return false;
+	return ["dependencies", "devDependencies"].every((key) => {
+		const section = value[key];
+		return (
+			section === undefined ||
+			(isRecord(section) &&
+				Object.values(section).every((v) => typeof v === "string"))
+		);
+	});
+}
+
 function compareVersions(a: string, b: string): number {
 	const pa = SEMVER.exec(a);
 	const pb = SEMVER.exec(b);
@@ -113,12 +129,12 @@ export function assessFleetTrainLag(
 	const lagging: ConsumerLag[] = [];
 	for (const { repo, manifest } of manifests) {
 		const m = (manifest ?? {}) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
-		const deps = { ...(m.devDependencies ?? {}), ...(m.dependencies ?? {}) };
+		const deps = [...Object.entries(m.devDependencies ?? {}), ...Object.entries(m.dependencies ?? {})];
 		const reasons: string[] = [];
 		const pinned = new Set<string>();
-		for (const [key, raw] of Object.entries(deps)) {
+		for (const [key, raw] of deps) {
 			if (typeof raw !== "string") continue;
-			const release = /github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\//.exec(raw);
+			const release = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/[^/?#]+(?:[?#].*)?$/i.exec(raw);
 			const tag = release && (!publisher || release[1]?.toLowerCase() === publisher.toLowerCase()) ? release[2] : undefined;
 			if (tag) {
 				const member = members.find((x) => tag.startsWith(x.tagPrefix));
@@ -161,8 +177,28 @@ async function getJson(url: string, signal: AbortSignal, maxResponseBytes: numbe
 		await response.body?.cancel();
 		throw new Error(response.status === 403 || response.status === 429 ? "provider_rate_limited" : `provider_status_${response.status}`);
 	}
-	const text = await response.text();
-	if (text.length > maxResponseBytes) throw new Error("provider_response_budget");
+	if (!response.body) throw new Error("provider_unavailable");
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (true) {
+			const part = await reader.read();
+			if (part.done) break;
+			size += part.value.byteLength;
+			if (size > maxResponseBytes) throw new Error("provider_response_budget");
+			chunks.push(part.value);
+		}
+	} finally {
+		await reader.cancel();
+	}
+	const bytes = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 	const date = response.headers.get("date");
 	return { body: JSON.parse(text), date: date ? new Date(date).toISOString() : null };
 }
@@ -198,7 +234,8 @@ export async function readFleetTrainLag(
 	try {
 		const refs = await getJson(`${api}/git/matching-refs/tags/train-v?per_page=100`, signal, budget.maxResponseBytes);
 		asOf = refs.date;
-		if (!Array.isArray(refs.body)) return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
+		if (!Array.isArray(refs.body) || refs.body.some((r) => !isRecord(r) || typeof r.ref !== "string" || !r.ref.startsWith("refs/tags/train-v")))
+			return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
 		candidates = (refs.body as { ref?: unknown }[])
 			.map((r) => (typeof r.ref === "string" ? r.ref.replace(/^refs\/tags\/train-v/, "") : ""))
 			.filter((v) => SEMVER.test(v))
@@ -219,7 +256,23 @@ export async function readFleetTrainLag(
 						throw error;
 					},
 				);
-				if (got) releases.push(got.body as ReleaseLike);
+				if (got) {
+					const body = got.body;
+					if (
+						!isRecord(body) ||
+						body.tag_name !== tag ||
+						(body.published_at !== null &&
+							(typeof body.published_at !== "string" ||
+								!Number.isFinite(Date.parse(body.published_at)))) ||
+						(body.draft !== undefined && typeof body.draft !== "boolean")
+					)
+						return unknown(
+							`releases=malformed:${tag}`,
+							"incomplete_or_invalid_source",
+							asOf,
+						);
+					releases.push(body as unknown as ReleaseLike);
+				}
 			}
 	} catch (error) {
 		signal.throwIfAborted();
@@ -234,9 +287,15 @@ export async function readFleetTrainLag(
 			manifest: (await getJson(`https://raw.githubusercontent.com/${c.repo}/HEAD/${c.manifestPath}`, signal, budget.maxResponseBytes)).body,
 		})),
 	);
+	signal.throwIfAborted();
 	const failed = p.consumers.filter((_, i) => read[i]?.status !== "fulfilled").map((c) => c.repo);
-	if (failed.length) return unknown(`train=${train};unreadable=${failed.join(",")}`, "source_failed", asOf);
+	if (failed.length) {
+		const failures = read.flatMap((result, i) => result.status === "rejected" ? [`${p.consumers[i]?.repo}:${result.reason instanceof Error ? result.reason.message : "provider_unavailable"}`] : []);
+		return unknown(`train=${train};unreadable=${failed.join(",")};failures=${failures.join(",")}`, "source_failed", asOf);
+	}
 	const manifests = read.map((r) => (r as PromiseFulfilledResult<{ repo: string; manifest: unknown }>).value);
+	const malformed = manifests.filter((m) => !validManifest(m.manifest)).map((m) => m.repo);
+	if (malformed.length) return unknown(`train=${train};malformed=${malformed.join(",")}`, "incomplete_or_invalid_source", asOf);
 	const lagging = assessFleetTrainLag(train, p.members, manifests, p.publisher);
 	return {
 		value: lagging.length,
