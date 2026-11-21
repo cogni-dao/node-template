@@ -82,6 +82,18 @@ const Critique = z
 	})
 	.strict();
 type Draft = z.infer<typeof PartialPacket>;
+const materialTargets = [
+	"missionScope",
+	"decision",
+	"sources",
+	"atoms",
+	"principles",
+	"contradictions",
+	"unknowns",
+	"kpiHypotheses",
+] as const;
+const isMaterialTarget = (id: string): id is (typeof materialTargets)[number] =>
+	(materialTargets as readonly string[]).includes(id);
 const size = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
 const obj = (v: unknown): Record<string, unknown> | undefined =>
 	v && typeof v === "object" && !Array.isArray(v)
@@ -167,8 +179,14 @@ export class ResearchReceipts {
 	}
 	validDraft(draft: Draft) {
 		const urls = new Set(draft.sources.map((s) => s.url));
+		const claims = [
+			...draft.atoms,
+			...draft.principles,
+			...draft.kpiHypotheses,
+		];
 		return (
 			urls.size === draft.sources.length &&
+			claims.every((claim) => !isMaterialTarget(claim.id)) &&
 			new Set(
 				[...draft.atoms, ...draft.principles, ...draft.kpiHypotheses].map(
 					(claim) => claim.id,
@@ -313,6 +331,15 @@ export class ResearchReceipts {
 					continue;
 				}
 				for (const id of finding.claimIds) {
+					if (isMaterialTarget(id)) {
+						if (
+							resolution.action === "removed" ||
+							(resolution.action === "revised" &&
+								JSON.stringify(this.draft[id]) === JSON.stringify(packet[id]))
+						)
+							this.reasons.add("invalid_resolution");
+						continue;
+					}
 					const old = [
 						...this.draft.atoms,
 						...this.draft.principles,
@@ -326,12 +353,9 @@ export class ResearchReceipts {
 					const revised =
 						old &&
 						current &&
-						("metric" in old
-							? "metric" in current &&
-								JSON.stringify(current) !== JSON.stringify(old)
-							: "content" in current &&
-								"action" in old === "action" in current &&
-								current.content !== old.content);
+						"metric" in old === "metric" in current &&
+						"action" in old === "action" in current &&
+						JSON.stringify(current) !== JSON.stringify(old);
 					if (
 						!old ||
 						(resolution.action === "removed" && current) ||

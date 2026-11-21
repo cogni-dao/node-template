@@ -340,7 +340,14 @@ describe("native child isolation", () => {
 				content = JSON.stringify({
 					fingerprint,
 					explanation: "The evidence and constraints were reviewed carefully.",
-					findings: [],
+					findings: [
+						{
+							id: "scope-finding",
+							claimIds: ["missionScope"],
+							severity: "critical",
+							explanation: "Scope is too broad",
+						},
+					],
 				});
 			else if (turn === 6)
 				calls = [
@@ -348,7 +355,13 @@ describe("native child isolation", () => {
 				];
 			else {
 				rootAfterRead = JSON.stringify(req.messages);
-				content = JSON.stringify(draft);
+				content = JSON.stringify({
+					...draft,
+					missionScope: "bounded mission",
+					critiqueResolutions: [
+						{ findingId: "scope-finding", action: "revised" },
+					],
+				});
 			}
 			return {
 				stream: (async function* (): AsyncIterable<AiEvent> {})(),
@@ -430,6 +443,10 @@ describe("native child isolation", () => {
 		const result = await run.final;
 		expect(result.ok).toBe(true);
 		expect(JSON.parse(result.content ?? "{}").status).toBe("complete");
+		expect(JSON.parse(result.content ?? "{}").packet).toMatchObject({
+			missionScope: "bounded mission",
+			critiqueResolutions: [{ findingId: "scope-finding", action: "revised" }],
+		});
 		expect(result.structuredOutput).toEqual(JSON.parse(result.content ?? "{}"));
 		expect(fingerprint).toHaveLength(64);
 		expect(childInput).not.toContain("ROOT_PRIVATE_CANARY");
@@ -882,6 +899,180 @@ describe("critic and evidence failures", () => {
 		expect(fresh.r.project(JSON.stringify(revised)).output.status).toBe(
 			"complete",
 		);
+	});
+	it.each([
+		["missionScope", "revised scope"],
+		["decision", "revised decision"],
+		[
+			"sources",
+			[
+				{ url: "https://evidence.example/doc" },
+				{ url: "https://evidence.example/other" },
+			],
+		],
+		["atoms", "atoms"],
+		["principles", "principles"],
+		["contradictions", ["A contrary observation"]],
+		["unknowns", ["An open question"]],
+		["kpiHypotheses", "kpiHypotheses"],
+	] as const)("requires a real revision of field %s", (target, value) => {
+		for (const changed of [false, true]) {
+			const { r, draft, fingerprint } = setup();
+			r.observe(
+				"core__web_search",
+				{},
+				{
+					results: [
+						{
+							url: "https://evidence.example/other",
+							rawContent: "other passage",
+							rawContentState: "available",
+						},
+					],
+				},
+			);
+			r.complete(
+				JSON.stringify({
+					fingerprint,
+					explanation: "The material field needs correction.",
+					findings: [
+						{
+							id: "f",
+							claimIds: [target],
+							severity: "critical",
+							explanation: "Correct the field",
+						},
+					],
+				}),
+			);
+			const packet = structuredClone(draft);
+			if (changed) {
+				if (target === "atoms") packet.atoms[0].title = "corrected title";
+				else if (target === "principles")
+					packet.principles[0].content = "corrected principle";
+				else if (target === "kpiHypotheses")
+					packet.kpiHypotheses[0].metric = "corrected metric";
+				else Object.assign(packet, { [target]: value });
+			}
+			const output = r.project(
+				JSON.stringify({
+					...packet,
+					critiqueResolutions: [{ findingId: "f", action: "revised" }],
+				}),
+			).output;
+			expect(output.reasons.includes("invalid_resolution")).toBe(!changed);
+			if (changed) expect(output.status).toBe("complete");
+		}
+	});
+	it.each([
+		"missionScope",
+		"decision",
+		"sources",
+		"atoms",
+		"principles",
+		"contradictions",
+		"unknowns",
+		"kpiHypotheses",
+	])("reserves %s against all individual claim IDs", (id) => {
+		for (const kind of ["atoms", "principles", "kpiHypotheses"] as const) {
+			const { r, draft } = setup();
+			const packet = structuredClone(draft);
+			packet[kind][0].id = ` ${id} `;
+			expect(r.prepare(JSON.stringify(packet), "collision")).toBeUndefined();
+		}
+	});
+	it.each(["missionScope", "sources", "unknown-target"])(
+		"rejects removed or unknown target %s",
+		(target) => {
+			const { r, draft, fingerprint } = setup();
+			r.complete(
+				JSON.stringify({
+					fingerprint,
+					explanation: "A material finding needs attention.",
+					findings: [
+						{
+							id: "f",
+							claimIds: [target],
+							severity: "critical",
+							explanation: "Fix this",
+						},
+					],
+				}),
+			);
+			expect(
+				r.project(
+					JSON.stringify({
+						...draft,
+						critiqueResolutions: [{ findingId: "f", action: "removed" }],
+					}),
+				).output.reasons,
+			).toContain("invalid_resolution");
+		},
+	);
+	it("rejects revised unknown targets and normalized unchanged scope", () => {
+		for (const target of ["unknown-target", "missionScope"]) {
+			const { r, draft, fingerprint } = setup();
+			r.complete(
+				JSON.stringify({
+					fingerprint,
+					explanation: "A material finding needs attention.",
+					findings: [
+						{
+							id: "f",
+							claimIds: [target],
+							severity: "critical",
+							explanation: "Fix this",
+						},
+					],
+				}),
+			);
+			expect(
+				r.project(
+					JSON.stringify({
+						...draft,
+						missionScope: " mission ",
+						critiqueResolutions: [{ findingId: "f", action: "revised" }],
+					}),
+				).output.reasons,
+			).toContain("invalid_resolution");
+		}
+	});
+	it("accepts actual individual claim field revisions", () => {
+		for (const kind of ["atoms", "principles"] as const) {
+			const { r, draft, fingerprint } = setup();
+			r.complete(
+				JSON.stringify({
+					fingerprint,
+					explanation: "The claim evidence needs correction.",
+					findings: [
+						{
+							id: "f",
+							claimIds: [draft[kind][0].id],
+							severity: "critical",
+							explanation: "Correct metadata",
+						},
+					],
+				}),
+			);
+			const packet = structuredClone(draft);
+			if (kind === "atoms") packet.atoms[0].title = "corrected title";
+			else
+				packet.principles[0].sourceUrls = [
+					"https://node.example/knowledge/mission-loop-expert",
+				];
+			if (kind === "principles")
+				packet.sources.push({
+					url: "https://node.example/knowledge/mission-loop-expert",
+				});
+			expect(
+				r.project(
+					JSON.stringify({
+						...packet,
+						critiqueResolutions: [{ findingId: "f", action: "revised" }],
+					}),
+				).output.status,
+			).toBe("complete");
+		}
 	});
 	it("does not accept oversized or unobserved evidence", () => {
 		const { r, draft } = setup();
