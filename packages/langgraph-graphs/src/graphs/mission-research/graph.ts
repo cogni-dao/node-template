@@ -74,6 +74,12 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				});
 			};
 			if (receipts.tools > 24) return reject("tool_budget");
+			if (
+				call.args === null ||
+				typeof call.args !== "object" ||
+				Array.isArray(call.args)
+			)
+				return reject("invalid_tool_arguments");
 			if (call.name === "core__web_search") {
 				receipts.searches++;
 				if (receipts.searches > 6) return reject("search_budget");
@@ -161,7 +167,8 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 					return reject("critic_failed");
 				if (
 					cause instanceof InvalidCompletionError &&
-					cause.message === "empty_model_completion"
+					(cause.message === "empty_model_completion" ||
+						cause.message === "malformed_tool_arguments")
 				)
 					return reject("critic_failed");
 				throw error;

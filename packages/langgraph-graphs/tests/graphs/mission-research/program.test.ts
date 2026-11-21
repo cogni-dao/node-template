@@ -15,6 +15,7 @@ import { createMissionResearchGraph } from "../../../src/graphs/mission-research
 import { ResearchReceipts } from "../../../src/graphs/mission-research/receipts";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../../src/inproc/types";
+import { InvalidCompletionError } from "../../../src/runtime/cogni/completion-adapter";
 
 describe("mission research public boundary", () => {
 	it("rejects a missing trusted mission before making a model call", async () => {
@@ -163,6 +164,85 @@ describe("native task limiter", () => {
 		expect(JSON.parse(result.content ?? "{}").reasons).toContain(
 			"excess_task_attempt",
 		);
+		expect(
+			events.filter((event) => event.type === "assistant_final"),
+		).toHaveLength(1);
+	});
+});
+
+describe("native invalid argument boundary", () => {
+	it.each(
+		["core__web_search", "core__knowledge_read", "task"].flatMap((name) =>
+			[null, [], "private-canary", 42, true].map((args) => ({ name, args })),
+		),
+	)("refuses $name non-record before useful work", async ({ name, args }) => {
+		let turn = 0;
+		let dispatches = 0;
+		let childCalls = 0;
+		const completionFn: CompletionFn = (req) => {
+			const names = (req.tools ?? []).map((tool) => {
+				const t = tool as { name?: string; function?: { name?: string } };
+				return t.function?.name ?? t.name;
+			});
+			if (!names.includes("task")) childCalls++;
+			const toolCalls =
+				++turn === 1
+					? [
+							{
+								id: "invalid",
+								type: "function" as const,
+								function: { name, arguments: JSON.stringify(args) },
+							},
+						]
+					: undefined;
+			return {
+				stream: (async function* (): AsyncIterable<AiEvent> {})(),
+				final: Promise.resolve({
+					ok: true as const,
+					content: toolCalls ? "" : "{}",
+					...(toolCalls ? { toolCalls } : {}),
+					finishReason: toolCalls ? ("tool_calls" as const) : ("stop" as const),
+				}),
+			};
+		};
+		const entry = LANGGRAPH_CATALOG["mission-research"];
+		if (!entry) throw new Error("missing graph");
+		const run = createInProcGraphRunner({
+			program: "mission-research",
+			sourceContext: {
+				nodeId: "test",
+				origin: "https://node.example",
+				mission: { content: "mission", sourceRef: "test", buildSha: null },
+			},
+			createGraph: entry.graphFactory,
+			completionFn,
+			createToolExecFn: (): ToolExecFn => async () => {
+				dispatches++;
+				return { ok: true, value: {} };
+			},
+			toolContracts: [
+				goalListContract,
+				knowledgeReadContract,
+				webSearchContract,
+			],
+			request: {
+				runId: "invalid-shape",
+				messages: [{ role: "user", content: "research" }],
+				configurable: { model: "test", toolIds: [...entry.toolIds] },
+			},
+		});
+		const events: AiEvent[] = [];
+		for await (const event of run.stream) events.push(event);
+		const result = await run.final;
+		expect(result.ok).toBe(true);
+		const output = JSON.parse(result.content ?? "{}");
+		expect(output.status).toBe("incomplete");
+		expect(output.reasons).toContain("invalid_tool_arguments");
+		expect(result.structuredOutput).toEqual(output);
+		expect(result.content).not.toContain("private-canary");
+		expect(dispatches).toBe(0);
+		expect(childCalls).toBe(0);
+		expect(events.filter((event) => event.type === "done")).toHaveLength(1);
 		expect(
 			events.filter((event) => event.type === "assistant_final"),
 		).toHaveLength(1);
@@ -829,14 +909,34 @@ describe("child recursion bound", () => {
 	it.each([
 		"recursion",
 		"transport",
+		"billing",
+		"rate",
+		"timeout",
+		"abort",
+		"stream-reject",
+		"final-reject",
+		"transport-cause",
+		"unknown",
 		"output8",
 		"output16",
 		"escaped16",
 		"empty",
 		"no-kpi",
+		"malformed-child",
+		"malformed-root",
+		...(["core__web_search", "core__knowledge_read", "task"] as const).flatMap(
+			(name) =>
+				[null, [], "private-canary", 42, true].map((args) =>
+					JSON.stringify({ name, args }),
+				),
+		),
 	])("handles child %s failures", async (failure) => {
 		let rootTurns = 0;
 		let childTurns = 0;
+		let invalidDispatches = 0;
+		const shape = failure.startsWith("{")
+			? (JSON.parse(failure) as { name: string; args: unknown })
+			: undefined;
 		const url = "https://evidence.example/source";
 		const draft = {
 			missionScope: "mission",
@@ -857,7 +957,7 @@ describe("child recursion bound", () => {
 			],
 			principles: [{ id: "p", content: "claim", sourceUrls: [url] }],
 			contradictions: [],
-			unknowns: [],
+			unknowns: ["Which evidence remains unavailable?"],
 			critiqueResolutions: [],
 			kpiHypotheses: [
 				{
@@ -908,8 +1008,80 @@ describe("child recursion bound", () => {
 						description: JSON.stringify(draft),
 					}),
 				];
+			else if (root && rootTurns === 3 && shape)
+				calls = [call("invalid-shape", shape.name, shape.args)];
+			else if (root && rootTurns >= 3 && failure === "malformed-root")
+				return {
+					stream: (async function* (): AsyncIterable<AiEvent> {})(),
+					final: Promise.resolve({
+						ok: true as const,
+						content: "",
+						finishReason: "tool_calls" as const,
+						toolCalls: [
+							{
+								id: "bad",
+								type: "function" as const,
+								function: { name: "write_file", arguments: "{" },
+							},
+						],
+					}),
+				};
 			else if (!root) {
 				childTurns++;
+				if (failure === "malformed-child")
+					return {
+						stream: (async function* (): AsyncIterable<AiEvent> {})(),
+						final: Promise.resolve({
+							ok: true as const,
+							content: "",
+							finishReason: "tool_calls" as const,
+							toolCalls: [
+								{
+									id: "bad",
+									type: "function" as const,
+									function: { name: "write_file", arguments: "{" },
+								},
+							],
+						}),
+					};
+				if (failure === "stream-reject" || failure === "transport-cause")
+					return {
+						stream: (async function* (): AsyncIterable<AiEvent> {
+							yield* [];
+							throw failure === "transport-cause"
+								? new Error("transport failed", {
+										cause: new InvalidCompletionError(
+											"malformed_tool_arguments",
+										),
+									})
+								: new Error("stream rejected");
+						})(),
+						final: Promise.resolve({
+							ok: true as const,
+							content: "unused",
+							finishReason: "stop" as const,
+						}),
+					};
+				if (failure === "final-reject" || failure === "unknown")
+					return {
+						stream: (async function* (): AsyncIterable<AiEvent> {})(),
+						final: Promise.reject(new Error("unexpected failure")),
+					};
+				if (["billing", "rate", "timeout", "abort"].includes(failure))
+					return {
+						stream: (async function* (): AsyncIterable<AiEvent> {})(),
+						final: Promise.resolve({
+							ok: false as const,
+							error: (
+								{
+									billing: "insufficient_credits",
+									rate: "rate_limit",
+									timeout: "timeout",
+									abort: "aborted",
+								} as const
+							)[failure as "billing" | "rate" | "timeout" | "abort"],
+						}),
+					};
 				if (failure === "transport")
 					return {
 						stream: (async function* (): AsyncIterable<AiEvent> {})(),
@@ -923,7 +1095,9 @@ describe("child recursion bound", () => {
 					failure === "output16" ||
 					failure === "escaped16" ||
 					failure === "empty" ||
-					failure === "no-kpi"
+					failure === "no-kpi" ||
+					failure === "malformed-root" ||
+					shape !== undefined
 				)
 					return {
 						stream: (async function* (): AsyncIterable<AiEvent> {})(),
@@ -932,7 +1106,9 @@ describe("child recursion bound", () => {
 							content:
 								failure === "empty"
 									? ""
-									: failure === "no-kpi"
+									: failure === "no-kpi" ||
+											failure === "malformed-root" ||
+											shape !== undefined
 										? JSON.stringify({
 												fingerprint: JSON.stringify(req.messages).match(
 													/[a-f0-9]{64}/,
@@ -966,8 +1142,10 @@ describe("child recursion bound", () => {
 		};
 		const entry = LANGGRAPH_CATALOG["mission-research"];
 		if (!entry) throw new Error("missing graph");
-		const exec: ToolExecFn = async (name, args) =>
-			name === "core__goal_list"
+		const exec: ToolExecFn = async (name, args) => {
+			if (args === null || typeof args !== "object" || Array.isArray(args))
+				invalidDispatches++;
+			return name === "core__goal_list"
 				? { ok: true, value: { goals: [] } }
 				: name === "core__knowledge_read"
 					? {
@@ -995,6 +1173,7 @@ describe("child recursion bound", () => {
 								],
 							},
 						};
+		};
 		const run = createInProcGraphRunner({
 			program: "mission-research",
 			sourceContext: {
@@ -1024,16 +1203,37 @@ describe("child recursion bound", () => {
 				configurable: { model: "test", toolIds: [...entry.toolIds] },
 			},
 		});
-		for await (const _ of run.stream) {
-			/* drain */
-		}
+		const events: AiEvent[] = [];
+		for await (const event of run.stream) events.push(event);
 		const result = await run.final;
-		if (failure === "transport") {
+		expect(events.filter((event) => event.type === "done")).toHaveLength(1);
+		if (
+			[
+				"transport",
+				"malformed-root",
+				"billing",
+				"rate",
+				"timeout",
+				"abort",
+				"stream-reject",
+				"final-reject",
+				"transport-cause",
+				"unknown",
+			].includes(failure)
+		) {
 			expect(result.ok).toBe(false);
-			expect(result.error).toBe("provider_unavailable");
+			if (failure === "transport")
+				expect(result.error).toBe("provider_unavailable");
+			expect(
+				events.filter((event) => event.type === "assistant_final"),
+			).toHaveLength(0);
 			return;
 		}
 		expect(result.ok).toBe(true);
+		expect(
+			events.filter((event) => event.type === "assistant_final"),
+		).toHaveLength(1);
+		if (failure === "malformed-child") expect(childTurns).toBeGreaterThan(1);
 		if (failure === "recursion") {
 			expect(childTurns).toBeGreaterThan(1);
 			expect(childTurns).toBeLessThanOrEqual(30);
@@ -1042,6 +1242,18 @@ describe("child recursion bound", () => {
 		expect(output.status).toBe("incomplete");
 		expect(output.packet).toEqual(draft);
 		expect(result.structuredOutput).toEqual(output);
+		expect(
+			events.find((event) => event.type === "assistant_final"),
+		).toMatchObject({ content: result.content });
+		if (shape) {
+			expect(invalidDispatches).toBe(0);
+			expect(output.reasons).toContain(
+				shape.name === "task"
+					? "excess_task_attempt"
+					: "invalid_tool_arguments",
+			);
+			expect(result.content).not.toContain("private-canary");
+		}
 		if (
 			failure === "output8" ||
 			failure === "output16" ||
