@@ -84,6 +84,7 @@ export class TavilyWebSearchAdapter implements WebSearchCapability {
       });
 
       if (!response.ok) {
+        controller.abort();
         logger.error(
           {
             event: EVENT_NAMES.ADAPTER_TAVILY_ERROR,

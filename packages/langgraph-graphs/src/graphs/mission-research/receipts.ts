@@ -46,6 +46,7 @@ export const Packet = z
 			.array(
 				z
 					.object({
+						id: text,
 						outcome: text,
 						metric: text,
 						rationale: text,
@@ -164,9 +165,14 @@ export class ResearchReceipts {
 		return (
 			urls.size === draft.sources.length &&
 			[...urls].some((url) => this.webSources.has(url)) &&
-			new Set([...draft.atoms, ...draft.principles].map((claim) => claim.id))
-				.size ===
-				draft.atoms.length + draft.principles.length &&
+			new Set(
+				[...draft.atoms, ...draft.principles, ...draft.kpiHypotheses].map(
+					(claim) => claim.id,
+				),
+			).size ===
+				draft.atoms.length +
+					draft.principles.length +
+					draft.kpiHypotheses.length &&
 			[...urls].every((url) => this.sources.has(url)) &&
 			[...draft.atoms, ...draft.principles].every((item) =>
 				item.sourceUrls.every((url) => urls.has(url) && this.sources.has(url)),
@@ -201,6 +207,7 @@ export class ResearchReceipts {
 			this.reasons.add("unverified_draft");
 			return undefined;
 		}
+		this.draft = parsed.data;
 		const evidence = [...this.sources]
 			.filter(([url]) => parsed.data.sources.some((s) => s.url === url))
 			.map(([url, passage]) => ({
@@ -220,7 +227,6 @@ export class ResearchReceipts {
 			this.reasons.add("critic_input_limit");
 			return undefined;
 		}
-		this.draft = parsed.data;
 		this.fingerprint = fingerprint;
 		this.taskId = callId;
 		return assignment;
@@ -295,16 +301,30 @@ export class ResearchReceipts {
 					this.reasons.add("unresolved_critique");
 					continue;
 				}
-				const before = [...this.draft.atoms, ...this.draft.principles];
-				const after = [...packet.atoms, ...packet.principles];
 				for (const id of finding.claimIds) {
-					const old = before.find((c) => c.id === id);
-					const current = after.find((c) => c.id === id);
+					const old = [
+						...this.draft.atoms,
+						...this.draft.principles,
+						...this.draft.kpiHypotheses,
+					].find((c) => c.id === id);
+					const current = [
+						...packet.atoms,
+						...packet.principles,
+						...packet.kpiHypotheses,
+					].find((c) => c.id === id);
+					const revised =
+						old &&
+						current &&
+						("metric" in old
+							? "metric" in current &&
+								JSON.stringify(current) !== JSON.stringify(old)
+							: "content" in current &&
+								"action" in old === "action" in current &&
+								current.content !== old.content);
 					if (
 						!old ||
 						(resolution.action === "removed" && current) ||
-						(resolution.action === "revised" &&
-							(!current || current.content === old.content))
+						(resolution.action === "revised" && !revised)
 					)
 						this.reasons.add("invalid_resolution");
 				}

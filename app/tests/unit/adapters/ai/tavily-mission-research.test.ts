@@ -95,6 +95,44 @@ describe("provider failures", () => {
 		expect(error).toBeInstanceOf(Error);
 		expect(String(error)).toBe("Error: web_search_http_error");
 	});
+	it("aborts the transport on an HTTP error", async () => {
+		let signal: AbortSignal | undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: unknown, init: RequestInit) => {
+				signal = init.signal ?? undefined;
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(new Uint8Array([1]));
+						},
+					}),
+					{ status: 500 },
+				);
+			}),
+		);
+		await expect(
+			new TavilyWebSearchAdapter({ apiKey: "test" }).search({ query: "q" }),
+		).rejects.toThrow("web_search_http_error");
+		expect(signal?.aborted).toBe(true);
+	});
+	it("rejects an oversized URL instead of inventing a source identity", async () => {
+		const url = `https://example.org/${"x".repeat(3000)}`;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					results: [{ title: "t", url, content: "s", raw_content: "passage" }],
+				}),
+			),
+		);
+		await expect(
+			new TavilyWebSearchAdapter({ apiKey: "test" }).search({
+				query: "q",
+				includeRawContent: true,
+			}),
+		).rejects.toThrow("web_search_result_too_large");
+	});
 	it("keeps snippet-only defaults", async () => {
 		vi.stubGlobal(
 			"fetch",

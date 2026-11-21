@@ -50,6 +50,7 @@ export function projectWebSearchResponse(
 			typeof r.content !== "string"
 		)
 			throw new Error("web_search_invalid_response");
+		if (bytes(r.url) > 2048) throw new Error("web_search_result_too_large");
 		const raw =
 			typeof r.raw_content === "string" && r.raw_content.length
 				? r.raw_content
@@ -61,7 +62,7 @@ export function projectWebSearchResponse(
 		if (passage !== undefined) remaining -= bytes(passage);
 		return {
 			title: boundString(Array.from(r.title).slice(0, 120).join(""), 512),
-			url: boundString(r.url, 2048),
+			url: r.url,
 			content: boundString(Array.from(r.content).slice(0, 160).join(""), 1024),
 			...(typeof r.score === "number" && Number.isFinite(r.score)
 				? { score: r.score }

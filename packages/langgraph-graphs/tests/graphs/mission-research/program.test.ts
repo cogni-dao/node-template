@@ -198,6 +198,7 @@ describe("native child isolation", () => {
 			critiqueResolutions: [],
 			kpiHypotheses: [
 				{
+					id: "k1",
 					outcome: "outcome",
 					metric: "metric",
 					rationale: "rationale",
@@ -399,6 +400,7 @@ describe("host evidence and critique binding", () => {
 			critiqueResolutions: [],
 			kpiHypotheses: [
 				{
+					id: "k1",
 					outcome: "outcome",
 					metric: "metric",
 					rationale: "rationale",
@@ -510,6 +512,7 @@ describe("critic and evidence failures", () => {
 			critiqueResolutions: [],
 			kpiHypotheses: [
 				{
+					id: "k1",
 					outcome: "outcome",
 					metric: "metric",
 					rationale: "rationale",
@@ -563,6 +566,81 @@ describe("critic and evidence failures", () => {
 		expect(handoff.reasons).toContain("step_budget");
 		expect(handoff.packet).toEqual(draft);
 	});
+	it("retains a verified draft when its expanded critic input is too large", () => {
+		const { draft } = setup();
+		const r = new ResearchReceipts("https://node.example");
+		r.domains.add("strategy");
+		const sources = Array.from({ length: 3 }, (_, i) => ({
+			url: `https://example.org/${i}`,
+		}));
+		r.observe(
+			"core__web_search",
+			{},
+			{
+				results: sources.map(({ url }) => ({
+					url,
+					rawContent: "x".repeat(8000),
+					rawContentState: "available",
+				})),
+			},
+		);
+		const largeDraft = {
+			...draft,
+			sources,
+			atoms: [{ ...draft.atoms[0], sourceUrls: [sources[0].url] }],
+			principles: [{ ...draft.principles[0], sourceUrls: [sources[0].url] }],
+		};
+		expect(r.prepare(JSON.stringify(largeDraft), "task")).toBeUndefined();
+		expect(r.reasons.has("critic_input_limit")).toBe(true);
+		expect(r.project("", "step_budget").output.packet).toEqual(largeDraft);
+	});
+	it("binds critical KPI revisions to their own stable identity", () => {
+		const { r, draft, fingerprint } = setup();
+		r.complete(
+			JSON.stringify({
+				fingerprint,
+				explanation: "The proposed measure needs revision.",
+				findings: [
+					{
+						id: "f",
+						claimIds: ["k1"],
+						severity: "critical",
+						explanation: "Use a tail measure",
+					},
+				],
+			}),
+		);
+		const resolution = [{ findingId: "f", action: "revised" }];
+		expect(
+			r.project(JSON.stringify({ ...draft, critiqueResolutions: resolution }))
+				.output.reasons,
+		).toContain("invalid_resolution");
+		const fresh = setup();
+		fresh.r.complete(
+			JSON.stringify({
+				fingerprint: fresh.fingerprint,
+				explanation: "The proposed measure needs revision.",
+				findings: [
+					{
+						id: "f",
+						claimIds: ["k1"],
+						severity: "critical",
+						explanation: "Use a tail measure",
+					},
+				],
+			}),
+		);
+		const revised = {
+			...fresh.draft,
+			kpiHypotheses: [
+				{ ...fresh.draft.kpiHypotheses[0], metric: "p99 latency" },
+			],
+			critiqueResolutions: resolution,
+		};
+		expect(fresh.r.project(JSON.stringify(revised)).output.status).toBe(
+			"complete",
+		);
+	});
 	it("does not accept oversized or unobserved evidence", () => {
 		const { r, draft } = setup();
 		r.observe(
@@ -586,157 +664,178 @@ describe("critic and evidence failures", () => {
 });
 
 describe("child recursion bound", () => {
-	it("stops a nonterminating critic despite the parent's 100-step limit", async () => {
-		let rootTurns = 0;
-		let childTurns = 0;
-		const url = "https://evidence.example/source";
-		const draft = {
-			missionScope: "mission",
-			decision: "decision",
-			sources: [{ url }],
-			atoms: [
-				{
-					id: "a",
-					action: "create",
-					domain: "strategy",
-					title: "t",
-					useWhen: "use",
-					content: "claim",
-					relationships: [],
-					ownerId: null,
-					sourceUrls: [url],
-				},
-			],
-			principles: [{ id: "p", content: "claim", sourceUrls: [url] }],
-			contradictions: [],
-			unknowns: [],
-			critiqueResolutions: [],
-			kpiHypotheses: [
-				{
-					outcome: "outcome",
-					metric: "metric",
-					rationale: "rationale",
-					source: "source",
-					window: "7d",
-					guardrails: ["safety"],
-					gamingRisk: "risk",
-					measurementGap: "gap",
-				},
-			],
-		};
-		const call = (id: string, name: string, args: unknown) => ({
-			id,
-			type: "function" as const,
-			function: { name, arguments: JSON.stringify(args) },
-		});
-		const completionFn: CompletionFn = (req) => {
-			const names = (req.tools ?? []).map((tool) => {
-				const t = tool as { name?: string; function?: { name?: string } };
-				return t.function?.name ?? t.name;
-			});
-			const root = names.includes("task");
-			let calls: ReturnType<typeof call>[] | undefined;
-			if (root && ++rootTurns === 1)
-				calls = [
-					call("goals", "core__goal_list", {}),
-					call("g1", "core__knowledge_read", {
-						id: "knowledge-syntropy-expert",
-					}),
-					call("g2", "core__knowledge_read", { id: "mission-loop-expert" }),
-					call("web", "core__web_search", {
-						query: "q",
-						includeRawContent: true,
-					}),
-				];
-			else if (root && rootTurns === 2)
-				calls = [
-					call("task", "task", {
-						subagent_type: "critic",
-						description: JSON.stringify(draft),
-					}),
-				];
-			else if (!root) {
-				childTurns++;
-				calls = [
-					call(`loop-${childTurns}`, "write_file", {
-						file_path: "/loop.txt",
-						content: "loop",
-					}),
-				];
-			}
-			return {
-				stream: (async function* (): AsyncIterable<AiEvent> {})(),
-				final: Promise.resolve({
-					ok: true as const,
-					content: calls ? "" : JSON.stringify(draft),
-					...(calls ? { toolCalls: calls } : {}),
-					finishReason: calls ? ("tool_calls" as const) : ("stop" as const),
-				}),
-			};
-		};
-		const entry = LANGGRAPH_CATALOG["mission-research"];
-		if (!entry) throw new Error("missing graph");
-		const exec: ToolExecFn = async (name, args) =>
-			name === "core__goal_list"
-				? { ok: true, value: { goals: [] } }
-				: name === "core__knowledge_read"
-					? {
-							ok: true,
-							value: {
-								mode: "get",
-								entries: [
-									{
-										id: (args as { id: string }).id,
-										domain: "meta",
-										content: "guidance",
-									},
-								],
-							},
-						}
-					: {
-							ok: true,
-							value: {
-								results: [
-									{ url, rawContent: "passage", rawContentState: "available" },
-								],
-							},
-						};
-		const run = createInProcGraphRunner({
-			program: "mission-research",
-			sourceContext: {
-				nodeId: "test",
-				origin: "https://node.example",
-				mission: { content: "A mission", sourceRef: "test", buildSha: null },
-				governingIndex: [
+	it.each(["recursion", "transport"])(
+		"handles child %s failures",
+		async (failure) => {
+			let rootTurns = 0;
+			let childTurns = 0;
+			const url = "https://evidence.example/source";
+			const draft = {
+				missionScope: "mission",
+				decision: "decision",
+				sources: [{ url }],
+				atoms: [
 					{
-						id: "owner",
+						id: "a",
+						action: "create",
 						domain: "strategy",
-						entryType: "reference",
-						useWhen: "research",
+						title: "t",
+						useWhen: "use",
+						content: "claim",
+						relationships: [],
+						ownerId: null,
+						sourceUrls: [url],
 					},
 				],
-			},
-			createGraph: entry.graphFactory,
-			completionFn,
-			createToolExecFn: () => exec,
-			toolContracts: [
-				goalListContract,
-				knowledgeReadContract,
-				webSearchContract,
-			],
-			request: {
-				runId: "bounded-child",
-				messages: [{ role: "user", content: "research" }],
-				configurable: { model: "test", toolIds: [...entry.toolIds] },
-			},
-		});
-		for await (const _ of run.stream) {
-			/* drain */
-		}
-		const result = await run.final;
-		expect(result.ok).toBe(true);
-		expect(childTurns).toBeGreaterThan(1);
-		expect(childTurns).toBeLessThanOrEqual(30);
-		expect(JSON.parse(result.content ?? "{}").status).toBe("incomplete");
-	});
+				principles: [{ id: "p", content: "claim", sourceUrls: [url] }],
+				contradictions: [],
+				unknowns: [],
+				critiqueResolutions: [],
+				kpiHypotheses: [
+					{
+						id: "k1",
+						outcome: "outcome",
+						metric: "metric",
+						rationale: "rationale",
+						source: "source",
+						window: "7d",
+						guardrails: ["safety"],
+						gamingRisk: "risk",
+						measurementGap: "gap",
+					},
+				],
+			};
+			const call = (id: string, name: string, args: unknown) => ({
+				id,
+				type: "function" as const,
+				function: { name, arguments: JSON.stringify(args) },
+			});
+			const completionFn: CompletionFn = (req) => {
+				const names = (req.tools ?? []).map((tool) => {
+					const t = tool as { name?: string; function?: { name?: string } };
+					return t.function?.name ?? t.name;
+				});
+				const root = names.includes("task");
+				let calls: ReturnType<typeof call>[] | undefined;
+				if (root && ++rootTurns === 1)
+					calls = [
+						call("goals", "core__goal_list", {}),
+						call("g1", "core__knowledge_read", {
+							id: "knowledge-syntropy-expert",
+						}),
+						call("g2", "core__knowledge_read", { id: "mission-loop-expert" }),
+						call("web", "core__web_search", {
+							query: "q",
+							includeRawContent: true,
+						}),
+					];
+				else if (root && rootTurns === 2)
+					calls = [
+						call("task", "task", {
+							subagent_type: "critic",
+							description: JSON.stringify(draft),
+						}),
+					];
+				else if (!root) {
+					childTurns++;
+					if (failure === "transport")
+						return {
+							stream: (async function* (): AsyncIterable<AiEvent> {})(),
+							final: Promise.resolve({
+								ok: false as const,
+								error: "provider_unavailable" as const,
+							}),
+						};
+					calls = [
+						call(`loop-${childTurns}`, "write_file", {
+							file_path: "/loop.txt",
+							content: "loop",
+						}),
+					];
+				}
+				return {
+					stream: (async function* (): AsyncIterable<AiEvent> {})(),
+					final: Promise.resolve({
+						ok: true as const,
+						content: calls ? "" : JSON.stringify(draft),
+						...(calls ? { toolCalls: calls } : {}),
+						finishReason: calls ? ("tool_calls" as const) : ("stop" as const),
+					}),
+				};
+			};
+			const entry = LANGGRAPH_CATALOG["mission-research"];
+			if (!entry) throw new Error("missing graph");
+			const exec: ToolExecFn = async (name, args) =>
+				name === "core__goal_list"
+					? { ok: true, value: { goals: [] } }
+					: name === "core__knowledge_read"
+						? {
+								ok: true,
+								value: {
+									mode: "get",
+									entries: [
+										{
+											id: (args as { id: string }).id,
+											domain: "meta",
+											content: "guidance",
+										},
+									],
+								},
+							}
+						: {
+								ok: true,
+								value: {
+									results: [
+										{
+											url,
+											rawContent: "passage",
+											rawContentState: "available",
+										},
+									],
+								},
+							};
+			const run = createInProcGraphRunner({
+				program: "mission-research",
+				sourceContext: {
+					nodeId: "test",
+					origin: "https://node.example",
+					mission: { content: "A mission", sourceRef: "test", buildSha: null },
+					governingIndex: [
+						{
+							id: "owner",
+							domain: "strategy",
+							entryType: "reference",
+							useWhen: "research",
+						},
+					],
+				},
+				createGraph: entry.graphFactory,
+				completionFn,
+				createToolExecFn: () => exec,
+				toolContracts: [
+					goalListContract,
+					knowledgeReadContract,
+					webSearchContract,
+				],
+				request: {
+					runId: "bounded-child",
+					messages: [{ role: "user", content: "research" }],
+					configurable: { model: "test", toolIds: [...entry.toolIds] },
+				},
+			});
+			for await (const _ of run.stream) {
+				/* drain */
+			}
+			const result = await run.final;
+			if (failure === "transport") {
+				expect(result.ok).toBe(false);
+				expect(result.error).toBe("provider_unavailable");
+				return;
+			}
+			expect(result.ok).toBe(true);
+			expect(childTurns).toBeGreaterThan(1);
+			expect(childTurns).toBeLessThanOrEqual(30);
+			expect(JSON.parse(result.content ?? "{}").status).toBe("incomplete");
+		},
+	);
 });

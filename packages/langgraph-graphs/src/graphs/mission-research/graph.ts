@@ -6,7 +6,7 @@ import {
 	ToolMessage,
 } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
-import { createMiddleware } from "langchain";
+import { createMiddleware, MiddlewareError } from "langchain";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
 import type { CreateReactAgentGraphOptions } from "../types";
 import {
@@ -134,8 +134,18 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				if (call.name !== "task" && bytes(result) > 48 * 1024)
 					return reject("evidence_limit");
 				return result;
-			} catch {
-				return reject(call.name === "task" ? "critic_failed" : "tool_failed");
+			} catch (error) {
+				if (call.name !== "task") return reject("tool_failed");
+				let cause: unknown = error;
+				while (
+					MiddlewareError.isInstance(cause) &&
+					"cause" in cause &&
+					cause.cause !== cause
+				)
+					cause = cause.cause;
+				if (cause instanceof Error && cause.name === "GraphRecursionError")
+					return reject("critic_failed");
+				throw cause;
 			}
 		},
 	});
