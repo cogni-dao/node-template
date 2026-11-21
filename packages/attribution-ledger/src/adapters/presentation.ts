@@ -8,6 +8,7 @@ import {
   displayShare,
   type ContributorSummaryPage,
 } from "../read/presentation";
+import { EPOCH_PAGE_MAX_LIMIT } from "../read/epoch-views";
 import type { ReadPage } from "../store";
 import type { AttributionDatabase } from "./types";
 
@@ -30,6 +31,7 @@ export async function readLiveContributorSummaryPage(
   page: ReadPage
 ): Promise<ContributorSummaryPage> {
   // B1: projections, resolved-without-projection and unresolved selections are disjoint.
+  // Eligibility uses the original weight so a zero review override retains its receipt and reset control.
   // Global totals are computed before LIMIT. No raw receipt history enters the process.
   const result = await db.execute<{
     items: SummaryRow[];
@@ -37,6 +39,9 @@ export async function readLiveContributorSummaryPage(
     total_units: string;
     total_points: string;
     total_receipt_count: number;
+    unresolved_count: number;
+    unresolved_activity_total: number;
+    unresolved_activities: ContributorSummaryPage["unresolvedActivities"];
   }>(sql`
     WITH scoped_epoch AS (
       SELECT id, node_id, weight_config FROM ${tables.epochs}
@@ -51,6 +56,15 @@ export async function readLiveContributorSummaryPage(
       WHERE s.included = true
     ), selected AS (
       SELECT *, COALESCE(override_units, base_units) AS units FROM selected_base
+    ), unresolved AS (
+      SELECT 'identity:' || source || ':' || platform_user_id AS claimant_key,
+        source, MAX(platform_login) AS platform_login, COUNT(*)::int AS event_count
+      FROM selected WHERE user_id IS NULL GROUP BY source, platform_user_id
+    ), unresolved_totals AS (
+      SELECT COALESCE(SUM(event_count),0)::int AS unresolved_count, COUNT(*)::int AS unresolved_activity_total FROM unresolved
+    ), unresolved_page AS (
+      SELECT claimant_key AS "claimantKey", source, platform_login AS "platformLogin", event_count AS "eventCount"
+      FROM unresolved ORDER BY event_count DESC, claimant_key ASC LIMIT ${EPOCH_PAGE_MAX_LIMIT}
     ), projection_deltas AS (
       SELECT user_id, SUM(units - base_units) AS delta, MAX(platform_login) AS platform_login FROM selected WHERE user_id IS NOT NULL GROUP BY user_id
     ), projected AS (
@@ -62,7 +76,7 @@ export async function readLiveContributorSummaryPage(
         CASE WHEN s.user_id IS NOT NULL THEN 'user' ELSE 'identity' END AS claimant_kind,
         s.user_id, CASE WHEN s.user_id IS NULL THEN s.source ELSE NULL END AS source,
         s.platform_login, s.units
-      FROM selected s WHERE s.units > 0 AND NOT EXISTS (SELECT 1 FROM projected p WHERE p.user_id = s.user_id)
+      FROM selected s WHERE s.base_units > 0 AND NOT EXISTS (SELECT 1 FROM projected p WHERE p.user_id = s.user_id)
     ), fallback AS (
       SELECT claimant_key, claimant_kind, user_id, source, MAX(platform_login) AS platform_login,
         SUM(units)::text AS units, COUNT(*)::int AS receipt_count
@@ -79,8 +93,10 @@ export async function readLiveContributorSummaryPage(
       SELECT * FROM contributors ORDER BY units::numeric DESC, claimant_key ASC LIMIT ${page.limit} OFFSET ${page.offset}
     )
     SELECT totals.total, totals.total_units, totals.total_points, totals.total_receipt_count,
+      unresolved_totals.unresolved_count, unresolved_totals.unresolved_activity_total,
+      COALESCE((SELECT jsonb_agg(to_jsonb(u) ORDER BY u."eventCount" DESC, u."claimantKey" ASC) FROM unresolved_page u), '[]'::jsonb) AS unresolved_activities,
       COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.units::numeric DESC, p.claimant_key ASC) FROM page p), '[]'::jsonb) AS items
-    FROM totals
+    FROM totals CROSS JOIN unresolved_totals
   `);
   const row = result[0];
   const totalUnits = row?.total_units ?? "0";
@@ -90,6 +106,9 @@ export async function readLiveContributorSummaryPage(
     totalUnits,
     totalPoints: row?.total_points ?? "0",
     totalReceiptCount: row?.total_receipt_count ?? 0,
+    unresolvedCount: row?.unresolved_count ?? 0,
+    unresolvedActivityTotal: row?.unresolved_activity_total ?? 0,
+    unresolvedActivities: row?.unresolved_activities ?? [],
     limit: page.limit,
     offset: page.offset,
     items: (row?.items ?? []).map((item) => ({

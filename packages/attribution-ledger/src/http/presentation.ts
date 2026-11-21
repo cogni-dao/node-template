@@ -60,7 +60,21 @@ export async function readEpochContributorSummary(
         ? -1
         : 1
   );
+  const unresolved = sorted.filter(
+    (item) => item.claimant.kind === "identity" && !item.isLinked
+  );
   return {
+    unresolvedCount: new Set(unresolved.flatMap((item) => item.receiptIds))
+      .size,
+    unresolvedActivityTotal: unresolved.length,
+    unresolvedActivities: unresolved
+      .slice(0, EPOCH_PAGE_MAX_LIMIT)
+      .map((item) => ({
+        claimantKey: item.claimantKey,
+        source: item.claimant.kind === "identity" ? item.claimant.provider : "",
+        platformLogin: item.displayName,
+        eventCount: item.receiptIds.length,
+      })),
     epochId: epochId.toString(),
     total: sorted.length,
     totalUnits: totalUnits.toString(),

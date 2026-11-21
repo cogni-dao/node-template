@@ -30,9 +30,9 @@
  * @public
  */
 
-import { useEpochContext } from "../context";
 "use client";
 
+import { useEpochContext } from "../context";
 
 import { useQueryClient } from "@tanstack/react-query";
 import { type ComponentProps } from "react";

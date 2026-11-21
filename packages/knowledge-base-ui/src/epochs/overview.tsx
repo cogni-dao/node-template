@@ -466,7 +466,7 @@ export function CurrentEpochView(): ReactElement {
           </div>
           <PastEpochsSection epochs={data.pastEpochs} lifecycle={lifecycle} />
           {(data.historyTotal > 200 || state.historyOffset > 0) && (
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <Button
                 disabled={state.historyOffset === 0}
                 onClick={() =>

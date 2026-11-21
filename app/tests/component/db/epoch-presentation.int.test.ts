@@ -197,4 +197,130 @@ describe("public attribution presentation on PostgreSQL", () => {
       )?.units
     ).toBe("1000");
   });
+  it("keeps zero overrides and reset access for both fallback groups through projection arrival", async () => {
+    await db.execute(
+      sql`UPDATE epochs SET status = 'review' WHERE id = ${epochId} AND node_id = ${nodeId}::uuid`
+    );
+    for (const receiptId of [
+      `${prefix}:b:0`,
+      `${prefix}:b:1`,
+      `${prefix}:c:0`,
+    ]) {
+      await store.upsertReviewSubjectOverride({
+        nodeId,
+        epochId,
+        subjectRef: receiptId,
+        overrideUnits: 0n,
+        overrideReason: "zero regression",
+      });
+    }
+    const before = await readEpochContributorSummary(store, nodeId, epochId, {
+      limit: 200,
+      offset: 0,
+    });
+    expect(before).toMatchObject({
+      total: 3,
+      totalUnits: "201000",
+      totalReceiptCount: 204,
+      unresolvedCount: 1,
+      unresolvedActivityTotal: 1,
+    });
+    expect(
+      before?.items.find((item) => item.claimantKey === `user:${b}`)
+    ).toMatchObject({ units: "0", receiptCount: 2 });
+    expect(
+      before?.items.find((item) => item.claimantKey === "identity:github:33")
+    ).toMatchObject({ units: "0", receiptCount: 1 });
+    for (const key of [`user:${b}`, "identity:github:33"]) {
+      const details = await store.getContributorReceiptsPage(
+        nodeId,
+        epochId,
+        key,
+        { limit: 50, offset: 0 }
+      );
+      expect(details.receipts.length).toBeGreaterThan(0);
+    }
+    await store.upsertUserProjections([
+      { nodeId, epochId, userId: b, projectedUnits: 2000n, receiptCount: 2 },
+    ]);
+    const after = await readEpochContributorSummary(store, nodeId, epochId, {
+      limit: 200,
+      offset: 0,
+    });
+    expect(after).toEqual(before);
+    for (const receiptId of [`${prefix}:b:0`, `${prefix}:b:1`, `${prefix}:c:0`])
+      await store.deleteReviewSubjectOverride(epochId, receiptId);
+    const reset = await readEpochContributorSummary(store, nodeId, epochId, {
+      limit: 200,
+      offset: 0,
+    });
+    expect(reset).toMatchObject({
+      total: 3,
+      totalUnits: "204000",
+      totalReceiptCount: 204,
+      unresolvedCount: 1,
+    });
+  });
+
+  it("returns stable complete unresolved facts across actual dense contributor and receipt pages", async () => {
+    const receipts = Array.from({ length: 201 }, (_, i) => ({
+      nodeId,
+      receiptId: `${prefix}:dense:${i}`,
+      source: "github",
+      eventType: "pr_merged",
+      platformUserId: `dense-${i}`,
+      platformLogin: "Same label",
+      payloadHash: "dense-fixture",
+      producer: "fixture",
+      producerVersion: "1",
+      eventTime: periodStart,
+      retrievedAt: periodStart,
+    }));
+    await store.insertIngestionReceipts(receipts);
+    await store.insertSelectionDoNothing(
+      receipts.map((receipt) => ({
+        nodeId,
+        epochId,
+        receiptId: receipt.receiptId,
+        userId: null,
+        included: true,
+      }))
+    );
+    const first = await readEpochContributorSummary(store, nodeId, epochId, {
+      limit: 200,
+      offset: 0,
+    });
+    const last = await readEpochContributorSummary(store, nodeId, epochId, {
+      limit: 200,
+      offset: 200,
+    });
+    expect(first?.items).toHaveLength(200);
+    expect(last?.items).toHaveLength(4);
+    for (const page of [first, last]) {
+      expect(page).toMatchObject({
+        total: 204,
+        totalUnits: "405000",
+        totalReceiptCount: 405,
+        unresolvedCount: 202,
+        unresolvedActivityTotal: 202,
+      });
+      expect(page?.unresolvedActivities).toHaveLength(200);
+      expect(
+        new Set(page?.unresolvedActivities.map((item) => item.claimantKey)).size
+      ).toBe(200);
+    }
+    expect(last?.unresolvedActivities).toEqual(first?.unresolvedActivities);
+    await store.updateSelectionUserId(epochId, `${prefix}:c:0`, b);
+    const linked = await readEpochContributorSummary(store, nodeId, epochId, {
+      limit: 1,
+      offset: 200,
+    });
+    expect(linked).toMatchObject({
+      total: 203,
+      totalUnits: "405000",
+      totalReceiptCount: 405,
+      unresolvedCount: 201,
+      unresolvedActivityTotal: 201,
+    });
+  });
 });

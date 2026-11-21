@@ -529,7 +529,8 @@ export function composeEpochViewFromSummary(
           ? []
           : (byClaimant.get(item.claimantKey) ?? []),
     })),
-    unresolvedCount: details.unresolvedCount,
-    unresolvedActivities: details.unresolvedActivities,
+    unresolvedCount: summary.unresolvedCount,
+    unresolvedActivities: summary.unresolvedActivities,
+    unresolvedActivityTotal: summary.unresolvedActivityTotal,
   };
 }
