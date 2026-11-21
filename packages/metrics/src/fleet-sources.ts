@@ -260,14 +260,17 @@ export async function readFleetTrainLag(
 	// One logical source call may issue multiple HTTP requests. Count each returned tag,
 	// successful Release and consumer manifest against one cumulative interpreted-row budget.
 	let sourceRows = 0;
+	let restRequests = 0;
 	let candidates: string[];
 	try {
+		restRequests++;
 		const refs = await getJson(`${api}/git/matching-refs/tags/train-v?per_page=100`, signal, budget.maxResponseBytes);
 		asOf = refs.date;
-		if (!Array.isArray(refs.body) || refs.body.some((r) => !isRecord(r) || typeof r.ref !== "string" || !validGitRef(r.ref)))
-			return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
+		if (!Array.isArray(refs.body)) return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
 		sourceRows = refs.body.length;
 		if (sourceRows > budget.maxRows) return unknown("tags=row_budget", "incomplete_or_invalid_source", asOf);
+		if (refs.body.some((r) => !isRecord(r) || typeof r.ref !== "string" || !validGitRef(r.ref)))
+			return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
 		candidates = (refs.body as { ref?: unknown }[])
 			.map((r) => (typeof r.ref === "string" ? r.ref.replace(/^refs\/tags\/train-v/, "") : ""))
 			.filter((v) => SEMVER.test(v))
@@ -282,6 +285,8 @@ export async function readFleetTrainLag(
 		for (const version of candidates)
 			for (const member of p.members) {
 				const tag = `${member.tagPrefix}${version}`;
+				if (restRequests >= 11) return unknown("releases=request_budget", "incomplete_or_invalid_source", asOf);
+				restRequests++;
 				const got = await getJson(`${api}/releases/tags/${encodeURIComponent(tag)}`, signal, budget.maxResponseBytes).catch(
 					(error: Error) => {
 						if (error.message === "provider_status_404") return null; // not published: the train is partial

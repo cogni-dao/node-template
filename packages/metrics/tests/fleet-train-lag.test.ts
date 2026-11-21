@@ -497,4 +497,21 @@ describe("source qualification against six current consumers", () => {
 		expect(sample).toMatchObject({ complete: true, value: 0 });
 	});
 
+
+	it("never exceeds eleven REST requests for larger admitted member sets", async () => {
+		const extended = [...MEMBERS, ...Array.from({ length: 5 }, (_, n) => ({ name: `@example/member-${n}`, tagPrefix: `member-${n}-v` }))];
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response([{ ref: "refs/tags/train-v0.25.0" }, { ref: "refs/tags/train-v0.24.0" }]);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			return tag ? response(release(decodeURIComponent(tag), "2026-11-20T00:00:00Z")) : response(current());
+		}));
+		const sample = await readFleetTrainLag({ ...params, members: extended }, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: false });
+		expect(sample.evidenceRefs[0]).toContain("request_budget");
+		expect(calls.filter((address) => address.startsWith("https://api.github.com"))).toHaveLength(11);
+		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com"))).toHaveLength(0);
+	});
+
 });
