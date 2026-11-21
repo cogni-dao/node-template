@@ -7,7 +7,7 @@
  * Scope: Defines UsageFact and ExecutorType. Does NOT implement functions.
  * Invariants:
  *   - SINGLE_SOURCE_OF_TRUTH: This is the canonical definition; src/types re-exports
- *   - usageUnitId is REQUIRED for billing-authoritative executors (inproc), enforced via Zod strict schema. Optional only for external/telemetry executors (hints schema).
+ *   - usageUnitId is REQUIRED for billing-authoritative executors (inproc/sandbox), enforced via Zod strict schema. Optional only for external/telemetry executors (hints schema).
  *   - runId + attempt + usageUnitId form the idempotency key (computed by billing.ts)
  *   - source identifies the adapter system (litellm, anthropic_sdk, etc.)
  *   - executorType is REQUIRED for executor-agnostic billing/history
@@ -25,7 +25,11 @@ import type { GraphId } from "../graph/graph-id";
  * Executor type for multi-runtime billing.
  * Per EXECUTOR_TYPE_REQUIRED invariant: all UsageFacts must specify executorType.
  */
-export type ExecutorType = "langgraph_server" | "claude_sdk" | "inproc";
+export type ExecutorType =
+  | "langgraph_server"
+  | "claude_sdk"
+  | "inproc"
+  | "sandbox";
 
 /**
  * Usage fact emitted by graph executors for billing ingestion.
@@ -44,7 +48,7 @@ export interface UsageFact {
    * USAGE_UNIT_IS_LITELLM_CALL_ID: `x-litellm-call-id === spend_logs.request_id`
    *   (manually verified 2026-02-07; automated test pending system test infra,
    *    see tests/stack/ai/litellm-call-id-mapping.stack.test.ts).
-   * REQUIRED for billing-authoritative executors (inproc) - enforced via Zod validation.
+   * REQUIRED for billing-authoritative executors (inproc/sandbox) - enforced via Zod validation.
    * Optional for external executors (validated via hints schema).
    */
   readonly usageUnitId?: string;
@@ -81,7 +85,7 @@ export interface UsageFact {
 }
 
 /**
- * Strict Zod schema for billing-authoritative executors (inproc).
+ * Strict Zod schema for billing-authoritative executors (inproc/sandbox).
  * usageUnitId is REQUIRED. Validation failures = billing incomplete = run fails.
  */
 export const UsageFactStrictSchema = z
@@ -93,7 +97,7 @@ export const UsageFactStrictSchema = z
 
     // Required for billing context
     source: z.enum(SOURCE_SYSTEMS),
-    executorType: z.literal("inproc"), // Only billing-authoritative types
+    executorType: z.enum(["inproc", "sandbox"]), // Only billing-authoritative types
     billingAccountId: z.string().min(1, "billingAccountId required"),
     virtualKeyId: z.string().min(1, "virtualKeyId required"),
 

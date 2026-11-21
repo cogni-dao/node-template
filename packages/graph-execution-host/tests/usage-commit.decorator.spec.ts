@@ -104,4 +104,58 @@ describe("UsageCommitDecorator", () => {
 
     expect(commitByo).not.toHaveBeenCalled();
   });
+
+  it("defers valid sandbox platform receipts to the callback", async () => {
+    const fact = buildInprocUsageFact({ executorType: "sandbox" });
+    const commitByo = vi.fn();
+    const result = new UsageCommitDecorator(
+      makeInnerExecutor([{ type: "usage_report", fact }]),
+      createMockLogger(),
+      commitByo
+    ).runGraph(makeRequest());
+    for await (const _ of result.stream) {
+      /* drain */
+    }
+    expect(commitByo).not.toHaveBeenCalled();
+  });
+
+  it.each(["usageUnitId", "billingAccountId", "virtualKeyId"] as const)(
+    "rejects sandbox receipts without %s before any direct commit",
+    async (field) => {
+      const fact = buildByoUsageFact({
+        executorType: "sandbox",
+        [field]: undefined,
+      });
+      const commitByo = vi.fn();
+      const result = new UsageCommitDecorator(
+        makeInnerExecutor([{ type: "usage_report", fact }]),
+        createMockLogger(),
+        commitByo
+      ).runGraph(makeRequest());
+      await expect(
+        (async () => {
+          for await (const _ of result.stream) {
+            /* drain */
+          }
+        })()
+      ).rejects.toThrow("Billing validation failed");
+      expect(commitByo).not.toHaveBeenCalled();
+    }
+  );
+
+  it("commits a valid BYO sandbox receipt exactly once", async () => {
+    const fact = buildByoUsageFact({ executorType: "sandbox" });
+    const commitByo = vi.fn();
+    const log = createMockLogger();
+    const result = new UsageCommitDecorator(
+      makeInnerExecutor([{ type: "usage_report", fact }]),
+      log,
+      commitByo
+    ).runGraph(makeRequest());
+    for await (const _ of result.stream) {
+      /* drain */
+    }
+    expect(commitByo).toHaveBeenCalledTimes(1);
+    expect(commitByo).toHaveBeenCalledWith(fact, log);
+  });
 });
