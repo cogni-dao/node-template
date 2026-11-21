@@ -10,13 +10,15 @@
  * Invariants:
  *   - ONE_TERMINAL_EVENT: every handled request returns exactly one event, success or refused, with ids and codes, never the body.
  *   - EVENT_NAMES_HERE: the four event names are owned here; a node's own name table repeats them only as these values.
- *   - PACKAGE_ERRORS_FIRST: `workItemWriteErrorResponse` answers every write-contract error; `mapNodeError` answers only node errors.
+ *   - PACKAGE_ERRORS_FIRST: `workItemWriteErrorResponse` answers every write-contract error and `backendUnavailableReason` every busy store (503 with `reason`); `mapNodeError` answers only node errors.
  * Side-effects: none (the injected write does the IO)
  * Links: ./write-errors.ts, hub work-gate-enforcement
  * @public
  */
 
 import type { WriteAttribution, WriteRunKind } from "./attribution.js";
+import type { WorkItemsBusyReason } from "./errors.js";
+import { backendUnavailableBody, backendUnavailableReason } from "./read-handlers.js";
 import { workItemWriteErrorResponse } from "./write-errors.js";
 
 export const WORK_ITEM_WRITE_EVENTS = {
@@ -44,6 +46,8 @@ export interface WorkItemWriteEvent {
   readonly from?: string;
   readonly to?: string;
   readonly missing?: string;
+  /** A busy or unavailable store: why, from the closed set (task.0162). */
+  readonly reason?: WorkItemsBusyReason;
 }
 
 export interface WorkItemWriteResult {
@@ -52,7 +56,7 @@ export interface WorkItemWriteResult {
   readonly event: WorkItemWriteEvent;
 }
 
-/** A node's own refusal for an error the package does not know (not found, forbidden, admin required, backend down). */
+/** A node's own refusal for an error the package does not know (not found, forbidden, admin required). */
 export type NodeWriteRefusal = { readonly status: number; readonly errorCode: string; readonly body: unknown };
 
 type Parse<T> = (body: unknown) =>
@@ -150,6 +154,9 @@ async function handleWrite<T, R>(
         ...(missing ? { missing } : {}),
       });
     }
+    // A busy or unavailable store is a package error too: 503 with its closed reason on the one terminal event.
+    const reason = backendUnavailableReason(error);
+    if (reason) return refuse(503, "backend_unavailable", backendUnavailableBody(reason), { reason });
     const node = deps.mapNodeError?.(error);
     if (node) return refuse(node.status, node.errorCode, node.body);
     throw error;

@@ -20,7 +20,9 @@ import {
 import {
   normalizeWorkItemOrder,
   type WorkItemOrder,
+  backendUnavailableBody,
   handleWorkItemCreate,
+  type WorkItemsBusyReason,
 } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
@@ -58,6 +60,7 @@ export const GET = wrapRouteHandlerWithLogging(
     let count = 0;
     let hasMore = false;
     let order: WorkItemOrder | undefined;
+    let busyReason: WorkItemsBusyReason | undefined;
     let errorCode:
       | (typeof WORK_ITEMS_LIST_ERROR_CODES)[keyof typeof WORK_ITEMS_LIST_ERROR_CODES]
       | undefined = WORK_ITEMS_LIST_ERROR_CODES.INTERNAL_ERROR;
@@ -153,7 +156,10 @@ export const GET = wrapRouteHandlerWithLogging(
         if (e instanceof WorkItemsBackendNotReadyError) {
           status = 503;
           errorCode = WORK_ITEMS_LIST_ERROR_CODES.BACKEND_UNAVAILABLE;
-          return NextResponse.json({ error: e.message }, { status });
+          busyReason = e.reason;
+          return NextResponse.json(backendUnavailableBody(e.reason), {
+            status,
+          });
         }
         throw e;
       }
@@ -182,6 +188,7 @@ export const GET = wrapRouteHandlerWithLogging(
         hasMore,
         ...order,
         ...(errorCode && { errorCode }),
+        ...(busyReason && { reason: busyReason }),
       });
     }
   },
@@ -211,8 +218,6 @@ export const POST = wrapRouteHandlerWithLogging(
       mapNodeError: (e) => {
         if (e instanceof NodeAdminRequiredError)
           return { status: e.status, errorCode: e.errorCode, body: { error: e.message, errorCode: e.errorCode, action: e.action } };
-        if (e instanceof WorkItemsBackendNotReadyError)
-          return { status: 503, errorCode: "backend_unavailable", body: { error: e.message } };
         return undefined;
       },
     });

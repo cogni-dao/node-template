@@ -19,7 +19,14 @@
 
 import { z } from "zod";
 
-import { classifyWorkReadError, WORK_READ_CLIENT_CLOSED, WORK_READ_ERROR_CODES } from "./read-handlers.js";
+import type { WorkItemsBusyReason } from "./errors.js";
+import {
+  backendUnavailableBody,
+  backendUnavailableReason,
+  classifyWorkReadError,
+  WORK_READ_CLIENT_CLOSED,
+  WORK_READ_ERROR_CODES,
+} from "./read-handlers.js";
 
 /** Optional envelope parts a single-item read can add: `GET /api/v1/work/items/{id}?include=links,artifacts,history`. */
 export const WORK_ITEM_INCLUDES = ["links", "artifacts", "history"] as const;
@@ -48,6 +55,8 @@ export interface WorkItemReadEvent {
   readonly status: number;
   readonly workItemId: string;
   readonly errorCode?: string;
+  /** A busy or unavailable store: why, from the closed set (task.0162). */
+  readonly reason?: WorkItemsBusyReason;
   /** The envelope parts asked for, in request order. */
   readonly include?: readonly WorkItemInclude[];
 }
@@ -59,8 +68,6 @@ export interface WorkItemReadResult {
   readonly event: WorkItemReadEvent;
 }
 
-/** Fixed response text: store and error internals never reach the client. */
-const UNAVAILABLE_MESSAGE = "work items are temporarily unavailable; retry shortly";
 
 /** The envelope options a node's store read takes. */
 export interface WorkItemEnvelopeOptions {
@@ -88,10 +95,18 @@ interface ReadDeps<R> {
 
 /** GET /work/items/{id}: parse the parts, read the envelope, and the one terminal event. */
 export async function handleWorkItemGet<R>(id: string, deps: ReadDeps<R>): Promise<WorkItemReadResult> {
-  const refuse = (status: number, errorCode: string, body: unknown): WorkItemReadResult => ({
+  const refuse = (status: number, errorCode: string, body: unknown, reason?: WorkItemsBusyReason): WorkItemReadResult => ({
     status,
     body,
-    event: { event: WORK_ITEM_READ_EVENTS.getRefused, routeId: "work.items.get", outcome: "refused", status, workItemId: id, errorCode },
+    event: {
+      event: WORK_ITEM_READ_EVENTS.getRefused,
+      routeId: "work.items.get",
+      outcome: "refused",
+      status,
+      workItemId: id,
+      errorCode,
+      ...(reason !== undefined ? { reason } : {}),
+    },
   });
 
   const requested = deps.searchParams
@@ -118,8 +133,11 @@ export async function handleWorkItemGet<R>(id: string, deps: ReadDeps<R>): Promi
     });
   } catch (error) {
     if (deps.signal?.aborted) return refuse(WORK_READ_CLIENT_CLOSED, WORK_READ_ERROR_CODES.CLIENT_ABORTED, null);
-    if (classifyWorkReadError(error) === "backend_unavailable")
-      return refuse(503, WORK_READ_ERROR_CODES.BACKEND_UNAVAILABLE, { error: UNAVAILABLE_MESSAGE });
+    if (classifyWorkReadError(error) === "backend_unavailable") {
+      // task.0162: the 503 names its reason in the body and on the one terminal event.
+      const reason = backendUnavailableReason(error) ?? "capacity_held";
+      return refuse(503, WORK_READ_ERROR_CODES.BACKEND_UNAVAILABLE, backendUnavailableBody(reason), reason);
+    }
     const node = deps.mapNodeError?.(error);
     if (node) return refuse(node.status, node.errorCode, node.body);
     throw error;

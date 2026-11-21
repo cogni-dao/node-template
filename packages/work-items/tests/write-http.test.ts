@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import { WorkItemPatchInputSchema } from "../src/patch-contract.js";
+import { WorkItemsBusyError } from "../src/errors.js";
 import { handleWorkItemCreate, handleWorkItemPatch, WORK_ITEM_WRITE_EVENTS } from "../src/write-http.js";
 
 const patchDeps = (overrides: Partial<Parameters<typeof handleWorkItemPatch>[1]> = {}) => ({
@@ -63,6 +64,22 @@ describe("handleWorkItemPatch", () => {
     }));
     expect(node.event).toMatchObject({ event: WORK_ITEM_WRITE_EVENTS.patchRefused, status: 404, errorCode: "not_found" });
     await expect(handleWorkItemPatch("task.1", patchDeps({ write: async () => { throw new Error("boom"); } }))).rejects.toThrow("boom");
+  });
+
+  // task.0162: a busy store answered a bare 503 whose only log line was "request complete".
+  it("a busy store is one refused 503 event naming its reason, with a fixed body, before node mapping", async () => {
+    const busy = new WorkItemsBusyError("Work-item writer admission unavailable: lock_contended branch work-item-op/x", "lock_contended");
+    // A facade copy keeps the reason under its own name; the package still classifies it.
+    const copy = Object.assign(new Error("copy"), { name: "WorkItemsBackendNotReadyError", reason: "queue_timeout" });
+    for (const [error, reason] of [[busy, "lock_contended"], [copy, "queue_timeout"]] as const) {
+      const r = await handleWorkItemPatch("task.1", patchDeps({
+        write: async () => { throw error; },
+        mapNodeError: () => ({ status: 500, errorCode: "wrong", body: {} }),
+      }));
+      expect(r.status).toBe(503);
+      expect(r.event).toMatchObject({ event: WORK_ITEM_WRITE_EVENTS.patchRefused, errorCode: "backend_unavailable", reason });
+      expect(r.body).toEqual({ error: expect.not.stringContaining("work-item-op"), code: reason });
+    }
   });
 
   it("malformed JSON and a body id that is not the path id are refused before parsing", async () => {

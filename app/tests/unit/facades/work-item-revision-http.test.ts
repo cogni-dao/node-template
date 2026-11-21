@@ -283,4 +283,38 @@ describe("work-item revision HTTP boundary", () => {
     });
     expect(response.status).toBe(503);
   });
+
+  // Guards task.0162: a busy 503 once logged no reason and echoed the store's message.
+  it("names the busy reason in the 503 body and the one terminal event, never the error text", async () => {
+    const info = vi.fn();
+    patch.mockRejectedValue(
+      Object.assign(new Error("secret store detail"), {
+        name: "WorkItemsBusyError",
+        reason: "queue_timeout",
+      })
+    );
+    const response = await (PATCH as unknown as Handler)(
+      { log: { info } },
+      new Request("http://localhost/api/v1/work/items/task.0001", {
+        method: "PATCH",
+        body: JSON.stringify({ reason: "r", set: { summary: "updated" } }),
+      }),
+      { id: "principal-1" },
+      { params: Promise.resolve({ id: "task.0001" }) }
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: expect.not.stringContaining("secret store detail"),
+      code: "queue_timeout",
+    });
+    const terminal = info.mock.calls.filter(
+      ([fields]) => fields?.event === "work.items.patch_refused"
+    );
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]?.[0]).toMatchObject({
+      status: 503,
+      errorCode: "backend_unavailable",
+      reason: "queue_timeout",
+    });
+  });
 });

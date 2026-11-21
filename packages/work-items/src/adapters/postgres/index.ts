@@ -192,18 +192,22 @@ export class PostgresWorkItemLeaseAdapter implements WorkItemLeasePort {
         typeof error === "object" && error !== null && "code" in error
           ? String(error.code)
           : "";
-      if (
-        [
-          "55P03",
-          "57014",
-          "53300",
-          "08006",
-          "ECONNRESET",
-          "ECONNREFUSED",
-        ].includes(code)
-      ) {
+      if (code === "55P03") {
         throw new WorkItemsBusyError(
-          "Work-item coordination unavailable; retry shortly"
+          "Work-item coordination unavailable; retry shortly",
+          "lock_contended"
+        );
+      }
+      if (code === "57014") {
+        throw new WorkItemsBusyError(
+          "Work-item coordination unavailable; retry shortly",
+          "read_timeout"
+        );
+      }
+      if (["53300", "08006", "ECONNRESET", "ECONNREFUSED"].includes(code)) {
+        throw new WorkItemsBusyError(
+          "Work-item coordination unavailable; retry shortly",
+          "read_connection_lost"
         );
       }
       throw error;

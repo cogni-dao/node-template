@@ -7,7 +7,7 @@
  * Scope: Decode with the shared codec, read through an injected `listSummaries`, validate the output schema, classify errors, and report telemetry. No HTTP framework, auth, logging or environment.
  * Invariants:
  *   - ONE_CODEC: requests decode with `parseWorkSummarySearchParams` / `parseWorkBoardSearchParams`; bodies encode with `WorkSummaryPageSchema` / `WorkBoardColumnsSchema`.
- *   - TYPED_ERRORS: invalid input → 400 `invalid_input` (with codec issues); a cursor error (name `InvalidCursorError`) → 400 `invalid_cursor`; a busy, capacity-held or unconfigured store (names `WorkItemsBusyError`, `WorkItemsCapacityError`, `WorkItemsBackendNotReadyError`, `DoltgresNotConfiguredError`) → 503 `backend_unavailable`; an aborted request → 499 `client_aborted` with no body; anything else → 500 `internal_error`. Cursor, 503 and 500 bodies are fixed strings.
+ *   - TYPED_ERRORS: invalid input → 400 `invalid_input` (with codec issues); a cursor error (name `InvalidCursorError`) → 400 `invalid_cursor`; a busy, capacity-held or unconfigured store (names `WorkItemsBusyError`, `WorkItemsCapacityError`, `UnprovableTransitionError`, `WorkItemsBackendNotReadyError`, `DoltgresNotConfiguredError`) → 503 `backend_unavailable`, whose telemetry names the `reason` (`backendUnavailableReason`, task.0162); an aborted request → 499 `client_aborted` with no body; anything else → 500 `internal_error`. Cursor, 503 and 500 bodies are fixed strings.
  *   - TELEMETRY_IS_SAFE: telemetry carries counts, order, durations and rows scanned only, never item text or filters.
  * Side-effects: none (the injected reader performs the I/O)
  * Links: task.0055, packages/work-items/src/board.ts, packages/work-items/src/summary-query.ts
@@ -23,6 +23,7 @@ import {
   type WorkBoardColumns,
   WorkBoardColumnsSchema,
 } from "./board.js";
+import type { WorkItemsBusyReason } from "./errors.js";
 import {
   normalizeWorkItemOrder,
   type WorkItemOrder,
@@ -65,6 +66,8 @@ export interface WorkReadTelemetry {
   readonly status: number;
   readonly outcome: "success" | "error";
   readonly errorCode?: WorkReadErrorCode;
+  /** Why a 503 `backend_unavailable` happened (task.0162); never message text. */
+  readonly reason?: WorkItemsBusyReason;
   /** Items returned (all columns for a board). */
   readonly count: number;
   readonly hasMore: boolean;
@@ -94,8 +97,32 @@ const UNAVAILABLE_MESSAGE = "work items are temporarily unavailable; retry short
 const UNAVAILABLE_ERRORS = new Set([
   "WorkItemsBusyError",
   "WorkItemsCapacityError",
+  "UnprovableTransitionError",
   "WorkItemsBackendNotReadyError",
   "DoltgresNotConfiguredError",
+]);
+
+/** Error names whose `reason` field is a `WorkItemsBusyReason` (busy family, plus the facade's own copy). */
+const REASON_CARRIERS = new Set([
+  "WorkItemsBusyError",
+  "WorkItemsCapacityError",
+  "UnprovableTransitionError",
+  "WorkItemsBackendNotReadyError",
+]);
+
+const BUSY_REASONS: ReadonlySet<string> = new Set<WorkItemsBusyReason>([
+  "capacity_held",
+  "queue_timeout",
+  "writer_settling",
+  "connect_timeout",
+  "lock_contended",
+  "writer_admission",
+  "evidence_preserved",
+  "reconcile_unavailable",
+  "read_timeout",
+  "read_connection_lost",
+  "not_configured",
+  "outcome_unknown",
 ]);
 
 /** Maps a reader failure to its HTTP class by error name (facades rethrow their own copies). */
@@ -107,6 +134,34 @@ export function classifyWorkReadError(
   return typeof name === "string" && UNAVAILABLE_ERRORS.has(name)
     ? "backend_unavailable"
     : undefined;
+}
+
+/**
+ * Why a store failure is `backend_unavailable`, by error name (facades rethrow their own copies): a `reason` in the
+ * closed set on a busy-named error, else the name's own fixed reason, else `undefined` (never parses a message).
+ */
+export function backendUnavailableReason(
+  error: unknown,
+): WorkItemsBusyReason | undefined {
+  const { name, reason } = (error ?? {}) as { name?: unknown; reason?: unknown };
+  if (typeof name !== "string") return undefined;
+  if (
+    REASON_CARRIERS.has(name) &&
+    typeof reason === "string" &&
+    BUSY_REASONS.has(reason)
+  )
+    return reason as WorkItemsBusyReason;
+  if (name === "DoltgresNotConfiguredError") return "not_configured";
+  if (name === "DoltMergeOutcomeUnknownError") return "outcome_unknown";
+  return undefined;
+}
+
+/** The one 503 body for a busy or unavailable store: the fixed message and the closed reason as `code` (task.0162). */
+export function backendUnavailableBody(reason: WorkItemsBusyReason): {
+  readonly error: string;
+  readonly code: WorkItemsBusyReason;
+} {
+  return { error: UNAVAILABLE_MESSAGE, code: reason };
 }
 
 function orderOf(query: WorkSummaryQuery): WorkItemOrder {
@@ -122,6 +177,11 @@ interface Counts {
   readonly count: number;
   readonly hasMore: boolean;
   readonly rowsScanned: number;
+}
+
+function reasonField(error: unknown): { reason?: WorkItemsBusyReason } {
+  const reason = backendUnavailableReason(error);
+  return reason === undefined ? {} : { reason };
 }
 
 function failure<TBody>(
@@ -175,6 +235,7 @@ function failure<TBody>(
         status: 503,
         outcome: "error",
         errorCode: WORK_READ_ERROR_CODES.BACKEND_UNAVAILABLE,
+        ...reasonField(error),
       },
     };
   }
