@@ -17,6 +17,7 @@ import {
   Activity,
   BookOpen,
   Briefcase,
+  Building2,
   CalendarClock,
   CreditCard,
   Github,
@@ -51,6 +52,7 @@ const NAV_ITEMS = [
   { href: "/metrics", label: "Metrics", icon: Activity },
   { href: "/gov", label: "Gov", icon: Vote },
   { href: "/credits", label: "Credits", icon: CreditCard },
+  { href: "/orgs", label: "Orgs", icon: Building2 },
   { href: "/admin", label: "Admin", icon: Shield },
 ] as const;
 

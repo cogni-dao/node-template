@@ -65,6 +65,30 @@ export {
   type UseAgentAccessOptions,
 } from "./agent-access/use-agent-access.js";
 export {
+  OrgAdminSection,
+  type OrgAdminSectionProps,
+} from "./orgs/org-admin-section.js";
+export {
+  type AdminOrgItem,
+  ORG_ERROR_COPY,
+  type OrgEndpoints,
+  type OrgInvite,
+  type OrgLink,
+  type OrgListItem,
+  type OrgMember,
+  type OrgRole,
+} from "./orgs/org-client.js";
+export { OrgSection, type OrgSectionProps } from "./orgs/org-section.js";
+export {
+  type OrgLinkComponent,
+  type OrgLinkProps,
+  OrgsSection,
+  type OrgsSectionProps,
+} from "./orgs/orgs-section.js";
+export { type UseOrg, useOrg } from "./orgs/use-org.js";
+export { type UseOrgAdmin, useOrgAdmin } from "./orgs/use-org-admin.js";
+export { type UseOrgList, useOrgList } from "./orgs/use-org-list.js";
+export {
   APPROVAL_FRAGMENT_PARAM,
   APPROVAL_PAGES,
   ApprovalFragmentScrub,

@@ -26,6 +26,8 @@ import type { ReactElement } from "react";
 import { Badge, Card, CardContent } from "@/components";
 import { getServerSessionUser } from "@/lib/auth/server";
 
+import { AdminOrgsClient } from "./AdminOrgs.client";
+
 const PRIMARY_ACTION = {
 	href: "/gov/review",
 	title: "Finish Epoch",
@@ -183,6 +185,8 @@ export default async function AdminIndexPage(): Promise<ReactElement> {
 					</Card>
 				</Link>
 			</section>
+
+			<AdminOrgsClient />
 
 			<p className="text-muted-foreground text-xs">
 				Services, budgets, and member management will surface here as those
