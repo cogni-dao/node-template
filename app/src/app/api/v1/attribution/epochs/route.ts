@@ -11,6 +11,8 @@
  * @public
  */
 
+import { handleEpochOverview } from "@cogni/attribution-ledger/http";
+
 import { listEpochsView } from "@cogni/attribution-ledger";
 import { listEpochsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
@@ -27,13 +29,22 @@ export const GET = wrapRouteHandlerWithLogging(
     routeId: "ledger.list-epochs",
     auth: { mode: "required", getSessionUser },
   },
-  async (_ctx, request) => {
+  async (ctx, request) => {
     const url = new URL(request.url);
     const { limit, offset } = listEpochsOperation.input.parse({
       limit: url.searchParams.get("limit") ?? undefined,
       offset: url.searchParams.get("offset") ?? undefined,
     });
 
+    if (url.searchParams.get("view") === "overview") {
+      const result = await handleEpochOverview(
+        getContainer().attributionStore,
+        getNodeId(),
+        { limit, offset }
+      );
+      ctx.log.info(result.event, result.event.event);
+      return NextResponse.json(result.body, { status: result.status });
+    }
     const view = await listEpochsView(
       getContainer().attributionStore,
       getNodeId(),

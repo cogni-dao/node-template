@@ -34,6 +34,9 @@ const SIZES = {
   default: "h-9 px-4 py-2",
   sm: "h-8 rounded-md px-3 text-xs",
   icon: "h-9 w-9",
+  md: "h-10 px-4 py-2",
+  lg: "h-11 px-8",
+  xl: "h-12 px-8",
 } as const;
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -44,8 +47,14 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   (
-    { className, variant = "default", size = "default", asChild = false, ...props },
-    ref,
+    {
+      className,
+      variant = "default",
+      size = "default",
+      asChild = false,
+      ...props
+    },
+    ref
   ) => {
     const Comp = asChild ? Slot.Root : "button";
     return (
@@ -55,6 +64,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         {...props}
       />
     );
-  },
+  }
 );
 Button.displayName = "Button";

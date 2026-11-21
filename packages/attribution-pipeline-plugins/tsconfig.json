@@ -16,7 +16,8 @@
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "__arch_probes__"],
   "references": [
-    { "path": "../attribution-ledger" },
-    { "path": "../attribution-pipeline-contracts" }
+    {
+      "path": "../attribution-ledger"
+    }
   ]
 }

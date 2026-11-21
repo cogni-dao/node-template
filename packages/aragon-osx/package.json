@@ -29,6 +29,7 @@
     "viem": "^2.0.0"
   },
   "dependencies": {
-    "@openzeppelin/merkle-tree": "^1.0.8"
+    "@openzeppelin/merkle-tree": "^1.0.8",
+    "@cogni/attribution-ledger": "workspace:@cogni-dao/attribution@*"
   }
 }

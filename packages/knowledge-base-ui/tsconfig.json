@@ -19,9 +19,20 @@
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist"],
   "references": [
-    { "path": "../work-items" },
-    { "path": "../knowledge-store" },
-    { "path": "../metrics" },
-    { "path": "../agent-grants" }
+    {
+      "path": "../work-items"
+    },
+    {
+      "path": "../knowledge-store"
+    },
+    {
+      "path": "../metrics"
+    },
+    {
+      "path": "../agent-grants"
+    },
+    {
+      "path": "../attribution-ledger"
+    }
   ]
 }

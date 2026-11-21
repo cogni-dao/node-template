@@ -11,6 +11,10 @@
  * @public
  */
 
+import { handleEpochContributorSummary } from "@cogni/attribution-ledger/http";
+import { PaginationQuerySchema } from "@cogni/attribution-ledger/contracts";
+import { getNodeId } from "@/shared/config";
+
 import { epochClaimantsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { readFinalizedEpochClaimants } from "@/app/_facades/attribution/claimants.server";
@@ -28,7 +32,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     routeId: "ledger.epoch-claimants",
     auth: { mode: "required", getSessionUser },
   },
-  async (_ctx, _request, _sessionUser, context) => {
+  async (ctx, request, _sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
     let epochId: bigint;
@@ -39,6 +43,22 @@ export const GET = wrapRouteHandlerWithLogging<{
     }
 
     const store = getContainer().attributionStore;
+    const url = new URL(request.url);
+    if (url.searchParams.get("view") === "summary") {
+      const page = PaginationQuerySchema.parse({
+        limit: url.searchParams.get("limit") ?? undefined,
+        offset: url.searchParams.get("offset") ?? undefined,
+      });
+      const result = await handleEpochContributorSummary(
+        store,
+        getNodeId(),
+        epochId,
+        page
+      );
+      ctx.log.info(result.event, result.event.event);
+      return NextResponse.json(result.body, { status: result.status });
+    }
+
     const epoch = await store.getEpoch(epochId);
     if (!epoch || epoch.status !== "finalized") {
       return NextResponse.json({ error: "Epoch not found" }, { status: 404 });

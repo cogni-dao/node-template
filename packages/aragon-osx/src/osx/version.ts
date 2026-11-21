@@ -59,12 +59,15 @@ export const INITIAL_TOKEN_AMOUNT = 10n ** 18n;
  * The UI mints whole-token supplies only; contract arguments use 18-decimal base
  * units derived by parseDaoTokenSupplyUnits().
  */
-export const DAO_TOKEN_SUPPLY_MIN_WHOLE = 1_000;
-export const DAO_TOKEN_SUPPLY_MAX_WHOLE = 1_000_000_000;
-export const DAO_TOKEN_SUPPLY_DEFAULT_WHOLE = 1_000_000;
 
 /**
  * Zero address used for "deploy new token" in TokenSettings.
  */
 export const DEPLOY_NEW_TOKEN_ADDRESS =
   "0x0000000000000000000000000000000000000000" as const;
+
+export {
+  DAO_TOKEN_SUPPLY_MIN_WHOLE,
+  DAO_TOKEN_SUPPLY_MAX_WHOLE,
+  DAO_TOKEN_SUPPLY_DEFAULT_WHOLE,
+} from "@cogni/attribution-ledger/distribution";

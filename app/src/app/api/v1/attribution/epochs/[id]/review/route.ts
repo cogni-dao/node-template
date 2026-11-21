@@ -11,7 +11,7 @@
  * @public
  */
 
-import { createEnrichmentActivities } from "@cogni/attribution-collect";
+import { createEnrichmentActivities } from "@cogni/attribution-ledger/collect";
 import {
   computeApproverSetHash,
   computeWeightConfigHash,
