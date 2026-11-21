@@ -11,6 +11,66 @@ const params = {
 };
 
 describe("public fleet calculator", () => {
+	it.each((["dependencies", "devDependencies"] as const).flatMap((section) => [
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x.tgz", invalid: false },
+		{ section, path: "/cogni-dao/node-template/releases/%64ownload/metrics-vVERSION/x.tgz", invalid: false },
+		{ section, path: "/cogni-dao/node-template/%72eleases/download/metrics-vVERSION/x.tgz", invalid: false },
+		{ section, path: "/%63ogni-dao/node%2dtemplate/%72eleases/%64ownload/%6detrics-vVERSION/%78.tgz", invalid: false },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/..", invalid: true },
+		{ section, path: "/cogni-dao/node-template/%72eleases/%64ownload/metrics-vVERSION/%2e%2E", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases%2fdownload/metrics-vVERSION/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download%5cmetrics-vVERSION/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x%2ftgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x%broken", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x%0A%FF", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x.tgz", invalid: true, authority: "[invalid" },
+		{ section, path: "/cogni-dao/node-template/tmp/../%72eleases/%64ownload/metrics-vVERSION/x.tgz", invalid: true, authority: "[invalid" },
+		{ section, path: "\\cogni-dao\\node-template\\releases\\download\\metrics-vVERSION\\x.tgz", invalid: true, authority: "github.com:bad" },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics%2dvVERSION%zz/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/%6detrics%2dvVERSION%C3%28/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/%6detrics%2dvVERSION%FF/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics%2dvVERSION%/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics%2dvVERSION%zz/..", invalid: true, authority: "[invalid" },
+	]))("qualifies escaped identity in $section: $path (invalid: $invalid)", async ({ section, path, invalid, authority }) => {
+		const calculator = createFleetTrainLagCalculator();
+		const members = ["work-items", "knowledge-store", "knowledge-base-ui", "metrics", "ai-tools"].map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));
+		const consumers = Array.from({ length: 6 }, (_, i) => ({ repo: `cogni-dao/consumer${i}`, manifestPath: "package.json" }));
+		const official = Object.fromEntries(members.map((m) => [m.name, `https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.26.0/x.tgz`]));
+		const calls: string[] = [];
+		let alias: string | undefined;
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			calls.push(address);
+			expect(["https://api.github.com", "https://raw.githubusercontent.com"]).toContain(new URL(address).origin);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			const body = address.includes("matching-refs") ? [{ ref: "refs/tags/train-v0.26.0" }]
+				: tag ? { tag_name: decodeURIComponent(tag), published_at: "2026-11-20T00:00:00Z" }
+				: { dependencies: { ...official, "@cogni/ai-tools": "workspace:*", ...(section === "dependencies" && alias && (!invalid || address.includes("consumer0/")) ? { "old-metrics": alias } : {}) }, devDependencies: { "@cogni/knowledge-store": "workspace:*", ...(section === "devDependencies" && alias && (!invalid || address.includes("consumer0/")) ? { "old-metrics": alias } : {}) } };
+			return new Response(JSON.stringify(body));
+		});
+		const controller = new AbortController();
+		const compute = async (lagging: number) => {
+			calls.length = 0;
+			const result = await calculator.compute({ ...params, members, consumers }, {
+				window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+				signal: controller.signal, budget: calculator.budget, read: async (source) => source(controller.signal, calculator.budget),
+			});
+			expect(result, alias).toMatchObject({ complete: true, value: lagging });
+			expect(result.evidenceRefs).toContain(`fleet:train-lag:counts:evaluated=6;lagging=${lagging};train=0.26.0`);
+			if (lagging) expect(result.evidenceRefs).toContain(`fleet:train-lag:lagging=cogni-dao/consumer0:${invalid ? "invalid:old-metrics@pin" : "behind:old-metrics@0.25.0"}`);
+			expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(6);
+			expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(6);
+		};
+		try {
+			await compute(0);
+			for (const version of ["0.25.0", "0.26.0"]) {
+				for (const prefix of ["", "\t", " \r\n", "\u0000\u001f"]) {
+					alias = `${prefix}https://${authority ?? "github.com"}${path.replace("VERSION", version)}`;
+					await compute(invalid ? 1 : version === "0.25.0" ? 6 : 0);
+				}
+			}
+		} finally { fetchMock.mockRestore(); }
+	});
 	it.each(["dependencies", "devDependencies"] as const)("retains invalid Release aliases in %s beside five current pins", async (section) => {
 		const calculator = createFleetTrainLagCalculator();
 		const members = ["work-items", "knowledge-store", "knowledge-base-ui", "metrics", "ai-tools"].map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));

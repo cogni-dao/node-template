@@ -186,6 +186,20 @@ describe("source qualification against six current consumers", () => {
 		manifests.map(({ repo }) => ({ repo, manifest: current() }));
 	const assess = (rows: ReturnType<typeof cohort>) =>
 		assessFleetTrainLag("0.24.0", MEMBERS, rows, publisher);
+	it.each(["dependencies", "devDependencies"] as const)("uses decoded segment identity throughout Release paths in %s", (section) => {
+		for (const version of ["0.1.0", "0.24.0"]) {
+			const path = `/${publisher}/releases/download/metrics-v${version}/x.tgz`;
+			// Encode each unreserved character independently, across every segment.
+			for (let i = 0; i < path.length; i++) {
+				const char = path[i] as string;
+				if (!/[A-Za-z0-9._-]/.test(char)) continue;
+				const escaped = `${path.slice(0, i)}%${char.charCodeAt(0).toString(16)}${path.slice(i + 1)}`;
+				const rows = cohort();
+				(rows[0] as (typeof rows)[number]).manifest[section]["old-metrics"] = `https://github.com${escaped}`;
+				expect(assess(rows), escaped).toEqual(version === "0.24.0" ? [] : [{ repo: (rows[0] as (typeof rows)[number]).repo, reasons: ["behind:old-metrics@0.1.0"] }]);
+			}
+		}
+	});
 
 	it.each(["dependencies", "devDependencies"] as const)("flags invalid known pins in %s even with a valid alias", (section) => {
 		const member = MEMBERS[0] as (typeof MEMBERS)[number];

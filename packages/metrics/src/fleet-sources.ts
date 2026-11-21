@@ -73,8 +73,28 @@ function validManifest(value: unknown): boolean {
 	});
 }
 
-// Recognition and trust share native URL normalization. An untrusted identity is
-// only a reporting hint; manifest pins never supply network destinations.
+// URL preserves percent escapes in pathname. Decode each segment once, retaining
+// its boundaries for trust; decoded separators can only identify an invalid pin.
+function releasePathIdentity(pathname: string): { tag: string | undefined; publisher: string | undefined; valid: boolean } {
+	let valid = true;
+	const parts = pathname.split("/").map((part) => {
+		try {
+			return decodeURIComponent(part);
+		} catch {
+			valid = false;
+			// Native forgiving decoding preserves an encoded member prefix even
+			// when later percent/UTF-8 bytes are invalid. Escape form delimiters
+			// so literal '+' and '&' keep their path meaning. Never trust this.
+			return new URLSearchParams(`part=${part.replace(/[+&]/g, encodeURIComponent)}`).get("part") ?? part;
+		}
+	});
+	valid = valid && parts.length === 7 && parts.slice(1).every((part) => part && part !== "." && part !== ".." && !/[/\\]/.test(part));
+	const match = /^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)(?:\/|$)/.exec(parts.join("/").replace(/\\/g, "/"));
+	return { tag: match?.[2], publisher: match?.[1], valid: valid && !!match };
+}
+
+// Recognition and trust share the same decoded Release-path boundary. An
+// untrusted identity is only a reporting hint, never a network destination.
 function releaseIdentity(raw: string, publisher?: string): { tag: string | undefined; trusted: boolean } {
 	let url: URL | undefined;
 	try {
@@ -82,20 +102,27 @@ function releaseIdentity(raw: string, publisher?: string): { tag: string | undef
 	} catch {
 		// Malformed-but-recognizable pins still need reporting below.
 	}
-	const match = url && /^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
-	// Retain refusals for malformed authorities or paths normalized out of shape.
-	const rawTag = match?.[2] ?? /^[a-z][a-z\d+.-]*:\/\/[^/]*\/[^/]+\/[^/]+\/releases\/download\/([^/?#]+)/i.exec(raw)?.[1];
-	let tag = rawTag;
-	try {
-		if (tag !== undefined) tag = decodeURIComponent(tag);
-		if (!url || !match || url.origin !== "https://github.com" || url.username || url.password ||
-			(publisher && match[1]?.toLowerCase() !== publisher.toLowerCase())) return { tag, trusted: false };
-		const asset = decodeURIComponent(match[3] ?? "");
-		const trusted = [tag, asset].every((part) => part && part !== "." && part !== ".." && !/[/\\]/.test(part));
-		return { tag, trusted };
-	} catch {
-		return { tag, trusted: false };
+	const identity = url && releasePathIdentity(url.pathname);
+	if (identity?.tag !== undefined) {
+		return {
+			tag: identity.tag,
+			trusted: identity.valid && url?.origin === "https://github.com" && !url.username && !url.password &&
+				(!publisher || identity.publisher?.toLowerCase() === publisher.toLowerCase()),
+		};
 	}
+	// URL parsing can fail on the authority or erase the tag through traversal.
+	// Retain that path as a refusal, after URL's input whitespace preprocessing.
+	let start = 0;
+	let end = raw.length;
+	while (start < end && raw.charCodeAt(start) <= 32) start++;
+	while (end > start && raw.charCodeAt(end - 1) <= 32) end--;
+	const input = raw.slice(start, end).replace(/[\t\n\r]/g, "").replace(/\\/g, "/");
+	const path = /^[a-z][a-z\d+.-]*:\/\/[^/]*(\/[^?#]*)/i.exec(input)?.[1];
+	if (path === undefined) return { tag: undefined, trusted: false };
+	// A fixed dummy authority lets URL normalize the recovered path even when
+	// the manifest authority was invalid. Neither form can establish trust.
+	const normalized = new URL(`https://release.invalid${path}`).pathname;
+	return { tag: releasePathIdentity(normalized).tag ?? releasePathIdentity(path).tag, trusted: false };
 }
 
 function validGitRef(ref: string): boolean {
