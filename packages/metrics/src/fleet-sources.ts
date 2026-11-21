@@ -257,12 +257,17 @@ export async function readFleetTrainLag(
 	// Train tags first: the Releases list is newest-first across every package, so a day-old train falls off its first page.
 	const api = `https://api.github.com/repos/${p.publisher}`;
 	let asOf: string | null = null;
+	// One logical source call may issue multiple HTTP requests. Count each returned tag,
+	// successful Release and consumer manifest against one cumulative interpreted-row budget.
+	let sourceRows = 0;
 	let candidates: string[];
 	try {
 		const refs = await getJson(`${api}/git/matching-refs/tags/train-v?per_page=100`, signal, budget.maxResponseBytes);
 		asOf = refs.date;
 		if (!Array.isArray(refs.body) || refs.body.some((r) => !isRecord(r) || typeof r.ref !== "string" || !validGitRef(r.ref)))
 			return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
+		sourceRows = refs.body.length;
+		if (sourceRows > budget.maxRows) return unknown("tags=row_budget", "incomplete_or_invalid_source", asOf);
 		candidates = (refs.body as { ref?: unknown }[])
 			.map((r) => (typeof r.ref === "string" ? r.ref.replace(/^refs\/tags\/train-v/, "") : ""))
 			.filter((v) => SEMVER.test(v))
@@ -284,6 +289,7 @@ export async function readFleetTrainLag(
 					},
 				);
 				if (got) {
+					if (++sourceRows > budget.maxRows) return unknown("releases=row_budget", "incomplete_or_invalid_source", asOf);
 					const body = got.body;
 					if (
 						!isRecord(body) ||
@@ -308,6 +314,8 @@ export async function readFleetTrainLag(
 	const train = latestCompleteTrain(releases, p.members, at, p.graceHours);
 	if (train === null) return unknown("train=none", "incomplete_or_invalid_source", asOf);
 
+	if (sourceRows + p.consumers.length > budget.maxRows)
+		return unknown(`train=${train};manifests=row_budget`, "incomplete_or_invalid_source", asOf);
 	const read = await Promise.allSettled(
 		p.consumers.map(async (c) => ({
 			repo: c.repo,

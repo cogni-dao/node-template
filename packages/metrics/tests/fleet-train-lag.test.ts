@@ -474,4 +474,27 @@ describe("source qualification against six current consumers", () => {
 		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
 	});
 
+
+	it("rejects tag rows beyond the source row budget", async () => {
+		const fetcher = fakeFetch(current());
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => address.includes("matching-refs")
+			? response(Array.from({ length: 101 }, (_, n) => ({ ref: `refs/tags/train-v0.24.${n}` }))) : fetcher(address)));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, { ...budget, maxRows: 100 });
+		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+		expect(sample.evidenceRefs[0]).toContain("row_budget");
+	});
+
+	it.each([4, 11])("rejects cumulative Release or manifest rows above budget %i", async (maxRows) => {
+		vi.stubGlobal("fetch", fakeFetch(current()));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, { ...budget, maxRows });
+		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+		expect(sample.evidenceRefs[0]).toContain("row_budget");
+	});
+
+	it("accepts the exact cumulative source row budget", async () => {
+		vi.stubGlobal("fetch", fakeFetch(current()));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, { ...budget, maxRows: 12 });
+		expect(sample).toMatchObject({ complete: true, value: 0 });
+	});
+
 });
