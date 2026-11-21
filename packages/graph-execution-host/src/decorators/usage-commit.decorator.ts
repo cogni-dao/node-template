@@ -8,7 +8,7 @@
  * Invariants:
  *   - CALLBACK_WRITES_PLATFORM_RECEIPTS: LiteLLM callback writes receipts for platform runs. BYO receipts written directly here.
  *   - BILLING_INDEPENDENT_OF_CLIENT: validation fires during stream iteration, not on client connection
- *   - USAGE_FACT_VALIDATED: Zod validation at ingestion boundary (strict for inproc, hints for external)
+ *   - USAGE_FACT_VALIDATED: Zod validation at ingestion boundary (strict for inproc/sandbox, hints for external)
  *   - ONE_LEDGER_WRITER: commitUsageFact() remains the sole caller of recordChargeReceipt()
  *   - PURE_LIBRARY: no env vars, no process lifecycle
  * Side-effects: IO (DB write for non-platform usage receipts via commitUsageFact)
@@ -86,11 +86,12 @@ export class UsageCommitDecorator implements GraphExecutorPort {
    * Validate a UsageFact from a usage_report event.
    *
    * Per USAGE_FACT_VALIDATED: validates at ingestion boundary.
-   * - Billing-authoritative (inproc): strict schema, hard failure on invalid
+   * - Billing-authoritative (inproc/sandbox): strict schema, hard failure on invalid
    * - External (langgraph_server/claude_sdk): hints schema, soft skip on invalid
    */
   private validateUsageFact(fact: UsageFact, runId: string): void {
-    const isBillingAuthoritative = fact.executorType === "inproc";
+    const isBillingAuthoritative =
+      fact.executorType === "inproc" || fact.executorType === "sandbox";
 
     const schema = isBillingAuthoritative
       ? UsageFactStrictSchema

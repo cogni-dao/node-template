@@ -44,9 +44,9 @@
   - `RunFinalSummary` - Terminal usage + finishReason shape (shared by DoneEvent, Redis terminal event, facade accumulator)
   - `ToolCallStartEvent`, `ToolCallResultEvent` - Tool execution events
   - `UsageFact` - Billing fact emitted per LLM call; inner executors may emit neutral facts and wrapper layers attach billing identity before validation
-  - `UsageFactStrictSchema` - Zod schema for billing-authoritative executors (inproc; usageUnitId required)
+  - `UsageFactStrictSchema` - Zod schema for billing-authoritative executors (inproc/sandbox; usageUnitId required)
   - `UsageFactHintsSchema` - Zod schema for external/telemetry executors (usageUnitId optional)
-  - `ExecutorType` - Executor discriminator ("langgraph_server" | "claude_sdk" | "inproc")
+  - `ExecutorType` - Executor discriminator ("langgraph_server" | "claude_sdk" | "inproc" | "sandbox")
   - `RunContext` - Run identity provided to relay subscribers
   - `SourceSystem`, `SOURCE_SYSTEMS` - Billing source system enum
   - `ToolSpec` - Canonical tool definition (JSONSchema7 inputSchema)
