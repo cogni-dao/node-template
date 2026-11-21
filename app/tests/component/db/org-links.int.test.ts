@@ -731,7 +731,16 @@ describe("the forward migration 0051 (real Postgres, rolled back)", () => {
       .filter((chunk) => chunk.length > 0);
   };
 
-  it("repairs the database the rejected first 0050 left: keeps the oldest live row per (principal, scope) with no human revoker, restores the old index, adds the new one, and is safe to run again", async () => {
+  /** Statements with their comment lines removed, for matching. */
+  const bare = (statement: string): string =>
+    statement
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .join("\n")
+      .trim();
+  const isForceToggle = (statement: string): boolean => /^ALTER TABLE "agent_roles" (NO )?FORCE ROW LEVEL SECURITY;?$/.test(bare(statement));
+
+  it("repairs the database the rejected first 0050 left, run as the migrator is run: the table's owner WITHOUT BYPASSRLS under FORCE row-level security (the unfixed statements fail with 23505, the migration passes)", async () => {
     const user = async (name: string) => {
       const id = randomUUID();
       await service`INSERT INTO users (id, name) VALUES (${id}, ${name})`;
@@ -747,40 +756,61 @@ describe("the forward migration 0051 (real Postgres, rolled back)", () => {
     try {
       await owner
         .begin(async (tx) => {
-          // The owner connection is subject to FORCE row-level security on `agent_roles`; lift it for this transaction (the DDL is transactional, so it comes back on rollback).
+          // SETUP ONLY: seed under the owner's own bypass (FORCE lifted), then put FORCE back, so the repair runs under the production condition.
           await tx.unsafe("ALTER TABLE agent_roles NO FORCE ROW LEVEL SECURITY");
-        // The state the rejected 0050 left: the old index replaced by the account-aware one under the OLD NAME, and the new one absent.
-        await tx.unsafe("DROP INDEX agent_roles_live_unique");
-        await tx.unsafe("DROP INDEX IF EXISTS agent_roles_live_account_unique");
-        await tx.unsafe(`CREATE UNIQUE INDEX agent_roles_live_unique ON agent_roles (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL`);
-        const give = (principal: string, accountId: string, ago: string) =>
-          tx.unsafe(
-            `INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, created_at, resource, account_id)
-             VALUES ('${principal}', 'org:owner', '${approver}', now(), now() - interval '${ago}', 'account', '${accountId}')`
-          );
-        await give(p, a1, "2 days"); // the oldest: kept
-        await give(p, a2, "1 day"); // a duplicate the bad state allowed: ended
-        await give(p, a3, "1 hour"); // another duplicate: ended
-        await give(q, a1, "3 hours"); // a principal with one live row: untouched
-        expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`).toHaveLength(3);
+          // The state the rejected 0050 left: the old index replaced by the account-aware one under the OLD NAME, and the new one absent.
+          await tx.unsafe("DROP INDEX agent_roles_live_unique");
+          await tx.unsafe("DROP INDEX IF EXISTS agent_roles_live_account_unique");
+          await tx.unsafe(`CREATE UNIQUE INDEX agent_roles_live_unique ON agent_roles (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL`);
+          const give = (principal: string, accountId: string, ago: string) =>
+            tx.unsafe(
+              `INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, created_at, resource, account_id)
+               VALUES ('${principal}', 'org:owner', '${approver}', now(), now() - interval '${ago}', 'account', '${accountId}')`
+            );
+          await give(p, a1, "2 days"); // the oldest: kept
+          await give(p, a2, "1 day"); // a duplicate the bad state allowed: ended
+          await give(p, a3, "1 hour"); // another duplicate: ended
+          await give(q, a1, "3 hours"); // a principal with one live row: untouched
+          await tx.unsafe("ALTER TABLE agent_roles FORCE ROW LEVEL SECURITY");
 
-        for (const statement of repairStatements()) await tx.unsafe(statement);
-        for (const statement of repairStatements()) await tx.unsafe(statement); // safe to run again
+          // THE PREMISE: this connection is the owner, is subject to row-level security, and FORCE is on, so it sees none of the rows it just wrote. That is what the migrator is.
+          expect((await tx`SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user`)[0]?.rolbypassrls).toBe(false);
+          expect((await tx`SELECT relforcerowsecurity FROM pg_class WHERE relname = 'agent_roles'`)[0]?.relforcerowsecurity).toBe(true);
+          expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${p}`).toHaveLength(0);
 
-        expect(await tx`SELECT account_id FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`).toEqual([{ account_id: a1 }]);
-        // The ended rows name no person: the migration, not an actor, ended them.
-        const ended = await tx`SELECT revoked_by FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NOT NULL`;
-        expect(ended).toHaveLength(2);
-        expect(ended.every((row) => row.revoked_by === null)).toBe(true);
-        expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${q} AND scope = 'org:owner' AND revoked_at IS NULL`).toHaveLength(1);
-        const defs = await tx`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'agent_roles' AND indexname IN ('agent_roles_live_unique', 'agent_roles_live_account_unique') ORDER BY indexname`;
-        expect(defs.map((d) => d.indexname)).toEqual(["agent_roles_live_account_unique", "agent_roles_live_unique"]);
-        expect(String(defs[1]?.indexdef)).not.toContain("COALESCE");
-        expect(String(defs[0]?.indexdef)).toContain("COALESCE");
-        // The previous release's writer works again: its ON CONFLICT infers the restored index and finds the live row.
-        const old = await tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${p}, 'org:owner', ${approver}) ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
-        expect(old).toHaveLength(0);
-        throw new Error("rollback");
+          // WITHOUT THE FIX (the migration's two FORCE toggles removed): the UPDATE ends zero rows under FORCE, and the unique-index build then sees the duplicates and fails.
+          const statements = repairStatements();
+          expect(statements.filter(isForceToggle)).toHaveLength(2); // the fix: NO FORCE before step 1's UPDATE, FORCE after it
+          await tx.unsafe("SAVEPOINT without_the_fix");
+          await expect(
+            (async () => {
+              for (const statement of statements.filter((statement) => !isForceToggle(statement))) await tx.unsafe(statement);
+            })()
+          ).rejects.toMatchObject({ code: "23505" });
+          await tx.unsafe("ROLLBACK TO SAVEPOINT without_the_fix");
+
+          // WITH THE FIX: the whole hand-written part, as the migrator runs it (one transaction), and again (safe to run twice).
+          for (const statement of statements) await tx.unsafe(statement);
+          for (const statement of statements) await tx.unsafe(statement);
+          // FORCE is back on when the migration is done.
+          expect((await tx`SELECT relforcerowsecurity FROM pg_class WHERE relname = 'agent_roles'`)[0]?.relforcerowsecurity).toBe(true);
+
+          // READ THE RESULT (test only: lift FORCE again to look at the rows).
+          await tx.unsafe("ALTER TABLE agent_roles NO FORCE ROW LEVEL SECURITY");
+          expect(await tx`SELECT account_id FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`).toEqual([{ account_id: a1 }]);
+          // The ended rows name no person: the migration, not an actor, ended them.
+          const ended = await tx`SELECT revoked_by FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NOT NULL`;
+          expect(ended).toHaveLength(2);
+          expect(ended.every((row) => row.revoked_by === null)).toBe(true);
+          expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${q} AND scope = 'org:owner' AND revoked_at IS NULL`).toHaveLength(1);
+          const defs = await tx`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'agent_roles' AND indexname IN ('agent_roles_live_unique', 'agent_roles_live_account_unique') ORDER BY indexname`;
+          expect(defs.map((d) => d.indexname)).toEqual(["agent_roles_live_account_unique", "agent_roles_live_unique"]);
+          expect(String(defs[1]?.indexdef)).not.toContain("COALESCE");
+          expect(String(defs[0]?.indexdef)).toContain("COALESCE");
+          // The previous release's writer works again: its ON CONFLICT infers the restored index and finds the live row.
+          const old = await tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${p}, 'org:owner', ${approver}) ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
+          expect(old).toHaveLength(0);
+          throw new Error("rollback");
         })
         .catch((error: unknown) => {
           if ((error as Error).message !== "rollback") throw error;

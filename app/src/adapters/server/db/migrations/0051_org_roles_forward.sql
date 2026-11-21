@@ -12,12 +12,17 @@ ALTER TABLE "org_links" ADD CONSTRAINT "org_links_created_by_users_id_fk" FOREIG
 -- A database that ran the first, rejected 0050 has `agent_roles_live_unique` as the account-aware three-column index and may hold several live rows per (principal, scope).
 -- On production nothing changes: the old index never allowed a duplicate, so step 1 ends no row and steps 2 and 3 find both indexes in place.
 -- 1. Keep the OLDEST live row per (principal, scope), end the rest. revoked_by stays NULL: the migration, not a person, ended them (there is no system actor row to name).
+-- `agent_roles` has ENABLE + FORCE row-level security and the migrator is its owner WITHOUT BYPASSRLS, so under FORCE the owner's UPDATE matches no policy and ends ZERO rows, while the
+-- unique-index build below still sees every row and fails (23505). The drizzle migrator runs every pending migration in ONE transaction, so lifting FORCE for this one UPDATE and putting
+-- it back is atomic with the rest: a failure anywhere rolls the FORCE setting back too, and it is on again before the migration commits.
+ALTER TABLE "agent_roles" NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 UPDATE "agent_roles" r SET "revoked_at" = now()
 FROM (
 	SELECT "id", row_number() OVER (PARTITION BY "principal_user_id", "scope" ORDER BY "created_at", "id") AS n
 	FROM "agent_roles" WHERE "revoked_at" IS NULL
 ) d
 WHERE r."id" = d."id" AND d.n > 1;--> statement-breakpoint
+ALTER TABLE "agent_roles" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 -- 2. Restore the old two-column index: drop an account-aware index that took its name, then create it if it is missing.
 DO $$
 BEGIN
