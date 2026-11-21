@@ -166,8 +166,6 @@ export function orgErrorCopy(reply: OrgReply): string {
   return reply.status === 503 || reply.status === 0 ? UNAVAILABLE_COPY : SAVE_FAILED_COPY;
 }
 
-/** A credit count for a person: grouped digits, no unit words. */
-export const formatCredits = (n: number): string => Math.round(n).toLocaleString("en-US");
 
 interface LedgerRow {
   readonly amount: number;

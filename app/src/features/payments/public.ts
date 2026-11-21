@@ -26,3 +26,4 @@ export {
   useCreditsSummary,
 } from "./hooks/useCreditsSummary";
 export { usePaymentFlow } from "./hooks/usePaymentFlow";
+export { formatCreditsAsDollars } from "./utils/formatDollars";

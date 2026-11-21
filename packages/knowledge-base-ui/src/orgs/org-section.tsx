@@ -25,7 +25,7 @@ import { type FormEvent, useState } from "react";
 import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
 import { Skeleton } from "../ui/skeleton.js";
-import { formatCredits, memberLabel, type OrgEndpoints, type OrgMember, type OrgRole, ORG_ERROR_COPY, UNAVAILABLE_COPY } from "./org-client.js";
+import { memberLabel, type OrgEndpoints, type OrgMember, type OrgRole, ORG_ERROR_COPY, UNAVAILABLE_COPY } from "./org-client.js";
 import { ErrorLine, OrgHeading, Pill, type RowMenuItem, RoleSelect, RolePill, RowMenu } from "./org-parts.js";
 import { useOrg } from "./use-org.js";
 
@@ -33,10 +33,12 @@ export interface OrgSectionProps {
   readonly endpoints: OrgEndpoints;
   /** The org's id, from the page's route. */
   readonly orgId: string;
+  /** How a credit amount reads to a person (the node passes its one dollars formatter; the package holds no rate). */
+  readonly formatMoney: (credits: number) => string;
   readonly className?: string;
 }
 
-export function OrgSection({ endpoints, orgId, className }: OrgSectionProps) {
+export function OrgSection({ endpoints, orgId, formatMoney, className }: OrgSectionProps) {
   const org = useOrg(endpoints, orgId);
   const { state, busy, error } = org;
   const [wallet, setWallet] = useState("");
@@ -127,11 +129,11 @@ export function OrgSection({ endpoints, orgId, className }: OrgSectionProps) {
       <dl className="flex gap-8 pt-6 pb-2">
         <div>
           <dt className="text-muted-foreground text-sm">Balance</dt>
-          <dd className="font-semibold text-foreground text-lg tabular-nums">{balance ? formatCredits(balance.balance) : balance === undefined ? <Skeleton className="h-6 w-16" /> : "—"}</dd>
+          <dd className="font-semibold text-foreground text-lg tabular-nums">{balance ? formatMoney(balance.balance) : balance === undefined ? <Skeleton className="h-6 w-16" /> : "—"}</dd>
         </div>
         <div>
           <dt className="text-muted-foreground text-sm">Spent this month</dt>
-          <dd className="font-semibold text-foreground text-lg tabular-nums">{balance ? `${formatCredits(balance.spent)}${balance.partial ? "+" : ""}` : balance === undefined ? <Skeleton className="h-6 w-16" /> : "—"}</dd>
+          <dd className="font-semibold text-foreground text-lg tabular-nums">{balance ? `${formatMoney(balance.spent)}${balance.partial ? "+" : ""}` : balance === undefined ? <Skeleton className="h-6 w-16" /> : "—"}</dd>
         </div>
       </dl>
 

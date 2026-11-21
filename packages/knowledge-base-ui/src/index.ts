@@ -70,7 +70,6 @@ export {
 } from "./orgs/org-admin-section.js";
 export {
   type AdminOrgItem,
-  formatCredits,
   ORG_ERROR_COPY,
   type OrgEndpoints,
   type OrgInvite,

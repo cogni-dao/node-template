@@ -23,7 +23,7 @@ import { type ComponentType, type FormEvent, type ReactNode, useState } from "re
 import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
 import { Skeleton } from "../ui/skeleton.js";
-import { formatCredits, type OrgEndpoints, UNAVAILABLE_COPY } from "./org-client.js";
+import { type OrgEndpoints, UNAVAILABLE_COPY } from "./org-client.js";
 import { ErrorLine, OrgHeading, RolePill } from "./org-parts.js";
 import { useOrgList } from "./use-org-list.js";
 
@@ -43,10 +43,12 @@ export interface OrgsSectionProps {
   readonly hrefFor?: (orgUserId: string) => string;
   /** The router's link (`next/link`); default `<a>`. */
   readonly LinkComponent?: OrgLinkComponent;
+  /** How a credit amount reads to a person (the node passes its one dollars formatter; the package holds no rate). */
+  readonly formatMoney: (credits: number) => string;
   readonly className?: string;
 }
 
-export function OrgsSection({ endpoints, hrefFor = (id) => `/orgs/${encodeURIComponent(id)}`, LinkComponent = DefaultLink, className }: OrgsSectionProps) {
+export function OrgsSection({ endpoints, formatMoney, hrefFor = (id) => `/orgs/${encodeURIComponent(id)}`, LinkComponent = DefaultLink, className }: OrgsSectionProps) {
   const { state, busy, error, create, accept, reload } = useOrgList(endpoints);
   const [name, setName] = useState("");
 
@@ -96,7 +98,7 @@ export function OrgsSection({ endpoints, hrefFor = (id) => `/orgs/${encodeURICom
                 </LinkComponent>
                 <RolePill role={o.role} />
                 <span className="w-16 shrink-0 text-right text-foreground tabular-nums" aria-label={credits == null ? "Balance unknown" : "Balance"}>
-                  {credits == null ? "—" : formatCredits(credits)}
+                  {credits == null ? "—" : formatMoney(credits)}
                 </span>
               </li>
             );

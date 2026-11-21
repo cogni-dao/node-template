@@ -27,18 +27,10 @@ import {
   UsdcPaymentFlow,
 } from "@/components";
 import {
-  creditsToUsd,
+  formatCreditsAsDollars,
   useCreditsSummary,
   usePaymentFlow,
 } from "@/features/payments/public";
-
-function formatDollars(credits: number): string {
-  const dollars = creditsToUsd(credits);
-  return dollars.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
 
 export function CreditsPageClient(): ReactElement {
   const [amountInput, setAmountInput] = useState<string>("");
@@ -67,7 +59,7 @@ export function CreditsPageClient(): ReactElement {
   };
 
   const balance = summaryQuery.data?.balanceCredits ?? 0;
-  const balanceDisplay = summaryQuery.isLoading ? "—" : formatDollars(balance);
+  const balanceDisplay = summaryQuery.isLoading ? "—" : formatCreditsAsDollars(balance);
   const isNegative = balance < 0;
 
   return (
