@@ -33,7 +33,7 @@
  */
 
 import { hashLinkToken, isLinkTokenShape, newLinkToken } from "./approval";
-import { type OrgAccountStore, type Page, pageOf, requireRole } from "./org-accounts";
+import { cleanCursor, clampLimit, type OrgAccountStore, type Page, type PageQuery, pageOf, requireRole } from "./org-accounts";
 import type { SqlTag } from "./postgres";
 import {
   isCanonicalHttpsOrigin,
@@ -259,6 +259,18 @@ export class LinkError extends Error {
     this.name = "LinkError";
     this.code = code;
   }
+}
+
+/**
+ * One page of an org's open node links, for an owner or admin (`not_found` for anyone else). The cursor is cleaned like the members' cursor: a value that is not a link id is
+ * `invalid_cursor` (the route answers 400), never a database error.
+ */
+export async function listLinks(
+  deps: { orgs: OrgAccountStore; links: OrgLinkStore },
+  input: { actorUserId: string; orgUserId: string } & PageQuery
+): Promise<Page<OpenLink>> {
+  await requireRole(deps.orgs, input.actorUserId, input.orgUserId, "admin");
+  return deps.links.openLinksOfOrg(input.orgUserId, { limit: clampLimit(input.limit), after: cleanCursor(input.cursor, "uuid") });
 }
 
 /** An org owner unlinks: the link closes and its bindings end, so the next run is refused with `org_link_closed`. `not_found` for a stranger, `not_allowed` for an admin. */

@@ -35,6 +35,7 @@ import {
   type LinkPreview,
   type LinkResult,
   listAllOrgs,
+  listLinks,
   listMembers,
   listMyInvites,
   listOrgs,
@@ -42,7 +43,7 @@ import {
   type OpenLink,
   type OrgMember,
   type OrgMembership,
-  type OrgRecord,
+  type OrgDetail,
   type OrgRole,
   type OrgSummary,
   type Page,
@@ -51,7 +52,6 @@ import {
   type OutboundResult,
   previewLinkCode,
   removeMember,
-  requireRole,
   suspendOrg,
 } from "@cogni/agent-grants";
 import { createPinnedHttp, createPinnedJwksFetch } from "@cogni/agent-grants/jwks-fetch";
@@ -67,7 +67,7 @@ export interface OrgAccounts {
   list(userId: string, query: PageQuery): Promise<Page<OrgMembership>>;
   /** One page of EVERY org, for the node admin's list. The route proved node-admin first (the one admin check). */
   listAll(query: PageQuery): Promise<Page<OrgSummary>>;
-  view(actorUserId: string, orgUserId: string, query: PageQuery): Promise<{ org: OrgRecord; role: OrgRole; members: Page<OrgMember>; links: Page<OpenLink> }>;
+  view(actorUserId: string, orgUserId: string, query: PageQuery): Promise<{ org: OrgDetail; role: OrgRole; members: Page<OrgMember>; links: Page<OpenLink> }>;
   members(actorUserId: string, orgUserId: string, query: PageQuery): Promise<Page<OrgMember>>;
   links(actorUserId: string, orgUserId: string, query: PageQuery): Promise<Page<OpenLink>>;
   invite(input: { actorUserId: string; orgUserId: string; wallet: unknown; role: unknown }): Promise<{ id: string; expiresAt: string; role: OrgRole }>;
@@ -140,8 +140,7 @@ export function createOrgAccounts(deps: {
     },
     members: (actorUserId, orgUserId, query) => listMembers(read, { actorUserId, orgUserId, ...query }),
     async links(actorUserId, orgUserId, query) {
-      await requireRole(read, actorUserId, orgUserId, "admin");
-      return readLinks.openLinksOfOrg(orgUserId, { limit: query.limit ?? 50, after: query.cursor ?? null });
+      return listLinks({ orgs: read, links: readLinks }, { actorUserId, orgUserId, ...query });
     },
     async invite(input) {
       const invite = await tx((store) => inviteMember(store, input));

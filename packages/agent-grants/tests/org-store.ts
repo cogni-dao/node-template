@@ -79,7 +79,8 @@ export function memoryOrgStore(init?: { wallets?: Record<string, string[]> }) {
       return { items: page.items.map((o) => ({ orgUserId: o.orgUserId, name: o.name, suspended: o.suspendedAt !== null })), nextCursor: page.nextCursor };
     },
     async getOrg(orgUserId) {
-      return orgs.get(orgUserId) ?? null;
+      const org = orgs.get(orgUserId);
+      return org ? { ...org, spentThisMonthCredits: 0 } : null;
     },
     async listOrgsOf(userId, input): Promise<Page<OrgMembership>> {
       const mine = [...orgs.values()].flatMap((o): OrgMembership[] => {
@@ -233,7 +234,7 @@ export function memoryLinkStore(orgs: { suspended?: Record<string, boolean> } = 
     },
     async insertLink({ orgUserId, issuer, services, createdBy }) {
       if (links.some((l) => l.issuer === issuer && l.open)) return null;
-      const id = `link-${++n}`;
+      const id = `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
       links.push({ id, orgUserId, issuer, services, createdAt: "t", open: true, closedBy: null, createdBy });
       return id;
     },

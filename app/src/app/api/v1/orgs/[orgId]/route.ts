@@ -33,7 +33,7 @@ export const GET = wrapRouteHandlerWithLogging<Ctx>(
       const view = await getContainer().orgAccounts.view(sessionUser.id, orgId, query);
       return json(
         orgViewOperation.output.parse({
-          org: { orgUserId: view.org.orgUserId, name: view.org.name, billingAccountId: view.org.billingAccountId, balanceCredits: view.org.balanceCredits, suspended: view.org.suspendedAt !== null },
+          org: { orgUserId: view.org.orgUserId, name: view.org.name, billingAccountId: view.org.billingAccountId, balanceCredits: view.org.balanceCredits, spentThisMonthCredits: view.org.spentThisMonthCredits, suspended: view.org.suspendedAt !== null },
           role: view.role,
           // The first page of each list, with its cursor; `/members` and `/links` carry on from there.
           members: view.members,

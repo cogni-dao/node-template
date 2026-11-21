@@ -28,6 +28,7 @@ import {
   createPostgresPayerBindingStore,
   hashLinkToken,
   inviteMember,
+  listLinks,
   listMembers,
   listOrgs,
   parseLinkCode,
@@ -405,6 +406,51 @@ describe("org people and links (real Postgres)", () => {
     });
   });
 
+  it("this UTC month's spend is computed in SQL: this month's debits only, never credits or last month, and zero for an org that spent nothing", async () => {
+    await rolledBack(async (tx) => {
+      const orgs = createPostgresOrgAccountStore(tx as unknown as SqlTag);
+      const alice = await user(tx, "alice");
+      const org = await createOrg(orgs, { creatorUserId: alice, name: "spender" });
+      expect((await orgs.getOrg(org.orgUserId))?.spentThisMonthCredits).toBe(0);
+      const key = (await tx`SELECT id FROM virtual_keys WHERE billing_account_id = ${org.billingAccountId} AND is_default`)[0]?.id as string;
+      const ledger = (amount: number, createdAt: string, reason = "charge_receipt") =>
+        tx`INSERT INTO credit_ledger (billing_account_id, virtual_key_id, amount, balance_after, reason, reference, created_at)
+           VALUES (${org.billingAccountId}, ${key}, ${amount}, 0, ${reason}, ${`ref-${randomUUID()}`}, ${createdAt}::timestamptz)`;
+      const startOfMonth = (await tx`SELECT (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')::text AS t`)[0]?.t as string;
+      await ledger(-100, startOfMonth); // the first instant of this UTC month: counted
+      await ledger(-210, new Date().toISOString()); // now: counted
+      await ledger(5000, new Date().toISOString(), "widget_payment"); // a credit: not spend
+      await tx`INSERT INTO credit_ledger (billing_account_id, virtual_key_id, amount, balance_after, reason, reference, created_at)
+        VALUES (${org.billingAccountId}, ${key}, -999, 0, 'charge_receipt', ${`ref-${randomUUID()}`}, ${startOfMonth}::timestamptz - interval '1 second')`; // the last instant of last month: not counted
+      expect((await orgs.getOrg(org.orgUserId))?.spentThisMonthCredits).toBe(310);
+      // Another org's spend never leaks in.
+      const bob = await user(tx, "bob");
+      const other = await createOrg(orgs, { creatorUserId: bob, name: "other" });
+      expect((await orgs.getOrg(other.orgUserId))?.spentThisMonthCredits).toBe(0);
+    });
+  });
+
+  it("a link list with a cursor that is not a link id is invalid_cursor from the decision (never a database error), and a real cursor pages through the real table", async () => {
+    await rolledBack(async (tx) => {
+      const sql = tx as unknown as SqlTag;
+      const orgs = createPostgresOrgAccountStore(sql);
+      const links = createPostgresOrgLinkStore(sql);
+      const alice = await user(tx, "alice");
+      const org = await createOrg(orgs, { creatorUserId: alice, name: "links" });
+      for (let i = 0; i < 3; i++) await links.insertLink({ orgUserId: org.orgUserId, issuer: `https://n${i}-${randomUUID().slice(0, 6)}.example`, services: ["node-ai"], createdBy: alice });
+      for (const bad of ["x", "not a uuid", "'; DROP TABLE org_links; --"])
+        await expect(listLinks({ orgs, links }, { actorUserId: alice, orgUserId: org.orgUserId, cursor: bad })).rejects.toMatchObject({ code: "invalid_cursor" });
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await listLinks({ orgs, links }, { actorUserId: alice, orgUserId: org.orgUserId, limit: 2, ...(cursor ? { cursor } : {}) });
+        seen.push(...page.items.map((l) => l.id));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      expect(new Set(seen).size).toBe(3);
+    });
+  });
+
   it("the durable replay table refuses a replay after the first use and takes over an expired row", async () => {
     await rolledBack(async (tx) => {
       const replay = createPostgresReplayStore(tx as unknown as SqlTag);
@@ -427,6 +473,19 @@ describe("two real connections (committed data, row locks)", () => {
   afterAll(async () => {
     await service?.end({ timeout: 1 });
   });
+
+  /**
+   * Polls `pg_stat_activity` until some backend of this database waits on a lock (an advisory lock, a row lock or a unique-index wait all report `Lock`), so a test releases the first
+   * transaction only once the second is really blocked on it. Gives up after 10 s (the test's own assertions then say what went wrong) instead of hanging.
+   */
+  async function untilALockWaits(): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const waiting = await service`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`;
+      if (Number(waiting[0]?.n ?? 0) > 0) return;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    }
+  }
 
   /** A committed org with two owners; the rows are removed again whatever the test says. */
   async function withOrg(fn: (ctx: { org: { orgUserId: string; billingAccountId: string }; alice: string; bob: string }) => Promise<void>): Promise<void> {
@@ -470,8 +529,8 @@ describe("two real connections (committed data, row locks)", () => {
     });
     await firstReady;
     const b = service.begin((tx) => second(tx));
-    // Give the second transaction time to reach (and block on) the first one's locks, then let the first commit.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Wait until the second transaction is actually blocked on a lock (not a guessed delay), then let the first commit.
+    await untilALockWaits();
     release();
     return Promise.allSettled([a, b]) as Promise<[PromiseSettledResult<A>, PromiseSettledResult<B>]>;
   }
@@ -535,8 +594,8 @@ describe("two real connections (committed data, row locks)", () => {
     });
     await Promise.race([isReady, a.then(() => undefined, () => undefined)]);
     const b = second();
-    // Give the second transaction time to reach (and block on) the first one's locks, then let the first commit.
-    await new Promise((resolveWait) => setTimeout(resolveWait, 400));
+    // Wait until the second transaction is actually blocked on a lock (not a guessed delay), then let the first commit.
+    await untilALockWaits();
     release();
     return Promise.all([a, b]);
   }

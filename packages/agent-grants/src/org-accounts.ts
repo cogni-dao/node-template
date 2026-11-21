@@ -68,7 +68,7 @@ export function pageOf<T>(rows: readonly T[], limit: number, keyOf: (row: T) => 
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** A cursor the store may use: null (the first page) or a well-formed key. `invalid_cursor` otherwise. */
-function cleanCursor(cursor: string | null | undefined, kind: "uuid" | "text"): string | null {
+export function cleanCursor(cursor: string | null | undefined, kind: "uuid" | "text"): string | null {
   if (cursor === null || cursor === undefined || cursor === "") return null;
   if (kind === "uuid" ? !UUID.test(cursor) : !/^[A-Za-z0-9._-]{1,100}$/.test(cursor)) throw new OrgError("invalid_cursor");
   return cursor;
@@ -108,6 +108,12 @@ export interface OrgRecord {
   readonly balanceCredits: number;
 }
 
+/** One org with its spend: `getOrg` reads the whole org page's numbers in one query, so a page makes no read per figure. */
+export interface OrgDetail extends OrgRecord {
+  /** Credits spent from the org's account in the current UTC month: the sum of its ledger debits since the first instant of this UTC month, read in SQL (never summed from a page of rows). */
+  readonly spentThisMonthCredits: number;
+}
+
 /** One org as the node admin's list shows it. */
 export interface OrgSummary {
   readonly orgUserId: string;
@@ -144,7 +150,7 @@ export interface OpenInvite extends OrgInviteView {}
 export interface OrgAccountStore {
   /** Writes the org's rows (`created_by` = the creator) and the creator's `org:owner`. `org_role_limit` when the creator already owns `maxOwned`, or the live index refuses their second `org:owner`; the count and the insert run under one per-person lock. */
   createOrg(input: { creatorUserId: string; name: string; maxOwned: number }): Promise<{ orgUserId: string; billingAccountId: string } | "org_role_limit">;
-  getOrg(orgUserId: string): Promise<OrgRecord | null>;
+  getOrg(orgUserId: string): Promise<OrgDetail | null>;
   /** One page of EVERY org on this node, by org id, for the node admin's list. The caller proved node-admin first. */
   listAll(input: { limit: number; after: string | null }): Promise<Page<OrgSummary>>;
   /** One page of the orgs this person holds a live role on, with the highest role, by org id. `after` is the previous page's cursor. */
@@ -224,7 +230,7 @@ export async function listOrgs(store: OrgAccountStore, userId: string, query: Pa
 export async function getOrgView(
   store: OrgAccountStore,
   input: { actorUserId: string; orgUserId: string } & PageQuery
-): Promise<{ org: OrgRecord; role: OrgRole; members: Page<OrgMember> }> {
+): Promise<{ org: OrgDetail; role: OrgRole; members: Page<OrgMember> }> {
   const role = await requireRole(store, input.actorUserId, input.orgUserId, "admin");
   const org = await store.getOrg(input.orgUserId);
   if (!org) throw new OrgError("not_found");
@@ -411,12 +417,17 @@ export function createPostgresOrgAccountStore(sql: SqlTag): OrgAccountStore {
     },
     async getOrg(orgUserId) {
       const rows = await sql`
-        SELECT p.user_id AS org_user_id, u.name, b.id AS billing_account_id, b.balance_credits, p.suspended_at
+        SELECT p.user_id AS org_user_id, u.name, b.id AS billing_account_id, b.balance_credits, p.suspended_at,
+               -- This UTC month's spend, computed here: the debits (negative ledger amounts) since the first instant of the current UTC month. A read; nothing is written.
+               (SELECT COALESCE(-SUM(l.amount), 0)::bigint FROM credit_ledger l
+                WHERE l.billing_account_id = b.id AND l.amount < 0
+                  AND l.created_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')) AS spent_this_month
         FROM agent_principals p
         JOIN users u ON u.id = p.user_id
         JOIN billing_accounts b ON b.owner_user_id = p.user_id
         WHERE p.user_id = ${orgUserId} AND p.kind = 'org' LIMIT 1`;
-      return rows[0] ? toOrg(rows[0]) : null;
+      const org = rows[0] ? toOrg(rows[0]) : null;
+      return org && rows[0] ? { ...org, spentThisMonthCredits: Number(rows[0].spent_this_month ?? 0) } : null;
     },
     async listAll({ limit, after }) {
       const rows = await sql`

@@ -302,6 +302,10 @@ describe("lists page (LISTS_PAGE)", () => {
     expect((await MEMBERS(req("/api/v1/orgs/o1/members", "GET"), params({ orgId: "o1" }))).status).toBe(404);
     fake.orgAccounts.members.mockRejectedValueOnce(new OrgError("invalid_cursor"));
     expect((await MEMBERS(req("/api/v1/orgs/o1/members?cursor=zzz", "GET"), params({ orgId: "o1" }))).status).toBe(400);
+    fake.orgAccounts.links.mockRejectedValueOnce(new OrgError("invalid_cursor"));
+    const badLinks = await LINKS(req("/api/v1/orgs/o1/links?cursor=x", "GET"), params({ orgId: "o1" }));
+    expect(badLinks.status).toBe(400);
+    expect(await badLinks.json()).toEqual({ error: "invalid_cursor" });
     fake.orgAccounts.links.mockResolvedValueOnce({ items: [{ id: "l1", orgUserId: "o1", issuer: "https://x.example", services: ["node-ai"], createdAt: "t" }], nextCursor: null });
     const links = await LINKS(req("/api/v1/orgs/o1/links", "GET"), params({ orgId: "o1" }));
     expect(await links.json()).toEqual({ items: [{ id: "l1", issuer: "https://x.example", services: ["node-ai"], createdAt: "t" }], nextCursor: null });
@@ -316,16 +320,16 @@ describe("lists page (LISTS_PAGE)", () => {
 });
 
 describe("the org view carries the balance and the members' bound wallets", () => {
-  it("GET /api/v1/orgs/{id} answers balanceCredits, and each member's wallet, so a page makes no read per org", async () => {
+  it("GET /api/v1/orgs/{id} answers balanceCredits and this month's spend (computed in SQL, not summed in the browser), and each member's wallet", async () => {
     fake.orgAccounts.view.mockResolvedValueOnce({
-      org: { orgUserId: "o1", name: "toks5", billingAccountId: "a1", balanceCredits: 4200, suspendedAt: null },
+      org: { orgUserId: "o1", name: "toks5", billingAccountId: "a1", balanceCredits: 4200, spentThisMonthCredits: 310, suspendedAt: null },
       role: "owner",
       members: { items: [{ userId: "u1", name: "alice", wallet: "0xabc", role: "owner", since: "t" }, { userId: "u2", name: "bob", wallet: null, role: "admin", since: "t" }], nextCursor: null },
       links: { items: [], nextCursor: null },
     });
     const res = await VIEW(req("/api/v1/orgs/o1", "GET"), params({ orgId: "o1" }));
     expect(await res.json()).toEqual({
-      org: { orgUserId: "o1", name: "toks5", billingAccountId: "a1", balanceCredits: 4200, suspended: false },
+      org: { orgUserId: "o1", name: "toks5", billingAccountId: "a1", balanceCredits: 4200, spentThisMonthCredits: 310, suspended: false },
       role: "owner",
       members: { items: [{ userId: "u1", name: "alice", wallet: "0xabc", role: "owner", since: "t" }, { userId: "u2", name: "bob", wallet: null, role: "admin", since: "t" }], nextCursor: null },
       links: { items: [], nextCursor: null },

@@ -60,7 +60,10 @@ export const orgAdminListOperation = {
 export const orgViewOperation = {
   id: "orgs.view.v1",
   output: z.object({
-    org: orgRefSchema,
+    org: orgRefSchema.extend({
+      /** Credits spent this UTC month, computed in SQL (the sum of the account's ledger debits since the first instant of the month), never summed from a page of rows. */
+      spentThisMonthCredits: z.number(),
+    }),
     role: orgRoleSchema,
     members: z.object({ items: z.array(memberSchema), nextCursor }),
     links: z.object({ items: z.array(linkSchema), nextCursor }),

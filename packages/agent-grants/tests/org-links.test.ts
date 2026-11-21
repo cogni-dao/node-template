@@ -16,6 +16,7 @@ import {
   linkClaims,
   linkCodeSecret,
   linkedHome,
+  listLinks,
   newLinkToken,
   parseLinkCode,
   parseServicesClaim,
@@ -383,3 +384,36 @@ describe("lock order and attribution of a link", () => {
     expect(links.locks).toEqual([]);
   });
 });
+
+describe("listing an org's links (the cursor is cleaned before it reaches the store)", () => {
+  const rig = async () => {
+    const orgs = memoryOrgStore();
+    const links = memoryLinkStore();
+    const orgUserId = (await createOrg(orgs, { creatorUserId: "alice", name: "toks5" })).orgUserId;
+    return { orgs, links, orgUserId };
+  };
+  const code = (p: Promise<unknown>) => p.then(() => "ok", (e: unknown) => (e as { code?: string }).code ?? `other:${String(e)}`);
+
+  it("a cursor that is not a link id is invalid_cursor, never a database error, and a stranger is still not_found", async () => {
+    const { orgs, links, orgUserId } = await rig();
+    for (const bad of ["x", "not a uuid", "../etc", "00000000-0000-0000-0000", "'; DROP TABLE org_links; --", "a".repeat(101)])
+      expect(await code(listLinks({ orgs, links }, { actorUserId: "alice", orgUserId, cursor: bad })), bad).toBe("invalid_cursor");
+    expect(await code(listLinks({ orgs, links }, { actorUserId: "stranger", orgUserId, cursor: "x" }))).toBe("not_found");
+  });
+
+  it("pages by link id with a valid cursor and clamps the page size", async () => {
+    const { orgs, links, orgUserId } = await rig();
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) ids.push((await links.insertLink({ orgUserId, issuer: `https://n${i}.example.org`, services: ["node-ai"], createdBy: "alice" })) as string);
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await listLinks({ orgs, links }, { actorUserId: "alice", orgUserId, limit: 2, ...(cursor ? { cursor } : {}) });
+      seen.push(...page.items.map((l) => l.id));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(new Set(seen).size).toBe(5);
+    expect((await listLinks({ orgs, links }, { actorUserId: "alice", orgUserId, limit: 10_000 })).items).toHaveLength(5);
+  });
+});
+
