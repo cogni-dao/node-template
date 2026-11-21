@@ -83,13 +83,16 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 			if (call.name === "core__web_search") {
 				receipts.searches++;
 				if (receipts.searches > 6) return reject("search_budget");
+				const maxResults = call.args.maxResults;
+				if (maxResults !== undefined && typeof maxResults !== "number")
+					return reject("invalid_tool_arguments");
 				request = {
 					...request,
 					toolCall: {
 						...call,
 						args: {
 							...call.args,
-							maxResults: Math.min(Number(call.args.maxResults ?? 3), 3),
+							maxResults: Math.min(maxResults ?? 3, 3),
 						},
 					},
 				};

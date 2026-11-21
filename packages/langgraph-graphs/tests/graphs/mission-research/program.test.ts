@@ -930,12 +930,43 @@ describe("child recursion bound", () => {
 					JSON.stringify({ name, args }),
 				),
 		),
+		...[
+			null,
+			{ toString: null },
+			{ valueOf: null, toString: null },
+			[],
+			[3],
+			"3",
+			true,
+			false,
+		].map((maxResults) =>
+			JSON.stringify({
+				name: "core__web_search",
+				args: { query: "q", maxResults },
+				limit: "invalid",
+			}),
+		),
+		...[
+			{ args: { query: "q" }, expected: 3 },
+			...[1, 3, 8].map((n) => ({
+				args: { query: "q", maxResults: n },
+				expected: Math.min(n, 3),
+			})),
+		].map((control) =>
+			JSON.stringify({ name: "core__web_search", ...control }),
+		),
 	])("handles child %s failures", async (failure) => {
 		let rootTurns = 0;
 		let childTurns = 0;
 		let invalidDispatches = 0;
+		const searchLimits: unknown[] = [];
 		const shape = failure.startsWith("{")
-			? (JSON.parse(failure) as { name: string; args: unknown })
+			? (JSON.parse(failure) as {
+					name: string;
+					args: unknown;
+					limit?: string;
+					expected?: number;
+				})
 			: undefined;
 		const url = "https://evidence.example/source";
 		const draft = {
@@ -1143,6 +1174,12 @@ describe("child recursion bound", () => {
 		const entry = LANGGRAPH_CATALOG["mission-research"];
 		if (!entry) throw new Error("missing graph");
 		const exec: ToolExecFn = async (name, args) => {
+			if (name === "core__web_search") {
+				expect(webSearchContract.inputSchema.safeParse(args).success).toBe(
+					true,
+				);
+				searchLimits.push((args as { maxResults?: unknown }).maxResults);
+			}
 			if (args === null || typeof args !== "object" || Array.isArray(args))
 				invalidDispatches++;
 			return name === "core__goal_list"
@@ -1239,7 +1276,7 @@ describe("child recursion bound", () => {
 			expect(childTurns).toBeLessThanOrEqual(30);
 		}
 		const output = JSON.parse(result.content ?? "{}");
-		expect(output.status).toBe("incomplete");
+		expect(output.status).toBe(shape?.expected ? "complete" : "incomplete");
 		expect(output.packet).toEqual(draft);
 		expect(result.structuredOutput).toEqual(output);
 		expect(
@@ -1247,11 +1284,24 @@ describe("child recursion bound", () => {
 		).toMatchObject({ content: result.content });
 		if (shape) {
 			expect(invalidDispatches).toBe(0);
-			expect(output.reasons).toContain(
-				shape.name === "task"
-					? "excess_task_attempt"
-					: "invalid_tool_arguments",
-			);
+			if (shape.limit === "invalid" || shape.expected !== undefined) {
+				expect(childTurns).toBe(1);
+				expect(output.telemetry).toMatchObject({
+					toolCalls: 6,
+					searches: 2,
+					taskAttempts: 1,
+				});
+			}
+			if (shape.expected !== undefined)
+				expect(searchLimits).toEqual([3, shape.expected]);
+			else {
+				if (shape.limit === "invalid") expect(searchLimits).toEqual([3]);
+				expect(output.reasons).toContain(
+					shape.name === "task"
+						? "excess_task_attempt"
+						: "invalid_tool_arguments",
+				);
+			}
 			expect(result.content).not.toContain("private-canary");
 		}
 		if (
