@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createPostgresAgentGrantsStore, type SqlTag } from "@cogni/agent-grants";
+import { createOrg, createPostgresAgentGrantsStore, createPostgresOrgAccountStore, type SqlTag } from "@cogni/agent-grants";
 import { runGrantConformance } from "@cogni/agent-grants/grants-conformance";
 import { toUserId } from "@cogni/ids";
 import { NODE_AI_PRINCIPAL_USER_ID } from "@cogni/node-shared";
@@ -461,9 +461,60 @@ describe("account grants (real Postgres, real roles)", () => {
       expect(again).toHaveLength(0);
       expect(await service`SELECT indexname FROM pg_indexes WHERE indexname = 'agent_roles_live_unique'`).toHaveLength(1);
     });
+
+    it("release 1 (task.0181): the account-aware index sits BESIDE the old one, the old writer's statements still run against it, and a second org role is refused by the old index", async () => {
+      const agent = await makeUser();
+      const admin = await makeUser();
+      const first = await makeOwner();
+      const second = await makeOwner();
+      const defs = await service`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'agent_roles' AND indexname IN ('agent_roles_live_unique', 'agent_roles_live_account_unique') ORDER BY indexname`;
+      expect(defs.map((d) => d.indexname)).toEqual(["agent_roles_live_account_unique", "agent_roles_live_unique"]);
+      expect(String(defs[1]?.indexdef)).not.toContain("COALESCE"); // the old index: (principal_user_id, scope)
+      expect(String(defs[0]?.indexdef)).toContain("COALESCE(account_id, ''::text)");
+      // The previous release's three ON CONFLICT statements (ask, direct node On, direct account On) use the old target and still infer it.
+      const oldWriter = (accountId: string | null, scope: string) =>
+        service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id)
+          VALUES (${agent}, ${scope}, ${admin}, now(), ${accountId === null ? "node" : "account"}, ${accountId})
+          ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
+      expect(await oldWriter(null, "edo:read")).toHaveLength(1);
+      expect(await oldWriter(null, "edo:read")).toHaveLength(0);
+      expect(await oldWriter(first.accountId, "account:read")).toHaveLength(1);
+      expect(await oldWriter(second.accountId, "account:read")).toHaveLength(0); // the v0 limit: one open row per AI and scope
+      // Release 1 gives a person ONE org role of each kind: a second org:owner on another account is refused by the old index.
+      const owner = async (accountId: string) =>
+        service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, resource, account_id) VALUES (${agent}, 'org:owner', ${admin}, now(), 'account', ${accountId})`;
+      await owner(first.accountId);
+      await expect(owner(second.accountId)).rejects.toThrow(/agent_roles_live_unique/);
+      // The new index still refuses the same role twice on one account, and would take one scope on two accounts once release 2 drops the old index.
+      await expect(owner(first.accountId)).rejects.toThrow(/agent_roles_live_(account_)?unique/);
+    });
   });
 
   // 4. The app's own read path, as the credits route and the tool twin use it.
+  // 3b. An ORG's account (task.0181): row-level security keys it on the org's own users id, so the credits reads take the org owner's scope AFTER the door allowed.
+  describe("an org account's credits read (real roles)", () => {
+    it("an org admin or owner reading AS THEMSELVES gets BillingAccountNotFound (the defect); the org owner's scope reads it; a stranger and a removed admin read nothing", async () => {
+      const [creator, admin, stranger] = [await makeUser(), await makeUser(), await makeUser()] as [string, string, string];
+      const orgs = createPostgresOrgAccountStore(sqlTag(service));
+      const org = await createOrg(orgs, { creatorUserId: creator, name: "credits org" });
+      users.push(org.orgUserId);
+      accountIds.push(org.billingAccountId);
+      await orgs.setRole({ orgUserId: org.orgUserId, userId: admin, role: "admin", approvedBy: creator, revokedBy: creator });
+      await service`UPDATE billing_accounts SET balance_credits = 777 WHERE id = ${org.billingAccountId}`;
+      const readAs = (actor: string) => new UserDrizzleAccountService(getAppDb(), toUserId(actor)).getBalance(org.billingAccountId);
+      // The door says yes to the admin and the owner (an org role), yet row-level security hides the account from the person: that is why the read takes the org's scope.
+      await expect(readAs(admin)).rejects.toSatisfy(isBillingAccountNotFoundPortError);
+      await expect(readAs(creator)).rejects.toSatisfy(isBillingAccountNotFoundPortError);
+      // After the door, the facade reads as the account's owner user (the org's own users id): the balance comes back.
+      await expect(readAs(org.orgUserId)).resolves.toBe(777);
+      await expect(readAs(stranger)).rejects.toSatisfy(isBillingAccountNotFoundPortError);
+      // A removed admin: the door refuses first (no live grant), and as themselves they still read nothing.
+      await orgs.removeRole({ orgUserId: org.orgUserId, userId: admin, revokedBy: creator });
+      expect(await storeOf().liveAccountScopes(admin, ["org:admin", "org:owner", "account:read"], org.billingAccountId)).toEqual([]);
+      await expect(readAs(admin)).rejects.toSatisfy(isBillingAccountNotFoundPortError);
+    });
+  });
+
   describe("the credits read path (UserDrizzleAccountService as the caller)", () => {
     it("the owner and a granted agent read the balance; a foreign, expired and revoked agent get BillingAccountNotFound (the route's 404)", async () => {
       const owner = await makeOwner(4242);

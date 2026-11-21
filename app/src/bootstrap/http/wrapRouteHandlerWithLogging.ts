@@ -18,7 +18,7 @@
  * @public
  */
 
-import { bearerWriteRefusal } from "@cogni/agent-grants";
+import { bearerWriteRefusal, isPayerRefusedError } from "@cogni/agent-grants";
 import {
   CredentialRateLimitedError,
   CredentialStoreUnavailableError,
@@ -375,6 +375,13 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           responseStatus = response.status;
           return response;
         } catch (error) {
+          // The payer resolver refused the run (`org_suspended`, `org_link_closed`): a terminal 403 with the code, never a 500 and never a silent bill to another account.
+          if (isPayerRefusedError(error)) {
+            responseStatus = 403;
+            ctx.log.warn({ event: EVENT_NAMES.ORG_REFUSED, routeId: options.routeId, code: error.code }, EVENT_NAMES.ORG_REFUSED);
+            response = NextResponse.json({ error: error.code }, { status: 403, headers: { "cache-control": "no-store" } });
+            return response;
+          }
           // Wrapper only catches unhandled errors - route should handle domain errors
           responseStatus = 500;
           logRequestError(ctx.log, error, "INTERNAL_SERVER_ERROR");

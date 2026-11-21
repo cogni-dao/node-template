@@ -25,6 +25,8 @@ const PORT_WIRING = ["ports/node-admin.port.ts", "ports/index.ts", "bootstrap/no
 const ASK_ALLOWLIST: ReadonlyArray<{ path: string; reason: string }> = [
   { path: "app/api/v1/attribution/_lib/admin-guard.ts", reason: "attribution write and read gate: a thin wrapper over the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/api/v1/service-links/ask/route.ts", reason: "starts this node's AI enrollment on a configured remote node: the one adminCheck (ONE_ADMIN_CHECK), any credential" },
+  { path: "app/api/v1/orgs/[orgId]/suspension/route.ts", reason: "suspends or resumes an org: the one adminCheck (ONE_ADMIN_CHECK), a cookie session only" },
+  { path: "app/api/v1/orgs/outbound/route.ts", reason: "makes this node sign a link for an org on another node: the one adminCheck (ONE_ADMIN_CHECK), a cookie session only" },
   { path: "app/api/v1/payments/steward-withdrawal/route.ts", reason: "steward top-up gate: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/(app)/gov/review/page.tsx", reason: "Finish Epoch eligibility hint: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/_facades/work/items.server.ts", reason: "work-items facade: priority 0/1 through container.nodeAdmin, which is the one adminCheck (ONE_ADMIN_CHECK)" },
