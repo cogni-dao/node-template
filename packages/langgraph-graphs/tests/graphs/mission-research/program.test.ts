@@ -10,6 +10,7 @@ import {
 	graphReportLogFields,
 	LANGGRAPH_CATALOG,
 } from "../../../src/catalog";
+import { ChildBoundaryError } from "../../../src/graphs/cogni/graph";
 import { createMissionResearchGraph } from "../../../src/graphs/mission-research/graph";
 import { ResearchReceipts } from "../../../src/graphs/mission-research/receipts";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
@@ -357,6 +358,14 @@ describe("native child isolation", () => {
 });
 
 describe("host evidence and critique binding", () => {
+	it("preserves shared child boundary error messages", () => {
+		expect(new ChildBoundaryError("assignment_invalid").message).toBe(
+			"cogni_child_assignment_invalid",
+		);
+		expect(new ChildBoundaryError("output_limit").message).toBe(
+			"cogni_child_output_exceeds_limit",
+		);
+	});
 	it("rejects invented source references and unchanged critical revisions", () => {
 		const receipts = new ResearchReceipts("https://node.example");
 		receipts.observe("core__goal_list", {}, { goals: [] });
@@ -531,6 +540,86 @@ describe("critic and evidence failures", () => {
 			fingerprint: JSON.parse(assignment ?? "{}").fingerprint as string,
 		};
 	};
+	it("retains internal owner evidence without treating it as primary research", () => {
+		const { draft } = setup();
+		const r = new ResearchReceipts("https://node.example");
+		r.observe("core__goal_list", {}, { goals: [] });
+		for (const id of [
+			"knowledge-syntropy-expert",
+			"mission-loop-expert",
+			"owner",
+		])
+			r.observe(
+				"core__knowledge_read",
+				{ id },
+				{
+					mode: "get",
+					entries: [
+						{ id, domain: "strategy", content: "Observed owner guidance" },
+					],
+				},
+			);
+		const url = "https://node.example/knowledge/owner";
+		const internal = {
+			...draft,
+			sources: [{ url }],
+			atoms: [
+				{
+					...draft.atoms[0],
+					action: "refine" as const,
+					ownerId: "owner",
+					sourceUrls: [url],
+				},
+			],
+			principles: [{ ...draft.principles[0], sourceUrls: [url] }],
+			unknowns: ["Which external primary source supports this claim?"],
+		};
+		const partial = { ...internal, kpiHypotheses: [] };
+		expect(r.prepare(JSON.stringify(partial), "partial")).toBeDefined();
+		const partialOutput = r.project(JSON.stringify(partial)).output;
+		expect(partialOutput.status).toBe("incomplete");
+		expect(partialOutput.packet).toEqual(partial);
+		expect(partialOutput.reasons).toContain("missing_primary_source");
+
+		const fresh = new ResearchReceipts("https://node.example");
+		fresh.observe("core__goal_list", {}, { goals: [] });
+		for (const id of [
+			"knowledge-syntropy-expert",
+			"mission-loop-expert",
+			"owner",
+		])
+			fresh.observe(
+				"core__knowledge_read",
+				{ id },
+				{
+					mode: "get",
+					entries: [
+						{ id, domain: "strategy", content: "Observed owner guidance" },
+					],
+				},
+			);
+		const assignment = fresh.prepare(
+			JSON.stringify(internal),
+			"complete-shape",
+		);
+		expect(assignment).toBeDefined();
+		fresh.complete(
+			JSON.stringify({
+				fingerprint: JSON.parse(assignment ?? "{}").fingerprint,
+				explanation: "The internal claims have been reviewed.",
+				findings: [],
+			}),
+		);
+		const result = fresh.project(JSON.stringify(internal)).output;
+		expect(result.packet).toEqual(internal);
+		expect(result.status).toBe("incomplete");
+		expect(result.reasons).toEqual(["missing_primary_source"]);
+		const forged = {
+			...internal,
+			sources: [{ url: "https://invented.example/owner" }],
+		};
+		expect(fresh.prepare(JSON.stringify(forged), "forged")).toBeUndefined();
+	});
 	it.each([
 		"",
 		"{}",

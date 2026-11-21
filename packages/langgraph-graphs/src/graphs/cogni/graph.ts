@@ -30,7 +30,11 @@ import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
 
 export class ChildBoundaryError extends Error {
 	constructor(readonly code: "assignment_invalid" | "output_limit") {
-		super(`cogni_child_${code}`);
+		super(
+			code === "assignment_invalid"
+				? "cogni_child_assignment_invalid"
+				: "cogni_child_output_exceeds_limit",
+		);
 	}
 }
 
