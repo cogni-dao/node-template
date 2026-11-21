@@ -25,6 +25,11 @@
       "import": "./dist/contracts.js",
       "default": "./dist/contracts.js"
     },
+    "./fleet-train-lag": {
+      "types": "./dist/fleet-train-lag.d.ts",
+      "import": "./dist/fleet-train-lag.js",
+      "default": "./dist/fleet-train-lag.js"
+    },
     "./http": {
       "types": "./dist/http.d.ts",
       "import": "./dist/http.js",
