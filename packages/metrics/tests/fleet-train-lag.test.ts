@@ -449,4 +449,29 @@ describe("source qualification against six current consumers", () => {
 			reason: "incomplete_or_invalid_source",
 		});
 	});
+
+	it.each(["..", "%2e%2e", "%2f..%2fescape", "x\\..\\..\\escape"])("does not count normalized Release traversal %s", (asset) => {
+		const rows = cohort();
+		const first = rows[0] as (typeof rows)[number];
+		const member = MEMBERS[0] as (typeof MEMBERS)[number];
+		first.manifest.dependencies[member.name] = url(member).replace("x.tgz", asset);
+		expect(assess(rows)[0]?.reasons).toContain(`missing:${member.name}@none`);
+	});
+
+	it("rejects mixed valid and malformed train refs", async () => {
+		const fetcher = fakeFetch(current());
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => address.includes("matching-refs")
+			? response([{ ref: "refs/tags/train-v0.24.0" }, { ref: "refs/tags/train-v0.25.0 bad" }]) : fetcher(address)));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+	});
+
+	it.each(["0", "2026-02-30T00:00:00Z"])("rejects malformed publication timestamp %s", async (published) => {
+		const fetcher = fakeFetch(current());
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => address.includes("releases/tags/work-items-v0.24.0")
+			? response(release("work-items-v0.24.0", published)) : fetcher(address)));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+	});
+
 });

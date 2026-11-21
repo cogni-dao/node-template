@@ -72,6 +72,34 @@ function validManifest(value: unknown): boolean {
 	});
 }
 
+function releaseTag(raw: string, publisher?: string): string | undefined {
+	try {
+		const url = new URL(raw);
+		if (url.origin !== "https://github.com" || url.username || url.password) return undefined;
+		const match = /^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+		if (!match || (publisher && match[1]?.toLowerCase() !== publisher.toLowerCase())) return undefined;
+		const tag = decodeURIComponent(match[2] ?? "");
+		const asset = decodeURIComponent(match[3] ?? "");
+		if ([tag, asset].some((part) => !part || part === "." || part === ".." || /[/\\]/.test(part))) return undefined;
+		return tag;
+	} catch {
+		return undefined;
+	}
+}
+
+function validGitRef(ref: string): boolean {
+	return ref.startsWith("refs/tags/train-v") && !Array.from(ref).some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127 || "~^:?*[\\".includes(char)) &&
+		!ref.includes("..") && !ref.includes("@{") && !ref.endsWith(".") &&
+		ref.split("/").every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock"));
+}
+
+function validPublishedAt(value: string): boolean {
+	const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/.exec(value);
+	if (!match) return false;
+	const date = new Date(value);
+	return Number.isFinite(date.getTime()) && date.toISOString() === `${match[1]}.${(match[2] ?? "").padEnd(3, "0")}Z`;
+}
+
 function compareVersions(a: string, b: string): number {
 	const pa = SEMVER.exec(a);
 	const pb = SEMVER.exec(b);
@@ -134,8 +162,7 @@ export function assessFleetTrainLag(
 		const pinned = new Set<string>();
 		for (const [key, raw] of deps) {
 			if (typeof raw !== "string") continue;
-			const release = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/[^/?#]+(?:[?#].*)?$/i.exec(raw);
-			const tag = release && (!publisher || release[1]?.toLowerCase() === publisher.toLowerCase()) ? release[2] : undefined;
+			const tag = releaseTag(raw, publisher);
 			if (tag) {
 				const member = members.find((x) => tag.startsWith(x.tagPrefix));
 				if (!member) continue;
@@ -234,7 +261,7 @@ export async function readFleetTrainLag(
 	try {
 		const refs = await getJson(`${api}/git/matching-refs/tags/train-v?per_page=100`, signal, budget.maxResponseBytes);
 		asOf = refs.date;
-		if (!Array.isArray(refs.body) || refs.body.some((r) => !isRecord(r) || typeof r.ref !== "string" || !r.ref.startsWith("refs/tags/train-v")))
+		if (!Array.isArray(refs.body) || refs.body.some((r) => !isRecord(r) || typeof r.ref !== "string" || !validGitRef(r.ref)))
 			return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
 		candidates = (refs.body as { ref?: unknown }[])
 			.map((r) => (typeof r.ref === "string" ? r.ref.replace(/^refs\/tags\/train-v/, "") : ""))
@@ -263,7 +290,7 @@ export async function readFleetTrainLag(
 						body.tag_name !== tag ||
 						(body.published_at !== null &&
 							(typeof body.published_at !== "string" ||
-								!Number.isFinite(Date.parse(body.published_at)))) ||
+								!validPublishedAt(body.published_at))) ||
 						(body.draft !== undefined && typeof body.draft !== "boolean")
 					)
 						return unknown(
