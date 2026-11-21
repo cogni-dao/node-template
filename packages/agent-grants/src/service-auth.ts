@@ -655,8 +655,14 @@ export async function requestServiceAccess(input: {
    * the link is bound when it is created (`bindLinkedService` in `./org-links`).
    */
   onPrincipal?: (userId: string) => Promise<void>;
+  /**
+   * Runs FIRST, before the principal is read or written, in the caller's transaction: the node takes the issuer's transaction lock here (`lockIssuer` in `./org-links`), the same lock a
+   * link of that issuer takes, so a principal that enrolls during a link is always bound, in either commit order.
+   */
+  beforePrincipal?: () => Promise<void>;
 }): Promise<{ userId: string; outcome: AskOutcome }> {
   if (!input.assertion.scope.split(" ").includes(input.scope)) throw new AgentRolesError("invalid_scope", "scope is not in the signed assertion");
+  if (input.beforePrincipal) await input.beforePrincipal();
   const userId = await ensureServicePrincipal(input.tx, { issuer: input.assertion.issuer, service: input.assertion.service });
   if (input.onPrincipal) await input.onPrincipal(userId);
   const outcome = await requestAccess(input.store, {

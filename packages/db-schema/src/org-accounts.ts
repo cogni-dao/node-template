@@ -86,6 +86,8 @@ export const orgLinks = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     closedAt: timestamp("closed_at", { withTimezone: true }),
     closedBy: text("closed_by").references(() => users.id),
+    /** The org owner whose link code made this link (the other node's signature is the second half of the decision). */
+    createdBy: text("created_by").references(() => users.id),
   },
   (table) => [
     uniqueIndex("org_links_open_per_issuer")

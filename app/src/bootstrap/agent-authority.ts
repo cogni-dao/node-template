@@ -36,6 +36,8 @@ import {
   createPostgresPayerBindingStore,
   bindLinkedService,
   buildNodeAiView,
+  holdsAccountRight,
+  ORG_ADMIN,
   payerFor,
   type AccountAccess,
   type GuardDeps,
@@ -137,6 +139,11 @@ export interface AgentToolAuthority {
    * `org:admin` ⊇ `account:read`) or null. Works for any credential, a session included. Billing's payment and credits routes call it with `org:admin`. A store failure throws.
    */
   authorizeAccount(input: { callerUserId: string; scope: string; accountId: string }): Promise<AccountAccess>;
+  /**
+   * True when the caller holds a live ORG role (`org:owner` or `org:admin`) on exactly this account. The credits reads ask it AFTER `authorizeAccount` allowed, to decide whose scope
+   * reads the org's data: row-level security keys an account on its `owner_user_id` (the org's own users row), so an org role is read through that owner's scope, as the payer path is.
+   */
+  holdsOrgRole(input: { callerUserId: string; accountId: string }): Promise<boolean>;
   /**
    * True when `name` matches (case, spacing and look-alike forms ignored) any user's name or any of this node's AI slugs. Used at
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
@@ -435,6 +442,7 @@ export function createAgentToolAuthority(deps: {
     },
     payerFor: (subjectUserId) => payerFor(createPostgresPayerBindingStore(deps.sql), subjectUserId),
     authorizeAccount: (input) => withStoreRead((store) => authorizeAccount(store, { ...input, owners: deps.owners })),
+    holdsOrgRole: ({ callerUserId, accountId }) => withStoreRead((store) => holdsAccountRight(store, callerUserId, ORG_ADMIN, accountId)),
     async nameTaken(name) {
       const key = agentNameKey(name);
       if (!key) return true;
@@ -467,6 +475,9 @@ export function createAgentToolAuthority(deps: {
           declaredScopes,
           askableScopes,
           scopeKinds,
+          // ONE_LOCK_ORDER: the issuer's transaction lock, the same one a link of that issuer takes, BEFORE the principal is read or written: a principal that enrolls during a link is bound
+          // whichever commits first.
+          beforePrincipal: () => createPostgresOrgLinkStore(tx).lockIssuer(assertion.issuer),
           // A service of a LINKED issuer is bound to the link's org here, in the transaction that creates its principal (ONE_PAYER_PATH).
           onPrincipal: async (principalUserId) => {
             const bound = await bindLinkedService(createPostgresOrgLinkStore(tx), { issuer: assertion.issuer, service: assertion.service, subjectUserId: principalUserId });

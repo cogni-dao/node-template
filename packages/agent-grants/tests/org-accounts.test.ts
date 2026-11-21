@@ -17,6 +17,7 @@ import {
   MAX_OWNED_ORGS,
   OrgError,
   removeMember,
+  suspendOrg,
 } from "../src";
 import { memoryOrgStore } from "./org-store";
 
@@ -46,10 +47,11 @@ describe("create (ANYONE_CREATES, BOUNDED_CREATION)", () => {
     expect(await code(createOrg(memoryOrgStore(), { creatorUserId: "a", name: "" }))).toBe("invalid_name");
   });
 
-  it("a person owns at most five orgs; the sixth is too_many_orgs and writes nothing", async () => {
+  it("release 1: a person holds each org role in at most one org; a second org is the named org_role_limit and writes nothing", async () => {
     const store = memoryOrgStore();
     for (let i = 0; i < MAX_OWNED_ORGS; i++) await createOrg(store, { creatorUserId: "alice", name: `o${i}` });
-    expect(await code(createOrg(store, { creatorUserId: "alice", name: "six" }))).toBe("too_many_orgs");
+    expect(MAX_OWNED_ORGS).toBe(1);
+    expect(await code(createOrg(store, { creatorUserId: "alice", name: "second" }))).toBe("org_role_limit");
     expect(store.orgs.size).toBe(MAX_OWNED_ORGS);
     // Someone else is unaffected.
     expect(await code(createOrg(store, { creatorUserId: "bob", name: "bobs" }))).toBe("ok");
@@ -125,13 +127,21 @@ describe("invite and accept (INVITE_GRANTS_NOTHING)", () => {
     expect(await code(acceptInvite(store, { userId: "carol", inviteId: carolInvite.id }))).toBe("invite_void");
   });
 
-  it("accepting an owner invite counts toward the 5-org cap", async () => {
+  it("accepting an owner invite counts toward the one-org limit, and so does a second admin role (org_role_limit)", async () => {
     const store = memoryOrgStore();
     store.addWallet("bob", W1);
     for (let i = 0; i < MAX_OWNED_ORGS; i++) await createOrg(store, { creatorUserId: "bob", name: `b${i}` });
     const org = await createOrg(store, { creatorUserId: "alice", name: "mine" });
     const invite = await inviteMember(store, { actorUserId: "alice", orgUserId: org.orgUserId, wallet: W1, role: "owner" });
-    expect(await code(acceptInvite(store, { userId: "bob", inviteId: invite.id }))).toBe("too_many_orgs");
+    expect(await code(acceptInvite(store, { userId: "bob", inviteId: invite.id }))).toBe("org_role_limit");
+    // A person who is already an admin in one org cannot accept an admin role in another.
+    const carol = await createOrg(store, { creatorUserId: "carol", name: "carols" });
+    store.addWallet("dave", W2);
+    const first = await inviteMember(store, { actorUserId: "alice", orgUserId: org.orgUserId, wallet: W2, role: "admin" });
+    await acceptInvite(store, { userId: "dave", inviteId: first.id });
+    const second = await inviteMember(store, { actorUserId: "carol", orgUserId: carol.orgUserId, wallet: W2, role: "admin" });
+    expect(await code(acceptInvite(store, { userId: "dave", inviteId: second.id }))).toBe("org_role_limit");
+    expect(await store.roleOf("dave", carol.orgUserId)).toBeNull();
   });
 });
 
@@ -209,7 +219,16 @@ describe("lists page and never cut silently (LISTS_PAGE)", () => {
   it("orgs, members and invites come a page at a time with a cursor that reaches every row exactly once", async () => {
     const store = memoryOrgStore();
     const orgIds: string[] = [];
-    for (let i = 0; i < 5; i++) orgIds.push((await createOrg(store, { creatorUserId: "alice", name: `o${i}` })).orgUserId);
+    // Seed five orgs where alice holds a role. The one-org limit is a release-1 rule on writers (release 2 lifts it); the list pages the same either way.
+    for (let i = 0; i < 5; i++) {
+      const orgUserId = `org-seed-${i}`;
+      orgIds.push(orgUserId);
+      store.orgs.set(orgUserId, { orgUserId, name: `o${i}`, billingAccountId: `acct-${i}`, suspendedAt: null });
+      store.roles.push({ id: `00000000-0000-4000-8000-0000000000${i}0`, userId: "alice", orgUserId, role: "admin", approvedBy: "x", at: 0, live: true, revokedBy: null });
+    }
+    // The org whose people we page: alice owns it (the one org she may own).
+    const ownedOrg = (await createOrg(store, { creatorUserId: "alice", name: "owned" })).orgUserId;
+    orgIds.push(ownedOrg);
     const seen: string[] = [];
     let cursor: string | null = null;
     let pages = 0;
@@ -224,7 +243,7 @@ describe("lists page and never cut silently (LISTS_PAGE)", () => {
     expect(seen.sort()).toEqual([...orgIds].sort());
 
     // Members of one org: add three admins, page by two.
-    const org = orgIds[0] as string;
+    const org = ownedOrg;
     for (const [i, user] of ["b", "c", "d"].entries()) {
       store.addWallet(user, `0x${String(i + 1).repeat(40)}`);
       const invite = await inviteMember(store, { actorUserId: "alice", orgUserId: org, wallet: `0x${String(i + 1).repeat(40)}`, role: "admin" });
@@ -246,5 +265,41 @@ describe("lists page and never cut silently (LISTS_PAGE)", () => {
     expect(await code(listMembers(store, { actorUserId: "alice", orgUserId: org.orgUserId, cursor: "not a uuid" }))).toBe("invalid_cursor");
     expect(await code(listMyInvites(store, "alice", { cursor: "../etc" }))).toBe("invalid_cursor");
     expect(await code(listMembers(store, { actorUserId: "stranger", orgUserId: org.orgUserId }))).toBe("not_found");
+  });
+});
+
+describe("every act names its actor where it writes (activity-attribution)", () => {
+  it("org create stores its creator; a removal and a role change store the person who did them, distinct from the target", async () => {
+    const { store, org } = await fixture();
+    expect(store.createdBy[org.orgUserId]).toBe("alice");
+    store.addWallet("bob", W1);
+    store.addWallet("carol", W2);
+    for (const [user, wallet] of [["bob", W1], ["carol", W2]] as const) {
+      const invite = await inviteMember(store, { actorUserId: "alice", orgUserId: org.orgUserId, wallet, role: "admin" });
+      await acceptInvite(store, { userId: user, inviteId: invite.id });
+    }
+    await removeMember(store, { actorUserId: "alice", orgUserId: org.orgUserId, targetUserId: "bob" });
+    const bob = store.roles.find((r) => r.userId === "bob");
+    expect(bob).toMatchObject({ live: false, revokedBy: "alice" });
+    await changeRole(store, { actorUserId: "alice", orgUserId: org.orgUserId, targetUserId: "carol", role: "owner" });
+    const oldCarol = store.roles.find((r) => r.userId === "carol" && r.role === "admin");
+    expect(oldCarol).toMatchObject({ live: false, revokedBy: "alice" });
+    // A live row names nobody as its revoker.
+    expect(store.roles.find((r) => r.userId === "alice")?.revokedBy).toBeNull();
+    // A person removing themselves is their own revoker (the person is the actor).
+    await removeMember(store, { actorUserId: "carol", orgUserId: org.orgUserId, targetUserId: "carol" });
+    expect(store.roles.filter((r) => r.userId === "carol").every((r) => r.revokedBy === "alice" || r.revokedBy === "carol")).toBe(true);
+  });
+
+  it("suspend stores the admin once and is final: there is no resume, and a second suspend keeps the first admin", async () => {
+    const { store, org } = await fixture();
+    expect(await suspendOrg(store, { orgUserId: org.orgUserId, adminUserId: "admin-1" })).toBe(true);
+    expect(store.orgs.get(org.orgUserId)?.suspendedAt).not.toBeNull();
+    expect(await suspendOrg(store, { orgUserId: org.orgUserId, adminUserId: "admin-2" })).toBe(true);
+    expect(store.suspendedBy[org.orgUserId]).toBe("admin-1");
+    expect(await suspendOrg(store, { orgUserId: "not-an-org", adminUserId: "admin-1" })).toBe(false);
+    // The package has no way to lift a suspension.
+    expect(Object.keys(store)).not.toContain("setSuspended");
+    expect(Object.keys(await import("../src"))).not.toContain("setOrgSuspended");
   });
 });

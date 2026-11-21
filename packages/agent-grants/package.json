@@ -44,6 +44,11 @@
       "types": "./dist/jwks-fetch.d.ts",
       "import": "./dist/jwks-fetch.js",
       "default": "./dist/jwks-fetch.js"
+    },
+    "./org-contracts": {
+      "types": "./dist/org-contracts.d.ts",
+      "import": "./dist/org-contracts.js",
+      "default": "./dist/org-contracts.js"
     }
   },
   "types": "./dist/index.d.ts",

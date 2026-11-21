@@ -3,11 +3,11 @@
 
 /**
  * Module: `@app/api/v1/orgs/[orgId]/suspension`
- * Purpose: This node's admin suspends an org (or resumes it): POST `{ suspended }` (task.0181). The next run billed to a suspended org is refused with `org_suspended`.
- * Scope: HTTP validation, the one admin check and delegation to `container.orgAccounts.setSuspended`. A person's cookie session only.
+ * Purpose: This node's admin suspends an org: POST `{ suspended: true }` (task.0181). The next run billed to a suspended org is refused with `org_suspended`. Suspend is FINAL in P1: there is no resume.
+ * Scope: HTTP validation, the one admin check and delegation to `container.orgAccounts.suspend`. A person's cookie session only.
  * Invariants:
  *   - ONE_ADMIN_CHECK: only a node admin (`agentAuthority.adminCheck`, the caller's bound wallets against the repo-spec roster). A non-admin is 403 `authz_denied`; no configured admins 503.
- *   - The org stays an ordinary account in the node admin's account list; suspension is `suspended_at` on its principal row and nothing else. Ledger rows are kept.
+ *   - EVERY_ACT_NAMES_ITS_ACTOR: the admin who suspended is stored as `suspended_by` on the org's principal row, beside `suspended_at`. The org stays an ordinary account in the node admin's account list; ledger rows are kept.
  * Side-effects: IO (service-role database write)
  * Links: https://node-template.cognidao.org/knowledge/org-account-lifecycle
  * @public
@@ -36,9 +36,9 @@ export const POST = wrapRouteHandlerWithLogging<Ctx>(
     const parsed = orgSuspensionOperation.input.safeParse(await readJson(request));
     if (!parsed.success) return json({ error: "invalid input" }, 400);
     try {
-      const changed = await container.orgAccounts.setSuspended({ adminUserId: sessionUser.id, orgUserId: orgId, suspended: parsed.data.suspended });
+      const changed = await container.orgAccounts.suspend({ adminUserId: sessionUser.id, orgUserId: orgId });
       if (!changed) return json({ error: "not_found" }, 404);
-      return json(orgSuspensionOperation.output.parse({ suspended: parsed.data.suspended }));
+      return json(orgSuspensionOperation.output.parse({ suspended: true }));
     } catch (error) {
       return orgFailure(ctx, "orgs.suspension", error);
     }

@@ -11,7 +11,9 @@
  *   - NO_DATE_PARAMETERS: a timestamp is written with `now()`, SQL interval arithmetic or an ISO string, never a JS Date. The node's client is drizzle's postgres.js
  *     client, which replaces the timestamp serializers; timestamps read back as strings too (`iso()` accepts both).
  *   - RESOURCE_SPLIT (R1): every node-plane statement names `resource = 'node'`; every account statement names `resource = 'account'`.
- *     The live index is (principal, scope, account) (0.10.0), so one open row exists per AI, scope and account; every `ON CONFLICT` names that index.
+ *     RELEASE_1_INDEXES (0.10.0): the OLD live index (principal, scope) stays, and every `ON CONFLICT` here still names it, so a pod of the previous release and a rollback both work. The new
+ *     account-aware index `agent_roles_live_account_unique` sits beside it; only `./org-accounts` writes a row the old index would refuse, and it answers `org_role_limit`.
+ *     The old index is dropped in release 2 (task.0175), when no pod runs the old writer.
  *   - ORG_ROWS_ARE_NOT_ASK_ROWS (0.10.0): an `org:%` scope is an org role row. The generic account lists and the generic org revoke never see it; `./org-accounts` is its only writer.
  *   - ACCOUNT_LIVE (R1, R14, durable): an account row is live when approved, unrevoked and (`expires_at` is null, i.e. until Off, or in the future); expired is read, and an expired live
  *     row is closed (`revoked_at = now()`) before an ask or a direct On on the same (AI, scope), so the old index frees.
@@ -266,7 +268,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const inserted = await sql`
         INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by, resource, link_hash, link_expires_at)
         VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId}, ${resource}, ${link.hash}, ${linkEnds})
-        ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       if (inserted.length > 0) return "created";
       // A concurrent ask took the open slot between our read and our insert. Whatever we answer, the link we hand back must be stored: rotate it
@@ -313,7 +315,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         SELECT ${principalUserId}, ${scope}, ${approvedBy}, now(), 'node'
         WHERE EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = ${principalUserId} AND ap.kind = 'internal')
           AND ${principalUserId} <> ${approvedBy}
-        ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       return rows.length > 0;
     },
@@ -392,10 +394,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         WHERE b.owner_user_id = ${approvedBy}
           AND ${principalUserId} <> ${approvedBy}
           AND EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = ${principalUserId} AND ap.kind = 'internal')
-          AND NOT EXISTS (
-            SELECT 1 FROM agent_roles w
-            WHERE w.principal_user_id = ${principalUserId} AND w.scope = ${scope} AND w.resource = 'account' AND w.account_id IS NULL AND w.revoked_at IS NULL)
-        ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       return rows.length > 0;
     },

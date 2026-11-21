@@ -12,9 +12,10 @@
  *   - NO_SECRET_IN_LOGS: events carry ids, roles, origins and counts; never an invite wallet, a link code or an assertion.
  *   - ONE_REQUEST_PATH: the outbound preview and the outbound signed link go through `createPinnedHttp` (https only, no redirect, the 5 s budget includes the lookup, a 64 KB response
  *     read, private ranges refused, address pinned): the code names the target, so the target is attacker-supplied until the preview confirms it.
- *   - CODE_NAMES_THE_TARGET: the other node's origin, node id and org id come from the link code, never from the admin's input. The admin confirms the org name the preview returned
- *     (`expectOrgName`); a link is signed only if a fresh preview still says the same name.
- *   - SIGNS_AS_NODE_CONNECT: the outbound link is signed as service `node-connect` for the target's audience and posted once to the fixed `LINK_PATH`.
+ *   - THE_PROTOCOL_IS_THE_PACKAGE'S: preview, confirm, sign and post are `createOrgOutbound` in `@cogni-dao/agent-grants`; this file injects the pinned request function, the signer and the
+ *     log line, and nothing else.
+ *   - EVERY_ACT_NAMES_ITS_ACTOR: every write passes the authenticated actor to the package, which stores it on the row it writes (created_by, invited_by, accepted_by, revoked_by,
+ *     closed_by, suspended_by). Suspend is final in P1: there is no resume.
  * Side-effects: IO (service-role database reads and writes; pinned HTTPS GET/POST for an outbound preview or link)
  * Links: https://node-template.cognidao.org/knowledge/org-account-lifecycle
  * @internal
@@ -31,9 +32,9 @@ import {
   createPostgresOrgLinkStore,
   getOrgView,
   inviteMember,
-  LINK_PATH,
   type LinkPreview,
   type LinkResult,
+  listAllOrgs,
   listMembers,
   listMyInvites,
   listOrgs,
@@ -43,14 +44,15 @@ import {
   type OrgMembership,
   type OrgRecord,
   type OrgRole,
+  type OrgSummary,
   type Page,
   type PageQuery,
-  parseLinkCode,
+  createOrgOutbound,
+  type OutboundResult,
   previewLinkCode,
   removeMember,
   requireRole,
-  setOrgSuspended,
-  signLinkAssertion,
+  suspendOrg,
 } from "@cogni/agent-grants";
 import { createPinnedHttp, createPinnedJwksFetch } from "@cogni/agent-grants/jwks-fetch";
 import { createPostgresReplayStore, type ServiceAssertionSigner } from "@cogni/agent-grants/service-auth";
@@ -58,14 +60,13 @@ import type { Logger } from "pino";
 import { EVENT_NAMES } from "@/shared/observability";
 import type { AgentAuthoritySql } from "./agent-authority";
 
-/** Why an outbound preview or link did not happen. A plain code, never a body. */
-export type OutboundRefusal = "invalid_code" | "no_signer" | "unreachable" | "code_not_found" | "preview_mismatch" | "preview_changed" | "invalid_input";
-
-export type OutboundResult<T> = ({ ok: true } & T) | { ok: false; reason: OutboundRefusal };
+export type { OutboundRefusal, OutboundResult } from "@cogni/agent-grants";
 
 export interface OrgAccounts {
   create(userId: string, name: unknown): Promise<{ orgUserId: string; billingAccountId: string; name: string }>;
   list(userId: string, query: PageQuery): Promise<Page<OrgMembership>>;
+  /** One page of EVERY org, for the node admin's list. The route proved node-admin first (the one admin check). */
+  listAll(query: PageQuery): Promise<Page<OrgSummary>>;
   view(actorUserId: string, orgUserId: string, query: PageQuery): Promise<{ org: OrgRecord; role: OrgRole; members: Page<OrgMember>; links: Page<OpenLink> }>;
   members(actorUserId: string, orgUserId: string, query: PageQuery): Promise<Page<OrgMember>>;
   links(actorUserId: string, orgUserId: string, query: PageQuery): Promise<Page<OpenLink>>;
@@ -80,8 +81,8 @@ export interface OrgAccounts {
   closeLink(input: { actorUserId: string; orgUserId: string; linkId: string }): Promise<{ closedBindings: number }>;
   /** A signed link or unlink from another node (the assertion is the credential). A failed key fetch or replay store throws; a refusal is a code. */
   applyLink(token: string): Promise<LinkResult>;
-  /** The caller proved node-admin first (the one admin check). False when the user is not an org. */
-  setSuspended(input: { adminUserId: string; orgUserId: string; suspended: boolean }): Promise<boolean>;
+  /** The caller proved node-admin first (the one admin check). Stores `suspended_by`. Final: there is no resume. False when the user is not an org. */
+  suspend(input: { adminUserId: string; orgUserId: string }): Promise<boolean>;
   /** This node as the OTHER node: ask the node named in `code` for the code's preview, so the admin can confirm the org name before anything is signed. */
   previewOutbound(code: string): Promise<OutboundResult<{ preview: LinkPreview }>>;
   /** Sign `act: link` (after a fresh preview still names `expectOrgName`) or `act: unlink` for the org and node the code names, and post it once. The caller proved node-admin first. */
@@ -92,9 +93,6 @@ export interface OrgAccounts {
     expectOrgName?: string | undefined;
   }): Promise<OutboundResult<{ httpStatus: number; error: string | null; act: "link" | "unlink" | null }>>;
 }
-
-/** The short error code a node answers with, kept only when it looks like one (letters, digits and underscore). */
-const SHORT_CODE = /^[a-z0-9_]{1,40}$/;
 
 export function createOrgAccounts(deps: {
   sql: AgentAuthoritySql;
@@ -119,27 +117,11 @@ export function createOrgAccounts(deps: {
     return { origin: deps.selfOrigin, nodeId: deps.nodeId };
   };
 
-  /** The preview the node named in `code` gives for it: its org name and its origin, which must be the origin the code names. */
-  const fetchPreview = async (code: string, parsed: NonNullable<ReturnType<typeof parseLinkCode>>): Promise<OutboundResult<{ preview: LinkPreview }>> => {
-    let response: { status: number; body: string };
-    try {
-      response = await http(`${parsed.origin}/api/v1/orgs/link-preview?code=${encodeURIComponent(code)}`);
-    } catch {
-      return { ok: false, reason: "unreachable" };
-    }
-    if (response.status === 404) return { ok: false, reason: "code_not_found" };
-    if (response.status !== 200) return { ok: false, reason: "unreachable" };
-    let body: { orgName?: unknown; origin?: unknown } = {};
-    try {
-      body = JSON.parse(response.body) as typeof body;
-    } catch {
-      return { ok: false, reason: "unreachable" };
-    }
-    if (typeof body.orgName !== "string" || body.orgName.length === 0 || body.orgName.length > 200 || typeof body.origin !== "string") return { ok: false, reason: "preview_mismatch" };
-    // The node that answered must be the node the code names.
-    if (body.origin !== parsed.origin) return { ok: false, reason: "preview_mismatch" };
-    return { ok: true, preview: { orgName: body.orgName, origin: body.origin } };
-  };
+  const outbound = createOrgOutbound({
+    http,
+    getSigner: deps.getSigner,
+    onSent: (sent) => info(EVENT_NAMES.ORG_OUTBOUND_LINK, { act: sent.act, targetOrigin: sent.targetOrigin, httpStatus: sent.httpStatus, error: sent.error }),
+  });
 
   return {
     async create(userId, name) {
@@ -148,6 +130,7 @@ export function createOrgAccounts(deps: {
       return org;
     },
     list: (userId, query) => listOrgs(read, userId, query),
+    listAll: (query) => listAllOrgs(read, query),
     async view(actorUserId, orgUserId, query) {
       // One consistent snapshot: the record, the first page of the people and of the links read together.
       return tx(async (store, links) => {
@@ -216,55 +199,12 @@ export function createOrgAccounts(deps: {
       } else deps.log.warn({ event: EVENT_NAMES.ORG_REFUSED, routeId: "orgs.link", code: result.code, ...(result.verifier ? { verifier: result.verifier } : {}) }, EVENT_NAMES.ORG_REFUSED);
       return result;
     },
-    async setSuspended({ adminUserId, orgUserId, suspended }) {
-      const changed = await setOrgSuspended(read, orgUserId, suspended);
-      if (changed) info(EVENT_NAMES.ORG_SUSPENDED, { orgUserId, suspended, adminUserId });
+    async suspend({ adminUserId, orgUserId }) {
+      const changed = await suspendOrg(read, { orgUserId, adminUserId });
+      if (changed) info(EVENT_NAMES.ORG_SUSPENDED, { orgUserId, adminUserId });
       return changed;
     },
-    async previewOutbound(code) {
-      const parsed = parseLinkCode(code);
-      if (!parsed) return { ok: false, reason: "invalid_code" };
-      return fetchPreview(code, parsed);
-    },
-    async signOutbound(input) {
-      const parsed = parseLinkCode(input.code);
-      if (!parsed) return { ok: false, reason: "invalid_code" };
-      if (input.act === "link") {
-        if (!input.services || input.services.length === 0 || !input.expectOrgName) return { ok: false, reason: "invalid_input" };
-        // The admin confirmed a name; sign only if the node that will receive the link still says that name for this code.
-        const fresh = await fetchPreview(input.code, parsed);
-        if (!fresh.ok) return fresh;
-        if (fresh.preview.orgName !== input.expectOrgName) return { ok: false, reason: "preview_changed" };
-      }
-      const signer = await deps.getSigner();
-      if (!signer) return { ok: false, reason: "no_signer" };
-      let token: string;
-      try {
-        token = await signLinkAssertion(signer, {
-          audienceNodeId: parsed.nodeId,
-          act: input.act,
-          orgUserId: parsed.orgUserId,
-          ...(input.act === "link" ? { code: parsed.secret, ...(input.services ? { services: input.services } : {}) } : {}),
-        });
-      } catch {
-        return { ok: false, reason: "invalid_input" };
-      }
-      let response: { status: number; body: string };
-      try {
-        response = await http(`${parsed.origin}${LINK_PATH}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: "{}" });
-      } catch {
-        return { ok: false, reason: "unreachable" };
-      }
-      let body: { error?: unknown; act?: unknown } = {};
-      try {
-        body = JSON.parse(response.body) as typeof body;
-      } catch {
-        // A node that answers no JSON is reported by its status alone.
-      }
-      const error = typeof body.error === "string" && SHORT_CODE.test(body.error) ? body.error : null;
-      const act = body.act === "link" || body.act === "unlink" ? body.act : null;
-      info(EVENT_NAMES.ORG_OUTBOUND_LINK, { act: input.act, targetOrigin: parsed.origin, httpStatus: response.status, error });
-      return { ok: true, httpStatus: response.status, error, act };
-    },
+    previewOutbound: (code) => outbound.preview(code),
+    signOutbound: (input) => outbound.sign(input),
   };
 }

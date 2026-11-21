@@ -106,7 +106,7 @@ export const EVENT_NAMES = {
 	ORG_LINKED: "org.linked",
 	/** A link closed, by the org's owner or by the other node's signature (task.0181): orgUserId, issuer, linkId, closedBindings, by. */
 	ORG_UNLINKED: "org.unlinked",
-	/** The node's admin suspended or resumed an org (task.0181): orgUserId, suspended, adminUserId. */
+	/** The node's admin suspended an org, final in P1 (task.0181): orgUserId, adminUserId. */
 	ORG_SUSPENDED: "org.suspended",
 	/** This node's admin had this node sign a link or unlink for an org on another node (task.0181): act, targetOrigin, httpStatus, error. Never the code or the assertion. */
 	ORG_OUTBOUND_LINK: "org.outbound_link",

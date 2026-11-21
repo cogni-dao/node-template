@@ -17,6 +17,11 @@
  *   - KEYS_ONLY_FROM_THE_BOUND_ORIGIN: a link is verified against `<origin>/.well-known/jwks.json` of the origin the code names (the assertion's `iss` must equal it), fetched through the
  *     injected `fetchJwks` (`createPinnedJwksFetch`: https, no redirect, 5 s, 64 KB, private ranges refused, address pinned).
  *   - ONE_OPEN_LINK_PER_ISSUER: a second link for an issuer is `issuer_already_linked`. A closed link is kept.
+ *   - ONE_LOCK_ORDER: a link and a service-principal enrollment of the SAME issuer take one transaction lock, keyed by the verified `iss` exactly as `org_links.issuer` stores it,
+ *     before they read or write (`lockIssuer`), so a principal that enrolls during a link is always bound, in either commit order. Locks are taken in one order: issuer, then org
+ *     (`lockOrg`, also taken before a capped count of invites or link codes), then owner rows.
+ *   - EVERY_ACT_NAMES_ITS_ACTOR: a link code stores its creator; a link stores the owner whose code made it (`created_by`); an unlink stores who closed it (`closed_by`: the owner, or the
+ *     org's own users id when the other node closed it by signature).
  *   - UNLINK_BIND_RACE: a bind locks its link row `FOR SHARE` and writes only while the link is open, so a close (which updates that row) and a bind serialise: the binding either never
  *     lands or the close that follows ends it.
  *   - ONE_PAYER_PATH: a link writes bindings (approved by the org's own `users` id, so it never depends on which owner made the code); an unlink closes them. A service principal that
@@ -51,6 +56,8 @@ export const MAX_LINK_SERVICES = 8;
 export const LINK_SCOPE = "org:link";
 /** The route path on the org's node that takes a signed link or unlink (a public route: the signature is the credential). */
 export const LINK_PATH = "/api/v1/orgs/link";
+/** The route path on the org's node that previews a link code (public, a POST with the code in the body, never in a URL). */
+export const LINK_PREVIEW_PATH = "/api/v1/public/orgs/link-preview";
 
 /** The keys of a node, always at this path of its https origin. */
 export const jwksUriOfOrigin = (origin: string): string => `${origin}/.well-known/jwks.json`;
@@ -73,10 +80,14 @@ export interface OrgLinkStore {
   findCode(codeHash: string): Promise<{ orgUserId: string; origin: string } | null>;
   /** The same lookup for a preview: the org's id and name too. */
   codePreview(codeHash: string): Promise<{ orgUserId: string; orgName: string; origin: string } | null>;
-  /** Burns the code (unconsumed and unexpired only) and returns its org, else null. */
-  consumeCode(codeHash: string): Promise<string | null>;
-  /** Writes the open link; null when the issuer already has one. */
-  insertLink(input: { orgUserId: string; issuer: string; services: readonly string[] }): Promise<string | null>;
+  /** Burns the code (unconsumed and unexpired only) and returns its org and the owner who made it, else null. */
+  consumeCode(codeHash: string): Promise<{ orgUserId: string; createdBy: string } | null>;
+  /** Writes the open link (`createdBy`: the owner whose code made it); null when the issuer already has one. */
+  insertLink(input: { orgUserId: string; issuer: string; services: readonly string[]; createdBy: string }): Promise<string | null>;
+  /** Takes the issuer's transaction lock (first in the lock order). Held until the transaction ends. */
+  lockIssuer(issuer: string): Promise<void>;
+  /** Takes the org's transaction lock (after the issuer's, before any owner row). Held until the transaction ends. */
+  lockOrg(orgUserId: string): Promise<void>;
   /** Closes the open link and returns it, else null. */
   closeLink(input: { linkId: string; closedBy: string }): Promise<OpenLink | null>;
   /** Closes the open link `linkId` of exactly this org (`WHERE id = $1 AND org_user_id = $2`, no page window) and returns it, else null. */
@@ -347,10 +358,13 @@ export async function applyLinkAssertion(deps: ApplyLinkDeps, token: string): Pr
       const orgUserId = peek.org as string;
       const principalIds = await Promise.all(services.map((service) => servicePrincipalId({ issuer: iss, service })));
       return await deps.inTransaction(async (links) => {
+        // ONE_LOCK_ORDER: the issuer first (shared with the enrollment of its service principals), then the org, before anything is read or written.
+        await links.lockIssuer(iss);
+        await links.lockOrg(orgUserId);
         const burned = await links.consumeCode(codeHash as string);
-        if (!burned || burned !== orgUserId) throw new Refusal("link_code_invalid");
+        if (!burned || burned.orgUserId !== orgUserId) throw new Refusal("link_code_invalid");
         if ((await links.orgSuspended(orgUserId)) !== false) throw new Refusal("org_suspended");
-        const linkId = await links.insertLink({ orgUserId, issuer: iss, services });
+        const linkId = await links.insertLink({ orgUserId, issuer: iss, services, createdBy: burned.createdBy });
         if (!linkId) throw new Refusal("issuer_already_linked");
         const bound = await links.bindPrincipals({ linkId, orgUserId, principalIds });
         return { ok: true as const, act: "link" as const, orgUserId, issuer: iss, services, linkId, bound };
@@ -407,7 +421,15 @@ export function createPostgresOrgLinkStore(sql: SqlTag): OrgLinkStore {
         return link ? [link] : [];
       }), limit, (link) => link.id);
     },
+    async lockIssuer(issuer) {
+      await sql`SELECT pg_advisory_xact_lock(hashtext(${`org_issuer:${issuer}`}))`;
+    },
+    async lockOrg(orgUserId) {
+      await sql`SELECT pg_advisory_xact_lock(hashtext(${`org_cap:${orgUserId}`}))`;
+    },
     async createCode({ orgUserId, origin, codeHash, createdBy, ttlMinutes, maxOpen }) {
+      // The cap is counted under the org's lock: two requests for the last slot cannot both see room (a per-org budget, not a per-code identity).
+      await sql`SELECT pg_advisory_xact_lock(hashtext(${`org_cap:${orgUserId}`}))`;
       const open = await sql`
         SELECT count(*)::int AS n FROM org_link_codes
         WHERE org_user_id = ${orgUserId} AND consumed_at IS NULL AND expires_at > now()`;
@@ -439,12 +461,14 @@ export function createPostgresOrgLinkStore(sql: SqlTag): OrgLinkStore {
       const rows = await sql`
         UPDATE org_link_codes SET consumed_at = now()
         WHERE code_hash = ${codeHash} AND consumed_at IS NULL AND expires_at > now()
-        RETURNING org_user_id`;
-      return str(rows[0]?.org_user_id);
+        RETURNING org_user_id, created_by`;
+      const orgUserId = str(rows[0]?.org_user_id);
+      const createdBy = str(rows[0]?.created_by);
+      return orgUserId && createdBy ? { orgUserId, createdBy } : null;
     },
-    async insertLink({ orgUserId, issuer, services }) {
+    async insertLink({ orgUserId, issuer, services, createdBy }) {
       const rows = await sql`
-        INSERT INTO org_links (org_user_id, issuer, services) VALUES (${orgUserId}, ${issuer}, ${services as string[]})
+        INSERT INTO org_links (org_user_id, issuer, services, created_by) VALUES (${orgUserId}, ${issuer}, ${services as string[]}, ${createdBy})
         ON CONFLICT (issuer) WHERE closed_at IS NULL DO NOTHING
         RETURNING id`;
       return str(rows[0]?.id);

@@ -81,7 +81,7 @@ describe("org decisions (real Postgres)", () => {
     const orgs = createPostgresOrgAccountStore(sql);
     const [owner, admin] = [await user(tx, "owner"), await user(tx, "admin")] as [string, string];
     const org = await createOrg(orgs, { creatorUserId: owner, name: "org" });
-    await orgs.setRole({ orgUserId: org.orgUserId, userId: admin, role: "admin", approvedBy: owner });
+    await orgs.setRole({ orgUserId: org.orgUserId, userId: admin, role: "admin", approvedBy: owner, revokedBy: owner });
     return { sql, org, owner, admin, owners: createGrantsOwnerSource(sql) };
   };
 

@@ -49,9 +49,17 @@ The store needs a BYPASSRLS (service role) connection: the table has no policy, 
 
 # org_accounts migration template
 
-`org_accounts.sql` is the shape a node applies for org accounts (`@cogni-dao/agent-grants` 0.10.0, `./org-accounts`, `./org-links`). node-template keeps it as `0050_org_accounts.sql`. Do not copy it blind into a fork:
+`org_accounts.sql` is the shape a node applies for org accounts (`@cogni-dao/agent-grants` 0.10.0, `./org-accounts`, `./org-links`). node-template keeps it as `0050_org_accounts.sql`; the file is that migration byte for byte under a two-line header. Do not copy it blind into a fork:
 
-1. In the node's own schema package add: the tables `orgInvites`, `orgLinkCodes` and `orgLinks` (their CHECKs and the unique partial indexes `org_invites_open_per_wallet` and `org_links_open_per_issuer`); `suspended_at` on `agentPrincipals`; `link_id` (a foreign key to `org_links`) on `payerBindings`; and the live-row index of `agentRoles` as `(principal_user_id, scope, coalesce(account_id, ''))` where `revoked_at IS NULL` (it REPLACES `agent_roles_live_unique`). Then run the node's `db:generate`. Never copy a snapshot.
+1. In the node's own schema package add: the tables `orgInvites`, `orgLinkCodes` and `orgLinks` (their CHECKs and the unique partial indexes `org_invites_open_per_wallet` and `org_links_open_per_issuer`); `suspended_at` on `agentPrincipals`; `link_id` (a foreign key to `org_links`) on `payerBindings`; and the account-aware live-row index `agent_roles_live_account_unique` on `agentRoles` as `(principal_user_id, scope, coalesce(account_id, ''))` where `revoked_at IS NULL`. KEEP the old `agent_roles_live_unique` (principal_user_id, scope) index. Then run the node's `db:generate`. Never copy a snapshot.
 2. Append the hand-written part (everything after the line `Hand-written below`): `FORCE ROW LEVEL SECURITY` on the three new tables. They have no policy.
-3. The index change is not additive: a pod of the previous package version names the old `ON CONFLICT (principal_user_id, scope)` target and fails an ask until it rolls. Roll the app in the same release as the migration.
+3. The change is additive (release 1 of two): the previous release's `ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL` keeps working, and so does a rollback. The old index is dropped in release 2 (task.0175), after every node runs release 1; a person then holds a role in up to five orgs.
 4. Run `db:check`. The journal `when` must be greater than every earlier entry. Run `runGrantConformance` over the node's real SQL store (it now expects `authorizeAccount` to honour a live grant for a session caller).
+
+# org_roles_forward migration template
+
+`org_roles_forward.sql` is the forward migration a node applies after `org_accounts.sql`: the actor columns and the index repair. node-template keeps it as `0051_org_roles_forward.sql`; the file is that migration byte for byte under a header. Do not copy it blind into a fork:
+
+1. Add `revoked_by` (a foreign key to `users`) to `agentRoles`, `suspended_by` and `created_by` to `agentPrincipals`, and `created_by` to `orgLinks`, then run the node's `db:generate`. Never copy a snapshot.
+2. Append the hand-written part (everything after the line `Hand-written below`). It is safe to run again. It ends every live row but the OLDEST per (principal, scope) with `revoked_by` NULL (the migration, not a person, ended them), drops an account-aware index that took the old index's name, and creates `agent_roles_live_unique` (the old two-column index) and `agent_roles_live_account_unique` if either is missing. On a database that never ran the rejected first `0050` it changes nothing.
+3. Run `db:check`. The journal `when` must be greater than every earlier entry.

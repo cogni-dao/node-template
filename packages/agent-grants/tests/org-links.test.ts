@@ -176,7 +176,7 @@ describe("org links", () => {
       expect((await applyLinkAssertion(deps(), token)).ok).toBe(true);
       expect(await applyLinkAssertion(deps(), token)).toMatchObject({ ok: false, code: "link_code_invalid" });
       // A fresh code and fresh signature for the same issuer on a second org.
-      const second = (await createOrg(orgs, { creatorUserId: "alice", name: "second" })).orgUserId;
+      const second = (await createOrg(orgs, { creatorUserId: "carol", name: "second" })).orgUserId;
       const secondCode = newLinkToken();
       await links.createCode({ orgUserId: second, origin: X, codeHash: await hashLinkToken(secondCode), createdBy: "alice", ttlMinutes: 15, maxOpen: 10 });
       const result = await applyLinkAssertion(deps(), await sign({ code: secondCode, orgUserId: second }));
@@ -345,5 +345,41 @@ describe("link code and preview (the other node's admin enters only the code)", 
       after = page.nextCursor;
     } while (after);
     expect(new Set(seen).size).toBe(5);
+  });
+});
+
+describe("lock order and attribution of a link", () => {
+  const rig = async () => {
+    const orgs = memoryOrgStore();
+    const links = memoryLinkStore();
+    const orgUserId = (await createOrg(orgs, { creatorUserId: "alice", name: "toks5" })).orgUserId;
+    return { orgs, links, orgUserId };
+  };
+
+  it("a link takes the issuer's lock first and the org's second, before it reads or writes, and records the owner whose code made it", async () => {
+    const { orgs, links, orgUserId } = await rig();
+    const signer = await createServiceAssertionSignerFromSeed({ issuer: X, seedHex: SEED });
+    const { code } = await createLinkCode({ orgs, links, self: SELF }, { actorUserId: "alice", orgUserId, origin: X });
+    expect(links.locks).toEqual([`org:${orgUserId}`]); // the capped count is taken under the org's lock
+    links.locks.length = 0;
+    const result = await applyLinkAssertion(
+      { links, inTransaction: async (fn) => fn(links), selfNodeId: Y_NODE_ID, replay: createMemoryReplayStore(), fetchJwks: async () => signer.jwks() },
+      await signLinkAssertion(signer, { audienceNodeId: Y_NODE_ID, act: "link", orgUserId, code, services: ["node-ai"] })
+    );
+    expect(result.ok).toBe(true);
+    // ONE_LOCK_ORDER: issuer, then org; the issuer key is the verified `iss` exactly as the link row stores it.
+    expect(links.locks).toEqual([`issuer:${X}`, `org:${orgUserId}`]);
+    expect(links.links[0]).toMatchObject({ issuer: X, createdBy: "alice" });
+  });
+
+  it("a refused link (a used code) takes no lock: nothing is written, so nothing is held", async () => {
+    const { links, orgUserId } = await rig();
+    const signer = await createServiceAssertionSignerFromSeed({ issuer: X, seedHex: SEED });
+    const result = await applyLinkAssertion(
+      { links, inTransaction: async (fn) => fn(links), selfNodeId: Y_NODE_ID, replay: createMemoryReplayStore(), fetchJwks: async () => signer.jwks() },
+      await signLinkAssertion(signer, { audienceNodeId: Y_NODE_ID, act: "link", orgUserId, code: "A".repeat(43), services: ["node-ai"] })
+    );
+    expect(result).toMatchObject({ ok: false, code: "link_code_invalid" });
+    expect(links.locks).toEqual([]);
   });
 });

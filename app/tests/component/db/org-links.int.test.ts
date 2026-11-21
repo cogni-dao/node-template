@@ -12,6 +12,8 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   acceptInvite,
   applyLinkAssertion,
@@ -20,6 +22,7 @@ import {
   closeLinkByOwner,
   createLinkCode,
   createOrg,
+  createPostgresAgentGrantsStore,
   createPostgresOrgAccountStore,
   createPostgresOrgLinkStore,
   createPostgresPayerBindingStore,
@@ -31,7 +34,7 @@ import {
   payerFor,
   previewLinkCode,
   removeMember,
-  setOrgSuspended,
+  suspendOrg,
   signLinkAssertion,
   type SqlTag,
 } from "@cogni/agent-grants";
@@ -39,7 +42,9 @@ import {
   createPostgresReplayStore,
   createServiceAssertionSignerFromSeed,
   ensureServicePrincipal,
+  requestServiceAccess,
   servicePrincipalId,
+  type VerifiedServiceAssertion,
 } from "@cogni/agent-grants/service-auth";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -189,15 +194,16 @@ describe("org people and links (real Postgres)", () => {
       const orgs = createPostgresOrgAccountStore(sql);
       const links = createPostgresOrgLinkStore(sql);
       const alice = await user(tx, "alice");
+      const carol = await user(tx, "carol");
       const first = await createOrg(orgs, { creatorUserId: alice, name: "first" });
-      const secondOrg = await createOrg(orgs, { creatorUserId: alice, name: "second" });
+      const secondOrg = await createOrg(orgs, { creatorUserId: carol, name: "second" });
       const issuer = `https://x-${randomUUID().slice(0, 8)}.example`;
       const signer = await createServiceAssertionSignerFromSeed({ issuer, seedHex: SEED });
       const deps = { links, inTransaction: <T>(fn: (l: typeof links) => Promise<T>) => fn(links), selfNodeId: NODE_ID, replay: createPostgresReplayStore(sql), fetchJwks: async () => signer.jwks() };
       const codeOne = (await createLinkCode({ orgs, links, self: SELF }, { actorUserId: alice, orgUserId: first.orgUserId, origin: issuer })).code;
       expect((await applyLinkAssertion(deps, await signLinkAssertion(signer, { audienceNodeId: NODE_ID, act: "link", orgUserId: first.orgUserId, code: codeOne, services: ["node-ai"] }))).ok).toBe(true);
       // The owner cannot even make a code for an origin that is linked.
-      await expect(createLinkCode({ orgs, links, self: SELF }, { actorUserId: alice, orgUserId: secondOrg.orgUserId, origin: issuer })).rejects.toMatchObject({ code: "issuer_already_linked" });
+      await expect(createLinkCode({ orgs, links, self: SELF }, { actorUserId: carol, orgUserId: secondOrg.orgUserId, origin: issuer })).rejects.toMatchObject({ code: "issuer_already_linked" });
       await tx`SAVEPOINT dup`;
       await expect(tx`INSERT INTO org_links (org_user_id, issuer, services) VALUES (${secondOrg.orgUserId}, ${issuer}, ARRAY['node-ai'])`).rejects.toMatchObject({ constraint_name: "org_links_open_per_issuer" });
       await tx`ROLLBACK TO SAVEPOINT dup`;
@@ -212,7 +218,7 @@ describe("org people and links (real Postgres)", () => {
       const payer = createPostgresPayerBindingStore(sql);
       const [alice, bob] = [await user(tx, "alice"), await user(tx, "bob")] as [string, string];
       const org = await createOrg(orgs, { creatorUserId: alice, name: "toks5" });
-      await orgs.setRole({ orgUserId: org.orgUserId, userId: bob, role: "admin", approvedBy: alice });
+      await orgs.setRole({ orgUserId: org.orgUserId, userId: bob, role: "admin", approvedBy: alice, revokedBy: alice });
       const issuer = `https://x-${randomUUID().slice(0, 8)}.example`;
       const signer = await createServiceAssertionSignerFromSeed({ issuer, seedHex: SEED });
       const deps = { links, inTransaction: <T>(fn: (l: typeof links) => Promise<T>) => fn(links), selfNodeId: NODE_ID, replay: createPostgresReplayStore(sql), fetchJwks: async () => signer.jwks() };
@@ -245,7 +251,7 @@ describe("org people and links (real Postgres)", () => {
     });
   });
 
-  it("a suspended org is refused with org_suspended at the resolver and links nothing; resuming clears it", async () => {
+  it("a suspended org is refused with org_suspended at the resolver and links nothing; suspend is final and stores the admin", async () => {
     await rolledBack(async (tx) => {
       const sql = tx as unknown as SqlTag;
       const orgs = createPostgresOrgAccountStore(sql);
@@ -260,13 +266,17 @@ describe("org people and links (real Postgres)", () => {
       const { code } = await createLinkCode({ orgs, links, self: SELF }, { actorUserId: alice, orgUserId: org.orgUserId, origin: issuer });
       expect((await applyLinkAssertion(deps, await signLinkAssertion(signer, { audienceNodeId: NODE_ID, act: "link", orgUserId: org.orgUserId, code, services: ["node-ai"] }))).ok).toBe(true);
 
-      expect(await setOrgSuspended(orgs, org.orgUserId, true)).toBe(true);
+      const admin = await user(tx, "admin");
+      expect(await suspendOrg(orgs, { orgUserId: org.orgUserId, adminUserId: admin })).toBe(true);
       await expect(payerFor(payer, aiUser)).rejects.toMatchObject({ code: "org_suspended" });
       await expect(createLinkCode({ orgs, links, self: SELF }, { actorUserId: alice, orgUserId: org.orgUserId, origin: `https://other-${randomUUID().slice(0, 8)}.example` })).rejects.toMatchObject({ code: "org_suspended" });
-      expect(await setOrgSuspended(orgs, org.orgUserId, false)).toBe(true);
-      expect(await payerFor(payer, aiUser)).toBe(org.billingAccountId);
+      // Suspend is FINAL: the admin is stored once, a second suspend changes nothing, and nothing lifts it.
+      expect(await tx`SELECT suspended_by FROM agent_principals WHERE user_id = ${org.orgUserId}`).toEqual([{ suspended_by: admin }]);
+      expect(await suspendOrg(orgs, { orgUserId: org.orgUserId, adminUserId: alice })).toBe(true);
+      expect(await tx`SELECT suspended_by FROM agent_principals WHERE user_id = ${org.orgUserId}`).toEqual([{ suspended_by: admin }]);
+      await expect(payerFor(payer, aiUser)).rejects.toMatchObject({ code: "org_suspended" });
       // A user that is not an org cannot be suspended.
-      expect(await setOrgSuspended(orgs, alice, true)).toBe(false);
+      expect(await suspendOrg(orgs, { orgUserId: alice, adminUserId: admin })).toBe(false);
     });
   });
 
@@ -280,7 +290,7 @@ describe("org people and links (real Postgres)", () => {
       const org = await createOrg(orgs, { creatorUserId: alice, name: "toks5" });
       const issuer = `https://x-${randomUUID().slice(0, 8)}.example`;
       const aiUser = await ensureServicePrincipal(sql, { issuer, service: "node-ai" });
-      const linkId = (await links.insertLink({ orgUserId: org.orgUserId, issuer, services: ["node-ai"] })) as string;
+      const linkId = (await links.insertLink({ orgUserId: org.orgUserId, issuer, services: ["node-ai"], createdBy: alice })) as string;
       await links.closeLink({ linkId, closedBy: alice });
       expect(await links.bindPrincipals({ linkId, orgUserId: org.orgUserId, principalIds: [aiUser] })).toBe(0);
       expect(await tx`SELECT 1 FROM payer_bindings WHERE subject_user_id = ${aiUser}`).toHaveLength(0);
@@ -308,7 +318,7 @@ describe("org people and links (real Postgres)", () => {
       const orgs = createPostgresOrgAccountStore(sql);
       const [alice, bob] = [await user(tx, "alice"), await user(tx, "bob")] as [string, string];
       const org = await createOrg(orgs, { creatorUserId: alice, name: "toks5" });
-      await orgs.setRole({ orgUserId: org.orgUserId, userId: bob, role: "admin", approvedBy: alice });
+      await orgs.setRole({ orgUserId: org.orgUserId, userId: bob, role: "admin", approvedBy: alice, revokedBy: alice });
       expect(await orgs.roleOf(bob, org.orgUserId)).toBe("admin");
       await tx`UPDATE agent_roles SET granted_at = now() - interval '2 days', expires_at = now() - interval '1 day' WHERE principal_user_id = ${bob} AND account_id = ${org.billingAccountId}`;
       expect(await orgs.roleOf(bob, org.orgUserId)).toBeNull();
@@ -327,7 +337,7 @@ describe("org people and links (real Postgres)", () => {
       for (let i = 0; i < 6; i++) {
         const id = await user(tx, `m${i}`);
         ids.push(id);
-        await orgs.setRole({ orgUserId: org.orgUserId, userId: id, role: "admin", approvedBy: alice });
+        await orgs.setRole({ orgUserId: org.orgUserId, userId: id, role: "admin", approvedBy: alice, revokedBy: alice });
       }
       const seen: string[] = [];
       let cursor: string | null = null;
@@ -340,17 +350,58 @@ describe("org people and links (real Postgres)", () => {
       } while (cursor);
       expect(pages).toBe(4);
       expect(seen.sort()).toEqual([...ids].sort());
-      // Orgs of one person page the same way.
-      for (let i = 0; i < 3; i++) await createOrg(orgs, { creatorUserId: alice, name: `o${i}` });
+      // Orgs of one person page the same way. In release 1 a person holds an owner and an admin role in one org each, so two orgs; a page of one reaches both.
+      const bob = await user(tx, "bob");
+      const bobs = await createOrg(orgs, { creatorUserId: bob, name: "bobs" });
+      await orgs.setRole({ orgUserId: bobs.orgUserId, userId: alice, role: "admin", approvedBy: bob, revokedBy: bob });
       const orgsSeen: string[] = [];
       let orgCursor: string | null = null;
+      let orgPages = 0;
       do {
-        const page: Awaited<ReturnType<typeof listOrgs>> = await listOrgs(orgs, alice, { limit: 3, cursor: orgCursor });
+        const page: Awaited<ReturnType<typeof listOrgs>> = await listOrgs(orgs, alice, { limit: 1, cursor: orgCursor });
         orgsSeen.push(...page.items.map((o) => o.orgUserId));
         orgCursor = page.nextCursor;
+        orgPages++;
       } while (orgCursor);
-      expect(orgsSeen).toHaveLength(4);
-      expect(new Set(orgsSeen).size).toBe(4);
+      expect(orgPages).toBe(2);
+      expect(new Set(orgsSeen)).toEqual(new Set([org.orgUserId, bobs.orgUserId]));
+    });
+  });
+
+  it("every act names its actor on its own row: invite, accept, link code, link, and an unlink by the owner and by the other node's signature", async () => {
+    await rolledBack(async (tx) => {
+      const sql = tx as unknown as SqlTag;
+      const orgs = createPostgresOrgAccountStore(sql);
+      const links = createPostgresOrgLinkStore(sql);
+      const [alice, bob] = [await user(tx, "alice"), await user(tx, "bob")] as [string, string];
+      const bobWallet = wallet();
+      await bindWallet(tx, bob, bobWallet);
+      const org = await createOrg(orgs, { creatorUserId: alice, name: "actors" });
+      const invite = await inviteMember(orgs, { actorUserId: alice, orgUserId: org.orgUserId, wallet: bobWallet, role: "admin" });
+      expect(await tx`SELECT invited_by, accepted_by FROM org_invites WHERE id = ${invite.id}::uuid`).toEqual([{ invited_by: alice, accepted_by: null }]);
+      await acceptInvite(orgs, { userId: bob, inviteId: invite.id });
+      expect(await tx`SELECT invited_by, accepted_by FROM org_invites WHERE id = ${invite.id}::uuid`).toEqual([{ invited_by: alice, accepted_by: bob }]);
+      // The grant row names the person who approved it (the inviter), distinct from the principal.
+      expect(await tx`SELECT approved_by FROM agent_roles WHERE principal_user_id = ${bob} AND account_id = ${org.billingAccountId} AND revoked_at IS NULL`).toEqual([{ approved_by: alice }]);
+
+      const issuer = `https://x-${randomUUID().slice(0, 8)}.example`;
+      const signer = await createServiceAssertionSignerFromSeed({ issuer, seedHex: SEED });
+      const deps = { links, inTransaction: <T>(fn: (l: typeof links) => Promise<T>) => fn(links), selfNodeId: NODE_ID, replay: createPostgresReplayStore(sql), fetchJwks: async () => signer.jwks() };
+      const link = async () => {
+        const { code } = await createLinkCode({ orgs, links, self: SELF }, { actorUserId: alice, orgUserId: org.orgUserId, origin: issuer });
+        const result = await applyLinkAssertion(deps, await signLinkAssertion(signer, { audienceNodeId: NODE_ID, act: "link", orgUserId: org.orgUserId, code, services: ["node-ai"] }));
+        return result.ok ? result.linkId : "";
+      };
+      expect(await tx`SELECT created_by FROM org_link_codes WHERE org_user_id = ${org.orgUserId}`).toEqual([]);
+      const first = await link();
+      expect(await tx`SELECT created_by FROM org_link_codes WHERE org_user_id = ${org.orgUserId}`).toEqual([{ created_by: alice }]);
+      expect(await tx`SELECT created_by, closed_by FROM org_links WHERE id = ${first}::uuid`).toEqual([{ created_by: alice, closed_by: null }]);
+      // The owner unlinks: the owner is stored. A second link, closed by the other node's signature, stores the org's own users id (no person did it).
+      await closeLinkByOwner({ orgs, inTransaction: <T>(fn: (l: typeof links) => Promise<T>) => fn(links) }, { actorUserId: alice, orgUserId: org.orgUserId, linkId: first });
+      expect(await tx`SELECT closed_by FROM org_links WHERE id = ${first}::uuid`).toEqual([{ closed_by: alice }]);
+      const second = await link();
+      await applyLinkAssertion(deps, await signLinkAssertion(signer, { audienceNodeId: NODE_ID, act: "unlink", orgUserId: org.orgUserId }));
+      expect(await tx`SELECT closed_by FROM org_links WHERE id = ${second}::uuid`).toEqual([{ closed_by: org.orgUserId }]);
     });
   });
 
@@ -384,10 +435,14 @@ describe("two real connections (committed data, row locks)", () => {
     try {
       await service`INSERT INTO users (id, name) VALUES (${alice}, 'alice'), (${bob}, 'bob')`;
       org = await createOrg(createPostgresOrgAccountStore(service as unknown as SqlTag), { creatorUserId: alice, name: "race" });
-      await createPostgresOrgAccountStore(service as unknown as SqlTag).setRole({ orgUserId: org.orgUserId, userId: bob, role: "owner", approvedBy: alice });
+      await createPostgresOrgAccountStore(service as unknown as SqlTag).setRole({ orgUserId: org.orgUserId, userId: bob, role: "owner", approvedBy: alice, revokedBy: alice });
       await fn({ org, alice, bob });
     } finally {
       if (org) {
+        await service`DELETE FROM payer_bindings WHERE billing_account_id = ${org.billingAccountId}`.catch(() => undefined);
+        await service`DELETE FROM org_links WHERE org_user_id = ${org.orgUserId}`.catch(() => undefined);
+        await service`DELETE FROM org_link_codes WHERE org_user_id = ${org.orgUserId}`.catch(() => undefined);
+        await service`DELETE FROM org_invites WHERE org_user_id = ${org.orgUserId}`.catch(() => undefined);
         await service`DELETE FROM agent_roles WHERE account_id = ${org.billingAccountId}`.catch(() => undefined);
         await service`DELETE FROM virtual_keys WHERE billing_account_id = ${org.billingAccountId}`.catch(() => undefined);
         await service`DELETE FROM billing_accounts WHERE id = ${org.billingAccountId}`.catch(() => undefined);
@@ -451,7 +506,7 @@ describe("two real connections (committed data, row locks)", () => {
       const carol = randomUUID();
       await service`INSERT INTO users (id, name) VALUES (${carol}, 'carol')`;
       try {
-        const set = (tx: TransactionSql) => createPostgresOrgAccountStore(tx as unknown as SqlTag).setRole({ orgUserId: org.orgUserId, userId: carol, role: "admin", approvedBy: alice });
+        const set = (tx: TransactionSql) => createPostgresOrgAccountStore(tx as unknown as SqlTag).setRole({ orgUserId: org.orgUserId, userId: carol, role: "admin", approvedBy: alice, revokedBy: alice });
         const [one, two] = await overlapped(set, set);
         expect(one.status).toBe("fulfilled");
         expect(two.status).toBe("rejected");
@@ -463,4 +518,204 @@ describe("two real connections (committed data, row locks)", () => {
       }
     });
   });
+
+  /** Runs `first` until it calls `hold()`, then starts `second` while `first`'s transaction is still open, lets `first` commit, and returns both outcomes. */
+  async function holding<A, B>(first: (hold: () => Promise<void>) => Promise<A>, second: () => Promise<B>): Promise<[A, B]> {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolveGate) => {
+      release = resolveGate;
+    });
+    let ready: () => void = () => undefined;
+    const isReady = new Promise<void>((resolveReady) => {
+      ready = resolveReady;
+    });
+    const a = first(async () => {
+      ready();
+      await gate;
+    });
+    await Promise.race([isReady, a.then(() => undefined, () => undefined)]);
+    const b = second();
+    // Give the second transaction time to reach (and block on) the first one's locks, then let the first commit.
+    await new Promise((resolveWait) => setTimeout(resolveWait, 400));
+    release();
+    return Promise.all([a, b]);
+  }
+
+  /** A trusted issuer and a node-ai principal that is about to enroll while its issuer links (a statically trusted home is the case the review named). */
+  async function linkRace(order: "link first" | "enrollment first"): Promise<void> {
+    await withOrg(async ({ org, alice }) => {
+      const sqlTag = service as unknown as SqlTag;
+      const orgs = createPostgresOrgAccountStore(sqlTag);
+      const links = createPostgresOrgLinkStore(sqlTag);
+      const issuer = `https://race-${randomUUID().slice(0, 8)}.example`;
+      const principal = await servicePrincipalId({ issuer, service: "node-ai" });
+      const signer = await createServiceAssertionSignerFromSeed({ issuer, seedHex: SEED });
+      const { code } = await createLinkCode({ orgs, links, self: SELF }, { actorUserId: alice, orgUserId: org.orgUserId, origin: issuer });
+      const assertion: VerifiedServiceAssertion = { ok: true, issuer, service: "node-ai", clientId: `${issuer}#node-ai`, scope: "knowledge:read", jti: randomUUID(), claims: {} };
+      const token = await signLinkAssertion(signer, { audienceNodeId: NODE_ID, act: "link", orgUserId: org.orgUserId, code, services: ["node-ai"] });
+      const linkDeps = (begin: (fn: (tx: TransactionSql) => Promise<unknown>) => Promise<unknown>) => ({
+        links,
+        inTransaction: ((fn: (l: ReturnType<typeof createPostgresOrgLinkStore>) => Promise<unknown>) => begin((tx) => fn(createPostgresOrgLinkStore(tx as unknown as SqlTag)))) as never,
+        selfNodeId: NODE_ID,
+        replay: createPostgresReplayStore(sqlTag),
+        fetchJwks: async () => signer.jwks(),
+      });
+      const link = (hold?: () => Promise<void>) =>
+        applyLinkAssertion(
+          linkDeps((fn) =>
+            service.begin(async (tx) => {
+              const result = await fn(tx);
+              if (hold) await hold();
+              return result;
+            })
+          ),
+          token
+        );
+      const enroll = (hold?: () => Promise<void>) =>
+        service.begin(async (tx) => {
+          const t = tx as unknown as SqlTag;
+          const result = await requestServiceAccess({
+            tx: t,
+            store: createPostgresAgentGrantsStore(t),
+            assertion,
+            scope: "knowledge:read",
+            declaredScopes: ["knowledge:read"],
+            askableScopes: ["knowledge:read"],
+            scopeKinds: { "knowledge:read": "node" },
+            // The same two hooks the node wires: the issuer's lock first, then the bind of a principal of a linked service.
+            beforePrincipal: () => createPostgresOrgLinkStore(t).lockIssuer(issuer),
+            onPrincipal: async (userId) => void (await bindLinkedService(createPostgresOrgLinkStore(t), { issuer, service: "node-ai", subjectUserId: userId })),
+          });
+          if (hold) await hold();
+          return result;
+        });
+      try {
+        if (order === "link first") {
+          const [linked] = await holding((hold) => link(hold), () => enroll());
+          expect(linked).toMatchObject({ ok: true, act: "link" });
+        } else {
+          const [, linked] = await holding((hold) => enroll(hold), () => link());
+          expect(linked).toMatchObject({ ok: true, act: "link" });
+        }
+        // Whichever committed first, the principal exists AND is bound: the payer is the org's account.
+        expect(await payerFor(createPostgresPayerBindingStore(sqlTag), principal)).toBe(org.billingAccountId);
+        expect(await service`SELECT 1 FROM payer_bindings WHERE subject_user_id = ${principal} AND revoked_at IS NULL`).toHaveLength(1);
+      } finally {
+        await service`DELETE FROM payer_bindings WHERE subject_user_id = ${principal}`.catch(() => undefined);
+        await service`DELETE FROM agent_roles WHERE principal_user_id = ${principal}`.catch(() => undefined);
+        await service`DELETE FROM agent_principals WHERE user_id = ${principal}`.catch(() => undefined);
+        await service`DELETE FROM users WHERE id = ${principal}`.catch(() => undefined);
+      }
+    });
+  }
+
+  it("link vs enrollment of the same issuer, the link commits first: the principal that enrolls during the link is bound (the payer is the org)", async () => {
+    await linkRace("link first");
+  });
+
+  it("link vs enrollment of the same issuer, the enrollment commits first: the link binds the principal that already exists (the payer is the org)", async () => {
+    await linkRace("enrollment first");
+  });
+
+  it("the final invite slot: two invites for different wallets race at 49 open, exactly one succeeds and the org never holds more than 50", async () => {
+    await withOrg(async ({ org, alice }) => {
+      for (let i = 0; i < 49; i++)
+        await service`INSERT INTO org_invites (org_user_id, wallet, scope, invited_by, expires_at) VALUES (${org.orgUserId}, ${`0x${i.toString(16).padStart(40, "0")}`}, 'org:admin', ${alice}, now() + interval '7 days')`;
+      const invite = (wallet: string) => (tx: TransactionSql) => inviteMember(createPostgresOrgAccountStore(tx as unknown as SqlTag), { actorUserId: alice, orgUserId: org.orgUserId, wallet, role: "admin" });
+      const wallets = [`0x${"a".repeat(40)}`, `0x${"b".repeat(40)}`];
+      const [one, two] = await overlapped(invite(wallets[0] as string), invite(wallets[1] as string));
+      expect([one.status, two.status].sort()).toEqual(["fulfilled", "rejected"]);
+      const loser = [one, two].find((r) => r.status === "rejected") as PromiseRejectedResult;
+      expect(loser.reason).toMatchObject({ code: "too_many_invites" });
+      expect(await service`SELECT 1 FROM org_invites WHERE org_user_id = ${org.orgUserId} AND accepted_at IS NULL AND revoked_at IS NULL`).toHaveLength(50);
+    });
+  });
+
+  it("the final link-code slot: two codes race at 9 open, exactly one succeeds and the org never holds more than 10", async () => {
+    await withOrg(async ({ org, alice }) => {
+      for (let i = 0; i < 9; i++)
+        await service`INSERT INTO org_link_codes (org_user_id, origin, code_hash, created_by, expires_at) VALUES (${org.orgUserId}, ${`https://n${i}.example`}, ${`hash-${randomUUID()}`}, ${alice}, now() + interval '15 minutes')`;
+      const code = (origin: string) => (tx: TransactionSql) =>
+        createLinkCode({ orgs: createPostgresOrgAccountStore(tx as unknown as SqlTag), links: createPostgresOrgLinkStore(tx as unknown as SqlTag), self: SELF }, { actorUserId: alice, orgUserId: org.orgUserId, origin });
+      const [one, two] = await overlapped(code("https://a.example"), code("https://b.example"));
+      expect([one.status, two.status].sort()).toEqual(["fulfilled", "rejected"]);
+      const loser = [one, two].find((r) => r.status === "rejected") as PromiseRejectedResult;
+      expect(loser.reason).toMatchObject({ code: "too_many_codes" });
+      expect(await service`SELECT 1 FROM org_link_codes WHERE org_user_id = ${org.orgUserId} AND consumed_at IS NULL`).toHaveLength(10);
+    });
+  });
 });
+
+describe("the forward migration 0051 (real Postgres, rolled back)", () => {
+  let service: Sql;
+
+  beforeAll(() => {
+    if (!process.env.DATABASE_SERVICE_URL) throw new Error("component PostgreSQL required");
+    service = postgres(process.env.DATABASE_SERVICE_URL, { max: 2 });
+  });
+  afterAll(async () => {
+    await service?.end({ timeout: 1 });
+  });
+
+  /** The hand-written repair part of 0051, one statement per chunk. */
+  const repairStatements = (): string[] => {
+    const text = readFileSync(resolve(__dirname, "../../../src/adapters/server/db/migrations/0051_org_roles_forward.sql"), "utf8");
+    return text
+      .slice(text.indexOf("-- Hand-written below"))
+      .split("--> statement-breakpoint")
+      .map((chunk) => chunk.trim())
+      .filter((chunk) => chunk.length > 0);
+  };
+
+  it("repairs the database the rejected first 0050 left: keeps the oldest live row per (principal, scope) with no human revoker, restores the old index, adds the new one, and is safe to run again", async () => {
+    await service
+      .begin(async (tx) => {
+        const user = async (name: string) => {
+          const id = randomUUID();
+          await tx`INSERT INTO users (id, name) VALUES (${id}, ${name})`;
+          return id;
+        };
+        const sqlTag = tx as unknown as SqlTag;
+        const orgs = createPostgresOrgAccountStore(sqlTag);
+        const [p, q, bob, carol] = [await user("p"), await user("q"), await user("bob"), await user("carol")] as [string, string, string, string];
+        const [a1, a2, a3] = [await createOrg(orgs, { creatorUserId: bob, name: "one" }), await createOrg(orgs, { creatorUserId: carol, name: "two" }), await createOrg(orgs, { creatorUserId: q, name: "three" })];
+        // The state the rejected 0050 left: the old index replaced by the account-aware one under the OLD NAME, and the new one absent.
+        await tx.unsafe("DROP INDEX agent_roles_live_unique");
+        await tx.unsafe("DROP INDEX IF EXISTS agent_roles_live_account_unique");
+        await tx.unsafe(`CREATE UNIQUE INDEX agent_roles_live_unique ON agent_roles (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL`);
+        const give = (principal: string, accountId: string, ago: string) =>
+          tx.unsafe(
+            `INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, created_at, resource, account_id)
+             VALUES ('${principal}', 'org:owner', '${bob}', now(), now() - interval '${ago}', 'account', '${accountId}')`
+          );
+        await give(p, a1.billingAccountId, "2 days"); // the oldest: kept
+        await give(p, a2.billingAccountId, "1 day"); // a duplicate the bad state allowed: ended
+        await give(p, a3.billingAccountId, "1 hour"); // another duplicate: ended
+        const before = await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`;
+        expect(before).toHaveLength(3);
+
+        for (const statement of repairStatements()) await tx.unsafe(statement);
+        for (const statement of repairStatements()) await tx.unsafe(statement); // safe to run again
+
+        const live = await tx`SELECT account_id FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NULL`;
+        expect(live).toEqual([{ account_id: a1.billingAccountId }]);
+        // The ended rows name no person: the migration, not an actor, ended them.
+        const ended = await tx`SELECT account_id, revoked_by FROM agent_roles WHERE principal_user_id = ${p} AND scope = 'org:owner' AND revoked_at IS NOT NULL ORDER BY account_id`;
+        expect(ended).toHaveLength(2);
+        expect(ended.every((row) => row.revoked_by === null)).toBe(true);
+        // A principal with one live row, and the org owners of other orgs, are untouched.
+        expect(await tx`SELECT 1 FROM agent_roles WHERE principal_user_id = ${q} AND scope = 'org:owner' AND revoked_at IS NULL`).toHaveLength(1);
+        const defs = await tx`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'agent_roles' AND indexname IN ('agent_roles_live_unique', 'agent_roles_live_account_unique') ORDER BY indexname`;
+        expect(defs.map((d) => d.indexname)).toEqual(["agent_roles_live_account_unique", "agent_roles_live_unique"]);
+        expect(String(defs[1]?.indexdef)).not.toContain("COALESCE");
+        // The previous release's writer works again: its ON CONFLICT infers the restored index and finds the live row.
+        const old = await tx`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${p}, 'org:owner', ${bob}) ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
+        expect(old).toHaveLength(0);
+        throw new Error("rollback");
+      })
+      .catch((error: unknown) => {
+        if ((error as Error).message !== "rollback") throw error;
+      });
+  });
+});
+

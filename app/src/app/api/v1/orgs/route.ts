@@ -8,7 +8,7 @@
  *   `createOrg` in one transaction.
  * Invariants:
  *   - ANYONE_CREATES: any signed-in person may create an org on any node. It grants nothing outside the org: no node permission, no data access.
- *   - BOUNDED_CREATION: a sixth org for one owner is 409 `too_many_orgs`.
+ *   - BOUNDED_CREATION (release 1): a person holds each org role in at most one org, so a second org is 409 `org_role_limit` (release 2 raises it to 5 owned orgs).
  *   - This route replaces the retired `POST /api/v1/orgs` that registered an org for a repo-spec owner source (agent-grants 0.10.0 deletes that source).
  * Side-effects: IO (service-role database write)
  * Links: https://node-template.cognidao.org/knowledge/org-account-lifecycle
@@ -33,7 +33,7 @@ export const GET = wrapRouteHandlerWithLogging(
       const page = await getContainer().orgAccounts.list(sessionUser.id, query);
       return json(
         orgListOperation.output.parse({
-          orgs: page.items.map((o) => ({ orgUserId: o.orgUserId, name: o.name, billingAccountId: o.billingAccountId, suspended: o.suspendedAt !== null, role: o.role })),
+          orgs: page.items.map((o) => ({ orgUserId: o.orgUserId, name: o.name, billingAccountId: o.billingAccountId, balanceCredits: o.balanceCredits, suspended: o.suspendedAt !== null, role: o.role })),
           nextCursor: page.nextCursor,
         })
       );

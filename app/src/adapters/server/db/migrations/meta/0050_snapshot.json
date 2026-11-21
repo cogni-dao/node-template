@@ -1,5 +1,5 @@
 {
-  "id": "40f1368d-51f7-429d-8f09-4fa0db114b7c",
+  "id": "148377c7-8827-470d-88b8-1e86b15130c1",
   "prevId": "65670964-e0af-44f1-a060-de9304032e5d",
   "version": "7",
   "dialect": "postgresql",
@@ -428,6 +428,28 @@
       "indexes": {
         "agent_roles_live_unique": {
           "name": "agent_roles_live_unique",
+          "columns": [
+            {
+              "expression": "principal_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "scope",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"agent_roles\".\"revoked_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_roles_live_account_unique": {
+          "name": "agent_roles_live_account_unique",
           "columns": [
             {
               "expression": "principal_user_id",

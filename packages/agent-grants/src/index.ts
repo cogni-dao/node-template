@@ -91,6 +91,7 @@ export {
   getOrgView,
   INVITE_TTL_DAYS,
   inviteMember,
+  listAllOrgs,
   listMembers,
   listMyInvites,
   listOrgs,
@@ -105,12 +106,13 @@ export {
   type OrgMember,
   type OrgMembership,
   type OrgRecord,
+  type OrgSummary,
   type Page,
   type PageQuery,
   pageOf,
   removeMember,
   requireRole,
-  setOrgSuspended,
+  suspendOrg,
 } from "./org-accounts";
 export {
   type ApplyLinkDeps,
@@ -123,6 +125,7 @@ export {
   jwksUriOfOrigin,
   LINK_CODE_TTL_MINUTES,
   LINK_PATH,
+  LINK_PREVIEW_PATH,
   LINK_SCOPE,
   type LinkRefusal,
   type LinkResult,
@@ -141,6 +144,14 @@ export {
   previewLinkCode,
   signLinkAssertion,
 } from "./org-links";
+export {
+  createOrgOutbound,
+  type OrgOutbound,
+  type OutboundHttp,
+  type OutboundRefusal,
+  type OutboundResult,
+  type OutboundSent,
+} from "./org-outbound";
 export {
   ACCOUNT_READ,
   holdsAccountRight,

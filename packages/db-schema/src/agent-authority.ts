@@ -52,6 +52,10 @@ export const agentPrincipals = pgTable(
     ownerSourceRef: text("owner_source_ref"),
     /** Only an `org` row: set when the node's admin suspends the org. The payer resolver refuses a suspended org with `org_suspended`. */
     suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+    /** Only a suspended `org` row: the node admin who suspended it. Suspend is final in P1 (no Resume), so this is set once. */
+    suspendedBy: text("suspended_by").references(() => users.id),
+    /** Only an `org` row: the signed-in person who created the org. */
+    createdBy: text("created_by").references(() => users.id),
     userId: text("user_id")
       .notNull()
       .references(() => users.id),
@@ -110,6 +114,8 @@ export const agentRoles = pgTable(
       .notNull()
       .defaultNow(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /** Who ended the row, when a person did (an org role removed or changed). Null while live, and null for a row ended by a migration or by a system path with no actor. */
+    revokedBy: text("revoked_by").references(() => users.id),
     /** What the row covers: the whole node, or one account. Every row before this column is a node row. */
     resource: text("resource").notNull().default("node"),
     /** The account an approved account row covers. Null on a node row and on a pending account row. */
@@ -122,9 +128,14 @@ export const agentRoles = pgTable(
     linkConsumedAt: timestamp("link_consumed_at", { withTimezone: true }),
   },
   (table) => [
-    // One open row per (principal, scope, account) (task.0181): a person can hold `org:owner` on several orgs. A node row and a pending account ask have no
-    // account, so they read as the empty account and stay one open row per (principal, scope), as before.
+    // RELEASE 1 of the index change (task.0181): the OLD unique (principal, scope) live index stays, because the previous release's `ON CONFLICT (principal_user_id, scope)` needs it and a
+    // rollback must be safe. It gives a person ONE row per (principal, scope), so a second `org:owner` in another org is refused (`org_role_limit`).
+    // RELEASE 2 (task.0175, after every node runs release 1) drops it and leaves the account-aware index below as the only one.
     uniqueIndex("agent_roles_live_unique")
+      .on(table.principalUserId, table.scope)
+      .where(sql`${table.revokedAt} IS NULL`),
+    // The account-aware live index, under its own name: one open row per (principal, scope, account). A node row and a pending account ask have no account, so they read as the empty account.
+    uniqueIndex("agent_roles_live_account_unique")
       .on(table.principalUserId, table.scope, sql`coalesce(${table.accountId}, '')`)
       .where(sql`${table.revokedAt} IS NULL`),
     uniqueIndex("agent_roles_link_hash_unique").on(table.linkHash),

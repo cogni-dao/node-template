@@ -1,5 +1,6 @@
--- org accounts (task.0181, `@cogni-dao/agent-grants` 0.10.0): invites, link codes, node links, the org's `suspended_at`, `payer_bindings.link_id`, and the live-row index
--- (principal, scope, account) on `agent_roles`. node-template keeps this as 0050_org_accounts.sql. Do not copy it blind into a fork: see README.md.
+-- org accounts (task.0181, `@cogni-dao/agent-grants` 0.10.0): invites, link codes, node links, the org's `suspended_at`, `payer_bindings.link_id`, and the account-aware live-row index
+-- `agent_roles_live_account_unique` BESIDE the old (principal, scope) index, which stays (RELEASE 1; the old one is dropped in release 2, task.0175).
+-- node-template keeps this as 0050_org_accounts.sql; everything below this header is that file byte for byte. Do not copy it blind into a fork: see README.md.
 CREATE TABLE "org_invites" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"org_user_id" text NOT NULL,
@@ -40,7 +41,6 @@ CREATE TABLE "org_links" (
 );
 --> statement-breakpoint
 ALTER TABLE "org_links" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
-DROP INDEX "agent_roles_live_unique";--> statement-breakpoint
 ALTER TABLE "agent_principals" ADD COLUMN "suspended_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "payer_bindings" ADD COLUMN "link_id" uuid;--> statement-breakpoint
 ALTER TABLE "org_invites" ADD CONSTRAINT "org_invites_org_user_id_users_id_fk" FOREIGN KEY ("org_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -57,7 +57,7 @@ CREATE INDEX "org_link_codes_org_idx" ON "org_link_codes" USING btree ("org_user
 CREATE UNIQUE INDEX "org_links_open_per_issuer" ON "org_links" USING btree ("issuer") WHERE "org_links"."closed_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "org_links_org_idx" ON "org_links" USING btree ("org_user_id");--> statement-breakpoint
 ALTER TABLE "payer_bindings" ADD CONSTRAINT "payer_bindings_link_id_org_links_id_fk" FOREIGN KEY ("link_id") REFERENCES "public"."org_links"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "agent_roles_live_unique" ON "agent_roles" USING btree ("principal_user_id","scope",coalesce("account_id", '')) WHERE "agent_roles"."revoked_at" IS NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "agent_roles_live_account_unique" ON "agent_roles" USING btree ("principal_user_id","scope",coalesce("account_id", '')) WHERE "agent_roles"."revoked_at" IS NULL;--> statement-breakpoint
 
 -- Hand-written below: FORCE RLS is outside Drizzle's DDL scope (same as 0039 / 0041 / 0046 / 0049).
 -- org_invites, org_link_codes and org_links have NO policy: ENABLE + FORCE = deny-all for the app role. Only the BYPASSRLS service role reads or writes them.

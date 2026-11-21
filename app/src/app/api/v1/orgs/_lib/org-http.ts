@@ -26,7 +26,7 @@ const ORG_STATUS: Record<OrgError["code"], number> = {
   not_found: 404,
   not_allowed: 403,
   last_owner: 409,
-  too_many_orgs: 409,
+  org_role_limit: 409,
   too_many_invites: 429,
   already_member: 409,
   invalid_name: 400,
