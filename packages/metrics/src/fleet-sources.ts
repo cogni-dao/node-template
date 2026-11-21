@@ -93,9 +93,10 @@ function releasePathIdentity(pathname: string): { tag: string | undefined; publi
 	return { tag: match?.[2], publisher: match?.[1], valid: valid && !!match };
 }
 
-// Recognition and trust share the same decoded Release-path boundary. An
-// untrusted identity is only a reporting hint, never a network destination.
-function releaseIdentity(raw: string, publisher?: string): { tag: string | undefined; trusted: boolean } {
+// Only the actual normalized target can establish trust. Otherwise preserve all
+// recoverable identities until member classification: an unrelated normalized
+// hint cannot discharge a recognizable raw member refusal. Hints never direct IO.
+function releaseIdentity(raw: string, publisher?: string): { tag: string | undefined; trusted: boolean; hints: readonly string[] } {
 	let url: URL | undefined;
 	try {
 		url = new URL(raw);
@@ -103,11 +104,12 @@ function releaseIdentity(raw: string, publisher?: string): { tag: string | undef
 		// Malformed-but-recognizable pins still need reporting below.
 	}
 	const identity = url && releasePathIdentity(url.pathname);
-	if (identity?.tag !== undefined) {
+	if (identity?.valid && url?.origin === "https://github.com" && !url.username && !url.password &&
+		(!publisher || identity.publisher?.toLowerCase() === publisher.toLowerCase())) {
 		return {
 			tag: identity.tag,
-			trusted: identity.valid && url?.origin === "https://github.com" && !url.username && !url.password &&
-				(!publisher || identity.publisher?.toLowerCase() === publisher.toLowerCase()),
+			trusted: true,
+			hints: [],
 		};
 	}
 	// URL parsing can fail on the authority or erase the tag through traversal.
@@ -117,12 +119,21 @@ function releaseIdentity(raw: string, publisher?: string): { tag: string | undef
 	while (start < end && raw.charCodeAt(start) <= 32) start++;
 	while (end > start && raw.charCodeAt(end - 1) <= 32) end--;
 	const input = raw.slice(start, end).replace(/[\t\n\r]/g, "").replace(/\\/g, "/");
-	const path = /^[a-z][a-z\d+.-]*:\/\/[^/]*(\/[^?#]*)/i.exec(input)?.[1];
-	if (path === undefined) return { tag: undefined, trusted: false };
+	// HTTP(S) special URLs accept zero, one or many authority slashes. Extract
+	// only the path when a bad authority prevents native URL parsing; URL still
+	// owns path normalization. Keep the existing :// recovery for other schemes.
+	const path = /^(?:https?:\/*|[a-z][a-z\d+.-]*:\/\/)[^/?#]*(\/[^?#]*)/i.exec(input)?.[1];
+	const hints = new Set<string>();
+	if (identity?.tag !== undefined) hints.add(identity.tag);
 	// A fixed dummy authority lets URL normalize the recovered path even when
 	// the manifest authority was invalid. Neither form can establish trust.
-	const normalized = new URL(`https://release.invalid${path}`).pathname;
-	return { tag: releasePathIdentity(normalized).tag ?? releasePathIdentity(path).tag, trusted: false };
+	if (path !== undefined) {
+		const normalized = new URL(`https://release.invalid${path}`).pathname;
+		for (const hint of [releasePathIdentity(normalized).tag, releasePathIdentity(path).tag]) {
+			if (hint !== undefined) hints.add(hint);
+		}
+	}
+	return { tag: undefined, trusted: false, hints: [...hints] };
 }
 
 function validGitRef(ref: string): boolean {
@@ -201,7 +212,7 @@ export function assessFleetTrainLag(
 		for (const [key, raw] of deps) {
 			if (typeof raw !== "string") continue;
 			const namedMember = members.find((x) => x.name === key);
-			const { tag, trusted } = releaseIdentity(raw, publisher);
+			const { tag, trusted, hints } = releaseIdentity(raw, publisher);
 			if (trusted && tag) {
 				const member = members.find((x) => tag.startsWith(x.tagPrefix));
 				if (namedMember && member !== namedMember) reasons.push(`invalid:${key}@release`);
@@ -222,7 +233,7 @@ export function assessFleetTrainLag(
 				if (!member) continue;
 				pinned.add(member.name);
 				reasons.push(`vendored:${key}@workspace`);
-			} else if (namedMember || members.some((x) => tag?.startsWith(x.tagPrefix))) {
+			} else if (namedMember || members.some((x) => hints.some((hint) => hint.startsWith(x.tagPrefix)))) {
 				reasons.push(`invalid:${key}@pin`);
 			}
 		}

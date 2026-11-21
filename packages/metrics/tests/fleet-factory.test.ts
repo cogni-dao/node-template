@@ -11,6 +11,64 @@ const params = {
 };
 
 describe("public fleet calculator", () => {
+	it.each((["dependencies", "devDependencies"] as const).flatMap((section) => [1, 5].map((size) => ({ section, size }))))("retains member refusals through authority/traversal combinations ($section, $size members)", async ({ section, size }) => {
+		const calculator = createFleetTrainLagCalculator();
+		const members = ["metrics", "work-items", "knowledge-store", "knowledge-base-ui", "ai-tools"].slice(0, size).map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));
+		const consumers = Array.from({ length: size === 1 ? 1 : 6 }, (_, i) => ({ repo: `cogni-dao/consumer${i}`, manifestPath: "package.json" }));
+		const official = Object.fromEntries(members.map((m) => [m.name, `https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.26.0/x.tgz`]));
+		let alias: string | undefined;
+		const calls: string[] = [];
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			calls.push(address);
+			expect(["https://api.github.com", "https://raw.githubusercontent.com"]).toContain(new URL(address).origin);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			const body = address.includes("matching-refs") ? [{ ref: "refs/tags/train-v0.26.0" }]
+				: tag ? { tag_name: decodeURIComponent(tag), published_at: "2026-11-20T00:00:00Z" }
+				: { dependencies: { ...official, "@cogni/metrics": "workspace:*", ...(section === "dependencies" && alias && address.includes("consumer0/") ? { "legacy-any-name": alias } : {}) }, devDependencies: { "@cogni/knowledge-store": "workspace:*", ...(section === "devDependencies" && alias && address.includes("consumer0/") ? { "legacy-any-name": alias } : {}) } };
+			return new Response(JSON.stringify(body), { headers: { date: "Sun, 22 Nov 2026 00:00:00 GMT" } });
+		});
+		const controller = new AbortController();
+		const compute = async (reason?: string) => {
+			calls.length = 0;
+			const result = await calculator.compute({ ...params, members, consumers }, {
+				window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+				signal: controller.signal, budget: calculator.budget, read: async (source) => source(controller.signal, calculator.budget),
+			});
+			const lagging = reason ? 1 : 0;
+			expect(result, alias).toMatchObject({ complete: true, value: lagging });
+			expect(result.evidenceRefs).toContain(`fleet:train-lag:counts:evaluated=${consumers.length};lagging=${lagging};train=0.26.0`);
+			if (reason) expect(result.evidenceRefs).toContain(`fleet:train-lag:lagging=cogni-dao/consumer0:${reason}`);
+			expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(1 + size);
+			expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(consumers.length);
+		};
+		try {
+			await compute();
+			for (const slashes of ["", "/", "//", "///", "////"]) {
+				for (const { scheme, authority } of ["https", "http"].flatMap((scheme) => ["github.com", "github.com:bad", "[invalid", "foreign.example", "user@github.com"].map((authority) => ({ scheme, authority })))) {
+					for (const suffix of ["", "%FF", "%C3%28"]) {
+						for (const tail of ["/x.tgz", "/../other", "/%2e%2e/other", "/../other/x.tgz"]) {
+							const raw = `${scheme}:${slashes}${authority}/cogni-dao/node-template/%72eleases/%64ownload/%6detrics%2dv0.1.0${suffix}${tail}`;
+							for (alias of [raw, raw.replace("%72eleases/%64ownload/%6detrics%2dv", "releases/download/metrics-v"), ` \t${raw.replace(/\//g, "\\").replace("node-template", "node-\ttemplate")}\n`]) {
+								const trusted = scheme === "https" && authority === "github.com";
+								await compute(trusted && tail === "/../other/x.tgz" ? undefined
+									: trusted && tail === "/x.tgz" && !suffix ? "behind:legacy-any-name@0.1.0" : "invalid:legacy-any-name@pin");
+							}
+						}
+					}
+				}
+			}
+			for (const target of [...members.map((m) => `${m.tagPrefix}0.26.0/x.tgz`), "unrelated-v1.0.0/x.tgz"]) {
+				alias = `https://github.com/cogni-dao/node-template/releases/download/%6detrics-v0.1.0%FF/../${target}`;
+				await compute();
+			}
+			for (const authority of ["github.com", "github.com:bad", "[invalid"]) {
+				alias = `https:/${authority}/cogni-dao/node-template/releases/download/unrelated-v1.0.0%FF/../other`;
+				await compute();
+			}
+		} finally { fetchMock.mockRestore(); }
+	});
+
 	it.each((["dependencies", "devDependencies"] as const).flatMap((section) => [
 		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x.tgz", invalid: false },
 		{ section, path: "/cogni-dao/node-template/releases/%64ownload/metrics-vVERSION/x.tgz", invalid: false },

@@ -186,6 +186,48 @@ describe("source qualification against six current consumers", () => {
 		manifests.map(({ repo }) => ({ repo, manifest: current() }));
 	const assess = (rows: ReturnType<typeof cohort>) =>
 		assessFleetTrainLag("0.24.0", MEMBERS, rows, publisher);
+	it.each(["dependencies", "devDependencies"] as const)("preserves every member refusal across native authority and traversal families in %s", (section) => {
+		for (const member of MEMBERS) {
+			for (const slashes of ["", "/", "//", "///", "////"]) {
+				for (const { scheme, authority } of ["https", "http"].flatMap((scheme) => ["github.com", "github.com:bad", "[invalid", "foreign.example", "user@github.com"].map((authority) => ({ scheme, authority })))) {
+					for (const suffix of ["", "%FF", "%zz"]) {
+						for (const tail of ["/x.tgz", "/../other", "/%2e%2E/other", "/../other/x.tgz"]) {
+							const tag = `%${member.tagPrefix.charCodeAt(0).toString(16)}${member.tagPrefix.slice(1).replace("-v", "%2dv")}0.1.0${suffix}`;
+							const raw = `${scheme}:${slashes}${authority}/${publisher}/%72eleases/%64ownload/${tag}${tail}`;
+							for (const pin of [raw, raw.replace("%72eleases/%64ownload", "releases/download").replace(tag, `${member.tagPrefix}0.1.0${suffix}`), ` \t${raw.replace(/\//g, "\\").replace("http", "ht\ttp")}\r\n`]) {
+								const rows = cohort();
+								const first = rows[0] as (typeof rows)[number];
+								first.manifest[section]["arbitrary-legacy"] = pin;
+								const trusted = scheme === "https" && authority === "github.com";
+								const reasons = trusted && tail === "/../other/x.tgz" ? []
+									: [trusted && tail === "/x.tgz" && !suffix ? "behind:arbitrary-legacy@0.1.0" : "invalid:arbitrary-legacy@pin"];
+								expect(assess(rows), pin).toEqual(reasons.length ? [{ repo: first.repo, reasons }] : []);
+							}
+						}
+					}
+				}
+			}
+		}
+	});
+
+	it.each(["dependencies", "devDependencies"] as const)("uses the trusted actual target while retaining unrelated and private controls in %s", (section) => {
+		for (const member of MEMBERS) {
+			const raw = `https://github.com/${publisher}/releases/download/${member.tagPrefix}0.1.0%FF/../`;
+			for (const target of [...MEMBERS.map((m) => `${m.tagPrefix}0.24.0/x.tgz`), "unrelated-v0.1.0/x.tgz"]) {
+				const rows = cohort();
+				const first = rows[0] as (typeof rows)[number];
+				first.manifest[section]["arbitrary-legacy"] = raw + target;
+				first.manifest[section]["private-wrapper"] = "workspace:@cogni/metrics@*";
+				expect(assess(rows), target).toEqual([]);
+			}
+			for (const authority of ["github.com", "github.com:bad", "[invalid"]) {
+				const rows = cohort();
+				const first = rows[0] as (typeof rows)[number];
+				first.manifest[section].unrelated = `https:/${authority}/${publisher}/releases/download/unrelated-v0.1.0%FF/../other`;
+				expect(assess(rows), authority).toEqual([]);
+			}
+		}
+	});
 	it.each(["dependencies", "devDependencies"] as const)("uses decoded segment identity throughout Release paths in %s", (section) => {
 		for (const version of ["0.1.0", "0.24.0"]) {
 			const path = `/${publisher}/releases/download/metrics-v${version}/x.tgz`;
