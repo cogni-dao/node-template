@@ -11,6 +11,7 @@ export type Role = "owner" | "admin";
 export interface FxMember {
   userId: string;
   name: string | null;
+  wallet: string | null;
   role: Role;
   since: string;
 }
@@ -58,7 +59,7 @@ export interface OrgsWorld {
 
 export const ENDPOINTS = { orgs: "/api/v1/orgs", accounts: "/api/v1/accounts", adminOrgs: "/api/v1/admin/orgs" } as const;
 
-export const member = (userId: string, role: Role, name: string | null = null): FxMember => ({ userId, name, role, since: "2026-11-01T00:00:00.000Z" });
+export const member = (userId: string, role: Role, name: string | null = null, wallet: string | null = null): FxMember => ({ userId, name, wallet, role, since: "2026-11-01T00:00:00.000Z" });
 
 export function newWorld(): OrgsWorld {
   return { orgs: [], invites: [], balances: {}, allOrgs: [], refuse: null, statusFor: {}, memberPage: 100, calls: [] };
@@ -99,7 +100,7 @@ export function serve(w: OrgsWorld) {
     if (path === "/api/v1/admin/orgs") return reply(200, { orgs: w.allOrgs, nextCursor: null });
 
     if (path === "/api/v1/orgs" && method === "GET") {
-      return reply(200, { orgs: w.orgs.map(({ members: _m, links: _l, ...o }) => o), nextCursor: null });
+      return reply(200, { orgs: w.orgs.map(({ members: _m, links: _l, ...o }) => ({ ...o, balanceCredits: w.balances[o.billingAccountId]?.balance ?? 0 })), nextCursor: null });
     }
     if (path === "/api/v1/orgs" && method === "POST") {
       const name = String((body as { name: string }).name);
@@ -143,7 +144,7 @@ export function serve(w: OrgsWorld) {
     if (!kind && method === "GET") {
       const { members, links, ...record } = org;
       const { role, ...rec } = record;
-      return reply(200, { org: rec, role, members: page(members, (m) => m.userId, w.memberPage), links: page(links, (l) => l.id, 100) });
+      return reply(200, { org: { ...rec, balanceCredits: w.balances[rec.billingAccountId]?.balance ?? 0 }, role, members: page(members, (m) => m.userId, w.memberPage), links: page(links, (l) => l.id, 100) });
     }
     if (kind === "members" && !target && method === "GET") return reply(200, page(org.members, (m) => m.userId, w.memberPage));
     if (kind === "links" && !target && method === "GET") return reply(200, page(org.links, (l) => l.id, 100));

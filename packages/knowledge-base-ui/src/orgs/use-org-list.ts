@@ -3,11 +3,10 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/orgs/use-org-list`
- * Purpose: The data hook behind `/orgs`: the person's orgs with each balance, their open invites, and the two actions (create an org, accept an invite).
- * Scope: Plain `fetch` through `orgRequest`; no react-query. Loads on mount and after every action; the balances load after the rows, one read per org.
+ * Purpose: The data hook behind `/orgs`: the person's orgs with each balance (the list route carries it), their open invites, and the two actions (create an org, accept an invite).
+ * Scope: Plain `fetch` through `orgRequest`; no react-query. Loads on mount and after every action.
  * Invariants:
  *   - STALE_RESPONSE_GUARD: each load takes a sequence number and only the newest is applied.
- *   - BALANCE_IS_NEVER_ZERO_WHEN_UNKNOWN: an org whose balance read failed has `null` (drawn "—"), never 0.
  *   - A later failure keeps an already-ready view; 401, 403 and 404 hide it, a 503 or a first-load failure says "unavailable".
  * Side-effects: IO (fetch)
  * @internal
@@ -23,7 +22,6 @@ import {
   type OrgListItem,
   orgErrorCopy,
   orgRequest,
-  readBalance,
   readPage,
 } from "./org-client.js";
 
@@ -35,8 +33,6 @@ export type OrgListState =
       readonly status: "ready";
       readonly orgs: readonly OrgListItem[];
       readonly invites: readonly OrgInvite[];
-      /** Credits by billing account; `undefined` while loading, `null` when the read failed. */
-      readonly balances: Readonly<Record<string, number | null | undefined>>;
     };
 
 export interface UseOrgList {
@@ -75,18 +71,8 @@ export function useOrgList(endpoints: OrgEndpoints): UseOrgList {
     if (!alive.current || mine !== seq.current) return;
     if (!orgs || !invites) return fail(0);
     ready.current = true;
-    setState({ status: "ready", orgs: orgs.items, invites: invites.items, balances: {} });
-    const now = new Date();
-    const entries = await Promise.all(
-      orgs.items.map(async (o) => {
-        // One ledger row is enough here: the list shows the balance only.
-        const reply = await orgRequest(`${endpoints.accounts}/${encodeURIComponent(o.billingAccountId)}/credits?limit=1`);
-        return [o.billingAccountId, readBalance(reply, now)?.balance ?? null] as const;
-      }),
-    );
-    if (!alive.current || mine !== seq.current) return;
-    setState((s) => (s.status === "ready" ? { ...s, balances: Object.fromEntries(entries) } : s));
-  }, [endpoints.orgs, endpoints.accounts]);
+    setState({ status: "ready", orgs: orgs.items, invites: invites.items });
+  }, [endpoints.orgs]);
 
   useEffect(() => {
     alive.current = true;

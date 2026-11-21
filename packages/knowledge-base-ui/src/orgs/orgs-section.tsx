@@ -8,7 +8,7 @@
  * Scope: Presentation over `useOrgList`. Shown to every signed-in person; a signed-out caller (401) sees nothing.
  * Invariants:
  *   - ONE_SURFACE_PER_ROW: the whole org row is the link (stretched anchor); the balance is text inside it.
- *   - UNKNOWN_IS_NOT_ZERO: a balance still loading or failed reads "—".
+ *   - MONEY_IS_DOLLARS: the balance reads through the injected `formatMoney`; the package holds no rate.
  *   - REFUSAL_IN_PLAIN_WORDS: a refused create (a second org, `org_role_limit`) shows the server's refusal as one sentence under the form.
  *   - A click in flight replaces its button with a Skeleton and locks the other buttons.
  * Side-effects: IO (through the hook)
@@ -89,20 +89,17 @@ export function OrgsSection({ endpoints, formatMoney, hrefFor = (id) => `/orgs/$
       <OrgHeading id="orgs-heading">Orgs</OrgHeading>
       {state.orgs.length > 0 && (
         <ul className="divide-y divide-border">
-          {state.orgs.map((o) => {
-            const credits = state.balances[o.billingAccountId];
-            return (
-              <li key={o.orgUserId} className="relative flex min-h-12 items-center gap-3 py-2 hover:bg-accent">
-                <LinkComponent href={hrefFor(o.orgUserId)} className="min-w-0 flex-1 break-words font-medium text-foreground after:absolute after:inset-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                  {o.name}
-                </LinkComponent>
-                <RolePill role={o.role} />
-                <span className="w-16 shrink-0 text-right text-foreground tabular-nums" aria-label={credits == null ? "Balance unknown" : "Balance"}>
-                  {credits == null ? "—" : formatMoney(credits)}
-                </span>
-              </li>
-            );
-          })}
+          {state.orgs.map((o) => (
+            <li key={o.orgUserId} className="relative flex min-h-12 items-center gap-3 py-2 hover:bg-accent">
+              <LinkComponent href={hrefFor(o.orgUserId)} className="min-w-0 flex-1 break-words font-medium text-foreground after:absolute after:inset-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                {o.name}
+              </LinkComponent>
+              <RolePill role={o.role} />
+              <span className="shrink-0 whitespace-nowrap text-right text-foreground tabular-nums" aria-label="Balance">
+                {formatMoney(o.balanceCredits)}
+              </span>
+            </li>
+          ))}
         </ul>
       )}
 

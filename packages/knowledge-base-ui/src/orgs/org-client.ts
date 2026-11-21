@@ -20,7 +20,7 @@ export type OrgRole = "owner" | "admin";
 export interface OrgEndpoints {
   /** The org routes: list and create, `/{id}`, `/{id}/members`, `/{id}/invites`, `/{id}/link-codes`, `/{id}/links`, `/{id}/suspension`, `/invites/mine`, `/invites/{id}/accept` (`/api/v1/orgs`). */
   readonly orgs: string;
-  /** The account door; the balance is `GET {accounts}/{billingAccountId}/credits` (`/api/v1/accounts`). */
+  /** The account door; "spent this month" is read from `GET {accounts}/{billingAccountId}/credits` (`/api/v1/accounts`). */
   readonly accounts: string;
   /** The node admin's list of every org, a page at a time (`/api/v1/admin/orgs`). Needed only by `OrgAdminSection`. */
   readonly adminOrgs?: string;
@@ -30,6 +30,7 @@ export interface OrgListItem {
   readonly orgUserId: string;
   readonly name: string;
   readonly billingAccountId: string;
+  readonly balanceCredits: number;
   readonly suspended: boolean;
   readonly role: OrgRole;
 }
@@ -38,6 +39,7 @@ export interface OrgRecord {
   readonly orgUserId: string;
   readonly name: string;
   readonly billingAccountId: string;
+  readonly balanceCredits: number;
   readonly suspended: boolean;
 }
 
@@ -52,6 +54,7 @@ export interface OrgInvite {
 export interface OrgMember {
   readonly userId: string;
   readonly name: string | null;
+  readonly wallet: string | null;
   readonly role: OrgRole;
   readonly since: string;
 }
@@ -173,21 +176,21 @@ interface LedgerRow {
   readonly createdAt: string;
 }
 
-export interface OrgBalance {
-  readonly balance: number;
+export interface OrgSpend {
   /** Credits charged since the first of this UTC month. */
   readonly spent: number;
   /** True when the ledger page ended inside the month, so `spent` is a floor. */
   readonly partial: boolean;
 }
 
-/** The ledger rows one balance read asks for. */
+/** The ledger rows one spend read asks for. */
 export const LEDGER_PAGE = 100;
 
-/** Reads `{ balanceCredits, ledger }`; null when the reply is not a credits summary. */
-export function readBalance(reply: OrgReply, now: Date): OrgBalance | null {
-  if (!reply.ok || !isRecord(reply.body) || typeof reply.body.balanceCredits !== "number") return null;
-  const ledger = asArray<LedgerRow>(reply.body.ledger) ?? [];
+/** Reads this month's spend out of `{ ledger }`; null when the reply is not a credits summary. */
+export function readSpend(reply: OrgReply, now: Date): OrgSpend | null {
+  if (!reply.ok || !isRecord(reply.body)) return null;
+  const ledger = asArray<LedgerRow>(reply.body.ledger);
+  if (!ledger) return null;
   const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
   let spent = 0;
   let oldest = Number.POSITIVE_INFINITY;
@@ -197,11 +200,12 @@ export function readBalance(reply: OrgReply, now: Date): OrgBalance | null {
     oldest = Math.min(oldest, at);
     if (at >= monthStart && row.reason === "charge_receipt" && row.amount < 0) spent += -row.amount;
   }
-  return { balance: reply.body.balanceCredits, spent, partial: ledger.length >= LEDGER_PAGE && oldest >= monthStart };
+  return { spent, partial: ledger.length >= LEDGER_PAGE && oldest >= monthStart };
 }
 
-/** A person's name, else a short form of their id (the member list carries no wallet). */
-export function memberLabel(m: { name: string | null; userId: string }): string {
+/** A person's name, else their wallet in short form, else a short id. */
+export function memberLabel(m: { name: string | null; wallet: string | null; userId: string }): string {
   if (m.name?.trim()) return m.name;
-  return m.userId.length > 12 ? `${m.userId.slice(0, 6)}…${m.userId.slice(-4)}` : m.userId;
+  const who = m.wallet?.trim() || m.userId;
+  return who.length > 12 ? `${who.slice(0, 6)}…${who.slice(-4)}` : who;
 }

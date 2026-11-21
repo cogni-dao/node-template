@@ -12,7 +12,7 @@
  *   - ONLY_OWNERS_LINK: Unlink and Link a node render for an owner only.
  *   - CODE_IS_SHOWN_ONCE: the link code appears after the origin is accepted, with Copy; typing a new origin removes it.
  *   - NON_DISCLOSING: an unknown org and an org the caller is not in read the same one line.
- *   - UNKNOWN_IS_NOT_ZERO: a balance that is loading or failed reads "—"; a spend that may be cut by the ledger page reads with a trailing "+".
+ *   - MONEY_IS_DOLLARS: balance and spend read through the injected `formatMoney` (the package holds no rate). A spend still loading or failed reads "—", never 0; a spend that may be cut by the ledger page reads with a trailing "+".
  * Side-effects: IO (through the hook)
  * Links: https://node-template.cognidao.org/knowledge/org-account-lifecycle
  * @public
@@ -114,7 +114,7 @@ export function OrgSection({ endpoints, orgId, formatMoney, className }: OrgSect
     }
   };
 
-  const { balance } = state;
+  const { spend } = state;
 
   return (
     <section aria-labelledby="org-heading" className={className}>
@@ -129,11 +129,11 @@ export function OrgSection({ endpoints, orgId, formatMoney, className }: OrgSect
       <dl className="flex gap-8 pt-6 pb-2">
         <div>
           <dt className="text-muted-foreground text-sm">Balance</dt>
-          <dd className="font-semibold text-foreground text-lg tabular-nums">{balance ? formatMoney(balance.balance) : balance === undefined ? <Skeleton className="h-6 w-16" /> : "—"}</dd>
+          <dd className="font-semibold text-foreground text-lg tabular-nums">{formatMoney(state.org.balanceCredits)}</dd>
         </div>
         <div>
           <dt className="text-muted-foreground text-sm">Spent this month</dt>
-          <dd className="font-semibold text-foreground text-lg tabular-nums">{balance ? `${formatMoney(balance.spent)}${balance.partial ? "+" : ""}` : balance === undefined ? <Skeleton className="h-6 w-16" /> : "—"}</dd>
+          <dd className="font-semibold text-foreground text-lg tabular-nums">{spend ? `${formatMoney(spend.spent)}${spend.partial ? "+" : ""}` : spend === undefined ? <Skeleton className="h-6 w-16" /> : "—"}</dd>
         </div>
       </dl>
 

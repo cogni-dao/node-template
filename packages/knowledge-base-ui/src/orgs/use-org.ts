@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/orgs/use-org`
- * Purpose: The data hook behind `/orgs/[id]`: the org, the caller's role, its balance, every person and every linked node, and the actions on them
+ * Purpose: The data hook behind `/orgs/[id]`: the org, the caller's role, its balance (carried by the org read) and this month's spend (one ledger read), every person and every linked node, and the actions on them
  *   (change a role, remove, invite, unlink, make a link code).
  * Scope: Plain `fetch` through `orgRequest`; no react-query. Loads on mount and after every action. The people and links follow their cursors to the end.
  * Invariants:
@@ -21,7 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchAllPages,
   LEDGER_PAGE,
-  type OrgBalance,
+  type OrgSpend,
   type OrgEndpoints,
   type OrgLink,
   type OrgMember,
@@ -29,7 +29,7 @@ import {
   type OrgRole,
   orgErrorCopy,
   orgRequest,
-  readBalance,
+  readSpend,
 } from "./org-client.js";
 
 export interface OrgLinkCode {
@@ -50,7 +50,8 @@ export type OrgState =
       readonly members: readonly OrgMember[];
       readonly links: readonly OrgLink[];
       /** `undefined` while loading, `null` when the read failed. */
-      readonly balance: OrgBalance | null | undefined;
+      /** This month's spend; `undefined` while loading, `null` when the ledger read failed. */
+      readonly spend: OrgSpend | null | undefined;
     };
 
 export interface UseOrg {
@@ -119,12 +120,12 @@ export function useOrg(endpoints: OrgEndpoints, orgId: string): UseOrg {
       role,
       members: members.items,
       links: links.items,
-      balance: s.status === "ready" ? s.balance : undefined,
+      spend: s.status === "ready" ? s.spend : undefined,
     }));
     const credits = await orgRequest(`${endpoints.accounts}/${encodeURIComponent(org.billingAccountId)}/credits?limit=${LEDGER_PAGE}`);
     if (!current()) return;
-    const balance = readBalance(credits, new Date());
-    setState((s) => (s.status === "ready" ? { ...s, balance } : s));
+    const spend = readSpend(credits, new Date());
+    setState((s) => (s.status === "ready" ? { ...s, spend } : s));
   }, [base, endpoints.accounts]);
 
   useEffect(() => {

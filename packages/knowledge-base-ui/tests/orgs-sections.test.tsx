@@ -12,6 +12,9 @@ import { ENDPOINTS, type FxOrg, member, newWorld, type OrgsWorld, serve } from "
 
 let world: OrgsWorld;
 
+/** A stand-in for the node's dollars formatter: a visible mark proves the section drew through the injected one. */
+const formatMoney = (credits: number): string => `¤${credits}`;
+
 const org = (o: Partial<FxOrg> & Pick<FxOrg, "orgUserId" | "name">): FxOrg => ({
   billingAccountId: `ba-${o.orgUserId}`,
   suspended: false,
@@ -43,31 +46,30 @@ describe("OrgsSection (/orgs)", () => {
     // Defect: a row with no role badge, a balance that is wrong, or a link that covers only part of the row.
     addOrg(org({ orgUserId: "o1", name: "Acme", role: "owner" }), 12345);
     addOrg(org({ orgUserId: "o2", name: "Beta", role: "admin" }), 7);
-    render(<OrgsSection endpoints={ENDPOINTS} />);
+    render(<OrgsSection endpoints={ENDPOINTS} formatMoney={formatMoney} />);
     const row = (await screen.findByRole("link", { name: "Acme" })).closest("li") as HTMLElement;
     expect(within(row).getByText("Owner")).toBeInTheDocument();
-    await waitFor(() => expect(within(row).getByText("12,345")).toBeInTheDocument());
+    await waitFor(() => expect(within(row).getByText("¤12345")).toBeInTheDocument());
     expect(screen.getByRole("link", { name: "Acme" })).toHaveAttribute("href", "/orgs/o1");
     const beta = screen.getByRole("link", { name: "Beta" }).closest("li") as HTMLElement;
     expect(within(beta).getByText("Admin")).toBeInTheDocument();
-    await waitFor(() => expect(within(beta).getByText("7")).toBeInTheDocument());
+    await waitFor(() => expect(within(beta).getByText("¤7")).toBeInTheDocument());
   });
 
-  it("an org whose balance cannot be read shows a dash, never 0", async () => {
-    // Defect: an unknown balance drawn as 0 reads as "this org is out of credits".
+  it("the balance comes with the list: no per-org credits read, and the injected formatter draws it", async () => {
+    // Defect: one extra credits request per org on every visit (N+1), or credits drawn raw instead of through the node's dollars formatter.
     addOrg(org({ orgUserId: "o1", name: "Acme" }), 5);
-    delete world.balances["ba-o1"];
-    render(<OrgsSection endpoints={ENDPOINTS} />);
+    addOrg(org({ orgUserId: "o2", name: "Beta" }), 6);
+    render(<OrgsSection endpoints={ENDPOINTS} formatMoney={formatMoney} />);
     const row = (await screen.findByRole("link", { name: "Acme" })).closest("li") as HTMLElement;
-    await waitFor(() => expect(world.calls.some((c) => c.path.endsWith("/credits"))).toBe(true));
-    expect(within(row).getByLabelText("Balance unknown")).toHaveTextContent("—");
-    expect(within(row).queryByText("0")).toBeNull();
+    expect(within(row).getByLabelText("Balance")).toHaveTextContent("¤5");
+    expect(world.calls.filter((c) => c.path.includes("/credits"))).toEqual([]);
   });
 
   it("Create org sends the trimmed name, clears the box and shows the new org", async () => {
     // Defect: the name sent with its spaces, the box left filled after a success, or a list that does not refresh.
     const user = userEvent.setup();
-    render(<OrgsSection endpoints={ENDPOINTS} />);
+    render(<OrgsSection endpoints={ENDPOINTS} formatMoney={formatMoney} />);
     await user.type(await screen.findByLabelText("Org name"), "  toks5  ");
     await user.click(screen.getByRole("button", { name: "Create org" }));
     expect(await screen.findByRole("link", { name: "toks5" })).toBeInTheDocument();
@@ -79,7 +81,7 @@ describe("OrgsSection (/orgs)", () => {
     // Defect: the raw code or a blank failure shown, or the typed name thrown away so the person must retype it.
     const user = userEvent.setup();
     addOrg(org({ orgUserId: "o1", name: "Acme" }));
-    render(<OrgsSection endpoints={ENDPOINTS} />);
+    render(<OrgsSection endpoints={ENDPOINTS} formatMoney={formatMoney} />);
     world.refuse = { status: 409, error: "org_role_limit" };
     await user.type(await screen.findByLabelText("Org name"), "Second");
     await user.click(screen.getByRole("button", { name: "Create org" }));
@@ -91,7 +93,7 @@ describe("OrgsSection (/orgs)", () => {
 
   it("Create org stays off until there is a name", async () => {
     // Defect: an empty create sent to the server.
-    render(<OrgsSection endpoints={ENDPOINTS} />);
+    render(<OrgsSection endpoints={ENDPOINTS} formatMoney={formatMoney} />);
     expect(await screen.findByRole("button", { name: "Create org" })).toBeDisabled();
   });
 
@@ -99,7 +101,7 @@ describe("OrgsSection (/orgs)", () => {
     // Defect: Accept that posts the wrong invite, or leaves the invite on the page after the grant is written.
     const user = userEvent.setup();
     world.invites.push({ id: "inv-9", orgUserId: "o9", orgName: "Zed", role: "admin", expiresAt: "2026-11-27T00:00:00.000Z" });
-    render(<OrgsSection endpoints={ENDPOINTS} />);
+    render(<OrgsSection endpoints={ENDPOINTS} formatMoney={formatMoney} />);
     const row = (await screen.findByText("Zed")).closest("li") as HTMLElement;
     expect(within(row).getByText("Admin")).toBeInTheDocument();
     await user.click(within(row).getByRole("button", { name: "Accept Zed" }));
@@ -111,7 +113,7 @@ describe("OrgsSection (/orgs)", () => {
   it("a signed-out visitor sees nothing", async () => {
     // Defect: a signed-out person shown an empty Create org form that can never work.
     world.statusFor["/api/v1/orgs"] = 401;
-    const { container } = render(<OrgsSection endpoints={ENDPOINTS} />);
+    const { container } = render(<OrgsSection endpoints={ENDPOINTS} formatMoney={formatMoney} />);
     await waitFor(() => expect(world.calls.length).toBeGreaterThan(0));
     await waitFor(() => expect(container.querySelector(".animate-pulse")).toBeNull());
     expect(container).toBeEmptyDOMElement();
@@ -141,27 +143,34 @@ describe("OrgSection (/orgs/[id])", () => {
       { amount: 5000, reason: "widget_payment", createdAt: thisMonth },
       { amount: -900, reason: "charge_receipt", createdAt: lastMonth },
     ]);
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     const balance = (await screen.findByText("Balance")).closest("div") as HTMLElement;
-    await waitFor(() => expect(within(balance).getByText("9,000")).toBeInTheDocument());
-    expect((screen.getByText("Spent this month").closest("div") as HTMLElement)).toHaveTextContent("500");
+    await waitFor(() => expect(within(balance).getByText("¤9000")).toBeInTheDocument());
+    expect((screen.getByText("Spent this month").closest("div") as HTMLElement)).toHaveTextContent("¤500");
   });
 
-  it("a balance that cannot be read shows dashes, not zeros", async () => {
-    // Defect: a failed credits read drawn as "0 left, 0 spent".
-    addOrg(owner());
-    delete world.balances["ba-o1"];
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
-    const balance = (await screen.findByText("Balance")).closest("div") as HTMLElement;
-    await waitFor(() => expect(balance).toHaveTextContent("—"));
-    expect(screen.getByText("Spent this month").closest("div")).toHaveTextContent("—");
+  it("a ledger read that fails shows a dash for spend, never 0, and keeps the balance", async () => {
+    // Defect: a failed ledger read drawn as "spent 0", or one failed read hiding the balance the org read already carried.
+    addOrg(owner(), 777);
+    world.statusFor["/api/v1/accounts"] = 503;
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
+    const spent = (await screen.findByText("Spent this month")).closest("div") as HTMLElement;
+    await waitFor(() => expect(spent).toHaveTextContent("—"));
+    expect(screen.getByText("Balance").closest("div")).toHaveTextContent("¤777");
+  });
+
+  it("a person with no name is shown by wallet, in short form", async () => {
+    // Defect: an unnamed person shown as an opaque id when the wallet is what the owner invited by.
+    addOrg(org({ orgUserId: "o1", name: "Acme", members: [member("me", "owner", "Me"), member("u-9", "admin", null, "0xabc123def4567890abc123def4567890abc12345")] }));
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
+    expect(await screen.findByText("0xabc1…2345")).toBeInTheDocument();
   });
 
   it("an owner's row menu changes roles and removes with the right person and role", async () => {
     // Defect: a role change or removal sent for the wrong person, or with the wrong role.
     const user = userEvent.setup();
     addOrg(owner());
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     await menu(user, "Actions for Ana");
     await user.click(await screen.findByRole("menuitem", { name: "Make owner" }));
     await waitFor(() => expect(writes()).toHaveLength(1));
@@ -183,7 +192,7 @@ describe("OrgSection (/orgs/[id])", () => {
     // Defect: a menu that offers the role the person already has, so one click changes nothing.
     const user = userEvent.setup();
     addOrg(owner());
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     await menu(user, "Actions for Ana");
     expect((await screen.findAllByRole("menuitem")).map((i) => i.textContent)).toEqual(["Make owner", "Remove"]);
     await user.keyboard("{Escape}");
@@ -195,7 +204,7 @@ describe("OrgSection (/orgs/[id])", () => {
     // Defect: the page drops a person the server refused to remove, or shows the raw code.
     const user = userEvent.setup();
     addOrg(org({ orgUserId: "o1", name: "Acme", members: [member("me", "owner", "Me")] }));
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     await menu(user, "Actions for Me");
     await user.click(await screen.findByRole("menuitem", { name: "Remove" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("An org keeps at least one owner.");
@@ -206,7 +215,7 @@ describe("OrgSection (/orgs/[id])", () => {
     // Defect: controls an admin can never use, which only produce refusals (RIGHTS: only owners touch owners and links).
     const user = userEvent.setup();
     addOrg({ ...owner(), role: "admin" });
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     await screen.findByText("Bo");
     expect(screen.queryByRole("button", { name: "Actions for Bo" })).toBeNull();
     await menu(user, "Actions for Ana");
@@ -225,7 +234,7 @@ describe("OrgSection (/orgs/[id])", () => {
     // Defect: the role choice ignored (everyone invited as admin) or a wallet left behind after the invite.
     const user = userEvent.setup();
     addOrg(owner());
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     await user.type(await screen.findByLabelText("Wallet"), " 0x2222222222222222222222222222222222222222 ");
     await user.selectOptions(screen.getByLabelText("Role"), "owner");
     await user.click(screen.getByRole("button", { name: "Invite" }));
@@ -238,7 +247,7 @@ describe("OrgSection (/orgs/[id])", () => {
     // Defect: a refused invite that silently clears the box.
     const user = userEvent.setup();
     addOrg(owner());
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     await user.type(await screen.findByLabelText("Wallet"), "not-a-wallet");
     await user.click(screen.getByRole("button", { name: "Invite" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Enter a wallet address.");
@@ -251,7 +260,7 @@ describe("OrgSection (/orgs/[id])", () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     addOrg(owner());
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     await user.type(await screen.findByLabelText("Node origin"), " https://toks5.cognidao.org ");
     await user.click(screen.getByRole("button", { name: "Link a node" }));
     const code = await screen.findByLabelText("Link code");
@@ -268,7 +277,7 @@ describe("OrgSection (/orgs/[id])", () => {
     // Defect: a code shown for an origin the server refused.
     const user = userEvent.setup();
     addOrg(owner());
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     await user.type(await screen.findByLabelText("Node origin"), "http://insecure.test");
     await user.click(screen.getByRole("button", { name: "Link a node" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Enter an https address");
@@ -279,7 +288,7 @@ describe("OrgSection (/orgs/[id])", () => {
     // Defect: Unlink that closes a different link, or leaves the node listed after it closed.
     const user = userEvent.setup();
     addOrg(owner());
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     const row = (await screen.findByText("https://toks5.cognidao.org")).closest("li") as HTMLElement;
     expect(within(row).getByText("Linked")).toBeInTheDocument();
     await menu(user, "Actions for https://toks5.cognidao.org");
@@ -292,7 +301,7 @@ describe("OrgSection (/orgs/[id])", () => {
     // Defect: only the first page of people drawn, hiding an owner or an admin.
     world.memberPage = 2;
     addOrg(org({ orgUserId: "o1", name: "Acme", members: [member("me", "owner", "Me"), member("a", "admin", "Ana"), member("b", "admin", "Bea"), member("c", "admin", "Cy"), member("d", "admin", "Di")] }));
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     expect(await screen.findByText("Di")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /^Actions for / })).toHaveLength(5);
   });
@@ -300,7 +309,7 @@ describe("OrgSection (/orgs/[id])", () => {
   it("a person who is not in the org reads one neutral line, the same as an org that does not exist", async () => {
     // Defect: a removed admin told that the org exists, or shown a broken page.
     world.statusFor["/api/v1/orgs/o1"] = 404;
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     expect(await screen.findByRole("status")).toHaveTextContent("That is not available.");
     expect(screen.queryByLabelText("Wallet")).toBeNull();
   });
@@ -308,7 +317,7 @@ describe("OrgSection (/orgs/[id])", () => {
   it("a suspended org says so beside its name", async () => {
     // Defect: an owner left guessing why every run is refused.
     addOrg({ ...owner(), suspended: true });
-    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" />);
+    render(<OrgSection endpoints={ENDPOINTS} orgId="o1" formatMoney={formatMoney} />);
     expect(await screen.findByText("Suspended")).toBeInTheDocument();
   });
 });
