@@ -41,7 +41,18 @@ export const tsupConfig = defineConfig([
 		dts: {
 			only: true,
 			resolve: true,
-			compilerOptions: { composite: false, incremental: false },
+			compilerOptions: {
+				composite: false,
+				incremental: false,
+				rootDir: "..",
+				baseUrl: ".",
+				paths: {
+					"@cogni/graph-execution-core": [
+						"../graph-execution-core/src/index.ts",
+					],
+					"@cogni/node-shared/*": ["../node-shared/src/*"],
+				},
+			},
 		},
 		// Do not feed Zod JavaScript to the declaration bundler. Its types are unused.
 		external: ["zod"],
