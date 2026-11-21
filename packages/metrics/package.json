@@ -35,6 +35,11 @@
       "import": "./dist/knowledge.js",
       "default": "./dist/knowledge.js"
     },
+    "./prometheus": {
+      "types": "./dist/prometheus.d.ts",
+      "import": "./dist/prometheus.js",
+      "default": "./dist/prometheus.js"
+    },
     "./schema": {
       "types": "./dist/schema.d.ts",
       "import": "./dist/schema.js",
