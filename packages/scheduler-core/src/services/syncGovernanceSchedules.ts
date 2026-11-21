@@ -33,7 +33,19 @@
  * @public
  */
 
+import {
+  governanceScheduleId,
+  isLegacyFlatGovernanceScheduleId,
+  isOperatorOwnedGovernanceCharter,
+  isOwnGovernanceScheduleId,
+} from "@cogni/scheduling";
 import type { JsonValue } from "type-fest";
+
+export {
+  governanceScheduleId,
+  isLegacyFlatGovernanceScheduleId,
+  isOwnGovernanceScheduleId,
+} from "@cogni/scheduling";
 
 import {
   type CreateScheduleParams,
@@ -47,9 +59,6 @@ import {
  * key the schedules UI and pr-review use for platform model ids.
  */
 const PLATFORM_PROVIDER_KEY = "platform";
-
-/** Charter the operator owns (epoch collection dispatched into the node). Lowercase. */
-const LEDGER_INGEST_CHARTER_LC = "ledger_ingest";
 
 /** Minimal governance schedule shape (no @/ imports — pure type) */
 export interface GovernanceScheduleEntry {
@@ -159,51 +168,6 @@ export interface GovernanceScheduleSyncResult {
 }
 
 /**
- * Derives the Temporal schedule ID from an owning node + charter name.
- * Format: `governance:{nodeId}:{charter_lowercase}`.
- *
- * NODE_SCOPED_SCHEDULE_ID (bug.0026): all nodes of an environment share ONE Temporal
- * namespace. A flat `governance:{charter}` id is therefore ONE schedule that every
- * writer overwrites (last-writer-wins); it froze the operator's epochs. Node-scoped
- * ids match the form the operator uses for its per-node dispatch schedules.
- */
-export function governanceScheduleId(nodeId: string, charter: string): string {
-  return `governance:${nodeId}:${charter.toLowerCase()}`;
-}
-
-/**
- * True for a schedule id this node's sync OWNS and may pause: it starts with
- * `governance:{nodeId}:` and is not the ledger charter.
- *
- * CROSS_TENANT_PRUNE (bug.5009 / bug.0026): a node never pauses a flat id, a sibling's
- * id, or the operator's `governance:{nodeId}:ledger_ingest` dispatch schedule
- * (LEDGER_COLLECT_IS_OPERATOR_OWNED). A paused schedule skips its cron, so pausing
- * one stops that node's epochs.
- */
-export function isOwnGovernanceScheduleId(
-  nodeId: string,
-  scheduleId: string
-): boolean {
-  const prefix = `governance:${nodeId}:`;
-  if (!scheduleId.startsWith(prefix)) return false;
-  const charter = scheduleId.slice(prefix.length);
-  return charter.length > 0 && charter !== LEDGER_INGEST_CHARTER_LC;
-}
-
-/**
- * True for a legacy flat id (`governance:{charter}`, two segments) written by older
- * builds. LEGACY_FLAT_IDS: the node cannot know whose flat Temporal schedule this is
- * (the operator owns `governance:ledger_ingest` and `governance:work_prioritizer`),
- * so it never pauses one; it only disables its own database row. Node ids are UUIDs
- * (no colons), so segment count distinguishes flat from node-scoped ids.
- */
-export function isLegacyFlatGovernanceScheduleId(scheduleId: string): boolean {
-  return (
-    scheduleId.startsWith("governance:") && scheduleId.split(":").length === 2
-  );
-}
-
-/**
  * Syncs governance schedules from repo-spec config to Temporal.
  *
  * For each graph charter in config (LEDGER_INGEST is skipped: operator-owned):
@@ -246,8 +210,7 @@ export async function syncGovernanceSchedules(
     // `governance:{nodeId}:ledger_ingest` itself. Writing it here would overwrite that
     // schedule. Never created, never given a DB row, never pruned (see
     // isOwnGovernanceScheduleId).
-    const isLedgerIngest =
-      schedule.charter.toLowerCase() === LEDGER_INGEST_CHARTER_LC;
+    const isLedgerIngest = isOperatorOwnedGovernanceCharter(schedule.charter);
     if (isLedgerIngest) {
       log.info(
         { scheduleId },

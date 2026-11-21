@@ -7,3 +7,4 @@ export * from "./contracts/schedules.history.v1.contract.js";
 export * from "./contracts/schedules.list.v1.contract.js";
 export * from "./contracts/schedules.update.v1.contract.js";
 export * from "./readback.js";
+export * from "./governance-policy.js";
