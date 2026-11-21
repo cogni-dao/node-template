@@ -18,6 +18,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useCollectEpoch } from "@/features/governance/hooks/useCollectEpoch";
 
+import { epochTestProvider } from "./epoch-test-provider";
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -31,7 +33,7 @@ function setup() {
     .spyOn(queryClient, "refetchQueries")
     .mockResolvedValue(undefined);
   const wrapper = ({ children }: { children: ReactNode }) =>
-    createElement(QueryClientProvider, { client: queryClient }, children);
+    createElement(QueryClientProvider, { client: queryClient }, epochTestProvider(children));
   const hook = renderHook(() => useCollectEpoch(), { wrapper });
   return { ...hook, refetch };
 }

@@ -11,7 +11,7 @@
  * @public
  */
 
-("use client");
+"use client";
 
 import { useEpochContext } from "../context";
 
