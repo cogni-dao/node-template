@@ -11,7 +11,7 @@
  *   - COMPLETE_TRAIN: `T` is the newest version every member has a Release for, published at least `graceHours` before the reading.
  *   - PIN_BY_RELEASE_URL: a pin counts by the publisher's Release tag it resolves to, never by its dependency key, so legacy
  *     aliases count too.
- *   - VENDORED_LAGS: a `workspace:` copy of a member is lagging: its bytes are not the published ones.
+ *   - VENDORED_LAGS: a `workspace:` target exactly naming a published member is lagging.
  *   - UNKNOWN_NOT_ZERO: a failed or malformed read is an incomplete sample naming its repo, never 0.
  * Side-effects: IO (HTTPS GET api.github.com tags and releases, at most 11 requests; raw.githubusercontent.com manifests)
  * Links: hub package-release-train, publish-shared-runtime-core
@@ -55,6 +55,50 @@ export const FLEET_TRAIN_MAX_CONSUMERS = 20;
 export const FLEET_TRAIN_CANDIDATES = 2;
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validManifest(value: unknown): boolean {
+	if (!isRecord(value)) return false;
+	return ["dependencies", "devDependencies"].every((key) => {
+		const section = value[key];
+		return (
+			section === undefined ||
+			(isRecord(section) &&
+				Object.values(section).every((v) => typeof v === "string"))
+		);
+	});
+}
+
+function releaseTag(raw: string, publisher?: string): string | undefined {
+	try {
+		const url = new URL(raw);
+		if (url.origin !== "https://github.com" || url.username || url.password) return undefined;
+		const match = /^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+		if (!match || (publisher && match[1]?.toLowerCase() !== publisher.toLowerCase())) return undefined;
+		const tag = decodeURIComponent(match[2] ?? "");
+		const asset = decodeURIComponent(match[3] ?? "");
+		if ([tag, asset].some((part) => !part || part === "." || part === ".." || /[/\\]/.test(part))) return undefined;
+		return tag;
+	} catch {
+		return undefined;
+	}
+}
+
+function validGitRef(ref: string): boolean {
+	return ref.startsWith("refs/tags/train-v") && !Array.from(ref).some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127 || "~^:?*[\\".includes(char)) &&
+		!ref.includes("..") && !ref.includes("@{") && !ref.endsWith(".") &&
+		ref.split("/").every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock"));
+}
+
+function validPublishedAt(value: string): boolean {
+	const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/.exec(value);
+	if (!match) return false;
+	const date = new Date(value);
+	return Number.isFinite(date.getTime()) && date.toISOString() === `${match[1]}.${(match[2] ?? "").padEnd(3, "0")}Z`;
+}
 
 function compareVersions(a: string, b: string): number {
 	const pa = SEMVER.exec(a);
@@ -110,18 +154,15 @@ export function assessFleetTrainLag(
 	manifests: readonly { readonly repo: string; readonly manifest: unknown }[],
 	publisher?: string,
 ): ConsumerLag[] {
-	// `@cogni/work-items` and `@cogni-dao/work-items` name one member: a vendored copy may keep either scope.
-	const base = (name: string) => name.replace(/^@[^/]+\//, "");
 	const lagging: ConsumerLag[] = [];
 	for (const { repo, manifest } of manifests) {
 		const m = (manifest ?? {}) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
-		const deps = { ...(m.devDependencies ?? {}), ...(m.dependencies ?? {}) };
+		const deps = [...Object.entries(m.devDependencies ?? {}), ...Object.entries(m.dependencies ?? {})];
 		const reasons: string[] = [];
 		const pinned = new Set<string>();
-		for (const [key, raw] of Object.entries(deps)) {
+		for (const [key, raw] of deps) {
 			if (typeof raw !== "string") continue;
-			const release = /github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\//.exec(raw);
-			const tag = release && (!publisher || release[1]?.toLowerCase() === publisher.toLowerCase()) ? release[2] : undefined;
+			const tag = releaseTag(raw, publisher);
 			if (tag) {
 				const member = members.find((x) => tag.startsWith(x.tagPrefix));
 				if (!member) continue;
@@ -136,7 +177,7 @@ export function assessFleetTrainLag(
 				const spec = raw.slice("workspace:".length);
 				const at = spec.lastIndexOf("@");
 				const target = spec.startsWith("@") ? (at > 0 ? spec.slice(0, at) : spec) : key;
-				const member = members.find((x) => base(x.name) === base(target));
+				const member = members.find((x) => x.name === target);
 				if (!member) continue;
 				pinned.add(member.name);
 				reasons.push(`vendored:${key}@workspace`);
@@ -163,8 +204,28 @@ async function getJson(url: string, signal: AbortSignal, maxResponseBytes: numbe
 		await response.body?.cancel();
 		throw new Error(response.status === 403 || response.status === 429 ? "provider_rate_limited" : `provider_status_${response.status}`);
 	}
-	const text = await response.text();
-	if (text.length > maxResponseBytes) throw new Error("provider_response_budget");
+	if (!response.body) throw new Error("provider_unavailable");
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (true) {
+			const part = await reader.read();
+			if (part.done) break;
+			size += part.value.byteLength;
+			if (size > maxResponseBytes) throw new Error("provider_response_budget");
+			chunks.push(part.value);
+		}
+	} finally {
+		await reader.cancel();
+	}
+	const bytes = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 	const date = response.headers.get("date");
 	return { body: JSON.parse(text), date: date ? new Date(date).toISOString() : null };
 }
@@ -196,11 +257,20 @@ export async function readFleetTrainLag(
 	// Train tags first: the Releases list is newest-first across every package, so a day-old train falls off its first page.
 	const api = `https://api.github.com/repos/${p.publisher}`;
 	let asOf: string | null = null;
+	// One logical source call may issue multiple HTTP requests. Count each returned tag,
+	// successful Release and consumer manifest against one cumulative interpreted-row budget.
+	let sourceRows = 0;
+	let restRequests = 0;
 	let candidates: string[];
 	try {
+		restRequests++;
 		const refs = await getJson(`${api}/git/matching-refs/tags/train-v?per_page=100`, signal, budget.maxResponseBytes);
 		asOf = refs.date;
 		if (!Array.isArray(refs.body)) return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
+		sourceRows = refs.body.length;
+		if (sourceRows > budget.maxRows) return unknown("tags=row_budget", "incomplete_or_invalid_source", asOf);
+		if (refs.body.some((r) => !isRecord(r) || typeof r.ref !== "string" || !validGitRef(r.ref)))
+			return unknown("tags=malformed", "incomplete_or_invalid_source", asOf);
 		candidates = (refs.body as { ref?: unknown }[])
 			.map((r) => (typeof r.ref === "string" ? r.ref.replace(/^refs\/tags\/train-v/, "") : ""))
 			.filter((v) => SEMVER.test(v))
@@ -215,13 +285,32 @@ export async function readFleetTrainLag(
 		for (const version of candidates)
 			for (const member of p.members) {
 				const tag = `${member.tagPrefix}${version}`;
+				if (restRequests >= 11) return unknown("releases=request_budget", "incomplete_or_invalid_source", asOf);
+				restRequests++;
 				const got = await getJson(`${api}/releases/tags/${encodeURIComponent(tag)}`, signal, budget.maxResponseBytes).catch(
 					(error: Error) => {
 						if (error.message === "provider_status_404") return null; // not published: the train is partial
 						throw error;
 					},
 				);
-				if (got) releases.push(got.body as ReleaseLike);
+				if (got) {
+					if (++sourceRows > budget.maxRows) return unknown("releases=row_budget", "incomplete_or_invalid_source", asOf);
+					const body = got.body;
+					if (
+						!isRecord(body) ||
+						body.tag_name !== tag ||
+						(body.published_at !== null &&
+							(typeof body.published_at !== "string" ||
+								!validPublishedAt(body.published_at))) ||
+						(body.draft !== undefined && typeof body.draft !== "boolean")
+					)
+						return unknown(
+							`releases=malformed:${tag}`,
+							"incomplete_or_invalid_source",
+							asOf,
+						);
+					releases.push(body as unknown as ReleaseLike);
+				}
 			}
 	} catch (error) {
 		signal.throwIfAborted();
@@ -230,15 +319,23 @@ export async function readFleetTrainLag(
 	const train = latestCompleteTrain(releases, p.members, at, p.graceHours);
 	if (train === null) return unknown("train=none", "incomplete_or_invalid_source", asOf);
 
+	if (sourceRows + p.consumers.length > budget.maxRows)
+		return unknown(`train=${train};manifests=row_budget`, "incomplete_or_invalid_source", asOf);
 	const read = await Promise.allSettled(
 		p.consumers.map(async (c) => ({
 			repo: c.repo,
 			manifest: (await getJson(`https://raw.githubusercontent.com/${c.repo}/HEAD/${c.manifestPath}`, signal, budget.maxResponseBytes)).body,
 		})),
 	);
+	signal.throwIfAborted();
 	const failed = p.consumers.filter((_, i) => read[i]?.status !== "fulfilled").map((c) => c.repo);
-	if (failed.length) return unknown(`train=${train};unreadable=${failed.join(",")}`, "source_failed", asOf);
+	if (failed.length) {
+		const failures = read.flatMap((result, i) => result.status === "rejected" ? [`${p.consumers[i]?.repo}:${result.reason instanceof Error ? result.reason.message : "provider_unavailable"}`] : []);
+		return unknown(`train=${train};unreadable=${failed.join(",")};failures=${failures.join(",")}`, "source_failed", asOf);
+	}
 	const manifests = read.map((r) => (r as PromiseFulfilledResult<{ repo: string; manifest: unknown }>).value);
+	const malformed = manifests.filter((m) => !validManifest(m.manifest)).map((m) => m.repo);
+	if (malformed.length) return unknown(`train=${train};malformed=${malformed.join(",")}`, "incomplete_or_invalid_source", asOf);
 	const lagging = assessFleetTrainLag(train, p.members, manifests, p.publisher);
 	return {
 		value: lagging.length,
