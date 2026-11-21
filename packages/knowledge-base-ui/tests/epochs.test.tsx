@@ -27,7 +27,10 @@ import {
   ExecuteDistributionPanel,
   useCollectEpoch,
   composeEpochView,
+  applyOverridesToEpochView,
   composeEpochViewFromClaimants,
+  composeEpochViewFromSummary,
+  type ApiIngestionReceipt,
   type EpochsClient,
   type EpochWallet,
   type EpochDto,
@@ -98,14 +101,18 @@ const typedData: SignDataResponse = {
 };
 
 function fixture(initialNavigation?: EpochNavigationState) {
-  let savedNavigation: EpochNavigationState = initialNavigation ?? { historyOffset: 0, selectedEpochId: null };
+  let savedNavigation: EpochNavigationState = initialNavigation ?? {
+    historyOffset: 0,
+    selectedEpochId: null,
+  };
   const state = {
     current: epoch as EpochDto | null,
     empty: false,
     failList: false,
     failLifecycle: false,
-    summaryCount: 1,
-    receiptCount: 2,
+    events: [event("r1"), event("r2")] as ApiIngestionReceipt[],
+    history: [past],
+    failReceipts: false,
     collectStatus: 200,
     kind: "finalize" as "open_review" | "finalize" | "publish",
     isNodeAdmin: true,
@@ -215,8 +222,13 @@ function fixture(initialNavigation?: EpochNavigationState) {
           ? json({ error: "fixture unavailable" }, 500)
           : json({
               current: state.empty ? null : state.current,
-              epochs: state.empty ? [] : [past],
-              total: state.empty ? 0 : 201,
+              epochs: state.empty
+                ? []
+                : state.history.slice(
+                    Number(parsed.searchParams.get("offset") ?? 0),
+                    Number(parsed.searchParams.get("offset") ?? 0) + 200
+                  ),
+              total: state.empty ? 0 : state.history.length,
             });
       if (path === "/fixture/lifecycle")
         return state.failLifecycle
@@ -249,41 +261,124 @@ function fixture(initialNavigation?: EpochNavigationState) {
               state.collectStatus
             );
       if (path.endsWith("/projections") || path.endsWith("/claimants")) {
-        const delta = state.overrides.reduce(
-          (sum, item) => sum + Number(item.overrideUnits) - 1000,
-          0
+        const groups = new Map<
+          string,
+          {
+            claimantKey: string;
+            claimantKind: "user" | "identity";
+            isLinked: boolean;
+            displayName: string | null;
+            claimantLabel: string;
+            units: bigint;
+            receiptCount: number;
+          }
+        >();
+        const unresolved = new Map<
+          string,
+          {
+            claimantKey: string;
+            source: string;
+            platformLogin: string | null;
+            eventCount: number;
+          }
+        >();
+        for (const receipt of state.events) {
+          if (!receipt.selection?.included) continue;
+          const user = receipt.selection.userId;
+          const claimantKey = user
+            ? `user:${user}`
+            : `identity:${receipt.source}:${receipt.platformUserId}`;
+          if (!user) {
+            const identity = unresolved.get(claimantKey) ?? {
+              claimantKey,
+              source: receipt.source,
+              platformLogin: receipt.platformLogin,
+              eventCount: 0,
+            };
+            identity.eventCount++;
+            unresolved.set(claimantKey, identity);
+          }
+          const base = BigInt(
+            receipt.selection.weightOverrideMilli ??
+              epoch.weightConfig[`${receipt.source}:${receipt.eventType}`] ??
+              0
+          );
+          if (base <= 0n) continue;
+          const units = BigInt(
+            state.overrides.find(
+              (item) => item.subjectRef === receipt.receiptId
+            )?.overrideUnits ?? base
+          );
+          const group = groups.get(claimantKey) ?? {
+            claimantKey,
+            claimantKind: user ? "user" : "identity",
+            isLinked: !!user,
+            displayName: receipt.platformLogin,
+            claimantLabel: user ? "Linked account" : "GitHub account",
+            units: 0n,
+            receiptCount: 0,
+          };
+          group.units += units;
+          group.receiptCount++;
+          groups.set(claimantKey, group);
+        }
+        const all = [...groups.values()].sort((a, b) =>
+          a.units === b.units
+            ? a.claimantKey.localeCompare(b.claimantKey)
+            : a.units > b.units
+              ? -1
+              : 1
         );
+        const totalUnits = all.reduce((sum, item) => sum + item.units, 0n);
         const offset = Number(parsed.searchParams.get("offset") ?? 0);
         return json({
           epochId: path.split("/")[2],
-          items: [
-            {
-              claimantKey: offset ? "user:late" : "user:a",
-              claimantKind: "user",
-              isLinked: true,
-              displayName: offset ? "Late contributor" : "Alpha",
-              claimantLabel: "Linked account",
-              units: String(2000 + delta),
-              receiptCount: state.receiptCount,
-              creditShare: 100,
-            },
-          ],
-          total: state.summaryCount,
-          totalUnits: String(2000 + delta),
-          totalPoints: "2",
-          totalReceiptCount: state.receiptCount,
+          items: all.slice(offset, offset + 200).map((item) => ({
+            ...item,
+            units: String(item.units),
+            creditShare: totalUnits
+              ? Number((item.units * 1000n) / totalUnits) / 10
+              : 0,
+          })),
+          total: all.length,
+          totalUnits: String(totalUnits),
+          totalPoints: String(
+            all.reduce((sum, item) => sum + (item.units + 500n) / 1000n, 0n)
+          ),
+          totalReceiptCount: all.reduce(
+            (sum, item) => sum + item.receiptCount,
+            0
+          ),
+          unresolvedCount: [...unresolved.values()].reduce(
+            (sum, item) => sum + item.eventCount,
+            0
+          ),
+          unresolvedActivityTotal: unresolved.size,
+          unresolvedActivities: [...unresolved.values()].slice(0, 200),
           limit: 200,
           offset,
         });
       }
-      if (path.endsWith("/activity"))
+      if (path.endsWith("/activity")) {
+        const claimantKey = parsed.searchParams.get("claimantKey");
+        if (claimantKey && state.failReceipts)
+          return json({ error: "fixture receipt failure" }, 503);
+        const all = state.events.filter(
+          (receipt) =>
+            !claimantKey ||
+            claimantKey ===
+              (receipt.selection?.userId
+                ? `user:${receipt.selection.userId}`
+                : `identity:${receipt.source}:${receipt.platformUserId}`)
+        );
+        const offset = Number(parsed.searchParams.get("offset") ?? 0);
+        const limit = Number(parsed.searchParams.get("limit") ?? 200);
         return json({
           epochId: path.split("/")[2],
-          total: state.receiptCount,
-          events: parsed.searchParams.has("claimantKey")
-            ? [event("r3")]
-            : [event("r1"), event("r2")],
+          total: all.length,
+          events: all.slice(offset, offset + limit),
         });
+      }
       if (path.endsWith("/overrides")) {
         if (method === "PATCH") {
           const body = JSON.parse(String(init?.body));
@@ -327,9 +422,20 @@ function fixture(initialNavigation?: EpochNavigationState) {
   });
   const wrapper = ({ children }: { children: ReactNode }) => {
     const [navigation, setNavigation] = useState(savedNavigation);
-    return <QueryClientProvider client={queryClient}>
-      <EpochsProvider client={client} state={navigation} onStateChange={next => { savedNavigation = next; setNavigation(next); }}>{children}</EpochsProvider>
-    </QueryClientProvider>;
+    return (
+      <QueryClientProvider client={queryClient}>
+        <EpochsProvider
+          client={client}
+          state={navigation}
+          onStateChange={(next) => {
+            savedNavigation = next;
+            setNavigation(next);
+          }}
+        >
+          {children}
+        </EpochsProvider>
+      </QueryClientProvider>
+    );
   };
   return {
     state,
@@ -343,28 +449,268 @@ function fixture(initialNavigation?: EpochNavigationState) {
   };
 }
 
+function denseHistory(): EpochDto[] {
+  return Array.from({ length: 201 }, (_, i) => ({
+    ...past,
+    id: i === 0 ? "14" : String(1000 + i),
+  }));
+}
+
+function denseContributors(): ApiIngestionReceipt[] {
+  return Array.from({ length: 201 }, (_, i) => ({
+    ...event(`dense-${i}`, `u${String(i).padStart(3, "0")}`),
+    platformLogin:
+      i === 200
+        ? "Late contributor"
+        : i === 0
+          ? "Alpha"
+          : `Contributor ${i + 1}`,
+  }));
+}
+
 describe("public epochs capability", () => {
   it("round-trips controlled navigation and toggles disclosure from the keyboard", async () => {
-    const f = fixture(); const user = userEvent.setup();
+    const f = fixture();
+    const user = userEvent.setup();
     const view = render(<CurrentEpochView />, { wrapper: f.wrapper });
-    const row = await screen.findByRole("row", { name: /Alpha/ });
+    const row = await screen.findByRole(
+      "row",
+      { name: /Alpha/ },
+      { timeout: 5000 }
+    );
     const expand = within(row).getByRole("button", { name: "Expand details" });
-    expand.focus(); await user.keyboard(" ");
+    expand.focus();
+    await user.keyboard(" ");
     expect(expand).toHaveAttribute("aria-expanded", "true");
-    await user.keyboard("{Enter}"); expect(expand).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(within(screen.getByText("14").closest("tr")!).getByRole("button", { name: "Expand details" }));
-    const saved = JSON.parse(JSON.stringify(f.getNavigation())) as EpochNavigationState;
+    await user.keyboard("{Enter}");
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(
+      within(screen.getByText("14").closest("tr")!).getByRole("button", {
+        name: "Expand details",
+      })
+    );
+    const saved = JSON.parse(
+      JSON.stringify(f.getNavigation())
+    ) as EpochNavigationState;
     expect(saved.expandedEpochIds).toEqual(["14"]);
     view.unmount();
-    const restored = fixture(saved); render(<CurrentEpochView />, { wrapper: restored.wrapper });
+    const restored = fixture(saved);
+    render(<CurrentEpochView />, { wrapper: restored.wrapper });
     await screen.findByRole("button", { name: "Collapse details" });
-    await waitFor(() => expect(restored.requests.filter(request => request.url.includes("/14/"))).toHaveLength(2));
+    await waitFor(() =>
+      expect(
+        restored.requests.filter((request) => request.url.includes("/14/"))
+      ).toHaveLength(2)
+    );
+  });
+
+  it("loads review contributor 201 and saves and resets its off-page receipt", async () => {
+    const f = fixture();
+    f.state.events = denseContributors();
+    const user = userEvent.setup();
+    render(
+      <ReviewView
+        walletAddress={WALLET}
+        isNodeAdmin
+        operatorSetupUrl="https://example.com/setup"
+      />,
+      { wrapper: f.wrapper }
+    );
+    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
+    expect(
+      screen.queryByRole("row", { name: /Late contributor/ })
+    ).not.toBeInTheDocument();
+    const more = screen.getByRole("button", { name: "More contributors" });
+    more.focus();
+    await user.keyboard("{Enter}");
+    const late = await screen.findByRole("row", { name: /Late contributor/ });
+    expect(within(late).getByText("201")).toBeVisible();
+    expect(
+      f.requests.some((r) =>
+        r.url.includes("/projections?view=summary&limit=200&offset=200")
+      )
+    ).toBe(true);
+    fireEvent.click(
+      within(late).getByRole("button", { name: "Expand details" })
+    );
+    await screen.findByRole("link", { name: "Contribution dense-200" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Adjust weight" })
+    );
+    fireEvent.change(screen.getByLabelText("Override weight (units)"), {
+      target: { value: "0" },
+    });
+    fireEvent.change(screen.getByLabelText("Reason (optional)"), {
+      target: { value: "Off-page correction" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("1 active weight override");
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("row", { name: /Late contributor/ })).getByText(
+          "0"
+        )
+      ).toBeVisible()
+    );
+    expect(f.state.overrides[0]).toMatchObject({
+      subjectRef: "dense-200",
+      overrideUnits: "0",
+      overrideReason: "Off-page correction",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reset to original weight" })
+    );
+    await waitFor(() => expect(f.state.overrides).toHaveLength(0));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("row", { name: /Late contributor/ })).getByText(
+          "1000"
+        )
+      ).toBeVisible()
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Previous contributors" })
+    );
+    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
+    expect(f.getNavigation().contributorPages?.["15"]).toBe(0);
+  });
+
+  it.each([null, "a"])(
+    "keeps a zero override reset reachable for fallback identity %s",
+    async (userId) => {
+      const f = fixture();
+      f.state.events = [
+        {
+          ...event("zero"),
+          selection: { userId, included: true, weightOverrideMilli: null },
+        },
+      ];
+      render(
+        <ReviewView
+          walletAddress={WALLET}
+          isNodeAdmin
+          operatorSetupUrl="https://example.com/setup"
+        />,
+        { wrapper: f.wrapper }
+      );
+      fireEvent.click(
+        within(
+          await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 })
+        ).getByRole("button", { name: "Expand details" })
+      );
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Adjust weight" })
+      );
+      fireEvent.change(screen.getByLabelText("Override weight (units)"), {
+        target: { value: "0" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText("1 active weight override");
+      await waitFor(() =>
+        expect(
+          within(screen.getByRole("row", { name: /Alpha/ })).getByText("0")
+        ).toBeVisible()
+      );
+      const original = applyOverridesToEpochView(
+        composeEpochView(epoch, [], f.state.events),
+        new Map([["zero", { subjectRef: "zero", overrideUnits: "0" }]])
+      );
+      const summary = await (
+        await f.client.request("/fixture/15/projections?offset=0")
+      ).json();
+      const repaired = composeEpochViewFromSummary(
+        epoch,
+        summary,
+        f.state.events
+      );
+      expect(
+        repaired.contributors.map(({ claimantKey, units, receiptCount }) => ({
+          claimantKey,
+          units,
+          receiptCount,
+        }))
+      ).toEqual(
+        original.contributors.map(({ claimantKey, units, receiptCount }) => ({
+          claimantKey,
+          units,
+          receiptCount,
+        }))
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Reset to original weight" })
+      );
+      await waitFor(() =>
+        expect(
+          within(screen.getByRole("row", { name: /Alpha/ })).getByText("1000")
+        ).toBeVisible()
+      );
+    }
+  );
+
+  it("keeps complete unresolved facts independent of contributor and activity windows", async () => {
+    const f = fixture();
+    f.state.events = denseContributors();
+    f.state.events.push(
+      ...["external-1", "external-2"].map((id) => ({
+        ...event(id),
+        platformUserId: id,
+        platformLogin: "Same label",
+        selection: { userId: null, included: true, weightOverrideMilli: null },
+      }))
+    );
+    const response = await f.client.request("/fixture/15/projections?offset=0");
+    const summary = await response.json();
+    const linkedPage = f.state.events.slice(0, 200);
+    const first = composeEpochViewFromSummary(epoch, summary, linkedPage);
+    const changedActivity = composeEpochViewFromSummary(
+      epoch,
+      summary,
+      f.state.events.slice(200)
+    );
+    const lastSummary = await (
+      await f.client.request("/fixture/15/projections?offset=200")
+    ).json();
+    const changedContributor = composeEpochViewFromSummary(
+      epoch,
+      lastSummary,
+      []
+    );
+    for (const view of [first, changedActivity, changedContributor]) {
+      expect(view.unresolvedCount).toBe(2);
+      expect(view.unresolvedActivities).toHaveLength(2);
+      expect(view.unresolvedActivities.map((item) => item.claimantKey)).toEqual(
+        ["identity:github:external-1", "identity:github:external-2"]
+      );
+      expect(view.totalUnits).toBe("203000");
+    }
+  });
+
+  // Dense DOM accessibility fixture; native 360/1280px geometry remains candidate qualification.
+  it("keeps dense contributor identity visible and its disclosure keyboard reachable", async () => {
+    const f = fixture();
+    f.state.events = denseContributors();
+    const user = userEvent.setup();
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    const row = await screen.findByRole(
+      "row",
+      { name: /Alpha/ },
+      { timeout: 5000 }
+    );
+    expect(within(row).getByText("Alpha")).toBeVisible();
+    const expand = within(row).getByRole("button", { name: "Expand details" });
+    expand.focus();
+    await user.keyboard("{Enter}");
+    expect(expand).toHaveAttribute("aria-expanded", "true");
+    expect(
+      await screen.findByRole("link", { name: "Contribution dense-0" })
+    ).toBeVisible();
   });
 
   it("loads four reads regardless of history and fetches a past epoch only on expansion", async () => {
     const f = fixture();
+    f.state.history = denseHistory();
     render(<CurrentEpochView />, { wrapper: f.wrapper });
-    await screen.findByRole("row", { name: /Alpha/ });
+    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
     expect(
       f.requests.filter((request) => request.method === "GET")
     ).toHaveLength(4);
@@ -388,9 +734,10 @@ describe("public epochs capability", () => {
 
   it("keeps the current epoch while changing the history page and exposes contributor pages", async () => {
     const f = fixture();
-    f.state.summaryCount = 201;
+    f.state.events = denseContributors();
+    f.state.history = denseHistory();
     render(<CurrentEpochView />, { wrapper: f.wrapper });
-    await screen.findByRole("row", { name: /Alpha/ });
+    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "More epochs" }));
     await waitFor(() =>
       expect(
@@ -407,20 +754,23 @@ describe("public epochs capability", () => {
     fireEvent.click(screen.getByRole("button", { name: "More contributors" }));
     await screen.findByRole("row", { name: /Late contributor/ });
     expect(screen.getByText("201 contributors")).toBeVisible();
-  });
+    fireEvent.click(screen.getByRole("button", { name: "Previous epochs" }));
+    await screen.findByText("14");
+    expect(f.getNavigation().historyOffset).toBe(0);
+  }, 15_000);
 
   it("expands a contributor to bounded receipt pages and real receipt links", async () => {
     const f = fixture();
-    f.state.receiptCount = 201;
+    f.state.events = Array.from({ length: 201 }, (_, i) => event(`r${i + 1}`));
     render(<CurrentEpochView />, { wrapper: f.wrapper });
-    await screen.findByRole("row", { name: /Alpha/ });
+    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
     fireEvent.click(
       within(screen.getByRole("row", { name: /Alpha/ })).getByRole("button", {
         name: "Expand details",
       })
     );
-    const link = await screen.findByRole("link", { name: "Contribution r3" });
-    expect(link).toHaveAttribute("href", "https://example.com/r3");
+    const link = await screen.findByRole("link", { name: "Contribution r1" });
+    expect(link).toHaveAttribute("href", "https://example.com/r1");
     fireEvent.click(screen.getByRole("button", { name: "More contributions" }));
     await waitFor(() =>
       expect(
@@ -431,6 +781,14 @@ describe("public epochs capability", () => {
         )
       ).toBe(true)
     );
+    await screen.findByRole("link", { name: "Contribution r51" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Previous contributions" })
+    );
+    await screen.findByRole("link", { name: "Contribution r1" });
+    expect(
+      screen.queryByRole("link", { name: "Contribution r51" })
+    ).not.toBeInTheDocument();
   });
 
   it("shows loading, empty, list error and unknown lifecycle states", async () => {
@@ -448,10 +806,65 @@ describe("public epochs capability", () => {
     const unknown = fixture();
     unknown.state.failLifecycle = true;
     render(<CurrentEpochView />, { wrapper: unknown.wrapper });
-    await screen.findByRole("row", { name: /Alpha/ });
+    await screen.findByRole("row", { name: /Alpha/ }, { timeout: 5000 });
     expect(screen.getByText("Publish:").parentElement).toHaveTextContent(
       "Settlement preparation begins after finalization"
     );
+  });
+
+  it("drives the sync button through pending and cooldown feedback", async () => {
+    const f = fixture();
+    const request = f.client.request;
+    let resolveSync!: (response: Response) => void;
+    vi.spyOn(f.client, "request").mockImplementation((url, init) =>
+      url.endsWith("/collect")
+        ? new Promise<Response>((resolve) => {
+            resolveSync = resolve;
+          })
+        : request(url, init)
+    );
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    const sync = await screen.findByRole("button", {
+      name: "Sync contributions",
+    });
+    fireEvent.click(sync);
+    expect(
+      await screen.findByRole("button", { name: "Syncing…" })
+    ).toBeDisabled();
+    await act(async () =>
+      resolveSync(
+        new Response(JSON.stringify({ workflowId: "fixture" }), { status: 200 })
+      )
+    );
+    await screen.findByText(/Sync started/);
+    expect(
+      screen.getByRole("button", { name: "Sync contributions" })
+    ).toBeDisabled();
+  });
+
+  it("retries a failed bounded receipt read from the rendered control", async () => {
+    const f = fixture();
+    f.state.events = Array.from({ length: 201 }, (_, i) => event(`r${i + 1}`));
+    f.state.failReceipts = true;
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    fireEvent.click(
+      within(await screen.findByRole("row", { name: /Alpha/ })).getByRole(
+        "button",
+        { name: "Expand details" }
+      )
+    );
+    const retry = await screen.findByRole("button", {
+      name: "Retry contributions",
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Couldn’t load contributions"
+    );
+    f.state.failReceipts = false;
+    fireEvent.click(retry);
+    await screen.findByRole("link", { name: "Contribution r1" });
+    expect(
+      screen.queryByRole("button", { name: "Retry contributions" })
+    ).not.toBeInTheDocument();
   });
 
   it("preserves sync success, failure, pending protection and server cooldown", async () => {

@@ -48,7 +48,11 @@ function wrapperFor(): ({ children }: { children: ReactNode }) => ReactNode {
     defaultOptions: { queries: { retry: false } },
   });
   return ({ children }) =>
-    createElement(QueryClientProvider, { client: queryClient }, epochTestProvider(children));
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      epochTestProvider(children)
+    );
 }
 
 function mockApi(epochs: readonly EpochDto[], lifecycleOk = true) {
@@ -72,14 +76,41 @@ function mockApi(epochs: readonly EpochDto[], lifecycleOk = true) {
           } as Response);
     }
     if (url.includes("/user-projections")) {
-      return ok({ items: [], total: 0, totalUnits: "0", totalPoints: "0", totalReceiptCount: 0, limit: 200, offset: 0 });
+      return ok({
+        items: [],
+        total: 0,
+        totalUnits: "0",
+        totalPoints: "0",
+        totalReceiptCount: 0,
+        unresolvedCount: 0,
+        unresolvedActivities: [],
+        unresolvedActivityTotal: 0,
+        limit: 200,
+        offset: 0,
+      });
     }
     if (url.includes("/activity")) return ok({ events: [] });
     if (url.includes("/claimants")) {
-      return ok({ epochId: "x", items: [], total: 0, totalUnits: "0", totalPoints: "0", totalReceiptCount: 0, limit: 200, offset: 0 });
+      return ok({
+        epochId: "x",
+        items: [],
+        total: 0,
+        totalUnits: "0",
+        totalPoints: "0",
+        totalReceiptCount: 0,
+        unresolvedCount: 0,
+        unresolvedActivities: [],
+        unresolvedActivityTotal: 0,
+        limit: 200,
+        offset: 0,
+      });
     }
     const current = epochs.find((epoch) => epoch.status === "open") ?? null;
-    return ok({ current, epochs: epochs.filter((epoch) => epoch !== current), total: epochs.length - (current ? 1 : 0) });
+    return ok({
+      current,
+      epochs: epochs.filter((epoch) => epoch !== current),
+      total: epochs.length - (current ? 1 : 0),
+    });
   });
   global.fetch = fetchMock as unknown as typeof fetch;
   return fetchMock;
@@ -184,7 +215,11 @@ describe("epoch page reads", () => {
     await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
     await waitFor(() => expect(result.current.lifecycle.isSuccess).toBe(true));
 
-    expect(result.current.list.data).toEqual({ current: null, pastEpochs: [], historyTotal: 0 });
+    expect(result.current.list.data).toEqual({
+      current: null,
+      pastEpochs: [],
+      historyTotal: 0,
+    });
     expect(result.current.lifecycle.data).toEqual({
       publicationEvidence: "unknown",
       liveRevision: null,

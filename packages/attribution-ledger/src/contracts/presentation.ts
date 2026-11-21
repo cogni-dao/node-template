@@ -22,6 +22,18 @@ export const EpochContributorSummaryPageSchema = z.object({
   totalUnits: z.string(),
   totalPoints: z.string(),
   totalReceiptCount: z.number().int().nonnegative(),
+  unresolvedCount: z.number().int().nonnegative(),
+  unresolvedActivityTotal: z.number().int().nonnegative(),
+  unresolvedActivities: z
+    .array(
+      z.object({
+        claimantKey: z.string(),
+        source: z.string(),
+        platformLogin: z.string().nullable(),
+        eventCount: z.number().int().nonnegative(),
+      })
+    )
+    .max(EPOCH_PAGE_MAX_LIMIT),
   limit: z.number().int().min(1).max(EPOCH_PAGE_MAX_LIMIT),
   offset: z.number().int().nonnegative(),
 });

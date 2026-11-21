@@ -53,6 +53,7 @@ export interface EpochContributor {
 
 /** An activity event that could not be attributed to a known user. */
 export interface UnresolvedActivity {
+  readonly claimantKey?: string;
   readonly platformLogin: string | null;
   readonly source: string;
   readonly eventCount: number;
@@ -74,8 +75,10 @@ export interface EpochView {
   readonly contributors: readonly EpochContributor[];
   /** Number of activity events with no resolved user_id. */
   readonly unresolvedCount: number;
-  /** Breakdown of unresolved activity by platform login. */
+  /** Identity breakdown; summary reads return an independent capped window. */
   readonly unresolvedActivities: readonly UnresolvedActivity[];
+  /** Complete number of unresolved identities when supplied by the summary read. */
+  readonly unresolvedActivityTotal?: number;
 }
 
 /** A single user's cumulative holdings. */

@@ -82,6 +82,7 @@ Published attribution runtime shared by node apps and workers. Contains model ty
   - `SelectedReceiptWithMetadata` — Receipt-with-metadata type for evaluation inputs
 
 - **Subpaths:** `collect`, `collect/contract` (workflow-safe), `collect/sources`, `pipeline`, `pipeline/contracts`, `distribution`, `contracts`, `schema`, `adapters/postgres`, `http`, `presentation` (browser-safe).
+- Summary reads retain zero review overrides. `unresolvedCount` and `unresolvedActivityTotal` describe the complete epoch; `unresolvedActivities` is an independent, capped immutable-identity breakdown. Contributor and activity offsets cannot change these facts.
 - Schema factory binds the node-owned user column. Migrations stay in the node.
 - Legacy private modules bind or re-export these entries; no mechanism copies.
 

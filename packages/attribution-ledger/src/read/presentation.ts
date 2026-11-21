@@ -19,6 +19,12 @@ export interface ContributorSummary {
   readonly receiptCount: number;
   readonly creditShare: number;
 }
+export interface UnresolvedActivitySummary {
+  readonly claimantKey: string;
+  readonly source: string;
+  readonly platformLogin: string | null;
+  readonly eventCount: number;
+}
 export interface ContributorSummaryPage {
   readonly epochId: string;
   readonly items: readonly ContributorSummary[];
@@ -26,6 +32,11 @@ export interface ContributorSummaryPage {
   readonly totalUnits: string;
   readonly totalPoints: string;
   readonly totalReceiptCount: number;
+  /** Full included unresolved receipt count, independent of either page. */
+  readonly unresolvedCount: number;
+  /** First capped identity breakdown, independent of contributor offset. */
+  readonly unresolvedActivities: readonly UnresolvedActivitySummary[];
+  readonly unresolvedActivityTotal: number;
   readonly limit: number;
   readonly offset: number;
 }

@@ -109,6 +109,6 @@ Metrics mode draws `MetricCard` (over a `MetricSubject`) in its row variant unde
 
 - `./epochs` carries current/history selection, contributor and receipt disclosure, lifecycle, sync cooldown/error, review override and signing, and guarded publisher controls.
 - `EpochsProvider` receives node endpoints, authenticated transport, controlled URL state and concrete wallet/signing IO. Shared controls do not choose credentials or perform actions on mount.
-- Four initial attribution reads: overview, lifecycle, selected summary and activity. Past epochs read only on expansion; detail pages are capped. Complete summary totals never come from the receipt page.
+- Four initial attribution reads: overview, lifecycle, selected summary and activity. Past epochs read only on expansion; detail pages are capped. Complete summary totals and unresolved facts never come from the receipt page. Review query keys include contributor offsets. Zero overrides retain contributor disclosure and reset.
 - The host imports from a client component, supplies QueryClientProvider and scans the shipped Tailwind source.
 - UI0.25.0 follows the existing release train. Runtime0.2.0 preserves inherited batch reads for one rollout; bug.0072 gates the next runtime bump.

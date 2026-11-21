@@ -76,7 +76,7 @@ export function EpochDetail({
   );
 
   return (
-    <div className="space-y-4">
+    <div className="max-w-full min-w-0 space-y-4">
       {!hideHeader && (
         <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
           <div className="hidden items-center gap-3 sm:flex">
@@ -164,11 +164,14 @@ export function EpochDetail({
                     <span key="rank" className="text-muted-foreground text-xs">
                       {offset + i + 1}
                     </span>,
-                    <div key="name" className="flex items-center gap-2">
+                    <div
+                      key="name"
+                      className="flex min-w-0 flex-wrap items-center gap-2"
+                    >
                       <div className="bg-muted flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm">
                         {c.avatar}
                       </div>
-                      <span className="text-sm font-medium">
+                      <span className="min-w-0 text-sm font-medium break-words">
                         {c.displayName ?? "Contributor"}
                       </span>
                       {!c.isLinked && (

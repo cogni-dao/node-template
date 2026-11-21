@@ -48,16 +48,19 @@ export interface FinishEpochWorkspaceData {
 }
 
 async function fetchFinishEpochWorkspace(
-  client: EpochsClient
+  client: EpochsClient,
+  contributorPages: Readonly<Record<string, number>>,
+  signal?: AbortSignal
 ): Promise<FinishEpochWorkspaceData> {
   const [epochResponse, lifecycleResponse] = await Promise.all([
     epochJson<{ epochs: AdminEpochDto[] }>(
       client,
-      client.endpoints.epochs + "?limit=200"
+      client.endpoints.epochs + "?limit=200",
+      signal
     ),
     epochJson<
       SettlementLifecycle & { finishSelection?: FinishEpochSelection | null }
-    >(client, client.endpoints.lifecycle).then(
+    >(client, client.endpoints.lifecycle, signal).then(
       (value) => ({ value, unavailable: false as const }),
       () => ({ value: null, unavailable: true as const })
     ),
@@ -66,7 +69,12 @@ async function fetchFinishEpochWorkspace(
   const selection = lifecycleResponse.value?.finishSelection ?? null;
   const epochView =
     selection?.kind === "open_review" || selection?.kind === "finalize"
-      ? await fetchEpochView(client, selection.epoch)
+      ? await fetchEpochView(
+          client,
+          selection.epoch,
+          signal,
+          contributorPages[selection.epoch.id] ?? 0
+        )
       : null;
 
   return {
@@ -83,10 +91,12 @@ export function useFinishEpochWorkspace(): UseQueryResult<
   FinishEpochWorkspaceData,
   Error
 > {
-  const { client } = useEpochContext();
+  const { client, state } = useEpochContext();
+  const contributorPages = state.contributorPages ?? {};
   return useQuery({
-    queryKey: ["governance", "finish-epoch"],
-    queryFn: () => fetchFinishEpochWorkspace(client),
+    queryKey: ["governance", "finish-epoch", contributorPages],
+    queryFn: ({ signal }) =>
+      fetchFinishEpochWorkspace(client, contributorPages, signal),
     staleTime: 15_000,
   });
 }
