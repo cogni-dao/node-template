@@ -104,3 +104,11 @@ Published React components and hooks every node renders for knowledge (Browse, G
 - The root entry never imports `@cogni/knowledge-store` or `react-force-graph-3d`; keep knowledge modules reachable only from `src/knowledge.ts` and the engine only through `src/graph-3d.tsx`'s dynamic import.
 
 Metrics mode draws `MetricCard` (over a `MetricSubject`) in its row variant under distinct goal sections: below md the title and tags take the first line, the value, pill and sparkline the second. Every row retains its value/unit/target and a sparkline trace (an SLO row keeps its availability bars; the progress bar stays on the Goals view cards); with fewer than two readings the slot shows a neutral dashed baseline. Selecting a KPI opens its own existing history chart and supporting metrics below that row. Supporting metrics and the not-serving group page 20 within the bounded fetched set; a truncated scan stays explicit and is not complete global impact ordering. Ordinary GoalsBoard retains cards. Pending attempts stay visibly historical/building; loading never fabricates zero.
+
+## Public Surface (epochs, task.0190)
+
+- `./epochs` carries current/history selection, contributor and receipt disclosure, lifecycle, sync cooldown/error, review override and signing, and guarded publisher controls.
+- `EpochsProvider` receives node endpoints, authenticated transport, controlled URL state and concrete wallet/signing IO. Shared controls do not choose credentials or perform actions on mount.
+- Four initial attribution reads: overview, lifecycle, selected summary and activity. Past epochs read only on expansion; detail pages are capped. Complete summary totals never come from the receipt page.
+- The host imports from a client component, supplies QueryClientProvider and scans the shipped Tailwind source.
+- UI0.25.0 follows the existing release train. Runtime0.2.0 preserves inherited batch reads for one rollout; bug.0072 gates the next runtime bump.

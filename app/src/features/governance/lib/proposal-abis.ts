@@ -11,18 +11,12 @@
  * @public
  */
 
-import { encodeFunctionData, keccak256, toBytes } from "viem";
-
 /**
  * Aragon OSx permission id for the DAO's `execute` entrypoint:
  * `keccak256("EXECUTE_PERMISSION")`. A wallet holding this on the DAO (where=DAO,
  * who=wallet) may call `DAO.execute(...)` directly — the standing authority the
  * operator grants during one-time setup, so per-epoch publishing needs no vote.
  */
-export const EXECUTE_PERMISSION_ID = keccak256(
-  toBytes("EXECUTE_PERMISSION")
-) as `0x${string}`;
-
 export const COGNI_SIGNAL_ABI = [
   {
     type: "function",
@@ -83,112 +77,11 @@ export const TOKEN_VOTING_ABI = [
  *     holds EXECUTE_PERMISSION; runs [mint, setMerkleRoot] atomically as msg.sender=DAO.
  * Source: Aragon OSx v1.3 `DAO.sol` (IDAO). Kept minimal — reads/writes only what publish uses.
  */
-export const DAO_ABI = [
-  {
-    type: "function",
-    name: "hasPermission",
-    stateMutability: "view",
-    inputs: [
-      { name: "_where", type: "address", internalType: "address" },
-      { name: "_who", type: "address", internalType: "address" },
-      { name: "_permissionId", type: "bytes32", internalType: "bytes32" },
-      { name: "_data", type: "bytes", internalType: "bytes" },
-    ],
-    outputs: [{ name: "", type: "bool", internalType: "bool" }],
-  },
-  {
-    type: "function",
-    name: "execute",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "_callId", type: "bytes32", internalType: "bytes32" },
-      {
-        name: "_actions",
-        type: "tuple[]",
-        internalType: "struct Action[]",
-        components: [
-          { name: "to", type: "address", internalType: "address" },
-          { name: "value", type: "uint256", internalType: "uint256" },
-          { name: "data", type: "bytes", internalType: "bytes" },
-        ],
-      },
-      { name: "_allowFailureMap", type: "uint256", internalType: "uint256" },
-    ],
-    outputs: [
-      { name: "", type: "bytes[]", internalType: "bytes[]" },
-      { name: "", type: "uint256", internalType: "uint256" },
-    ],
-  },
-] as const;
 
-const MINT_ABI = [
-  {
-    type: "function",
-    name: "mint",
-    stateMutability: "nonpayable",
-    inputs: [{ type: "address" }, { type: "uint256" }],
-    outputs: [],
-  },
-] as const;
-const SET_MERKLE_ROOT_ABI = [
-  {
-    type: "function",
-    name: "setMerkleRoot",
-    stateMutability: "nonpayable",
-    inputs: [{ type: "bytes32" }],
-    outputs: [],
-  },
-] as const;
-const ZERO_ROOT =
-  "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
-const PROBE_NEXT_ROOT =
-  "0x0000000000000000000000000000000000000000000000000000000000000001" as const;
-
-/** Build a representative strict publish payload for DAO.hasPermission. */
-export function buildPublishProbeData(
-  token: `0x${string}`,
-  distributor: `0x${string}`,
-  expectedRoot: `0x${string}`,
-  allowFailureMap: bigint
-): `0x${string}` {
-  const nextRoot =
-    expectedRoot.toLowerCase() === PROBE_NEXT_ROOT.toLowerCase()
-      ? ZERO_ROOT
-      : PROBE_NEXT_ROOT;
-  const mintData = encodeFunctionData({
-    abi: MINT_ABI,
-    functionName: "mint",
-    args: [distributor, 0n],
-  });
-  const rootData = encodeFunctionData({
-    abi: SET_MERKLE_ROOT_ABI,
-    functionName: "setMerkleRoot",
-    args: [nextRoot],
-  });
-  return encodeFunctionData({
-    abi: DAO_ABI,
-    functionName: "execute",
-    args: [
-      expectedRoot,
-      [
-        { to: token, value: 0n, data: mintData },
-        { to: distributor, value: 0n, data: rootData },
-      ],
-      allowFailureMap,
-    ],
-  });
-}
-
-export type PublishPermissionState = "authorized" | "none" | "loading";
-
-/** Only strict compare-and-swap authority passes; every other permission shape fails closed. */
-export function classifyPublishPermission(
-  validProbe: boolean | undefined,
-  invalidFailureProbe: boolean | undefined
-): PublishPermissionState {
-  if (validProbe === undefined || invalidFailureProbe === undefined) {
-    return "loading";
-  }
-  if (validProbe && !invalidFailureProbe) return "authorized";
-  return "none";
-}
+export {
+  DAO_ABI,
+  EXECUTE_PERMISSION_ID,
+  buildPublishProbeData,
+  classifyPublishPermission,
+  type PublishPermissionState,
+} from "@cogni/attribution-ledger/distribution/publish-permission";

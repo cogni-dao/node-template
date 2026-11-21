@@ -11,6 +11,8 @@
  * @public
  */
 
+import { handleEpochContributorReceipts } from "@cogni/attribution-ledger/http";
+
 import {
   buildEpochActivityView,
   persistSelectionUpdates,
@@ -50,6 +52,24 @@ export const GET = wrapRouteHandlerWithLogging<{
     });
 
     const store = getContainer().attributionStore;
+    const claimantKey = url.searchParams.get("claimantKey");
+    if (claimantKey !== null) {
+      if (claimantKey.length < 1 || claimantKey.length > 512)
+        return NextResponse.json(
+          { error: "Invalid claimant key" },
+          { status: 400 }
+        );
+      const result = await handleEpochContributorReceipts(
+        store,
+        getNodeId(),
+        epochId,
+        claimantKey,
+        { limit, offset }
+      );
+      ctx.log.info(result.event, result.event.event);
+      return NextResponse.json(result.body, { status: result.status });
+    }
+
     const result = await buildEpochActivityView(
       store,
       getNodeId(),

@@ -13,13 +13,8 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": [
-    "src/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ],
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"],
   "references": [
     {
       "path": "../agent-grants"
@@ -41,6 +36,9 @@
     },
     {
       "path": "../work-items"
+    },
+    {
+      "path": "../attribution-ledger"
     }
   ]
 }

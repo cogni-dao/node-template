@@ -11,7 +11,7 @@
  * @public
  */
 
-import { isFinalizeEpochError } from "@cogni/attribution-pipeline-plugins";
+import { isFinalizeEpochError } from "@cogni/attribution-ledger/pipeline";
 import {
   FinalizeEpochInputSchema,
   finalizeEpochOperation,
