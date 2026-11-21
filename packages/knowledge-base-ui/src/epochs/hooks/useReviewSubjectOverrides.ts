@@ -30,6 +30,8 @@ interface UseReviewSubjectOverridesReturn {
   /** Map of subjectRef → override for O(1) lookup. */
   readonly overridesByRef: ReadonlyMap<string, ReviewSubjectOverrideView>;
   readonly isLoading: boolean;
+  readonly error: Error | null;
+  readonly retry: () => void;
   /** Save (upsert) an override for a subject. */
   readonly saveOverride: (
     subjectRef: string,
@@ -52,7 +54,7 @@ export function useReviewSubjectOverrides(
   const queryClient = useQueryClient();
   const qk = overridesQueryKey(epochId);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: qk,
     queryFn: async (): Promise<ReviewSubjectOverrideView[]> => {
       const res = await client.request(client.endpoints.overrides(epochId), {
@@ -65,6 +67,7 @@ export function useReviewSubjectOverrides(
       return json.overrides;
     },
     staleTime: 30_000,
+    retry: false,
   });
 
   const overridesByRef = useMemo(() => {
@@ -149,6 +152,10 @@ export function useReviewSubjectOverrides(
   return {
     overridesByRef,
     isLoading,
+    error,
+    retry: () => {
+      void refetch();
+    },
     saveOverride,
     removeOverride,
     isSaving: upsertMutation.isPending || deleteMutation.isPending,

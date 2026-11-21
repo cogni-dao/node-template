@@ -348,6 +348,24 @@ function ReviewEpochSection({
 
   const activeOverrideCount = overrides.overridesByRef.size;
 
+  if (overrides.isLoading || overrides.error) {
+    return (
+      <Alert role={overrides.error ? "alert" : "status"}>
+        <AlertTitle>
+          {overrides.error
+            ? "Could not load weight overrides"
+            : "Loading weight overrides…"}
+        </AlertTitle>
+        <AlertDescription>
+          Review weights cannot be verified until overrides load.
+          {overrides.error && (
+            <Button onClick={overrides.retry}>Retry overrides</Button>
+          )}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {activeOverrideCount > 0 && (
@@ -370,7 +388,7 @@ function ReviewEpochSection({
 
       <div className="bg-card flex flex-wrap items-center gap-3 rounded-lg border p-4">
         {state.phase === "IDLE" && (
-          <Button onClick={handleSign}>
+          <Button onClick={handleSign} disabled={overrides.isSaving}>
             <FileSignature className="mr-2 h-4 w-4" />
             Sign & Finalize
           </Button>
@@ -388,7 +406,12 @@ function ReviewEpochSection({
         {state.phase === "SUCCESS" && (
           <div className="text-success flex items-center gap-2 text-sm">
             <CheckCircle2 className="h-4 w-4" />
-            <span>Finalization started (workflow: {state.workflowId})</span>
+            <span role="status">
+              Epoch finalized. Statement {state.result?.statementId}.
+              {state.result?.cumulativeDistribution
+                ? " Settlement ready to publish."
+                : " No distribution to publish."}
+            </span>
           </div>
         )}
 
@@ -430,21 +453,25 @@ function ReviewReceiptRow({
   readonly isSaving: boolean;
 }): ReactElement {
   const [isEditing, setIsEditing] = useState(false);
+  const [writeError, setWriteError] = useState<"save" | "reset" | null>(null);
   const [editUnits, setEditUnits] = useState(override?.overrideUnits ?? "");
   const [editReason, setEditReason] = useState(override?.overrideReason ?? "");
 
   const handleStartEdit = useCallback(() => {
     setEditUnits(override?.overrideUnits ?? "");
     setEditReason(override?.overrideReason ?? "");
+    setWriteError(null);
     setIsEditing(true);
   }, [override]);
 
   const handleCancel = useCallback(() => {
+    setWriteError(null);
     setIsEditing(false);
   }, []);
 
   const handleSave = useCallback(async () => {
     if (!editUnits.trim() || !/^\d+$/.test(editUnits.trim())) return;
+    setWriteError(null);
     try {
       await onSave(
         receipt.receiptId,
@@ -453,15 +480,16 @@ function ReviewReceiptRow({
       );
       setIsEditing(false);
     } catch {
-      // Mutation error is surfaced via useReviewSubjectOverrides hook state
+      setWriteError("save");
     }
   }, [receipt.receiptId, editUnits, editReason, onSave]);
 
   const handleRemove = useCallback(async () => {
+    setWriteError(null);
     try {
       await onRemove(receipt.receiptId);
     } catch {
-      // Mutation error is surfaced via useReviewSubjectOverrides hook state
+      setWriteError("reset");
     }
   }, [receipt.receiptId, onRemove]);
 
@@ -476,6 +504,11 @@ function ReviewReceiptRow({
       <TableRow className="bg-primary/5 hover:bg-primary/5">
         <TableCell colSpan={6} className="p-2">
           <div className="space-y-2">
+            {writeError === "save" && (
+              <p role="alert">
+                Could not save weight. Your changes are kept. Retry save.
+              </p>
+            )}
             <div className="flex min-w-0 items-center gap-2 text-sm">
               <Icon className="text-muted-foreground h-3.5 w-3.5" />
               <SourceBadge source={receipt.source as "github" | "discord"} />
@@ -541,7 +574,7 @@ function ReviewReceiptRow({
                 }
               >
                 <Save className="mr-1 h-3 w-3" />
-                Save
+                {writeError === "save" ? "Retry save" : "Save"}
               </Button>
               <Button
                 size="sm"
@@ -615,6 +648,11 @@ function ReviewReceiptRow({
       <TableCell className="text-right" />
       {/* Score column — includes edit/reset buttons */}
       <TableCell className="text-right">
+        {writeError === "reset" && (
+          <p role="alert">
+            Could not reset weight. The override is kept. Retry reset.
+          </p>
+        )}
         <div className="flex items-center justify-end gap-2">
           {score != null && hasOverride ? (
             <span className="font-mono text-xs">
@@ -648,7 +686,11 @@ function ReviewReceiptRow({
                 size="sm"
                 variant="ghost"
                 className="text-muted-foreground hover:text-destructive min-h-11 min-w-11"
-                aria-label="Reset to original weight"
+                aria-label={
+                  writeError === "reset"
+                    ? "Retry reset"
+                    : "Reset to original weight"
+                }
                 onClick={(e) => {
                   e.stopPropagation();
                   void handleRemove();
@@ -657,6 +699,7 @@ function ReviewReceiptRow({
                 title="Reset to original"
               >
                 <RotateCcw className="h-3 w-3" />
+                {writeError === "reset" && "Retry reset"}
               </Button>
             )}
           </div>
