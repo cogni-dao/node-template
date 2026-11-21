@@ -102,7 +102,7 @@ interface ProviderCatalogEntry {
   readonly principal?: string;
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
-  readonly program?: "cogni" | "work-review" | "work-closeout";
+  readonly program?: "cogni" | "work-review" | "work-closeout" | "mission-research";
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
 }
@@ -637,7 +637,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       for await (const event of inner.stream) {
         // CatalogEntry.report: echo the telemetry as one text delta just before `done`.
         if (event.type === "done" && report) {
-          const delta = graphReportDelta((await inner.final).structuredOutput);
+          const delta = graphReportDelta((await inner.final).structuredOutput, report);
           if (delta) yield { type: "text_delta" as const, delta };
         }
         yield event;

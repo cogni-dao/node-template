@@ -5,6 +5,7 @@
 import { isAiExecutionError } from "@cogni/ai-core";
 import { BaseLanguageModel } from "@langchain/core/language_models/base";
 import { SystemMessage, ToolMessage } from "@langchain/core/messages";
+import { RunnableLambda } from "@langchain/core/runnables";
 import { StructuredTool } from "@langchain/core/tools";
 import { Command, getConfig, StateSchema } from "@langchain/langgraph";
 import {
@@ -26,6 +27,17 @@ import {
 	toolCallLimitMiddleware,
 } from "langchain";
 import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
+
+export class ChildBoundaryError extends Error {
+	constructor(readonly code: "assignment_invalid" | "output_limit") {
+		super(
+			code === "assignment_invalid"
+				? "cogni_child_assignment_invalid"
+				: "cogni_child_output_exceeds_limit",
+		);
+	}
+}
+
 import type { CreateReactAgentGraphOptions } from "../types";
 import {
 	composeCogniPrompt,
@@ -62,6 +74,8 @@ export function cogniProfile(
 /** Construct the shared core with a host-selected prompt and an explicit child registry. */
 export function createCogniProgram(
 	opts: CreateReactAgentGraphOptions & {
+		readonly childStatePolicy?: "messages-only";
+		readonly taskLimitExitBehavior?: "error" | "continue";
 		readonly children?: readonly {
 			readonly profile: AgentProfile;
 			readonly description: string;
@@ -126,18 +140,38 @@ export function createCogniProgram(
 			),
 			allowedChildProfiles: [],
 		};
+		const compiled = createCogniProgram({
+			...opts,
+			profile,
+			children: [],
+			guardedTools: [],
+			programMiddleware: [],
+			disableCheckpointer: true,
+		});
+		const runnable =
+			opts.childStatePolicy === "messages-only"
+				? RunnableLambda.from(
+						async (state: { messages: unknown[] }, config) => {
+							if (state.messages.length !== 1)
+								throw new ChildBoundaryError("assignment_invalid");
+							const result = await compiled.invoke(
+								{ messages: state.messages as never },
+								{ ...config, recursionLimit: 30 },
+							);
+							return {
+								messages: result.messages,
+								...("structuredResponse" in result
+									? { structuredResponse: result.structuredResponse }
+									: {}),
+							};
+						},
+					)
+				: compiled.withConfig({ recursionLimit: 30 });
 		return {
 			name: profile.id,
 			description: child.description,
 			mode: "isolated" as const,
-			runnable: createCogniProgram({
-				...opts,
-				profile,
-				children: [],
-				guardedTools: [],
-				programMiddleware: [],
-				disableCheckpointer: true,
-			}).withConfig({ recursionLimit: 30 }),
+			runnable,
 		};
 	});
 	const routes: Record<string, StoreBackend | HubSkillBackend> = {};
@@ -289,7 +323,7 @@ export function createCogniProgram(
 				runLimit: children.length
 					? Math.min(4, opts.profile?.limits.maxTaskCalls ?? 4)
 					: 0,
-				exitBehavior: "error",
+				exitBehavior: opts.taskLimitExitBehavior ?? "error",
 			}),
 			createMiddleware({
 				name: "CogniChildOutputLimit",
@@ -314,7 +348,7 @@ export function createCogniProgram(
 										.length > 16_384,
 							)
 						)
-							throw new Error("cogni_child_output_exceeds_limit");
+							throw new ChildBoundaryError("output_limit");
 					}
 					return result;
 				},

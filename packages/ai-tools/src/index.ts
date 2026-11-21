@@ -515,3 +515,5 @@ export type {
 } from "./types";
 
 export { createMetricTools, METRIC_TOOL_BUNDLE } from "./tools/metric";
+
+export { projectWebSearchResponse } from "./capabilities/web-search-projection";

@@ -56,6 +56,7 @@ export const WebSearchResultItemSchema = z.object({
   url: z.string().describe("URL of the search result"),
   content: z.string().describe("Snippet or content from the result"),
   score: z.number().optional().describe("Relevance score (if available)"),
+  rawContentState: z.enum(["not_requested", "available", "partial", "unavailable"]),
   rawContent: z.string().optional().describe("Raw page content (if requested)"),
 });
 export type WebSearchResultItem = z.infer<typeof WebSearchResultItemSchema>;
@@ -65,7 +66,14 @@ export type WebSearchResultItem = z.infer<typeof WebSearchResultItemSchema>;
  */
 export const WebSearchOutputSchema = z.object({
   query: z.string().describe("The original query"),
-  results: z.array(WebSearchResultItemSchema).describe("Search results"),
+  partial: z.boolean(),
+  results: z.array(WebSearchResultItemSchema).max(5).describe("Search results"),
+}).superRefine((output, ctx) => {
+  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+  const passages = output.results.flatMap((item) => item.rawContent === undefined ? [] : [bytes(item.rawContent)]);
+  if (bytes(output) > 48 * 1024 || passages.some((length) => length > 8 * 1024) || passages.reduce((sum, length) => sum + length, 0) > 24 * 1024) {
+    ctx.addIssue({ code: "custom", message: "web_search_result_too_large" });
+  }
 });
 export type WebSearchOutput = z.infer<typeof WebSearchOutputSchema>;
 
@@ -104,7 +112,7 @@ export const webSearchContract: ToolContract<
     return output;
   },
 
-  allowlist: ["query", "results"] as const,
+  allowlist: ["query", "results", "partial"] as const,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,12 +145,14 @@ export function createWebSearchImplementation(
 
       return {
         query: result.query,
+        partial: result.partial,
         results: result.results.map((r) => ({
           title: r.title,
           url: r.url,
           content: r.content,
           score: r.score,
           rawContent: r.rawContent,
+          rawContentState: r.rawContentState,
         })),
       };
     },

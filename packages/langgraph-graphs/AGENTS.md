@@ -42,7 +42,8 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 
 - **Exports (subpaths):**
   - `@cogni/langgraph-graphs` — Barrel re-export of common types plus:
-    - `LANGGRAPH_CATALOG` / `NODE_LANGGRAPH_CATALOG` — Graph catalog; publishes exactly two graphs: `cogni` (node operator, principal `node-ai`, default graph) and `work-prioritizer` (display "Work Prioritizer", principal `prioritizer`, scheduled triage program: the guarded `core__work_item_update` writer)
+    - `LANGGRAPH_CATALOG` / `NODE_LANGGRAPH_CATALOG` — Graph catalog; includes graphs: `cogni` (node operator, principal `node-ai`, default graph) and `work-prioritizer` (display "Work Prioritizer", principal `prioritizer`, scheduled triage program: the guarded `core__work_item_update` writer)
+    - `mission-research` provides a read-only sourced research packet and isolated critic; `GraphReportDecl.echoToStream` controls the optional stream echo.
     - `LANGGRAPH_GRAPH_IDS`, `DEFAULT_LANGGRAPH_GRAPH_ID` (`langgraph:cogni`) — Namespaced graph ids
     - `McpToolSource` — ToolSourcePort implementation for MCP-discovered tools
     - `loadMcpTools()`, `parseMcpConfigFromEnv()` — MCP client connection + config parsing
@@ -121,3 +122,5 @@ pnpm --filter @cogni-dao/langgraph-graphs test
 - `CatalogEntry.principal` names the internal agent principal a graph acts as (`work-prioritizer` → `prioritizer`, `cogni` → `node-ai`). A graph with no principal gets no scoped tool; a slug with no seeded `agent_principals` row fails the run before any tool runs. The dev runner (`createDevToolExecFn`) guards its runtimes with `@cogni-dao/agent-grants` and has no run scope, so scoped tools are denied there.
 
 - The coordinator uses catalog-owned `guidanceId` values and host-observed per-run receipts. The catalog registers `createCatalogCogniGraph`, which binds those ids into `createCoordinatorGraph` and reuses its `createRunHooks` (`createCoordinatorRunHooks`) for receipt observation. After an exact-purpose lookup, native middleware supplies missing goals, KPI status, bounded open work and workflow cards before the next model decision. Creation requires those context reads and the selected full card; ordinary answers trigger no reads. The original host capability retains all ownership/edit-policy checks.
+
+- `createMissionResearchGraph` uses messages-only child state and the continue task-limit opt-in; other programs retain their defaults.
