@@ -32,6 +32,15 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 			: new ResearchReceipts(opts.sourceContext?.origin ?? "");
 	for (const entry of opts.sourceContext?.governingIndex ?? [])
 		receipts.domains.add(entry.domain);
+	const exhausted = () =>
+		receipts.tools >= 24 ||
+		[
+			"search_budget",
+			"evidence_limit",
+			"draft_limit",
+			"critic_input_limit",
+			"critic_output_limit",
+		].some((reason) => receipts.reasons.has(reason));
 	const profile = cogniProfile({
 		id: "mission-research",
 		instructions: MISSION_RESEARCH_PROMPT,
@@ -44,7 +53,7 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 		name: "MissionResearchBoundaries",
 		wrapModelCall: async (request, handler) => {
 			const result = await handler(
-				receipts.tools >= 24
+				exhausted()
 					? {
 							...request,
 							systemMessage: request.systemMessage.concat(
@@ -63,6 +72,7 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 		},
 		wrapToolCall: async (request, handler) => {
 			const call = request.toolCall;
+			const alreadyExhausted = exhausted();
 			receipts.tools++;
 			const reject = (reason: string) => {
 				receipts.reasons.add(reason);
@@ -74,6 +84,11 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				});
 			};
 			if (receipts.tools > 24) return reject("tool_budget");
+			if (
+				alreadyExhausted &&
+				(call.name.startsWith("core__") || call.name === "task")
+			)
+				return reject("research_budget");
 			if (
 				call.args === null ||
 				typeof call.args !== "object" ||

@@ -250,6 +250,107 @@ describe("native invalid argument boundary", () => {
 });
 
 describe("native child isolation", () => {
+	it("latches search exhaustion across concurrent and subsequent capability calls", async () => {
+		let turn = 0;
+		let searches = 0;
+		let knowledgeReads = 0;
+		let wrapUp = "";
+		const url = "https://evidence.example/source";
+		const draft = {
+			missionScope: "mission",
+			decision: "decision",
+			sources: [{ url }],
+			atoms: [],
+			principles: [],
+			contradictions: [],
+			unknowns: ["Further evidence is needed"],
+			critiqueResolutions: [],
+			kpiHypotheses: [],
+		};
+		const call = (id: string, name: string, args: unknown) => ({
+			id,
+			type: "function" as const,
+			function: { name, arguments: JSON.stringify(args) },
+		});
+		const completionFn: CompletionFn = (req) => {
+			turn++;
+			const calls =
+				turn === 1
+					? Array.from({ length: 6 }, (_, i) =>
+							call(`search-${i}`, "core__web_search", {
+								query: "q",
+								includeRawContent: true,
+							}),
+						)
+					: turn === 2
+						? [
+								call("search-excess", "core__web_search", { query: "q" }),
+								call("same-turn-read", "core__knowledge_read", { id: "owner" }),
+							]
+						: turn === 3
+							? [call("later-read", "core__knowledge_read", { id: "owner" })]
+							: undefined;
+			if (turn === 3) wrapUp = JSON.stringify(req.messages);
+			return {
+				stream: (async function* (): AsyncIterable<AiEvent> {})(),
+				final: Promise.resolve({
+					ok: true as const,
+					content: calls ? "" : JSON.stringify(draft),
+					...(calls ? { toolCalls: calls } : {}),
+					finishReason: calls ? ("tool_calls" as const) : ("stop" as const),
+				}),
+			};
+		};
+		const entry = LANGGRAPH_CATALOG["mission-research"];
+		if (!entry) throw new Error("missing graph");
+		const exec: ToolExecFn = async (name) => {
+			if (name === "core__knowledge_read") knowledgeReads++;
+			if (name === "core__web_search") searches++;
+			return {
+				ok: true,
+				value: {
+					results: [
+						{
+							url,
+							rawContent: "retained passage",
+							rawContentState: "available",
+						},
+					],
+				},
+			};
+		};
+		const run = createInProcGraphRunner({
+			program: "mission-research",
+			sourceContext: {
+				nodeId: "test",
+				origin: "https://node.example",
+				mission: { content: "A mission", sourceRef: "test", buildSha: null },
+				governingIndex: [],
+			},
+			createGraph: entry.graphFactory,
+			completionFn,
+			createToolExecFn: () => exec,
+			toolContracts: [knowledgeReadContract, webSearchContract],
+			request: {
+				runId: "search-exhaustion",
+				messages: [{ role: "user", content: "research" }],
+				configurable: { model: "test", toolIds: [...entry.toolIds] },
+			},
+		});
+		for await (const _ of run.stream) {
+			/* drain */
+		}
+		const result = await run.final;
+		expect(result.ok).toBe(true);
+		const output = JSON.parse(result.content ?? "{}");
+		expect(searches).toBe(6);
+		expect(knowledgeReads).toBe(0);
+		expect(wrapUp).toContain("The research budget is exhausted");
+		expect(output.status).toBe("incomplete");
+		expect(output.reasons).toContain("search_budget");
+		expect(output.observedSources).toContainEqual({ url, state: "available" });
+		expect(output.packet).toEqual(draft);
+	});
 	it("keeps root scratch out of the critic and critic writes out of root", async () => {
 		let turn = 0;
 		let childInput = "";
