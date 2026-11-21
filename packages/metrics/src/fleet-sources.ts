@@ -87,6 +87,18 @@ function releaseTag(raw: string, publisher?: string): string | undefined {
 	}
 }
 
+// Recognition is deliberately untrusted: it only identifies a Release-shaped
+// member pin for reporting, and never supplies an address for network access.
+function recognizableReleaseTag(raw: string): string | undefined {
+	const match = /^[a-z][a-z\d+.-]*:\/\/[^/]*\/[^/]+\/[^/]+\/releases\/download\/([^/?#]+)/i.exec(raw);
+	if (!match) return undefined;
+	try {
+		return decodeURIComponent(match[1] ?? "");
+	} catch {
+		return match[1];
+	}
+}
+
 function validGitRef(ref: string): boolean {
 	return ref.startsWith("refs/tags/train-v") && !Array.from(ref).some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127 || "~^:?*[\\".includes(char)) &&
 		!ref.includes("..") && !ref.includes("@{") && !ref.endsWith(".") &&
@@ -184,7 +196,7 @@ export function assessFleetTrainLag(
 				if (!member) continue;
 				pinned.add(member.name);
 				reasons.push(`vendored:${key}@workspace`);
-			} else if (namedMember || members.some((x) => releaseTag(raw)?.startsWith(x.tagPrefix))) {
+			} else if (namedMember || members.some((x) => recognizableReleaseTag(raw)?.startsWith(x.tagPrefix))) {
 				reasons.push(`invalid:${key}@pin`);
 			}
 		}

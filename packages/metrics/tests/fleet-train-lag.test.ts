@@ -207,6 +207,20 @@ describe("source qualification against six current consumers", () => {
 		expect(assess(rows)[0]?.reasons).toEqual(["invalid:@legacy/old@pin"]);
 	});
 
+	it.each(["dependencies", "devDependencies"] as const)("flags untrusted Release-shaped aliases in %s", (section) => {
+		for (const bad of [
+			"https://github.com.evil.test/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+			"http://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+			"https://foreign.example/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+			"https://user@github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+			"https://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0%2Fbad/x.tgz",
+		]) {
+			const rows = cohort();
+			(rows[0] as (typeof rows)[number]).manifest[section]["old-metrics"] = bad;
+			expect(assess(rows)[0]?.reasons).toEqual(["invalid:old-metrics@pin"]);
+		}
+	});
+
 	it("detects each individual fault without private-wrapper false positives", () => {
 		expect(assess(cohort())).toEqual([]);
 		const shadow = cohort();

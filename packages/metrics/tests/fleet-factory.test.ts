@@ -11,6 +11,42 @@ const params = {
 };
 
 describe("public fleet calculator", () => {
+	it.each(["dependencies", "devDependencies"] as const)("retains invalid Release aliases in %s beside five current pins", async (section) => {
+		const calculator = createFleetTrainLagCalculator();
+		const members = ["work-items", "knowledge-store", "knowledge-base-ui", "metrics", "ai-tools"].map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));
+		const consumers = Array.from({ length: 6 }, (_, i) => ({ repo: `cogni-dao/consumer${i}`, manifestPath: "package.json" }));
+		const official = Object.fromEntries(members.map((m) => [m.name, `https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.25.0/x.tgz`]));
+		let bad: string | undefined;
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			const body = address.includes("matching-refs") ? [{ ref: "refs/tags/train-v0.25.0" }]
+				: tag ? { tag_name: decodeURIComponent(tag), published_at: "2026-11-20T00:00:00Z" }
+				: { dependencies: { ...official, ...(section === "dependencies" && bad && address.includes("consumer0/") ? { "old-metrics": bad } : {}) }, devDependencies: section === "devDependencies" && bad && address.includes("consumer0/") ? { "old-metrics": bad } : {} };
+			return new Response(JSON.stringify(body));
+		});
+		const controller = new AbortController();
+		const compute = () => calculator.compute({ ...params, members, consumers }, {
+			window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+			signal: controller.signal, budget: calculator.budget, read: async (source) => source(controller.signal, calculator.budget),
+		});
+		try {
+			expect(await compute()).toMatchObject({ complete: true, value: 0 });
+			for (bad of [
+				"https://github.com.evil.test/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"http://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://foreign.example/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://user@github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://[invalid/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/",
+				"https://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0%2Fbad/x.tgz",
+			]) {
+				const result = await compute();
+				expect(result, bad).toMatchObject({ complete: true, value: 1 });
+				expect(result.evidenceRefs).toContain("fleet:train-lag:counts:evaluated=6;lagging=1;train=0.25.0");
+			}
+		} finally { fetchMock.mockRestore(); }
+	});
 	it("does not let an official alias mask a foreign canonical pin", async () => {
 		const calculator = createFleetTrainLagCalculator();
 		const official = "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/metrics.tgz";
