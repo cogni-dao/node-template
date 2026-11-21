@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 "use client";
-import { useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { type ReactElement, useState } from "react";
 import { useEpochContext, withEpochQuery } from "../context";
 import { epochJson } from "../hooks/useEpochsPage";
 import type { ApiIngestionReceipt } from "../lib/compose-epoch";
@@ -22,10 +22,10 @@ export function ContributorReceiptRows({
   readonly epoch: EpochView;
   readonly contributor: EpochContributor;
   readonly renderRows?: (
-    contributor: EpochContributor
+    contributor: EpochContributor,
   ) => ReactElement[] | null;
 }) {
-  const { client } = useEpochContext();
+  const { client, queryKeyPrefix } = useEpochContext();
   const [offset, setOffset] = useState(0);
   const complete =
     epoch.status !== "finalized" &&
@@ -33,7 +33,7 @@ export function ContributorReceiptRows({
     contributor.receipts.length >= contributor.receiptCount;
   const query = useQuery({
     queryKey: [
-      "governance",
+      ...queryKeyPrefix,
       "epochs",
       epoch.id,
       "contributor",
@@ -51,7 +51,7 @@ export function ContributorReceiptRows({
           limit: 50,
           offset,
         }),
-        signal
+        signal,
       ),
   });
   const receipts: readonly IngestionReceipt[] = complete
@@ -67,7 +67,7 @@ export function ContributorReceiptRows({
         units:
           receipt.selection?.weightOverrideMilli ??
           String(
-            epoch.weightConfig?.[`${receipt.source}:${receipt.eventType}`] ?? 0
+            epoch.weightConfig?.[`${receipt.source}:${receipt.eventType}`] ?? 0,
           ),
         override: receipt.reviewOverride ?? null,
       }));

@@ -1,163 +1,142 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2025 Cogni-DAO
-
-/**
- * Module: `@cogni-dao/knowledge-base-ui/epochs/hooks/useReviewSubjectOverrides`
- * Purpose: CRUD hook for review-subject overrides during epoch review.
- * Scope: Client-side data fetching and mutation for review-subject overrides. Does not perform server-side logic.
- * Invariants: WRITE_ROUTES_APPROVER_GATED (server enforces). BigInt overrideUnits serialized as strings.
- * Side-effects: IO (HTTP fetches to review-subject-overrides API)
- * Links: src/contracts/attribution.review-subject-overrides.v1.contract.ts
- * @public
- */
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 "use client";
-
+/** Exact scoped read + mutation transport. Acceptance never invalidates or claims verification. */
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { useEpochContext } from "../context";
+import {
+  ReviewRefusal,
+  reviewResponseError,
+  safeReviewError,
+} from "../review-errors";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo } from "react";
-
-/** Shape of a single override as returned by the GET endpoint. */
 export interface ReviewSubjectOverrideView {
   readonly id: string;
   readonly subjectRef: string;
   readonly overrideUnits: string | null;
   readonly overrideReason: string | null;
 }
-
-interface UseReviewSubjectOverridesReturn {
-  /** Map of subjectRef → override for O(1) lookup. */
-  readonly overridesByRef: ReadonlyMap<string, ReviewSubjectOverrideView>;
-  readonly isLoading: boolean;
-  readonly error: Error | null;
-  readonly retry: () => void;
-  /** Save (upsert) an override for a subject. */
-  readonly saveOverride: (
-    subjectRef: string,
-    overrideUnits: string,
-    reason?: string
-  ) => Promise<void>;
-  /** Remove an override for a subject. */
-  readonly removeOverride: (subjectRef: string) => Promise<void>;
-  readonly isSaving: boolean;
+export const overridesQueryKey = (
+  prefix: readonly string[],
+  epochId: string | null,
+) => [...prefix, "epochs", epochId, "review-subject-overrides"] as const;
+export interface OverrideRead {
+  readonly overrides: ReviewSubjectOverrideView[];
+  readonly readId: string;
 }
-
-function overridesQueryKey(epochId: string): readonly string[] {
-  return ["governance", "epochs", epochId, "review-subject-overrides"] as const;
+export interface OverrideSubmission {
+  readonly subjectRef: string;
+  readonly kind: "save" | "reset";
+  readonly units: string;
+  readonly reason: string | null;
 }
-
-export function useReviewSubjectOverrides(
-  epochId: string
-): UseReviewSubjectOverridesReturn {
-  const { client } = useEpochContext();
-  const queryClient = useQueryClient();
-  const qk = overridesQueryKey(epochId);
-
-  const { data, isLoading, error, refetch } = useQuery({
+export function useReviewSubjectOverrides(epochId: string | null) {
+  const { client, queryKeyPrefix } = useEpochContext();
+  const qk = overridesQueryKey(queryKeyPrefix, epochId);
+  const query = useQuery({
     queryKey: qk,
-    queryFn: async (): Promise<ReviewSubjectOverrideView[]> => {
-      const res = await client.request(client.endpoints.overrides(epochId), {
-        credentials: "same-origin",
-      });
-      if (!res.ok) throw new Error("Failed to fetch overrides");
-      const json = (await res.json()) as {
-        overrides: ReviewSubjectOverrideView[];
-      };
-      return json.overrides;
+    enabled: epochId !== null,
+    queryFn: async ({ signal }): Promise<OverrideRead> => {
+      try {
+        if (epochId === null) throw new ReviewRefusal("not_found", "read");
+        const res = await client.request(client.endpoints.overrides(epochId), {
+          credentials: "same-origin",
+          cache: "no-store",
+          signal,
+        });
+        if (!res.ok) throw await reviewResponseError(res, "read");
+        const json: unknown = await res.json();
+        signal.throwIfAborted();
+        if (
+          !json ||
+          typeof json !== "object" ||
+          !("overrides" in json) ||
+          !Array.isArray(json.overrides)
+        )
+          throw new ReviewRefusal("unexpected", "read");
+        const overrides: ReviewSubjectOverrideView[] = [];
+        for (const item of json.overrides) {
+          if (
+            !item ||
+            typeof item !== "object" ||
+            typeof item.id !== "string" ||
+            typeof item.subjectRef !== "string" ||
+            !(
+              item.overrideUnits === null ||
+              (typeof item.overrideUnits === "string" &&
+                /^\d+$/.test(item.overrideUnits))
+            ) ||
+            !(
+              item.overrideReason === null ||
+              typeof item.overrideReason === "string"
+            )
+          )
+            throw new ReviewRefusal("unexpected", "read");
+          overrides.push({
+            id: item.id,
+            subjectRef: item.subjectRef,
+            overrideUnits: item.overrideUnits,
+            overrideReason: item.overrideReason,
+          });
+        }
+        return { overrides, readId: crypto.randomUUID() };
+      } catch (error) {
+        throw safeReviewError(error, "read");
+      }
     },
     staleTime: 30_000,
     retry: false,
+    refetchOnMount: "always",
   });
-
-  const overridesByRef = useMemo(() => {
-    const m = new Map<string, ReviewSubjectOverrideView>();
-    if (data) {
-      for (const o of data) {
-        m.set(o.subjectRef, o);
-      }
-    }
-    return m;
-  }, [data]);
-
-  const upsertMutation = useMutation({
-    mutationFn: async (params: {
-      subjectRef: string;
-      overrideUnits: string;
-      reason?: string | undefined;
+  const mutation = useMutation({
+    mutationFn: async ({
+      epochId,
+      submission,
+    }: {
+      epochId: string | null;
+      submission: OverrideSubmission;
     }) => {
-      const res = await client.request(client.endpoints.overrides(epochId), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          overrides: [
-            {
-              subjectRef: params.subjectRef,
-              overrideUnits: params.overrideUnits,
-              overrideReason: params.reason ?? null,
-            },
-          ],
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(`Failed to save override: ${body}`);
+      if (epochId === null)
+        throw new ReviewRefusal("not_found", submission.kind);
+      try {
+        const res = await client.request(client.endpoints.overrides(epochId), {
+          method: submission.kind === "save" ? "PATCH" : "DELETE",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(
+            submission.kind === "save"
+              ? {
+                  overrides: [
+                    {
+                      subjectRef: submission.subjectRef,
+                      overrideUnits: submission.units,
+                      overrideReason: submission.reason,
+                    },
+                  ],
+                }
+              : { subjectRef: submission.subjectRef },
+          ),
+        });
+        if (!res.ok) throw await reviewResponseError(res, submission.kind);
+      } catch (error) {
+        throw safeReviewError(error, submission.kind);
       }
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: qk });
-      // Also invalidate the review epochs query so totals refresh
-      void queryClient.invalidateQueries({
-        queryKey: ["governance"],
-      });
-    },
+    retry: false,
+    networkMode: "always",
   });
-
-  const deleteMutation = useMutation({
-    mutationFn: async (subjectRef: string) => {
-      const res = await client.request(client.endpoints.overrides(epochId), {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ subjectRef }),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(`Failed to delete override: ${body}`);
-      }
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: qk });
-      void queryClient.invalidateQueries({
-        queryKey: ["governance"],
-      });
-    },
-  });
-
-  const saveOverride = useCallback(
-    async (subjectRef: string, overrideUnits: string, reason?: string) => {
-      await upsertMutation.mutateAsync({ subjectRef, overrideUnits, reason });
-    },
-    [upsertMutation.mutateAsync]
+  const overridesByRef = useMemo(
+    () => new Map(query.data?.overrides.map((o) => [o.subjectRef, o])),
+    [query.data],
   );
-
-  const removeOverride = useCallback(
-    async (subjectRef: string) => {
-      await deleteMutation.mutateAsync(subjectRef);
-    },
-    [deleteMutation.mutateAsync]
-  );
-
   return {
+    ...query,
+    queryKey: qk,
     overridesByRef,
-    isLoading,
-    error,
-    retry: () => {
-      void refetch();
-    },
-    saveOverride,
-    removeOverride,
-    isSaving: upsertMutation.isPending || deleteMutation.isPending,
+    submit: (submission: OverrideSubmission) =>
+      mutation.mutateAsync({ epochId, submission }),
+    isSaving: mutation.isPending,
   };
 }

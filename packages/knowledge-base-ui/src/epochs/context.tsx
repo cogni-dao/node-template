@@ -2,13 +2,19 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 "use client";
+import { useQueryClient } from "@tanstack/react-query";
 /** Node-owned transport, URL state and wallet IO. Shared controls never choose an auth identity or endpoint. */
 import {
-  createContext,
-  useContext,
-  useState,
-  type ReactNode,
   type ComponentType,
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
 } from "react";
 import type { Abi } from "viem";
 import type { SignDataResponse } from "./hooks/useSignEpoch";
@@ -40,10 +46,12 @@ export type EpochWallet = Pick<
   readonly getChainName: (chainId: number) => string;
   readonly getTransactionExplorerUrl: (
     chainId: number,
-    hash: string
+    hash: string,
   ) => string | null;
 };
 export interface EpochsClient {
+  /** Opaque host generation. Rotate on principal, node, authorization or endpoint changes. Never a credential or identity. */
+  readonly dataScope: string;
   readonly request: (url: string, init?: RequestInit) => Promise<Response>;
   readonly endpoints: EpochEndpoints;
   readonly wallet: EpochWallet;
@@ -56,12 +64,14 @@ export interface EpochNavigationState {
   readonly contributorPages?: Readonly<Record<string, number>>;
 }
 interface EpochContextValue {
+  readonly queryKeyPrefix: readonly string[];
+  readonly isCurrentScope: () => boolean;
   readonly client: EpochsClient;
   readonly state: EpochNavigationState;
   readonly setState: (state: EpochNavigationState) => void;
 }
 const EpochContext = createContext<EpochContextValue | null>(null);
-export function EpochsProvider({
+function EpochScope({
   client,
   state,
   onStateChange,
@@ -72,6 +82,42 @@ export function EpochsProvider({
   readonly onStateChange?: (state: EpochNavigationState) => void;
   readonly children: ReactNode;
 }) {
+  const queryClient = useQueryClient();
+  const id = useId();
+  const lifetime = useRef(new AbortController());
+  const queryKeyPrefix = useMemo(() => ["governance", "epoch-scope", id], [id]);
+  useLayoutEffect(() => {
+    // Effect replay in StrictMode must create a live boundary before query effects.
+    if (lifetime.current.signal.aborted)
+      lifetime.current = new AbortController();
+    return () => {
+      lifetime.current.abort();
+      void queryClient.cancelQueries({ queryKey: queryKeyPrefix });
+      queryClient.removeQueries({ queryKey: queryKeyPrefix });
+    };
+  }, [queryClient, queryKeyPrefix]);
+  const scopedClient = useMemo<EpochsClient>(
+    () => ({
+      ...client,
+      request: async (url, init) => {
+        const boundary = lifetime.current;
+        boundary.signal.throwIfAborted();
+        const response = await client.request(url, {
+          ...init,
+          signal: init?.signal
+            ? AbortSignal.any([boundary.signal, init.signal])
+            : boundary.signal,
+        });
+        boundary.signal.throwIfAborted();
+        return response;
+      },
+    }),
+    [client, lifetime],
+  );
+  const isCurrentScope = useCallback(
+    () => !lifetime.current.signal.aborted,
+    [],
+  );
   const [localState, setLocalState] = useState<EpochNavigationState>({
     historyOffset: 0,
     selectedEpochId: null,
@@ -79,7 +125,9 @@ export function EpochsProvider({
   return (
     <EpochContext.Provider
       value={{
-        client,
+        client: scopedClient,
+        queryKeyPrefix,
+        isCurrentScope,
         state: state ?? localState,
         setState: onStateChange ?? setLocalState,
       }}
@@ -87,6 +135,10 @@ export function EpochsProvider({
       {children}
     </EpochContext.Provider>
   );
+}
+/** Shared local state and query lifetime end at the host's explicit data-scope boundary. */
+export function EpochsProvider(props: Parameters<typeof EpochScope>[0]) {
+  return <EpochScope key={props.client.dataScope} {...props} />;
 }
 export function useEpochContext(): EpochContextValue {
   const context = useContext(EpochContext);
@@ -96,7 +148,7 @@ export function useEpochContext(): EpochContextValue {
 }
 export function withEpochQuery(
   url: string,
-  params: Record<string, string | number>
+  params: Record<string, string | number>,
 ) {
   return `${url}${url.includes("?") ? "&" : "?"}${new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]))}`;
 }

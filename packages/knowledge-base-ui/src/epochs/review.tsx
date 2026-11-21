@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/knowledge-base-ui/epochs/review`
- * Purpose: Single admin workspace for opening, finalizing, and publishing the oldest unfinished epoch work.
+ * Purpose: Helps a human decide whether verified epoch weights are ready to sign and finalize.
  * Scope: Composes existing governance hooks and actions. Does not perform server-side logic or construct transactions.
  * Invariants: OLDEST_FIRST, ONE_PRIMARY_ACTION, PINNED_APPROVERS_CAN_FINISH, WRITE_ROUTES_APPROVER_GATED.
  * Side-effects: IO (via existing review, finalize, and publish hooks)
@@ -26,19 +26,7 @@ import {
   X,
 } from "lucide-react";
 import type { ReactElement } from "react";
-import { useCallback, useMemo, useState } from "react";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-  Badge,
-  Button,
-  Input,
-  type Phase,
-  PhaseList,
-  TableCell,
-  TableRow,
-} from "./ui/index";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   receiptTitle,
   TYPE_ICONS,
@@ -55,12 +43,26 @@ import {
 } from "./hooks/useFinishEpochWorkspace";
 import { useOpenEpochReview } from "./hooks/useOpenEpochReview";
 import {
-  type ReviewSubjectOverrideView,
-  useReviewSubjectOverrides,
-} from "./hooks/useReviewSubjectOverrides";
+  type ReviewDraft,
+  type ReviewSession,
+  useReviewSession,
+} from "./hooks/useReviewSession";
+import type { ReviewSubjectOverrideView } from "./hooks/useReviewSubjectOverrides";
 import { useSignEpoch } from "./hooks/useSignEpoch";
 import { applyOverridesToEpochView } from "./lib/compose-epoch";
 import type { EpochContributor, EpochView, IngestionReceipt } from "./types";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Badge,
+  Button,
+  Input,
+  type Phase,
+  PhaseList,
+  TableCell,
+  TableRow,
+} from "./ui/index";
 
 interface ReviewViewProps {
   readonly walletAddress: string | null;
@@ -71,7 +73,7 @@ interface ReviewViewProps {
 function workflowPhases(
   selection: FinishEpochSelection | null,
   lifecycleUnavailable: boolean,
-  recentlyPublished: boolean
+  recentlyPublished: boolean,
 ): readonly Phase[] {
   if (recentlyPublished) {
     return [
@@ -127,21 +129,34 @@ export function ReviewView({
   isNodeAdmin,
   operatorSetupUrl,
 }: ReviewViewProps): ReactElement {
-  const { data, isLoading, error } = useFinishEpochWorkspace();
+  const workspace = useFinishEpochWorkspace();
+  const lastUsable = useRef(workspace.data);
+  if (workspace.data && !workspace.data.lifecycleUnavailable)
+    lastUsable.current = workspace.data;
+  const data = workspace.data?.lifecycleUnavailable
+    ? (lastUsable.current ?? workspace.data)
+    : workspace.data;
+  const { isLoading, error } = workspace;
+  const session = useReviewSession(
+    data?.selection?.kind === "finalize" ? data.selection.epoch.id : null,
+  );
   const openReview = useOpenEpochReview();
   const [publishedExplorerUrl, setPublishedExplorerUrl] = useState<
     string | null
   >(null);
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="border-destructive bg-destructive/10 rounded-lg border p-6">
         <h2 className="text-destructive text-lg font-semibold">
           Error loading review data
         </h2>
         <p className="text-muted-foreground text-sm">
-          {error instanceof Error ? error.message : "Unknown error"}
+          Could not verify current review data.
         </p>
+        <Button onClick={() => void workspace.refetch()}>
+          Retry review data
+        </Button>
       </div>
     );
   }
@@ -165,7 +180,7 @@ export function ReviewView({
     : false;
   const period = selection
     ? `${new Date(selection.epoch.periodStart).toLocaleDateString()} — ${new Date(
-        selection.epoch.periodEnd
+        selection.epoch.periodEnd,
       ).toLocaleDateString()}`
     : null;
 
@@ -178,6 +193,20 @@ export function ReviewView({
         </p>
       </header>
 
+      {(error || workspace.data?.lifecycleUnavailable) && (
+        <Alert role="alert">
+          <AlertTitle>Could not verify current review data</AlertTitle>
+          <AlertDescription>
+            Cached values and your changes are kept. Refresh current values
+            before acting.
+          </AlertDescription>
+          {session.epochId === null && (
+            <Button onClick={() => void workspace.refetch()}>
+              Retry review data
+            </Button>
+          )}
+        </Alert>
+      )}
       <section
         aria-labelledby="finish-progress-title"
         aria-live="polite"
@@ -195,7 +224,7 @@ export function ReviewView({
           phases={workflowPhases(
             selection,
             lifecycleUnavailable,
-            publishedExplorerUrl !== null
+            publishedExplorerUrl !== null,
           )}
         />
       </section>
@@ -248,9 +277,21 @@ export function ReviewView({
                   status="open"
                   reviewReady
                   isNodeAdmin
-                  isPending={openReview.isPending}
+                  isPending={
+                    openReview.isPending ||
+                    workspace.isFetching ||
+                    !!error ||
+                    !!workspace.data?.lifecycleUnavailable
+                  }
                   error={openReview.error}
-                  onOpen={() => openReview.mutate(selection.epoch.id)}
+                  onOpen={() => {
+                    if (
+                      !workspace.isFetching &&
+                      !error &&
+                      !workspace.data?.lifecycleUnavailable
+                    )
+                      openReview.mutate(selection.epoch.id);
+                  }}
                   onContinue={() => undefined}
                 />
               ) : null}
@@ -259,7 +300,11 @@ export function ReviewView({
 
           {selection.kind === "finalize" && epochView ? (
             canAct ? (
-              <ReviewEpochSection epoch={epochView} />
+              <ReviewEpochSection
+                key={epochView.id}
+                epoch={epochView}
+                session={session}
+              />
             ) : (
               <EpochDetail epoch={epochView} />
             )
@@ -313,21 +358,24 @@ function LockedActionNotice({
 
 function ReviewEpochSection({
   epoch,
+  session,
 }: {
   readonly epoch: EpochView;
+  readonly session: ReviewSession;
 }): ReactElement {
   const { state, sign, reset } = useSignEpoch(epoch.id);
-  const overrides = useReviewSubjectOverrides(epoch.id);
+  const { overrides } = session;
 
   // Recompute contributor sums with overrides applied
   const adjustedEpoch = useMemo(
     () => applyOverridesToEpochView(epoch, overrides.overridesByRef),
-    [epoch, overrides.overridesByRef]
+    [epoch, overrides.overridesByRef],
   );
 
   const handleSign = useCallback(() => {
-    void sign();
-  }, [sign]);
+    if (!session.canSign() || !session.beginSigning()) return;
+    void sign().finally(session.endSigning);
+  }, [sign, session]);
 
   const renderExpandedRows = useCallback(
     (contributor: EpochContributor): ReactElement[] | null => {
@@ -337,37 +385,60 @@ function ReviewEpochSection({
           key={receipt.receiptId}
           receipt={receipt}
           override={overrides.overridesByRef.get(receipt.receiptId) ?? null}
-          onSave={overrides.saveOverride}
-          onRemove={overrides.removeOverride}
-          isSaving={overrides.isSaving}
+          draft={session.drafts[receipt.receiptId] ?? null}
+          onStart={() => session.startDraft(receipt.receiptId)}
+          onChange={(patch) => session.changeDraft(receipt.receiptId, patch)}
+          onCancel={() => session.cancelDraft(receipt.receiptId)}
+          onSave={() => session.submit(receipt.receiptId, "save")}
+          onRemove={() => session.submit(receipt.receiptId, "reset")}
+          isSaving={session.writesDisabled}
         />
       ));
     },
-    [overrides]
+    [overrides, session],
   );
 
   const activeOverrideCount = overrides.overridesByRef.size;
 
-  if (overrides.isLoading || overrides.error) {
-    return (
-      <Alert role={overrides.error ? "alert" : "status"}>
-        <AlertTitle>
-          {overrides.error
-            ? "Could not load weight overrides"
-            : "Loading weight overrides…"}
-        </AlertTitle>
-        <AlertDescription>
-          Review weights cannot be verified until overrides load.
-          {overrides.error && (
-            <Button onClick={overrides.retry}>Retry overrides</Button>
-          )}
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
   return (
     <div className="space-y-4">
+      {!session.ready && (
+        <Alert role={session.checking ? "status" : "alert"}>
+          <AlertTitle>
+            {session.marker?.status === "writing"
+              ? "Saving weight…"
+              : session.marker?.accepted
+                ? session.checking
+                  ? "Saved. Checking current values…"
+                  : "Saved. Could not verify current values."
+                : session.marker
+                  ? "The write result is unknown."
+                  : overrides.error
+                    ? "Could not load weight overrides"
+                    : session.checking
+                      ? "Checking current values…"
+                      : "Review values need verification"}
+          </AlertTitle>
+          <AlertDescription>
+            {session.notice?.status ? `HTTP ${session.notice.status}. ` : ""}
+            {session.notice?.message ??
+              "Weights and complete totals must both be verified before acting."}
+          </AlertDescription>
+          {!session.checking && session.marker?.status !== "writing" && (
+            <Button
+              disabled={session.retryBlocked}
+              onClick={() => void session.refresh()}
+            >
+              Retry refresh
+            </Button>
+          )}
+          {session.marker?.status === "conflict" && (
+            <Button onClick={session.acknowledgeConflict}>
+              Review current values
+            </Button>
+          )}
+        </Alert>
+      )}
       {activeOverrideCount > 0 && (
         <div className="border-warning/30 bg-warning/5 flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
           <Pencil className="text-warning h-3.5 w-3.5" />
@@ -381,14 +452,16 @@ function ReviewEpochSection({
         </div>
       )}
 
-      <EpochDetail
-        epoch={adjustedEpoch}
-        renderExpandedRows={renderExpandedRows}
-      />
+      {overrides.data && (
+        <EpochDetail
+          epoch={adjustedEpoch}
+          renderExpandedRows={renderExpandedRows}
+        />
+      )}
 
       <div className="bg-card flex flex-wrap items-center gap-3 rounded-lg border p-4">
         {state.phase === "IDLE" && (
-          <Button onClick={handleSign} disabled={overrides.isSaving}>
+          <Button onClick={handleSign} disabled={!session.ready}>
             <FileSignature className="mr-2 h-4 w-4" />
             Sign & Finalize
           </Button>
@@ -406,12 +479,12 @@ function ReviewEpochSection({
         {state.phase === "SUCCESS" && (
           <div className="text-success flex items-center gap-2 text-sm">
             <CheckCircle2 className="h-4 w-4" />
-            <span role="status">
+            <output>
               Epoch finalized. Statement {state.result?.statementId}.
               {state.result?.cumulativeDistribution
                 ? " Settlement ready to publish."
                 : " No distribution to publish."}
-            </span>
+            </output>
           </div>
         )}
 
@@ -438,60 +511,34 @@ function ReviewEpochSection({
 function ReviewReceiptRow({
   receipt,
   override,
+  draft,
+  onStart,
+  onChange,
+  onCancel,
   onSave,
   onRemove,
   isSaving,
 }: {
   readonly receipt: IngestionReceipt;
   readonly override: ReviewSubjectOverrideView | null;
-  readonly onSave: (
-    subjectRef: string,
-    overrideUnits: string,
-    reason?: string
-  ) => Promise<void>;
-  readonly onRemove: (subjectRef: string) => Promise<void>;
+  readonly draft: ReviewDraft | null;
+  readonly onStart: () => void;
+  readonly onChange: (
+    patch: Partial<Pick<ReviewDraft, "units" | "reason">>,
+  ) => void;
+  readonly onCancel: () => void;
+  readonly onSave: () => Promise<unknown>;
+  readonly onRemove: () => Promise<unknown>;
   readonly isSaving: boolean;
 }): ReactElement {
-  const [isEditing, setIsEditing] = useState(false);
-  const [writeError, setWriteError] = useState<"save" | "reset" | null>(null);
-  const [editUnits, setEditUnits] = useState(override?.overrideUnits ?? "");
-  const [editReason, setEditReason] = useState(override?.overrideReason ?? "");
-
-  const handleStartEdit = useCallback(() => {
-    setEditUnits(override?.overrideUnits ?? "");
-    setEditReason(override?.overrideReason ?? "");
-    setWriteError(null);
-    setIsEditing(true);
-  }, [override]);
-
-  const handleCancel = useCallback(() => {
-    setWriteError(null);
-    setIsEditing(false);
-  }, []);
-
-  const handleSave = useCallback(async () => {
-    if (!editUnits.trim() || !/^\d+$/.test(editUnits.trim())) return;
-    setWriteError(null);
-    try {
-      await onSave(
-        receipt.receiptId,
-        editUnits.trim(),
-        editReason.trim() || undefined
-      );
-      setIsEditing(false);
-    } catch {
-      setWriteError("save");
-    }
-  }, [receipt.receiptId, editUnits, editReason, onSave]);
-
-  const handleRemove = useCallback(async () => {
-    setWriteError(null);
-    try {
-      await onRemove(receipt.receiptId);
-    } catch {
-      setWriteError("reset");
-    }
-  }, [receipt.receiptId, onRemove]);
+  const isEditing = draft?.editing ?? false;
+  const editUnits = draft?.units ?? "";
+  const editReason = draft?.reason ?? "";
+  const writeError = draft?.refusal ?? null;
+  const handleStartEdit = onStart;
+  const handleCancel = onCancel;
+  const handleSave = onSave;
+  const handleRemove = onRemove;
 
   const hasOverride = override !== null;
   const Icon = TYPE_ICONS[receipt.eventType] ?? Pin;
@@ -504,9 +551,10 @@ function ReviewReceiptRow({
       <TableRow className="bg-primary/5 hover:bg-primary/5">
         <TableCell colSpan={6} className="p-2">
           <div className="space-y-2">
-            {writeError === "save" && (
+            {writeError && (
               <p role="alert">
-                Could not save weight. Your changes are kept. Retry save.
+                {writeError.status ? `HTTP ${writeError.status}. ` : ""}
+                {writeError.message}
               </p>
             )}
             <div className="flex min-w-0 items-center gap-2 text-sm">
@@ -538,7 +586,7 @@ function ReviewReceiptRow({
                   inputMode="numeric"
                   pattern="[0-9]*"
                   value={editUnits}
-                  onChange={(e) => setEditUnits(e.target.value)}
+                  onChange={(e) => onChange({ units: e.target.value })}
                   onClick={(e) => e.stopPropagation()}
                   placeholder="e.g. 500"
                 />
@@ -554,7 +602,7 @@ function ReviewReceiptRow({
                   id={`override-reason-${receipt.receiptId}`}
                   type="text"
                   value={editReason}
-                  onChange={(e) => setEditReason(e.target.value)}
+                  onChange={(e) => onChange({ reason: e.target.value })}
                   onClick={(e) => e.stopPropagation()}
                   placeholder="e.g. trivial fix"
                 />
@@ -569,12 +617,14 @@ function ReviewReceiptRow({
                 }}
                 disabled={
                   isSaving ||
+                  (!!draft?.refusal &&
+                    draft.refusal.category !== "throttled") ||
                   !editUnits.trim() ||
                   !/^\d+$/.test(editUnits.trim())
                 }
               >
                 <Save className="mr-1 h-3 w-3" />
-                {writeError === "save" ? "Retry save" : "Save"}
+                {writeError?.category === "throttled" ? "Retry save" : "Save"}
               </Button>
               <Button
                 size="sm"
@@ -648,9 +698,10 @@ function ReviewReceiptRow({
       <TableCell className="text-right" />
       {/* Score column — includes edit/reset buttons */}
       <TableCell className="text-right">
-        {writeError === "reset" && (
+        {writeError && (
           <p role="alert">
-            Could not reset weight. The override is kept. Retry reset.
+            {writeError.status ? `HTTP ${writeError.status}. ` : ""}
+            {writeError.message}
           </p>
         )}
         <div className="flex items-center justify-end gap-2">
@@ -686,11 +737,7 @@ function ReviewReceiptRow({
                 size="sm"
                 variant="ghost"
                 className="text-muted-foreground hover:text-destructive min-h-11 min-w-11"
-                aria-label={
-                  writeError === "reset"
-                    ? "Retry reset"
-                    : "Reset to original weight"
-                }
+                aria-label="Reset to original weight"
                 onClick={(e) => {
                   e.stopPropagation();
                   void handleRemove();
@@ -699,7 +746,6 @@ function ReviewReceiptRow({
                 title="Reset to original"
               >
                 <RotateCcw className="h-3 w-3" />
-                {writeError === "reset" && "Retry reset"}
               </Button>
             )}
           </div>

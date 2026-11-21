@@ -13,9 +13,8 @@
 
 "use client";
 
-import { useEpochContext, type EpochsClient } from "../context";
-
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { type EpochsClient, useEpochContext } from "../context";
 
 interface ReviewEpochResponse {
   readonly epoch: {
@@ -26,7 +25,7 @@ interface ReviewEpochResponse {
 
 async function openEpochReview(
   client: EpochsClient,
-  epochId: string
+  epochId: string,
 ): Promise<ReviewEpochResponse> {
   const response = await client.request(client.endpoints.review(epochId), {
     method: "POST",
@@ -38,7 +37,7 @@ async function openEpochReview(
       readonly error?: string;
     } | null;
     throw new Error(
-      body?.error ?? `Unable to open review (HTTP ${response.status})`
+      body?.error ?? `Unable to open review (HTTP ${response.status})`,
     );
   }
 
@@ -46,13 +45,13 @@ async function openEpochReview(
 }
 
 export function useOpenEpochReview() {
-  const { client } = useEpochContext();
+  const { client, queryKeyPrefix } = useEpochContext();
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (epochId: string) => openEpochReview(client, epochId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["governance"] });
+      await queryClient.invalidateQueries({ queryKey: queryKeyPrefix });
     },
   });
 }

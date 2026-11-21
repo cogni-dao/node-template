@@ -13,10 +13,9 @@
 
 "use client";
 
-import { useEpochContext } from "../context";
-
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useEpochContext } from "../context";
 
 const DEFAULT_COOLDOWN_SECONDS = 300;
 
@@ -44,7 +43,7 @@ function retryDelay(body: ErrorResponse): number {
 }
 
 export function useCollectEpoch() {
-  const { client } = useEpochContext();
+  const { client, queryKeyPrefix } = useEpochContext();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -87,11 +86,11 @@ export function useCollectEpoch() {
       }
 
       await queryClient.refetchQueries({
-        queryKey: ["governance"],
+        queryKey: queryKeyPrefix,
         type: "active",
       });
       setSuccessMessage(
-        "Sync started. Epoch data refreshed; new contributions may take a moment to appear."
+        "Sync started. Epoch data refreshed; new contributions may take a moment to appear.",
       );
       setCooldownSeconds(DEFAULT_COOLDOWN_SECONDS);
     } catch (cause) {
@@ -100,7 +99,7 @@ export function useCollectEpoch() {
       requestInFlight.current = false;
       setLoading(false);
     }
-  }, [cooldownSeconds, queryClient, client]);
+  }, [cooldownSeconds, queryClient, client, queryKeyPrefix]);
 
   return {
     loading,

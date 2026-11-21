@@ -13,12 +13,11 @@
 
 "use client";
 
-import { useEpochContext, type EpochsClient } from "../context";
-
 import type { FinalizeEpochOutput } from "@cogni/attribution-ledger/contracts";
-
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useReducer } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
+import { type EpochsClient, useEpochContext } from "../context";
+import { ReviewRefusal, reviewResponseError } from "../review-errors";
 
 // Types mirrored from contracts (features must_not_import contracts layer)
 
@@ -137,7 +136,7 @@ function derivePublicState(internal: InternalState): SignEpochState {
 
 async function fetchSignData(
   client: EpochsClient,
-  epochId: string
+  epochId: string,
 ): Promise<SignDataResponse> {
   const res = await client.request(client.endpoints.signData(epochId), {
     method: "GET",
@@ -146,8 +145,7 @@ async function fetchSignData(
     cache: "no-store",
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${body}`);
+    throw await reviewResponseError(res, "read");
   }
   return res.json() as Promise<SignDataResponse>;
 }
@@ -159,7 +157,7 @@ async function fetchSignData(
  */
 async function sealReviewSnapshot(
   client: EpochsClient,
-  epochId: string
+  epochId: string,
 ): Promise<void> {
   const res = await client.request(client.endpoints.review(epochId), {
     method: "POST",
@@ -167,15 +165,14 @@ async function sealReviewSnapshot(
     cache: "no-store",
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${body}`);
+    throw await reviewResponseError(res, "save");
   }
 }
 
 async function postFinalize(
   client: EpochsClient,
   epochId: string,
-  signature: string
+  signature: string,
 ): Promise<FinalizeResponse> {
   const res = await client.request(client.endpoints.finalize(epochId), {
     method: "POST",
@@ -184,8 +181,7 @@ async function postFinalize(
     body: JSON.stringify({ signature }),
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${body}`);
+    throw await reviewResponseError(res, "save");
   }
   return res.json() as Promise<FinalizeResponse>;
 }
@@ -200,7 +196,18 @@ export interface UseSignEpochReturn {
 
 export function useSignEpoch(epochId: string): UseSignEpochReturn {
   const [internal, dispatch] = useReducer(reducer, { phase: "IDLE" });
-  const { client } = useEpochContext();
+  const { client, queryKeyPrefix, isCurrentScope } = useEpochContext();
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, [epochId]);
+  const assertActive = useCallback(() => {
+    if (!active.current || !isCurrentScope())
+      throw new Error("Review session ended");
+  }, [isCurrentScope]);
   const signTypedDataAsync = client.signTypedData;
   const queryClient = useQueryClient();
 
@@ -211,9 +218,11 @@ export function useSignEpoch(epochId: string): UseSignEpochReturn {
       // 1. Idempotently seal/repair the unsigned review snapshot.
       dispatch({ type: "START_FETCH" });
       await sealReviewSnapshot(client, epochId);
+      assertActive();
 
       // 2. Fetch EIP-712 typed data from server.
       const typedData = await fetchSignData(client, epochId);
+      assertActive();
 
       // 3. Request wallet signature
       dispatch({ type: "DATA_FETCHED" });
@@ -226,17 +235,33 @@ export function useSignEpoch(epochId: string): UseSignEpochReturn {
         message: typedData.message,
       });
 
+      assertActive();
+
       // 4. POST signature to finalize endpoint
       dispatch({ type: "SIGNATURE_RECEIVED" });
       const result = await postFinalize(client, epochId, signature);
+      assertActive();
 
       dispatch({ type: "FINALIZE_SUCCESS", result });
-      void queryClient.invalidateQueries({ queryKey: ["governance"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeyPrefix });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Signing failed";
+      if (!active.current || !isCurrentScope()) return;
+      const message =
+        err instanceof ReviewRefusal
+          ? err.message
+          : "Signing was not completed. Check your wallet and refresh current values.";
       dispatch({ type: "FAIL", message });
     }
-  }, [internal.phase, epochId, signTypedDataAsync, queryClient, client]);
+  }, [
+    internal.phase,
+    epochId,
+    signTypedDataAsync,
+    queryClient,
+    client,
+    queryKeyPrefix,
+    isCurrentScope,
+    assertActive,
+  ]);
 
   const reset = useCallback(() => {
     dispatch({ type: "RESET" });
