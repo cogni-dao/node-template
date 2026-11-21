@@ -186,6 +186,96 @@ describe("source qualification against six current consumers", () => {
 		manifests.map(({ repo }) => ({ repo, manifest: current() }));
 	const assess = (rows: ReturnType<typeof cohort>) =>
 		assessFleetTrainLag("0.24.0", MEMBERS, rows, publisher);
+	it.each(["dependencies", "devDependencies"] as const)("preserves every member refusal across native authority and traversal families in %s", (section) => {
+		for (const member of MEMBERS) {
+			for (const slashes of ["", "/", "//", "///", "////"]) {
+				for (const { scheme, authority } of ["https", "http"].flatMap((scheme) => ["github.com", "github.com:bad", "[invalid", "foreign.example", "user@github.com"].map((authority) => ({ scheme, authority })))) {
+					for (const suffix of ["", "%FF", "%zz"]) {
+						for (const tail of ["/x.tgz", "/../other", "/%2e%2E/other", "/../other/x.tgz"]) {
+							const tag = `%${member.tagPrefix.charCodeAt(0).toString(16)}${member.tagPrefix.slice(1).replace("-v", "%2dv")}0.1.0${suffix}`;
+							const raw = `${scheme}:${slashes}${authority}/${publisher}/%72eleases/%64ownload/${tag}${tail}`;
+							for (const pin of [raw, raw.replace("%72eleases/%64ownload", "releases/download").replace(tag, `${member.tagPrefix}0.1.0${suffix}`), ` \t${raw.replace(/\//g, "\\").replace("http", "ht\ttp")}\r\n`]) {
+								const rows = cohort();
+								const first = rows[0] as (typeof rows)[number];
+								first.manifest[section]["arbitrary-legacy"] = pin;
+								const trusted = scheme === "https" && authority === "github.com";
+								const reasons = trusted && tail === "/../other/x.tgz" ? []
+									: [trusted && tail === "/x.tgz" && !suffix ? "behind:arbitrary-legacy@0.1.0" : "invalid:arbitrary-legacy@pin"];
+								expect(assess(rows), pin).toEqual(reasons.length ? [{ repo: first.repo, reasons }] : []);
+							}
+						}
+					}
+				}
+			}
+		}
+	});
+
+	it.each(["dependencies", "devDependencies"] as const)("uses the trusted actual target while retaining unrelated and private controls in %s", (section) => {
+		for (const member of MEMBERS) {
+			const raw = `https://github.com/${publisher}/releases/download/${member.tagPrefix}0.1.0%FF/../`;
+			for (const target of [...MEMBERS.map((m) => `${m.tagPrefix}0.24.0/x.tgz`), "unrelated-v0.1.0/x.tgz"]) {
+				const rows = cohort();
+				const first = rows[0] as (typeof rows)[number];
+				first.manifest[section]["arbitrary-legacy"] = raw + target;
+				first.manifest[section]["private-wrapper"] = "workspace:@cogni/metrics@*";
+				expect(assess(rows), target).toEqual([]);
+			}
+			for (const authority of ["github.com", "github.com:bad", "[invalid"]) {
+				const rows = cohort();
+				const first = rows[0] as (typeof rows)[number];
+				first.manifest[section].unrelated = `https:/${authority}/${publisher}/releases/download/unrelated-v0.1.0%FF/../other`;
+				expect(assess(rows), authority).toEqual([]);
+			}
+		}
+	});
+	it.each(["dependencies", "devDependencies"] as const)("uses decoded segment identity throughout Release paths in %s", (section) => {
+		for (const version of ["0.1.0", "0.24.0"]) {
+			const path = `/${publisher}/releases/download/metrics-v${version}/x.tgz`;
+			// Encode each unreserved character independently, across every segment.
+			for (let i = 0; i < path.length; i++) {
+				const char = path[i] as string;
+				if (!/[A-Za-z0-9._-]/.test(char)) continue;
+				const escaped = `${path.slice(0, i)}%${char.charCodeAt(0).toString(16)}${path.slice(i + 1)}`;
+				const rows = cohort();
+				(rows[0] as (typeof rows)[number]).manifest[section]["old-metrics"] = `https://github.com${escaped}`;
+				expect(assess(rows), escaped).toEqual(version === "0.24.0" ? [] : [{ repo: (rows[0] as (typeof rows)[number]).repo, reasons: ["behind:old-metrics@0.1.0"] }]);
+			}
+		}
+	});
+
+	it.each(["dependencies", "devDependencies"] as const)("flags invalid known pins in %s even with a valid alias", (section) => {
+		const member = MEMBERS[0] as (typeof MEMBERS)[number];
+		for (const bad of [url(member, "0.1.8").replace(publisher, "someone/fork"), "not a URL", "workspace:@other/package@*"]) {
+			const rows = cohort();
+			const manifest = (rows[0] as (typeof rows)[number]).manifest;
+			manifest.dependencies["@legacy/current"] = url(member);
+			manifest[section][member.name] = bad;
+			expect(assess(rows)[0]?.reasons.some((reason) => reason.startsWith(`invalid:${member.name}@`))).toBe(true);
+		}
+	});
+
+	it("flags a recognizable foreign legacy alias while retaining private wrappers", () => {
+		const rows = cohort();
+		const manifest = (rows[0] as (typeof rows)[number]).manifest;
+		const member = MEMBERS[0] as (typeof MEMBERS)[number];
+		manifest.devDependencies["@legacy/old"] = url(member, "0.1.8").replace(publisher, "someone/fork");
+		manifest.devDependencies["@cogni/knowledge-store"] = "workspace:*";
+		expect(assess(rows)[0]?.reasons).toEqual(["invalid:@legacy/old@pin"]);
+	});
+
+	it.each(["dependencies", "devDependencies"] as const)("flags untrusted Release-shaped aliases in %s", (section) => {
+		for (const bad of [
+			"https://github.com.evil.test/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+			"http://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+			"https://foreign.example/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+			"https://user@github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+			"https://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0%2Fbad/x.tgz",
+		]) {
+			const rows = cohort();
+			(rows[0] as (typeof rows)[number]).manifest[section]["old-metrics"] = bad;
+			expect(assess(rows)[0]?.reasons).toEqual(["invalid:old-metrics@pin"]);
+		}
+	});
 
 	it("detects each individual fault without private-wrapper false positives", () => {
 		expect(assess(cohort())).toEqual([]);
@@ -305,7 +395,7 @@ describe("source qualification against six current consumers", () => {
 		expect(cancelled).toBe(true);
 	});
 
-	it("enforces the two-train request cap and exact grace boundary", async () => {
+	it("rejects a young train early and preserves the exact grace boundary", async () => {
 		const calls: string[] = [];
 		vi.stubGlobal(
 			"fetch",
@@ -340,7 +430,7 @@ describe("source qualification against six current consumers", () => {
 		expect(sample.evidenceRefs[1]).toContain("train=0.24.0");
 		expect(
 			calls.filter((x) => x.startsWith("https://api.github.com")),
-		).toHaveLength(11);
+		).toHaveLength(7);
 		expect(
 			calls.filter((x) => x.startsWith("https://raw.githubusercontent.com")),
 		).toHaveLength(6);
@@ -498,20 +588,85 @@ describe("source qualification against six current consumers", () => {
 	});
 
 
-	it("never exceeds eleven REST requests for larger admitted member sets", async () => {
+	it.each([false, true])("bounds ten-member discovery, including exact REST11 completion (first rejected: %s)", async (firstRejected) => {
 		const extended = [...MEMBERS, ...Array.from({ length: 5 }, (_, n) => ({ name: `@example/member-${n}`, tagPrefix: `member-${n}-v` }))];
 		const calls: string[] = [];
 		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
 			calls.push(address);
 			if (address.includes("matching-refs")) return response([{ ref: "refs/tags/train-v0.25.0" }, { ref: "refs/tags/train-v0.24.0" }]);
 			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			if (firstRejected && tag?.endsWith("0.25.0")) return response({}, 404);
 			return tag ? response(release(decodeURIComponent(tag), "2026-11-20T00:00:00Z")) : response(current());
 		}));
 		const sample = await readFleetTrainLag({ ...params, members: extended }, at, new AbortController().signal, budget);
-		expect(sample).toMatchObject({ complete: false });
-		expect(sample.evidenceRefs[0]).toContain("request_budget");
+		expect(sample).toMatchObject({ complete: !firstRejected });
+		if (firstRejected) expect(sample.evidenceRefs[0]).toContain("request_budget");
 		expect(calls.filter((address) => address.startsWith("https://api.github.com"))).toHaveLength(11);
-		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com"))).toHaveLength(0);
+		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com"))).toHaveLength(firstRejected ? 0 : 6);
+	});
+
+	it.each(["missing", "draft", "unpublished", "young"] as const)("rejects a %s member early before trying an older train", async (fault) => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response(["0.24.0", "0.25.0"].map((v) => ({ ref: `refs/tags/train-v${v}` })));
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			if (!tag) return response(current());
+			if (tag.endsWith("0.25.0")) {
+				if (fault === "missing") return response({}, 404);
+				return response({ tag_name: decodeURIComponent(tag), draft: fault === "draft", published_at: fault === "unpublished" ? null : fault === "young" ? "2026-11-21T00:00:00.001Z" : "2026-11-20T00:00:00Z" });
+			}
+			return response(release(decodeURIComponent(tag), "2026-11-21T00:00:00.000Z"));
+		}));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: true, value: 0 });
+		expect(sample.evidenceRefs[1]).toContain("train=0.24.0");
+		expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(7);
+		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(6);
+	});
+
+	it.each([false, true])("allows a fifth-member rejection but never exceeds REST11 (second rejected: %s)", async (secondRejected) => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response(["0.26.0", "0.25.0", "0.24.0"].map((v) => ({ ref: `refs/tags/train-v${v}` })));
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			if (!tag) return response(current());
+			if (tag === "ai-tools-v0.26.0" || (secondRejected && tag === "ai-tools-v0.25.0")) return response({}, 404);
+			return response(release(decodeURIComponent(tag), "2026-11-20T00:00:00Z"));
+		}));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample.complete).toBe(!secondRejected);
+		if (secondRejected) expect(sample.evidenceRefs[0]).toContain("request_budget");
+		else expect(sample.evidenceRefs[1]).toContain("train=0.25.0");
+		expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(11);
+		expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(secondRejected ? 0 : 6);
+	});
+
+	it("visits at most ten candidates within the eleven REST cap", async () => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response(Array.from({ length: 11 }, (_, n) => ({ ref: `refs/tags/train-v0.${24 + n}.0` })));
+			return response({}, 404);
+		}));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+		expect(sample.evidenceRefs[0]).toContain("request_budget");
+		expect(calls).toHaveLength(11);
+		expect(calls.slice(1).map((address) => address.split("/releases/tags/")[1])).toEqual(Array.from({ length: 10 }, (_, n) => `work-items-v0.${34 - n}.0`));
+	});
+
+	it.each(["malformed", 403, 429] as const)("does not skip failed or malformed Release %s to claim an older train", async (fault) => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+			calls.push(address);
+			if (address.includes("matching-refs")) return response(["0.25.0", "0.24.0"].map((v) => ({ ref: `refs/tags/train-v${v}` })));
+			return fault === "malformed" ? response({ tag_name: "wrong", published_at: null }) : response({}, fault);
+		}));
+		const sample = await readFleetTrainLag(params, at, new AbortController().signal, budget);
+		expect(sample).toMatchObject({ complete: false, reason: fault === "malformed" ? "incomplete_or_invalid_source" : "source_failed" });
+		expect(calls).toHaveLength(2);
 	});
 
 });
