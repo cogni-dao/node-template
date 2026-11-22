@@ -301,8 +301,8 @@ export class ResearchReceipts {
 		)
 			this.reasons.add("missing_primary_source");
 		if (
-			!this.guidance.has("knowledge-syntropy-expert") ||
-			!this.guidance.has("mission-loop-expert")
+			!this.guidance.has("knowledge-syntropy-protocol") ||
+			!this.guidance.has("research-mission")
 		)
 			this.reasons.add("missing_guidance");
 		if (!this.goalsObserved) this.reasons.add("missing_goal_context");

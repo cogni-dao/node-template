@@ -566,9 +566,9 @@ describe("native child isolation", () => {
 				calls = [
 					call("goals", "core__goal_list", {}),
 					call("g1", "core__knowledge_read", {
-						id: "knowledge-syntropy-expert",
+						id: "knowledge-syntropy-protocol",
 					}),
-					call("g2", "core__knowledge_read", { id: "mission-loop-expert" }),
+					call("g2", "core__knowledge_read", { id: "research-mission" }),
 					call("w1", "core__web_search", {
 						query: "q",
 						maxResults: 3,
@@ -728,7 +728,7 @@ describe("host evidence and critique binding", () => {
 	it("rejects invented source references and unchanged critical revisions", () => {
 		const receipts = new ResearchReceipts("https://node.example");
 		receipts.observe("core__goal_list", {}, { goals: [] });
-		for (const id of ["knowledge-syntropy-expert", "mission-loop-expert"])
+		for (const id of ["knowledge-syntropy-protocol", "research-mission"])
 			receipts.observe(
 				"core__knowledge_read",
 				{ id },
@@ -837,11 +837,13 @@ describe("host evidence and critique binding", () => {
 });
 
 describe("critic and evidence failures", () => {
-	const setup = () => {
+	const setup = (
+		guides = ["knowledge-syntropy-protocol", "research-mission"],
+	) => {
 		const r = new ResearchReceipts("https://node.example");
 		r.domains.add("strategy");
 		r.observe("core__goal_list", {}, { goals: [] });
-		for (const id of ["knowledge-syntropy-expert", "mission-loop-expert"])
+		for (const id of guides)
 			r.observe(
 				"core__knowledge_read",
 				{ id },
@@ -899,13 +901,83 @@ describe("critic and evidence failures", () => {
 			fingerprint: JSON.parse(assignment ?? "{}").fingerprint as string,
 		};
 	};
+	it.each([
+		{
+			guides: ["knowledge-syntropy-protocol", "research-mission"],
+			expected: "complete",
+		},
+		{ guides: ["knowledge-syntropy-protocol"], expected: "incomplete" },
+		{ guides: ["research-mission"], expected: "incomplete" },
+		{
+			guides: ["knowledge-syntropy-expert", "mission-loop-expert"],
+			expected: "incomplete",
+		},
+	])(
+		"requires both observed scoped guides: $guides",
+		({ guides, expected }) => {
+			const { r, draft, fingerprint } = setup(guides);
+			r.complete(
+				JSON.stringify({
+					fingerprint,
+					explanation: "The evidence was reviewed.",
+					findings: [],
+				}),
+			);
+			const output = r.project(JSON.stringify(draft)).output;
+			expect(output.status).toBe(expected);
+			if (expected === "incomplete")
+				expect(output.reasons).toContain("missing_guidance");
+		},
+	);
+	it.each(["remote", "empty", "list", "mismatch", "claim"])(
+		"does not count %s as a full local guide read",
+		(variant) => {
+			const { r, draft, fingerprint } = setup(["research-mission"]);
+			const id = "knowledge-syntropy-protocol";
+			if (variant === "claim")
+				r.observe(
+					"other_tool",
+					{ id },
+					{
+						mode: "get",
+						entries: [{ id, domain: "meta", content: "guidance" }],
+					},
+				);
+			else
+				r.observe(
+					"core__knowledge_read",
+					{ id },
+					{
+						mode: variant === "list" ? "list" : "get",
+						...(variant === "remote" ? { node: "remote" } : {}),
+						entries: [
+							{
+								id: variant === "mismatch" ? "other" : id,
+								domain: "meta",
+								content: variant === "empty" ? " " : "guidance",
+							},
+						],
+					},
+				);
+			r.complete(
+				JSON.stringify({
+					fingerprint,
+					explanation: "The evidence was reviewed.",
+					findings: [],
+				}),
+			);
+			const output = r.project(JSON.stringify(draft)).output;
+			expect(output.status).toBe("incomplete");
+			expect(output.reasons).toContain("missing_guidance");
+		},
+	);
 	it("retains internal owner evidence without treating it as primary research", () => {
 		const { draft } = setup();
 		const r = new ResearchReceipts("https://node.example");
 		r.observe("core__goal_list", {}, { goals: [] });
 		for (const id of [
-			"knowledge-syntropy-expert",
-			"mission-loop-expert",
+			"knowledge-syntropy-protocol",
+			"research-mission",
 			"owner",
 		])
 			r.observe(
@@ -943,8 +1015,8 @@ describe("critic and evidence failures", () => {
 		const fresh = new ResearchReceipts("https://node.example");
 		fresh.observe("core__goal_list", {}, { goals: [] });
 		for (const id of [
-			"knowledge-syntropy-expert",
-			"mission-loop-expert",
+			"knowledge-syntropy-protocol",
+			"research-mission",
 			"owner",
 		])
 			fresh.observe(
@@ -1040,7 +1112,7 @@ describe("critic and evidence failures", () => {
 		};
 		expect(r.prepare(JSON.stringify(noSource), "no-source")).toBeDefined();
 		expect(r.project(JSON.stringify(noSource)).output.packet).toEqual(noSource);
-		const hubUrl = "https://node.example/knowledge/knowledge-syntropy-expert";
+		const hubUrl = "https://node.example/knowledge/knowledge-syntropy-protocol";
 		const hubOnly = {
 			...partial,
 			sources: [{ url: hubUrl }],
@@ -1320,11 +1392,11 @@ describe("critic and evidence failures", () => {
 			if (kind === "atoms") packet.atoms[0].title = "corrected title";
 			else
 				packet.principles[0].sourceUrls = [
-					"https://node.example/knowledge/mission-loop-expert",
+					"https://node.example/knowledge/research-mission",
 				];
 			if (kind === "principles")
 				packet.sources.push({
-					url: "https://node.example/knowledge/mission-loop-expert",
+					url: "https://node.example/knowledge/research-mission",
 				});
 			expect(
 				r.project(
@@ -1477,9 +1549,9 @@ describe("child recursion bound", () => {
 				calls = [
 					call("goals", "core__goal_list", {}),
 					call("g1", "core__knowledge_read", {
-						id: "knowledge-syntropy-expert",
+						id: "knowledge-syntropy-protocol",
 					}),
-					call("g2", "core__knowledge_read", { id: "mission-loop-expert" }),
+					call("g2", "core__knowledge_read", { id: "research-mission" }),
 					call("web", "core__web_search", {
 						query: "q",
 						includeRawContent: true,
