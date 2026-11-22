@@ -9,14 +9,14 @@
  *   - NO_SECRETS_IN_CONTEXT: Tavily API key resolved from env, never passed to tools
  * Side-effects: none (factory only)
  * Links: Called by bootstrap container; consumed by ai-tools web-search tool.
- *        Uses TAVILY_API_KEY.
+ *        Uses NODE_TAVILY_API_KEY.
  * @internal
  */
 
 import type { WebSearchCapability } from "@cogni/ai-tools";
 
-import { TavilyWebSearchAdapter } from "@/adapters/server";
-import { FakeWebSearchAdapter } from "@/adapters/test";
+import { TavilyWebSearchAdapter } from "@/adapters/server/ai/tavily-web-search.adapter";
+import { FakeWebSearchAdapter } from "@/adapters/test/ai/fake-web-search.adapter";
 import type { ServerEnv } from "@/shared/env";
 
 /**
@@ -26,14 +26,14 @@ import type { ServerEnv } from "@/shared/env";
 export const stubWebSearchCapability: WebSearchCapability = {
   search: async () => {
     throw new Error(
-      "WebSearchCapability not configured. Set TAVILY_API_KEY environment variable."
+      "WebSearchCapability not configured. Set NODE_TAVILY_API_KEY environment variable."
     );
   },
 };
 
 /**
  * Create WebSearchCapability from server environment.
- * Uses TAVILY_API_KEY for Tavily API authentication.
+ * Uses NODE_TAVILY_API_KEY for Tavily API authentication.
  *
  * - APP_ENV=test: FakeWebSearchAdapter
  * - Configured: TavilyWebSearchAdapter (real Tavily API)
@@ -49,7 +49,7 @@ export function createWebSearchCapability(env: ServerEnv): WebSearchCapability {
     return { search: (p) => fake.search(p) };
   }
 
-  const apiKey = env.TAVILY_API_KEY;
+  const apiKey = env.NODE_TAVILY_API_KEY;
 
   // Not configured: stub that throws on use
   if (!apiKey) {
@@ -61,5 +61,13 @@ export function createWebSearchCapability(env: ServerEnv): WebSearchCapability {
     apiKey,
     timeoutMs: 10000,
   });
-  return { search: (p) => adapter.search(p) };
+  return {
+    search: async (p) => {
+      try {
+        return await adapter.search(p);
+      } catch {
+        throw new Error("web_search_unavailable");
+      }
+    },
+  };
 }

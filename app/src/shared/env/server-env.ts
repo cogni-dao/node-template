@@ -233,7 +233,7 @@ export const serverSchema = z.object({
 
   // Tavily Web Search - Optional
   // Required for research graph web search capability
-  TAVILY_API_KEY: optionalString,
+  NODE_TAVILY_API_KEY: optionalString,
 
   // Market Provider: Kalshi - Optional
   // Required for Kalshi market data in poly-brain. Polymarket works without credentials.
