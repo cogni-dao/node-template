@@ -1432,6 +1432,24 @@ describe("critic and evidence failures", () => {
 			).toBe("complete");
 		}
 	});
+	it("spends no evidence budget on re-reading an owner or a source already retained", () => {
+		const r = new ResearchReceipts("https://node.example");
+		const owner = {
+			mode: "get",
+			entries: [{ id: "research-mission", domain: "meta", content: "m".repeat(30000) }],
+		};
+		const search = {
+			results: [
+				{ url: "https://example.org/a", rawContent: "p".repeat(30000), rawContentState: "available" },
+			],
+		};
+		for (let i = 0; i < 4; i++) {
+			r.observe("core__knowledge_read", { id: "research-mission" }, owner);
+			r.observe("core__web_search", {}, search);
+		}
+		expect(r.reasons.has("evidence_limit")).toBe(false);
+		expect(r.evidenceBytes).toBeLessThan(64 * 1024);
+	});
 	it("does not accept oversized or unobserved evidence", () => {
 		const { r, draft } = setup();
 		r.observe(

@@ -111,8 +111,9 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				const problems = receipts.check(answer);
 				if (problems.length) {
 					const stage = critiqued ? "final" : "draft";
-					// No repair turn once collection is exhausted: it could only invent evidence.
-					if (receipts.repaired.has(stage) || exhausted()) return;
+					// Exhausted collection still gets its repair turn: capability calls are refused, so the
+					// researcher can only bind, remove or mark unknown what it already observed.
+					if (receipts.repaired.has(stage)) return;
 					receipts.repaired.add(stage);
 					return {
 						messages: [

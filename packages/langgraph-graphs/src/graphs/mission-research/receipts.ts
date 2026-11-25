@@ -125,6 +125,15 @@ export class ResearchReceipts {
 	taskId?: string;
 	constructor(readonly origin: string) {}
 	observe(name: string, args: unknown, value: unknown) {
+		const input = obj(args);
+		const output = obj(value);
+		// A repeated full read of an owner already retained adds no evidence and spends no budget.
+		if (
+			name === "core__knowledge_read" &&
+			typeof input?.id === "string" &&
+			this.owners.has(input.id)
+		)
+			return;
 		if (
 			size(value) > 48 * 1024 ||
 			// Reserve the entire maximum draft size, even before one is admitted.
@@ -133,8 +142,6 @@ export class ResearchReceipts {
 			this.reasons.add("evidence_limit");
 			return;
 		}
-		const input = obj(args);
-		const output = obj(value);
 		if (!output) return;
 		if (name === "core__goal_list" && Array.isArray(output.goals))
 			this.goalsObserved = true;
@@ -170,6 +177,7 @@ export class ResearchReceipts {
 				const row = obj(item);
 				if (
 					typeof row?.url === "string" &&
+					!this.sources.has(row.url) &&
 					typeof row.rawContent === "string" &&
 					row.rawContent &&
 					["available", "partial"].includes(String(row.rawContentState))
