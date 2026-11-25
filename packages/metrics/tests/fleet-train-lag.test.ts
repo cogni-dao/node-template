@@ -186,6 +186,25 @@ describe("source qualification against six current consumers", () => {
 		manifests.map(({ repo }) => ({ repo, manifest: current() }));
 	const assess = (rows: ReturnType<typeof cohort>) =>
 		assessFleetTrainLag("0.24.0", MEMBERS, rows, publisher);
+	it.each(["dependencies", "devDependencies"] as const)("retains every Release marker despite combined prefix and suffix traversal in %s", (section) => {
+		for (const member of MEMBERS) {
+			for (const authority of ["github.com", "github.com:bad", "foreign.example", "user@github.com", "[invalid"]) {
+				for (const path of [
+					`/${publisher}/tmp/../releases/download/${member.tagPrefix}0.1.0/../other`,
+					`/${publisher}/tmp/%2e%2E/%72eleases/%64ownload/${member.tagPrefix}0.1.0%FF/%2e%2e/unrelated-v1.0.0/p%FF.tgz`,
+					// Both the first and normalized last marker are unrelated. The
+					// intervening member still refuses the untrusted actual target.
+					`/${publisher}/releases/download/unrelated-v1.0.0/tmp/../../releases/download/${member.tagPrefix}0.1.0%C3%28/../unrelated-v1.0.0/p%FF.tgz`,
+				]) {
+					const rows = cohort();
+					const first = rows[0] as (typeof rows)[number];
+					const pin = `https://${authority}${path}`;
+					first.manifest[section]["arbitrary-legacy"] = pin;
+					expect(assess(rows), pin).toEqual([{ repo: first.repo, reasons: ["invalid:arbitrary-legacy@pin"] }]);
+				}
+			}
+		}
+	});
 	it.each(["dependencies", "devDependencies"] as const)("preserves every member refusal across native authority and traversal families in %s", (section) => {
 		for (const member of MEMBERS) {
 			for (const slashes of ["", "/", "//", "///", "////"]) {

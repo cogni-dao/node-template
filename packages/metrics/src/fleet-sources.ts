@@ -75,7 +75,7 @@ function validManifest(value: unknown): boolean {
 
 // URL preserves percent escapes in pathname. Decode each segment once, retaining
 // its boundaries for trust; decoded separators can only identify an invalid pin.
-function releasePathIdentity(pathname: string): { tag: string | undefined; publisher: string | undefined; valid: boolean } {
+function releasePathIdentity(pathname: string): { tag: string | undefined; publisher: string | undefined; valid: boolean; hints: readonly string[] } {
 	let valid = true;
 	const parts = pathname.split("/").map((part) => {
 		try {
@@ -89,8 +89,17 @@ function releasePathIdentity(pathname: string): { tag: string | undefined; publi
 		}
 	});
 	valid = valid && parts.length === 7 && parts.slice(1).every((part) => part && part !== "." && part !== ".." && !/[/\\]/.test(part));
-	const match = /^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)(?:\/|$)/.exec(parts.join("/").replace(/\\/g, "/"));
-	return { tag: match?.[2], publisher: match?.[1], valid: valid && !!match };
+	const decoded = parts.join("/").replace(/\\/g, "/");
+	const match = /^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)(?:\/|$)/.exec(decoded);
+	// Refusals have no publisher-depth requirement. Keep every marker's tag
+	// before native normalization can erase it alongside earlier traversal.
+	const segments = decoded.split("/");
+	const hints: string[] = [];
+	for (let i = 0; i < segments.length - 2; i++) {
+		const tag = segments[i + 2];
+		if (segments[i] === "releases" && segments[i + 1] === "download" && tag) hints.push(tag);
+	}
+	return { tag: match?.[2], publisher: match?.[1], valid: valid && !!match, hints };
 }
 
 // Only the actual normalized target can establish trust. Otherwise preserve all
@@ -124,14 +133,12 @@ function releaseIdentity(raw: string, publisher?: string): { tag: string | undef
 	// owns path normalization. Keep the existing :// recovery for other schemes.
 	const path = /^(?:https?:\/*|[a-z][a-z\d+.-]*:\/\/)[^/?#]*(\/[^?#]*)/i.exec(input)?.[1];
 	const hints = new Set<string>();
-	if (identity?.tag !== undefined) hints.add(identity.tag);
+	for (const hint of identity?.hints ?? []) hints.add(hint);
 	// A fixed dummy authority lets URL normalize the recovered path even when
 	// the manifest authority was invalid. Neither form can establish trust.
 	if (path !== undefined) {
 		const normalized = new URL(`https://release.invalid${path}`).pathname;
-		for (const hint of [releasePathIdentity(normalized).tag, releasePathIdentity(path).tag]) {
-			if (hint !== undefined) hints.add(hint);
-		}
+		for (const hint of [...releasePathIdentity(normalized).hints, ...releasePathIdentity(path).hints]) hints.add(hint);
 	}
 	return { tag: undefined, trusted: false, hints: [...hints] };
 }

@@ -11,7 +11,7 @@ const params = {
 };
 
 describe("public fleet calculator", () => {
-	it.each((["dependencies", "devDependencies"] as const).flatMap((section) => [1, 5].map((size) => ({ section, size }))))("retains member refusals through authority/traversal combinations ($section, $size members)", async ({ section, size }) => {
+	it.each((["dependencies", "devDependencies"] as const).flatMap((section) => [1, 5].map((size) => ({ section, size }))))("retains member refusals through combined prefix/suffix traversal ($section, $size members)", async ({ section, size }) => {
 		const calculator = createFleetTrainLagCalculator();
 		const members = ["metrics", "work-items", "knowledge-store", "knowledge-base-ui", "ai-tools"].slice(0, size).map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));
 		const consumers = Array.from({ length: size === 1 ? 1 : 6 }, (_, i) => ({ repo: `cogni-dao/consumer${i}`, manifestPath: "package.json" }));
@@ -44,6 +44,23 @@ describe("public fleet calculator", () => {
 		};
 		try {
 			await compute();
+			alias = "https://github.com:bad/cogni-dao/node-template/tmp/../releases/download/metrics-v0.1.0/../other";
+			await compute("invalid:legacy-any-name@pin");
+			for (const member of members) {
+				const encodedTag = `%${member.tagPrefix.charCodeAt(0).toString(16)}${member.tagPrefix.slice(1).replace("-v", "%2dv")}0.1.0`;
+				for (const authority of ["github.com", "github.com:bad", "[invalid", "foreign.example", "user@github.com"]) {
+					for (const { path, validTarget } of [
+						{ path: `/cogni-dao/node-template/tmp/../releases/download/${member.tagPrefix}0.1.0/../other`, validTarget: false },
+						{ path: `/%63ogni-dao/node%2dtemplate/tmp/%2e%2E/%72eleases/%64ownload/${encodedTag}%FF/%2e%2e/unrelated-v1.0.0/x.tgz`, validTarget: true },
+						{ path: `/cogni-dao/node-template/tmp/../releases%2fdownload/${encodedTag}%C3%28/../unrelated-v1.0.0/p%FF.tgz`, validTarget: false },
+					]) {
+						const raw = `https://${authority}${path}`;
+						for (alias of [raw, ` \t${raw.replace(/\//g, "\\")}\n`]) {
+							await compute(authority === "github.com" && validTarget ? undefined : "invalid:legacy-any-name@pin");
+						}
+					}
+				}
+			}
 			for (const slashes of ["", "/", "//", "///", "////"]) {
 				for (const { scheme, authority } of ["https", "http"].flatMap((scheme) => ["github.com", "github.com:bad", "[invalid", "foreign.example", "user@github.com"].map((authority) => ({ scheme, authority })))) {
 					for (const suffix of ["", "%FF", "%C3%28"]) {
@@ -59,11 +76,11 @@ describe("public fleet calculator", () => {
 				}
 			}
 			for (const target of [...members.map((m) => `${m.tagPrefix}0.26.0/x.tgz`), "unrelated-v1.0.0/x.tgz"]) {
-				alias = `https://github.com/cogni-dao/node-template/releases/download/%6detrics-v0.1.0%FF/../${target}`;
+				alias = `https://github.com/cogni-dao/node-template/tmp/%2e%2e/releases/download/%6detrics-v0.1.0%FF/../${target}`;
 				await compute();
 			}
 			for (const authority of ["github.com", "github.com:bad", "[invalid"]) {
-				alias = `https:/${authority}/cogni-dao/node-template/releases/download/unrelated-v1.0.0%FF/../other`;
+				alias = `https:/${authority}/cogni-dao/node-template/tmp/../releases/download/unrelated-v1.0.0%FF/../other`;
 				await compute();
 			}
 		} finally { fetchMock.mockRestore(); }
