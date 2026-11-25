@@ -7,7 +7,7 @@ import {
 	SystemMessage,
 	ToolMessage,
 } from "@langchain/core/messages";
-import { Command } from "@langchain/langgraph";
+import { Command, getConfig } from "@langchain/langgraph";
 import { createMiddleware, MiddlewareError } from "langchain";
 import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
 import { authorizedReadMessages } from "../cogni/authorized-read-messages";
@@ -85,7 +85,8 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 						{ name: "core__goal_list", args: {} },
 					]);
 				} catch (error) {
-					if (error instanceof Error && error.name === "AbortError") throw error;
+					// Cancellation and timeouts stay native failures, never an incomplete handoff.
+					if (getConfig().signal?.aborted) throw error;
 					receipts.reasons.add("guidance_failure");
 					return { jumpTo: "end" as const };
 				}
@@ -105,7 +106,7 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				const last = state.messages.at(-1);
 				if (!AIMessage.isInstance(last) || last.tool_calls?.length) return;
 				const answer = answerText(last);
-				const critiqued = receipts.taskId !== undefined;
+				const critiqued = receipts.criticDispatched;
 				if (critiqued && (!receipts.critique || receipts.refined)) return;
 				const problems = receipts.check(answer);
 				if (problems.length) {
@@ -133,11 +134,16 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				// A bindable but partial draft is an explicit incomplete handoff, not a critique target.
 				if (!receipts.isCompleteDraft(answer)) return;
 				receipts.tasks++;
+				receipts.criticDispatched = true;
 				return {
 					messages: [
 						new AIMessage({
 							...(last.id ? { id: last.id } : {}),
 							content: last.content,
+							response_metadata: last.response_metadata,
+							...(last.usage_metadata
+								? { usage_metadata: last.usage_metadata }
+								: {}),
 							tool_calls: [
 								{
 									id: `${HOST_CRITIC_PREFIX}${randomUUID()}`,

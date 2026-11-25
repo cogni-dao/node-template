@@ -99,6 +99,7 @@ const obj = (v: unknown): Record<string, unknown> | undefined =>
 	v && typeof v === "object" && !Array.isArray(v)
 		? (v as Record<string, unknown>)
 		: undefined;
+/** One run's receipts; never reuse an instance across runs. */
 export class ResearchReceipts {
 	readonly sources = new Map<string, string>();
 	readonly sourceStates = new Map<string, "available" | "partial">();
@@ -114,6 +115,8 @@ export class ResearchReceipts {
 	/** Stages (draft, final) that already used their one repair turn. */
 	readonly repaired = new Set<"draft" | "final">();
 	bootstrapped = false;
+	/** The host sent its one critic dispatch, whether or not the assignment was admitted. */
+	criticDispatched = false;
 	refined = false;
 	evidenceBytes = 0;
 	draft?: Draft;

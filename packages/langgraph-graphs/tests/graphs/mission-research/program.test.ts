@@ -1974,6 +1974,62 @@ describe("host-owned research stages", () => {
 		expect(output.reasons).toContain("missing_guidance");
 	});
 
+	it("dispatches the critic once even when its assignment is refused", async () => {
+		let rootTurn = 0;
+		let childTurns = 0;
+		const urls = ["https://evidence.example/a", "https://evidence.example/b"];
+		const cited = {
+			...draft,
+			sources: urls.map((u) => ({ url: u })),
+			atoms: [{ ...draft.atoms[0], sourceUrls: urls }],
+			principles: [{ ...draft.principles[0], sourceUrls: urls }],
+		};
+		const run = research(
+			(req) => {
+				if (!isRoot(req)) {
+					childTurns++;
+					return reply("{}");
+				}
+				rootTurn++;
+				if (rootTurn === 1)
+					return reply(
+						"",
+						urls.map((u, i) => ({
+							id: `w${i}`,
+							type: "function" as const,
+							function: {
+								name: "core__web_search",
+								arguments: JSON.stringify({ query: u }),
+							},
+						})),
+					);
+				return reply(JSON.stringify(cited));
+			},
+			withBootstrap(async (_name, args) => ({
+				ok: true,
+				value: {
+					results: [
+						{
+							url: (args as { query: string }).query,
+							// Quotes escape twice in the assignment, so admitted evidence can exceed 128 KiB.
+							rawContent: '"'.repeat(20000),
+							rawContentState: "available",
+						},
+					],
+				},
+			})),
+		);
+		for await (const _ of run.stream) {
+			/* drain */
+		}
+		const output = JSON.parse((await run.final).content ?? "{}");
+		expect(childTurns).toBe(0);
+		expect(rootTurn).toBe(3);
+		expect(output.status).toBe("incomplete");
+		expect(output.reasons).toContain("critic_input_limit");
+		expect(output.telemetry).toMatchObject({ taskAttempts: 1 });
+	});
+
 	it("repairs an unbindable draft once, then forces critique and one revision", async () => {
 		let rootTurn = 0;
 		let repairText = "";
