@@ -111,6 +111,10 @@ export class ResearchReceipts {
 	tools = 0;
 	searches = 0;
 	tasks = 0;
+	/** Stages (draft, final) that already used their one repair turn. */
+	readonly repaired = new Set<"draft" | "final">();
+	bootstrapped = false;
+	refined = false;
 	evidenceBytes = 0;
 	draft?: Draft;
 	fingerprint?: string;
@@ -178,39 +182,67 @@ export class ResearchReceipts {
 			}
 	}
 	validDraft(draft: Draft) {
+		return this.problems(draft).length === 0;
+	}
+	/** Every reason a draft cannot be bound to observed evidence, in words the researcher can act on. */
+	problems(draft: Draft) {
+		const found: string[] = [];
 		const urls = new Set(draft.sources.map((s) => s.url));
-		const claims = [
-			...draft.atoms,
-			...draft.principles,
-			...draft.kpiHypotheses,
-		];
-		return (
-			urls.size === draft.sources.length &&
-			claims.every((claim) => !isMaterialTarget(claim.id)) &&
-			new Set(
-				[...draft.atoms, ...draft.principles, ...draft.kpiHypotheses].map(
-					(claim) => claim.id,
-				),
-			).size ===
-				draft.atoms.length +
-					draft.principles.length +
-					draft.kpiHypotheses.length &&
-			[...urls].every((url) => this.sources.has(url)) &&
-			[...draft.atoms, ...draft.principles].every((item) =>
-				item.sourceUrls.every((url) => urls.has(url) && this.sources.has(url)),
-			) &&
-			draft.atoms.every(
-				(atom) =>
-					this.domains.has(atom.domain) &&
-					(atom.action === "create"
-						? atom.ownerId === null
-						: !!atom.ownerId &&
-							this.owners.get(atom.ownerId)?.domain === atom.domain &&
-							atom.sourceUrls.includes(
-								`${this.origin.replace(/\/$/, "")}/knowledge/${encodeURIComponent(atom.ownerId)}`,
-							)),
+		const claims = [...draft.atoms, ...draft.principles, ...draft.kpiHypotheses];
+		if (urls.size !== draft.sources.length) found.push("duplicate source URL");
+		for (const claim of claims)
+			if (isMaterialTarget(claim.id))
+				found.push(`claim ID ${claim.id} is a reserved field name`);
+		if (new Set(claims.map((claim) => claim.id)).size !== claims.length)
+			found.push("claim IDs are not unique");
+		for (const url of urls)
+			if (!this.sources.has(url))
+				found.push(`source ${url} was not observed this run`);
+		for (const item of [...draft.atoms, ...draft.principles])
+			for (const url of item.sourceUrls)
+				if (!urls.has(url) || !this.sources.has(url))
+					found.push(`${item.id} cites ${url}, which is not an observed listed source`);
+		for (const atom of draft.atoms) {
+			if (!this.domains.has(atom.domain))
+				found.push(`atom ${atom.id} uses domain ${atom.domain}, which is not eligible`);
+			if (atom.action === "create") {
+				if (atom.ownerId !== null)
+					found.push(`atom ${atom.id} is create, so ownerId must be null`);
+			} else if (
+				!atom.ownerId ||
+				this.owners.get(atom.ownerId)?.domain !== atom.domain ||
+				!atom.sourceUrls.includes(
+					`${this.origin.replace(/\/$/, "")}/knowledge/${encodeURIComponent(atom.ownerId)}`,
+				)
 			)
-		);
+				found.push(
+					`atom ${atom.id} is ${atom.action}, so it needs an owner read in full this run, in the same domain, cited by its owner URL`,
+				);
+		}
+		return found;
+	}
+	isCompleteDraft(raw: string) {
+		try {
+			return Packet.safeParse(JSON.parse(raw)).success;
+		} catch {
+			return false;
+		}
+	}
+	/** Side-effect-free check of a candidate draft or final answer. */
+	check(raw: string): string[] {
+		if (size(raw) > 24 * 1024) return ["the draft exceeds 24 KiB"];
+		let data: unknown;
+		try {
+			data = JSON.parse(raw);
+		} catch {
+			return ["the answer is not one bare JSON object (no markdown fences or prose)"];
+		}
+		const parsed = PartialPacket.safeParse(data);
+		if (!parsed.success)
+			return parsed.error.issues
+				.slice(0, 8)
+				.map((issue) => `${issue.path.join(".") || "packet"}: ${issue.message}`);
+		return this.problems(parsed.data);
 	}
 	prepare(raw: string, callId: string) {
 		if (size(raw) > 24 * 1024) {
@@ -245,7 +277,8 @@ export class ResearchReceipts {
 			fingerprint,
 			evidence,
 		});
-		if (size(assignment) > 24 * 1024) {
+		// The draft (24 KiB) plus its cited evidence (104 KiB) is the largest complete assignment.
+		if (size(assignment) > 128 * 1024) {
 			this.reasons.add("critic_input_limit");
 			return undefined;
 		}
@@ -400,6 +433,7 @@ export class ResearchReceipts {
 				toolCalls: this.tools,
 				searches: this.searches,
 				taskAttempts: this.tasks,
+				repairs: this.repaired.size,
 				reasonCount: this.reasons.size,
 			},
 		};

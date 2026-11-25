@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
+import { randomUUID } from "node:crypto";
 import {
 	AIMessage,
+	HumanMessage,
 	SystemMessage,
 	ToolMessage,
 } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 import { createMiddleware, MiddlewareError } from "langchain";
 import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
+import { authorizedReadMessages } from "../cogni/authorized-read-messages";
 import {
 	ChildBoundaryError,
 	cogniProfile,
@@ -19,12 +22,25 @@ import {
 	CRITIC_DESCRIPTION,
 	CRITIC_PROMPT,
 	MISSION_RESEARCH_PROMPT,
+	REQUIRED_GUIDANCE_IDS,
+	repairPrompt,
 } from "./prompts";
 import { ResearchReceipts } from "./receipts";
 import { MISSION_RESEARCH_TOOL_IDS } from "./tools";
 
 const bytes = (value: unknown) =>
 	new TextEncoder().encode(JSON.stringify(value)).length;
+const HOST_CRITIC_PREFIX = "host-critic-";
+const answerText = (message: AIMessage) =>
+	typeof message.content === "string"
+		? message.content
+		: message.content
+				.map((part) =>
+					typeof part === "object" && part && "text" in part
+						? String(part.text)
+						: "",
+				)
+				.join("");
 export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 	const receipts =
 		opts.programState instanceof ResearchReceipts
@@ -49,18 +65,110 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 		skillIds: (opts.sourceContext?.governingIndex ?? []).map((item) => item.id),
 		allowedChildProfiles: ["critic"],
 	});
+	// The host, not the model, owns the required stages: read the methods and goals, critique the
+	// first valid draft once, allow one revision, and give one repair turn for an unbindable answer.
+	const stages = createMiddleware({
+		name: "MissionResearchStages",
+		beforeAgent: {
+			canJumpTo: ["end"],
+			hook: async () => {
+				if (receipts.bootstrapped) return;
+				receipts.bootstrapped = true;
+				receipts.tools += REQUIRED_GUIDANCE_IDS.length + 1;
+				let messages: Awaited<ReturnType<typeof authorizedReadMessages>> = [];
+				try {
+					messages = await authorizedReadMessages(opts.tools, [
+						...REQUIRED_GUIDANCE_IDS.map((id) => ({
+							name: "core__knowledge_read",
+							args: { id },
+						})),
+						{ name: "core__goal_list", args: {} },
+					]);
+				} catch (error) {
+					if (error instanceof Error && error.name === "AbortError") throw error;
+					receipts.reasons.add("guidance_failure");
+					return { jumpTo: "end" as const };
+				}
+				const missing = REQUIRED_GUIDANCE_IDS.some(
+					(id) => !receipts.guidance.has(id),
+				);
+				if (missing) receipts.reasons.add("missing_guidance");
+				if (!receipts.goalsObserved) receipts.reasons.add("missing_goal_context");
+				return missing || !receipts.goalsObserved
+					? { messages, jumpTo: "end" as const }
+					: { messages };
+			},
+		},
+		afterModel: {
+			canJumpTo: ["model", "tools", "end"],
+			hook: (state) => {
+				const last = state.messages.at(-1);
+				if (!AIMessage.isInstance(last) || last.tool_calls?.length) return;
+				const answer = answerText(last);
+				const critiqued = receipts.taskId !== undefined;
+				if (critiqued && (!receipts.critique || receipts.refined)) return;
+				const problems = receipts.check(answer);
+				if (problems.length) {
+					const stage = critiqued ? "final" : "draft";
+					// No repair turn once collection is exhausted: it could only invent evidence.
+					if (receipts.repaired.has(stage) || exhausted()) return;
+					receipts.repaired.add(stage);
+					return {
+						messages: [
+							new HumanMessage(
+								repairPrompt(problems, {
+									domains: [...receipts.domains],
+									owners: [...receipts.owners.keys()],
+									sources: [...receipts.sources.keys()],
+								}),
+							),
+						],
+						jumpTo: "model" as const,
+					};
+				}
+				if (critiqued) {
+					receipts.refined = true;
+					return;
+				}
+				// A bindable but partial draft is an explicit incomplete handoff, not a critique target.
+				if (!receipts.isCompleteDraft(answer)) return;
+				receipts.tasks++;
+				return {
+					messages: [
+						new AIMessage({
+							...(last.id ? { id: last.id } : {}),
+							content: last.content,
+							tool_calls: [
+								{
+									id: `${HOST_CRITIC_PREFIX}${randomUUID()}`,
+									name: "task",
+									args: { subagent_type: "critic", description: answer },
+									type: "tool_call",
+								},
+							],
+						}),
+					],
+					jumpTo: "tools" as const,
+				};
+			},
+		},
+	});
 	const middleware = createMiddleware({
 		name: "MissionResearchBoundaries",
 		wrapModelCall: async (request, handler) => {
+			const tools = request.tools.filter(
+				(tool) => !("name" in tool) || tool.name !== "task",
+			);
 			const result = await handler(
 				exhausted()
 					? {
 							...request,
+							tools,
 							systemMessage: request.systemMessage.concat(
 								new SystemMessage(BUDGET_PROMPT),
 							),
 						}
-					: request,
+					: { ...request, tools },
 			);
 			if (AIMessage.isInstance(result))
 				for (const call of result.tool_calls ?? [])
@@ -72,6 +180,9 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 		},
 		wrapToolCall: async (request, handler) => {
 			const call = request.toolCall;
+			const hostCritic =
+				call.name === "task" &&
+				(call.id ?? "").startsWith(HOST_CRITIC_PREFIX);
 			const alreadyExhausted = exhausted();
 			receipts.tools++;
 			const reject = (reason: string) => {
@@ -83,11 +194,9 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 					status: "error",
 				});
 			};
-			if (receipts.tools > 24) return reject("tool_budget");
-			if (
-				alreadyExhausted &&
-				(call.name.startsWith("core__") || call.name === "task")
-			)
+			// The host critic has its own one-dispatch bound; collection exhaustion never forbids it.
+			if (receipts.tools > 24 && !hostCritic) return reject("tool_budget");
+			if (alreadyExhausted && call.name.startsWith("core__"))
 				return reject("research_budget");
 			if (
 				call.args === null ||
@@ -95,6 +204,7 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				Array.isArray(call.args)
 			)
 				return reject("invalid_tool_arguments");
+			if (call.name === "task" && !hostCritic) return reject("invalid_task");
 			if (call.name === "core__web_search") {
 				receipts.searches++;
 				if (receipts.searches > 6) return reject("search_budget");
@@ -214,7 +324,7 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 		profile: { ...profile, limits: { maxTaskCalls: 1, maxDepth: 1 } },
 		childStatePolicy: "messages-only",
 		taskLimitExitBehavior: "continue",
-		programMiddleware: [middleware],
+		programMiddleware: [stages, middleware],
 		children: [
 			{
 				description: CRITIC_DESCRIPTION,

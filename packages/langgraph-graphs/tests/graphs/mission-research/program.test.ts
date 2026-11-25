@@ -17,6 +17,31 @@ import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../../src/inproc/types";
 import { InvalidCompletionError } from "../../../src/runtime/cogni/completion-adapter";
 
+/** Answers the required method and goal reads, so a test exercises the stages after them. */
+const withBootstrap =
+	(exec: ToolExecFn): ToolExecFn =>
+	async (name, args, toolCallId) => {
+		const id = (args as { id?: unknown } | null)?.id;
+		if (name === "core__goal_list") return { ok: true, value: { goals: [] } };
+		if (
+			name === "core__knowledge_read" &&
+			(id === "research-mission" || id === "knowledge-syntropy-protocol")
+		)
+			return {
+				ok: true,
+				value: {
+					mode: "get",
+					entries: [{ id, domain: "meta", content: "method" }],
+				},
+			};
+		return exec(name, args, toolCallId);
+	};
+const isRoot = (req: Parameters<CompletionFn>[0]) =>
+	(req.tools ?? []).some((tool) => {
+		const t = tool as { name?: string; function?: { name?: string } };
+		return (t.function?.name ?? t.name ?? "").startsWith("core__");
+	});
+
 describe("mission research public boundary", () => {
 	it("rejects a missing trusted mission before making a model call", async () => {
 		let calls = 0;
@@ -148,12 +173,13 @@ describe("native task limiter", () => {
 			},
 			createGraph: entry.graphFactory,
 			completionFn,
-			createToolExecFn: (): ToolExecFn => async () => ({ ok: true, value: {} }),
-			toolContracts: [],
+			createToolExecFn: () =>
+				withBootstrap(async () => ({ ok: true, value: {} })),
+			toolContracts: [goalListContract, knowledgeReadContract],
 			request: {
 				runId: "excess",
 				messages: [{ role: "user", content: "research" }],
-				configurable: { model: "test", toolIds: [] },
+				configurable: { model: "test", toolIds: [...entry.toolIds] },
 			},
 		});
 		const events: AiEvent[] = [];
@@ -184,7 +210,7 @@ describe("native invalid argument boundary", () => {
 				const t = tool as { name?: string; function?: { name?: string } };
 				return t.function?.name ?? t.name;
 			});
-			if (!names.includes("task")) childCalls++;
+			if (!isRoot(req)) childCalls++;
 			const toolCalls =
 				++turn === 1
 					? [
@@ -216,10 +242,11 @@ describe("native invalid argument boundary", () => {
 			},
 			createGraph: entry.graphFactory,
 			completionFn,
-			createToolExecFn: (): ToolExecFn => async () => {
-				dispatches++;
-				return { ok: true, value: {} };
-			},
+			createToolExecFn: () =>
+				withBootstrap(async () => {
+					dispatches++;
+					return { ok: true, value: {} };
+				}),
 			toolContracts: [
 				goalListContract,
 				knowledgeReadContract,
@@ -341,7 +368,8 @@ describe("native child isolation", () => {
 				},
 				createGraph: entry.graphFactory,
 				completionFn,
-				createToolExecFn: (): ToolExecFn => async (name, args) => {
+				createToolExecFn: () =>
+					withBootstrap(async (name, args) => {
 					if (name === "core__knowledge_read") {
 						knowledgeReads++;
 						return {
@@ -370,8 +398,12 @@ describe("native child isolation", () => {
 							],
 						},
 					};
-				},
-				toolContracts: [knowledgeReadContract, webSearchContract],
+				}),
+				toolContracts: [
+					goalListContract,
+					knowledgeReadContract,
+					webSearchContract,
+				],
 				request: {
 					runId: `skill-${limit}`,
 					messages: [{ role: "user", content: "research" }],
@@ -490,8 +522,12 @@ describe("native child isolation", () => {
 			},
 			createGraph: entry.graphFactory,
 			completionFn,
-			createToolExecFn: () => exec,
-			toolContracts: [knowledgeReadContract, webSearchContract],
+			createToolExecFn: () => withBootstrap(exec),
+			toolContracts: [
+				goalListContract,
+				knowledgeReadContract,
+				webSearchContract,
+			],
 			request: {
 				runId: "search-exhaustion",
 				messages: [{ role: "user", content: "research" }],
@@ -582,13 +618,7 @@ describe("native child isolation", () => {
 						content: `ROOT_PRIVATE_CANARY${"x".repeat(128 * 1024)}`,
 					}),
 				];
-			else if (turn === 3)
-				calls = [
-					call("critic", "task", {
-						subagent_type: "critic",
-						description: JSON.stringify(draft),
-					}),
-				];
+			else if (turn === 3) content = JSON.stringify(draft);
 			else if (turn === 4) {
 				childInput = JSON.stringify(req.messages);
 				fingerprint = childInput.match(/[a-f0-9]{64}/)?.[0] ?? "";
@@ -1166,17 +1196,11 @@ describe("critic and evidence failures", () => {
 		const sources = Array.from({ length: 3 }, (_, i) => ({
 			url: `https://example.org/${i}`,
 		}));
-		r.observe(
-			"core__web_search",
-			{},
-			{
-				results: sources.map(({ url }) => ({
-					url,
-					rawContent: "x".repeat(8000),
-					rawContentState: "available",
-				})),
-			},
-		);
+		// Bypass admission: only an assignment over the 128 KiB critic input reaches this guard.
+		for (const { url } of sources) {
+			r.sources.set(url, "x".repeat(48 * 1024));
+			r.webSources.add(url);
+		}
 		const largeDraft = {
 			...draft,
 			sources,
@@ -1539,11 +1563,7 @@ describe("child recursion bound", () => {
 			draft.unknowns = ["Which outcome can be measured?"];
 		}
 		const completionFn: CompletionFn = (req) => {
-			const names = (req.tools ?? []).map((tool) => {
-				const t = tool as { name?: string; function?: { name?: string } };
-				return t.function?.name ?? t.name;
-			});
-			const root = names.includes("task");
+			const root = isRoot(req);
 			let calls: ReturnType<typeof call>[] | undefined;
 			if (root && ++rootTurns === 1)
 				calls = [
@@ -1555,13 +1575,6 @@ describe("child recursion bound", () => {
 					call("web", "core__web_search", {
 						query: "q",
 						includeRawContent: true,
-					}),
-				];
-			else if (root && rootTurns === 2)
-				calls = [
-					call("task", "task", {
-						subagent_type: "critic",
-						description: JSON.stringify(draft),
 					}),
 				];
 			else if (root && rootTurns === 3 && shape)
@@ -1812,7 +1825,7 @@ describe("child recursion bound", () => {
 			if (shape.limit === "invalid" || shape.expected !== undefined) {
 				expect(childTurns).toBe(1);
 				expect(output.telemetry).toMatchObject({
-					toolCalls: 6,
+					toolCalls: 9,
 					searches: 2,
 					taskAttempts: 1,
 				});
@@ -1839,5 +1852,246 @@ describe("child recursion bound", () => {
 			expect(output.packet.unknowns).toContain(
 				"Which outcome can be measured?",
 			);
+	});
+});
+
+describe("host-owned research stages", () => {
+	const url = "https://evidence.example/source";
+	const draft = {
+		missionScope: "mission",
+		decision: "decision",
+		sources: [{ url }],
+		atoms: [
+			{
+				id: "a",
+				action: "create",
+				domain: "strategy",
+				title: "t",
+				useWhen: "use",
+				content: "claim",
+				relationships: [],
+				ownerId: null,
+				sourceUrls: [url],
+			},
+		],
+		principles: [{ id: "p", content: "claim", sourceUrls: [url] }],
+		contradictions: [],
+		unknowns: [],
+		critiqueResolutions: [],
+		kpiHypotheses: [
+			{
+				id: "k1",
+				outcome: "outcome",
+				metric: "metric",
+				rationale: "rationale",
+				source: "source",
+				window: "7d",
+				guardrails: ["safety"],
+				gamingRisk: "risk",
+				measurementGap: "gap",
+			},
+		],
+	};
+	const reply = (content: string, calls?: unknown[]) => ({
+		stream: (async function* (): AsyncIterable<AiEvent> {})(),
+		final: Promise.resolve({
+			ok: true as const,
+			content,
+			...(calls ? { toolCalls: calls as never } : {}),
+			finishReason: calls ? ("tool_calls" as const) : ("stop" as const),
+		}),
+	});
+	const research = (completionFn: CompletionFn, exec: ToolExecFn) => {
+		const entry = LANGGRAPH_CATALOG["mission-research"];
+		if (!entry) throw new Error("missing graph");
+		return createInProcGraphRunner({
+			program: "mission-research",
+			sourceContext: {
+				nodeId: "test",
+				origin: "https://node.example",
+				mission: { content: "A mission", sourceRef: "test", buildSha: null },
+				governingIndex: [
+					{
+						id: "strategy-owner",
+						domain: "strategy",
+						entryType: "reference",
+						useWhen: "research",
+					},
+				],
+			},
+			createGraph: entry.graphFactory,
+			completionFn,
+			createToolExecFn: () => exec,
+			toolContracts: [goalListContract, knowledgeReadContract, webSearchContract],
+			request: {
+				runId: "stages",
+				messages: [{ role: "user", content: "research" }],
+				configurable: { model: "test", toolIds: [...entry.toolIds] },
+			},
+		});
+	};
+	const search: ToolExecFn = async () => ({
+		ok: true,
+		value: {
+			results: [
+				{ url, rawContent: "actual passage", rawContentState: "available" },
+			],
+		},
+	});
+
+	it("reads the methods before the model and stops with zero model calls when one is missing", async () => {
+		let calls = 0;
+		const run = research(
+			() => {
+				calls++;
+				return reply(JSON.stringify(draft));
+			},
+			async (name, args) =>
+				name === "core__goal_list"
+					? { ok: true, value: { goals: [] } }
+					: (args as { id?: string }).id === "research-mission"
+						? { ok: true, value: { mode: "get", entries: [] } }
+						: {
+								ok: true,
+								value: {
+									mode: "get",
+									entries: [
+										{
+											id: (args as { id: string }).id,
+											domain: "meta",
+											content: "method",
+										},
+									],
+								},
+							},
+		);
+		for await (const _ of run.stream) {
+			/* drain */
+		}
+		const output = JSON.parse((await run.final).content ?? "{}");
+		expect(calls).toBe(0);
+		expect(output.status).toBe("incomplete");
+		expect(output.reasons).toContain("missing_guidance");
+	});
+
+	it("repairs an unbindable draft once, then forces critique and one revision", async () => {
+		let rootTurn = 0;
+		let repairText = "";
+		let fingerprint = "";
+		const call = (id: string, name: string, args: unknown) => ({
+			id,
+			type: "function" as const,
+			function: { name, arguments: JSON.stringify(args) },
+		});
+		const run = research((req) => {
+			if (!isRoot(req)) {
+				fingerprint = JSON.stringify(req.messages).match(/[a-f0-9]{64}/)?.[0] ?? "";
+				return reply(
+					JSON.stringify({
+						fingerprint,
+						explanation: "The evidence and constraints were reviewed carefully.",
+						findings: [
+							{
+								id: "f1",
+								claimIds: ["missionScope"],
+								severity: "major",
+								explanation: "Scope is too broad",
+							},
+						],
+					}),
+				);
+			}
+			rootTurn++;
+			if (rootTurn === 1)
+				return reply("", [call("w", "core__web_search", { query: "q" })]);
+			if (rootTurn === 2)
+				return reply(
+					`\`\`\`json\n${JSON.stringify({
+						...draft,
+						atoms: [{ ...draft.atoms[0], domain: "invented-domain" }],
+					})}\n\`\`\``,
+				);
+			repairText = JSON.stringify(req.messages);
+			return reply(
+				JSON.stringify({
+					...draft,
+					atoms: [{ ...draft.atoms[0], domain: "invented-domain" }],
+				}),
+			);
+		}, withBootstrap(search));
+		for await (const _ of run.stream) {
+			/* drain */
+		}
+		const output = JSON.parse((await run.final).content ?? "{}");
+		// The draft's one repair turn is spent on the fenced answer; the still-invented domain ends the run.
+		expect(repairText).toContain("not one bare JSON object");
+		expect(repairText).toContain("Eligible domains:");
+		expect(rootTurn).toBe(3);
+		expect(fingerprint).toBe("");
+		expect(output.status).toBe("incomplete");
+		expect(output.reasons).toContain("missing_critique");
+		expect(output.telemetry).toMatchObject({ repairs: 1, taskAttempts: 0 });
+	});
+
+	it("dispatches the critic after a successful repair and accepts one revision", async () => {
+		let rootTurn = 0;
+		let childTurns = 0;
+		const run = research((req) => {
+			if (!isRoot(req)) {
+				childTurns++;
+				const fingerprint =
+					JSON.stringify(req.messages).match(/[a-f0-9]{64}/)?.[0] ?? "";
+				return reply(
+					JSON.stringify({
+						fingerprint,
+						explanation: "The evidence and constraints were reviewed carefully.",
+						findings: [
+							{
+								id: "f1",
+								claimIds: ["missionScope"],
+								severity: "major",
+								explanation: "Scope is too broad",
+							},
+						],
+					}),
+				);
+			}
+			rootTurn++;
+			if (rootTurn === 1)
+				return reply("", [
+					{
+						id: "w",
+						type: "function" as const,
+						function: {
+							name: "core__web_search",
+							arguments: JSON.stringify({ query: "q" }),
+						},
+					},
+				]);
+			if (rootTurn === 2)
+				return reply(
+					JSON.stringify({
+						...draft,
+						atoms: [{ ...draft.atoms[0], domain: "invented-domain" }],
+					}),
+				);
+			if (rootTurn === 3) return reply(JSON.stringify(draft));
+			return reply(
+				JSON.stringify({
+					...draft,
+					missionScope: "bounded mission",
+					critiqueResolutions: [{ findingId: "f1", action: "revised" }],
+				}),
+			);
+		}, withBootstrap(search));
+		for await (const _ of run.stream) {
+			/* drain */
+		}
+		const output = JSON.parse((await run.final).content ?? "{}");
+		expect(childTurns).toBe(1);
+		expect(rootTurn).toBe(4);
+		expect(output.status).toBe("complete");
+		expect(output.packet.missionScope).toBe("bounded mission");
+		expect(output.telemetry).toMatchObject({ repairs: 1, taskAttempts: 1 });
 	});
 });
