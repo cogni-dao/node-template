@@ -2173,6 +2173,7 @@ describe("host-owned research stages", () => {
 		let rootTurn = 0;
 		let childTurns = 0;
 		let childTools = -1;
+		let rootTools: string[] = [];
 		const run = research((req) => {
 			if (!isRoot(req)) {
 				childTurns++;
@@ -2195,6 +2196,10 @@ describe("host-owned research stages", () => {
 				);
 			}
 			rootTurn++;
+			rootTools = (req.tools ?? []).map((tool) => {
+				const t = tool as { name?: string; function?: { name?: string } };
+				return t.function?.name ?? t.name ?? "";
+			});
 			if (rootTurn === 1)
 				return reply("", [
 					{
@@ -2229,6 +2234,10 @@ describe("host-owned research stages", () => {
 		expect(childTurns).toBe(1);
 		// The tool-less critic is offered no scratch or todo tools to loop on.
 		expect(childTools).toBe(0);
+		// The root is offered its read capabilities only: no task, scratch or todo turns.
+		expect(rootTools.sort()).toEqual(
+			["core__goal_list", "core__knowledge_read", "core__web_search"].sort(),
+		);
 		expect(rootTurn).toBe(4);
 		expect(output.status).toBe("complete");
 		expect(output.packet.missionScope).toBe("bounded mission");

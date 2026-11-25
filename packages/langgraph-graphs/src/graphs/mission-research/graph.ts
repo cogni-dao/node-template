@@ -163,8 +163,11 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 	const middleware = createMiddleware({
 		name: "MissionResearchBoundaries",
 		wrapModelCall: async (request, handler) => {
+			// Offer only the program's capabilities: the host runs the critic, the methods arrive by
+			// bootstrap, and built-in scratch and todo turns spent the run's step limit on candidate.
+			const capabilities = new Set<string>(MISSION_RESEARCH_TOOL_IDS);
 			const tools = request.tools.filter(
-				(tool) => !("name" in tool) || tool.name !== "task",
+				(tool) => "name" in tool && capabilities.has(String(tool.name)),
 			);
 			const result = await handler(
 				exhausted()
