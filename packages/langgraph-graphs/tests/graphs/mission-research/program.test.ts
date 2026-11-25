@@ -2223,7 +2223,10 @@ describe("host-owned research stages", () => {
 				JSON.stringify({
 					...draft,
 					missionScope: "bounded mission",
-					critiqueResolutions: [{ findingId: "f1", action: "revised" }],
+					// A resolution note is accepted, as a real revision on candidate wrote one.
+					critiqueResolutions: [
+						{ findingId: "f1", action: "revised", note: "Narrowed the scope" },
+					],
 				}),
 			);
 		}, withBootstrap(search));

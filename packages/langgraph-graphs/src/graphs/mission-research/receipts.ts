@@ -39,6 +39,8 @@ const PartialPacket = z
 				.object({
 					findingId: text,
 					action: z.enum(["removed", "revised", "unresolved"]),
+					// How the finding was addressed; evaluators read it against the change.
+					note: z.string().trim().min(1).max(1000).optional(),
 				})
 				.strict(),
 		),
