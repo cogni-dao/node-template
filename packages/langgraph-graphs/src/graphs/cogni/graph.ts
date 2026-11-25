@@ -306,9 +306,12 @@ export function createCogniProgram(
 						: handler(request);
 				},
 			}),
-			// A profile that declares no tools gets none, not even built-in scratch or todo tools:
+			// A leaf profile with no tools and no guarded writer gets none, not even built-in scratch or todo tools:
 			// a tool-less critic otherwise loops on write_todos instead of answering.
-			...(opts.profile && !opts.profile.toolIds.length
+			...(opts.profile &&
+			!opts.profile.toolIds.length &&
+			!opts.guardedTools?.length &&
+			!children.length
 				? [
 						createMiddleware({
 							name: "CogniToolless",
