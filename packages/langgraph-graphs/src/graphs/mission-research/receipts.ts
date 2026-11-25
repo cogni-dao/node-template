@@ -134,15 +134,21 @@ export class ResearchReceipts {
 			this.owners.has(input.id)
 		)
 			return;
-		if (
-			size(value) > 48 * 1024 ||
-			// Reserve the entire maximum draft size, even before one is admitted.
-			this.evidenceBytes + size(value) > 104 * 1024
-		) {
+		if (size(value) > 48 * 1024) {
 			this.reasons.add("evidence_limit");
 			return;
 		}
 		if (!output) return;
+		// Only retained evidence is charged, so snippets and metadata never exhaust the budget,
+		// and the entire maximum draft size stays reserved even before one is admitted.
+		const admit = (bytes: number) => {
+			if (this.evidenceBytes + bytes > 104 * 1024) {
+				this.reasons.add("evidence_limit");
+				return false;
+			}
+			this.evidenceBytes += bytes;
+			return true;
+		};
 		if (name === "core__goal_list" && Array.isArray(output.goals))
 			this.goalsObserved = true;
 		if (
@@ -158,7 +164,8 @@ export class ResearchReceipts {
 				typeof entry.id === "string" &&
 				typeof entry.content === "string" &&
 				entry.content.trim() &&
-				typeof entry.domain === "string"
+				typeof entry.domain === "string" &&
+				admit(size(entry))
 			) {
 				const url = `${this.origin.replace(/\/$/, "")}/knowledge/${encodeURIComponent(entry.id)}`;
 				this.domains.add(entry.domain);
@@ -169,7 +176,6 @@ export class ResearchReceipts {
 				this.sources.set(url, entry.content);
 				this.sourceStates.set(url, "available");
 				this.guidance.add(entry.id);
-				this.evidenceBytes += size(entry);
 			}
 		}
 		if (name === "core__web_search" && Array.isArray(output.results))
@@ -180,7 +186,14 @@ export class ResearchReceipts {
 					!this.sources.has(row.url) &&
 					typeof row.rawContent === "string" &&
 					row.rawContent &&
-					["available", "partial"].includes(String(row.rawContentState))
+					["available", "partial"].includes(String(row.rawContentState)) &&
+					admit(
+						size({
+							url: row.url,
+							rawContent: row.rawContent,
+							rawContentState: row.rawContentState,
+						}),
+					)
 				) {
 					this.sources.set(row.url, row.rawContent);
 					this.webSources.add(row.url);
@@ -188,7 +201,6 @@ export class ResearchReceipts {
 						row.url,
 						row.rawContentState as "available" | "partial",
 					);
-					this.evidenceBytes += size(row);
 				}
 			}
 	}

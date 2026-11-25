@@ -191,7 +191,9 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				call.name === "task" &&
 				(call.id ?? "").startsWith(HOST_CRITIC_PREFIX);
 			const alreadyExhausted = exhausted();
-			receipts.tools++;
+			// The operation budget covers capability calls and the critic, not scratch files or todos.
+			const counted = call.name.startsWith("core__") || call.name === "task";
+			if (counted) receipts.tools++;
 			const reject = (reason: string) => {
 				receipts.reasons.add(reason);
 				return new ToolMessage({
@@ -202,7 +204,8 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				});
 			};
 			// The host critic has its own one-dispatch bound; collection exhaustion never forbids it.
-			if (receipts.tools > 24 && !hostCritic) return reject("tool_budget");
+			if (counted && receipts.tools > 24 && !hostCritic)
+				return reject("tool_budget");
 			if (alreadyExhausted && call.name.startsWith("core__"))
 				return reject("research_budget");
 			if (
@@ -277,7 +280,7 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 						return reject("critic_failed");
 					receipts.complete(response.content);
 				}
-				if (call.name !== "task" && bytes(result) > 48 * 1024)
+				if (call.name.startsWith("core__") && bytes(result) > 48 * 1024)
 					return reject("evidence_limit");
 				return result;
 			} catch (error) {
@@ -328,6 +331,9 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 			},
 		}),
 		program: "mission-research",
+		// The methods plus bounded source evidence exceed the 24k default; summarizing them away
+		// mid-run left the researcher re-reading history instead of drafting.
+		summarizationTokens: 96_000,
 		profile: { ...profile, limits: { maxTaskCalls: 1, maxDepth: 1 } },
 		childStatePolicy: "messages-only",
 		taskLimitExitBehavior: "continue",

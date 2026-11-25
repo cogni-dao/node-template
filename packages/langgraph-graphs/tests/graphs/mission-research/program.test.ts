@@ -1450,6 +1450,23 @@ describe("critic and evidence failures", () => {
 		expect(r.reasons.has("evidence_limit")).toBe(false);
 		expect(r.evidenceBytes).toBeLessThan(64 * 1024);
 	});
+	it("charges retained passages, not snippets or metadata, to the evidence budget", () => {
+		const r = new ResearchReceipts("https://node.example");
+		for (let i = 0; i < 4; i++)
+			r.observe("core__web_search", {}, {
+				results: [
+					{
+						url: `https://example.org/${i}`,
+						title: "t",
+						content: "s".repeat(30000),
+						rawContent: "p".repeat(2000),
+						rawContentState: "available",
+					},
+				],
+			});
+		expect(r.reasons.has("evidence_limit")).toBe(false);
+		expect(r.webSources.size).toBe(4);
+	});
 	it("does not accept oversized or unobserved evidence", () => {
 		const { r, draft } = setup();
 		r.observe(
@@ -2046,6 +2063,51 @@ describe("host-owned research stages", () => {
 		expect(output.status).toBe("incomplete");
 		expect(output.reasons).toContain("critic_input_limit");
 		expect(output.telemetry).toMatchObject({ taskAttempts: 1 });
+	});
+
+	it("keeps scratch files out of the operation and evidence budgets", async () => {
+		let rootTurn = 0;
+		let searches = 0;
+		const call = (id: string, name: string, args: unknown) => ({
+			id,
+			type: "function" as const,
+			function: { name, arguments: JSON.stringify(args) },
+		});
+		const run = research(
+			(req) => {
+				if (!isRoot(req)) return reply("{}");
+				rootTurn++;
+				if (rootTurn === 1)
+					return reply("", [
+						call("w", "write_file", {
+							file_path: "/history.md",
+							content: "h".repeat(60 * 1024),
+						}),
+					]);
+				if (rootTurn === 2)
+					return reply(
+						"",
+						Array.from({ length: 25 }, (_, i) =>
+							call(`r${i}`, "read_file", { file_path: "/history.md" }),
+						),
+					);
+				if (rootTurn === 3)
+					return reply("", [call("s", "core__web_search", { query: "q" })]);
+				return reply(JSON.stringify({ ...draft, atoms: [], principles: [], kpiHypotheses: [] }));
+			},
+			withBootstrap(async (...args) => {
+				searches++;
+				return search(...args);
+			}),
+		);
+		for await (const _ of run.stream) {
+			/* drain */
+		}
+		const output = JSON.parse((await run.final).content ?? "{}");
+		expect(searches).toBe(1);
+		expect(output.reasons).not.toContain("evidence_limit");
+		expect(output.reasons).not.toContain("tool_budget");
+		expect(output.telemetry.toolCalls).toBe(4);
 	});
 
 	it("repairs an unbindable draft once, then forces critique and one revision", async () => {

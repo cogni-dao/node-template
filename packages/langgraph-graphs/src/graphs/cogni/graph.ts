@@ -81,6 +81,8 @@ export function createCogniProgram(
 			readonly description: string;
 		}[];
 		readonly disableCheckpointer?: boolean;
+		/** Context tokens before history is summarized; a program whose evidence must survive raises it. */
+		readonly summarizationTokens?: number;
 		readonly guardedTools?: readonly StructuredTool[];
 		readonly profile?: AgentProfile;
 		/** Program-owned native middleware; never inherited by isolated readers. */
@@ -363,7 +365,7 @@ export function createCogniProgram(
 			createSummarizationMiddleware({
 				model,
 				backend,
-				trigger: { type: "tokens", value: 24_000 },
+				trigger: { type: "tokens", value: opts.summarizationTokens ?? 24_000 },
 				keep: { type: "messages", value: 12 },
 			}),
 		],
