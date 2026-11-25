@@ -75,9 +75,10 @@ function validManifest(value: unknown): boolean {
 
 // URL preserves percent escapes in pathname. Decode each segment once, retaining
 // its boundaries for trust; decoded separators can only identify an invalid pin.
-function releasePathIdentity(pathname: string): { tag: string | undefined; publisher: string | undefined; valid: boolean; hints: readonly string[] } {
+function releasePathIdentity(pathname: string, retainTraversal = false): { tag: string | undefined; publisher: string | undefined; valid: boolean; hints: readonly string[] } {
 	let valid = true;
-	const parts = pathname.split("/").map((part) => {
+	const encoded = pathname.split("/");
+	const parts = encoded.map((part) => {
 		try {
 			return decodeURIComponent(part);
 		} catch {
@@ -98,6 +99,30 @@ function releasePathIdentity(pathname: string): { tag: string | undefined; publi
 	for (let i = 0; i < segments.length - 2; i++) {
 		const tag = segments[i + 2];
 		if (segments[i] === "releases" && segments[i + 1] === "download" && tag) hints.push(tag);
+	}
+	if (retainTraversal) {
+		// Preserve identities at every native normalization frontier, before a
+		// later parent segment removes them. Each frame keeps only the last two
+		// decoded hint segments; a parent restores the previous frame in O(1).
+		const frontier: string[][] = [[]];
+		for (let i = 1; i < encoded.length; i++) {
+			// Native URL owns dot classification (including escaped dots). Probe
+			// one segment in a fixed context, never reparse a growing prefix:
+			// total parser input and frontier storage are linear in the path.
+			const probe = new URL(`https://release.invalid/frontier/${encoded[i]}/end`).pathname;
+			if (probe === "/end") {
+				if (frontier.length > 1) frontier.pop();
+			} else if (probe !== "/frontier/end") {
+				let tail = frontier[frontier.length - 1] ?? [];
+				// Reuse the same decoded parts as strict identity. Decoded slashes
+				// and backslashes are hint boundaries only, never native traversal.
+				for (const segment of (parts[i] ?? "").replace(/\\/g, "/").split("/")) {
+					if (tail[0] === "releases" && tail[1] === "download" && segment) hints.push(segment);
+					tail = [tail[tail.length - 1] ?? "", segment];
+				}
+				frontier.push(tail);
+			}
+		}
 	}
 	return { tag: match?.[2], publisher: match?.[1], valid: valid && !!match, hints };
 }
@@ -134,11 +159,10 @@ function releaseIdentity(raw: string, publisher?: string): { tag: string | undef
 	const path = /^(?:https?:\/*|[a-z][a-z\d+.-]*:\/\/)[^/?#]*(\/[^?#]*)/i.exec(input)?.[1];
 	const hints = new Set<string>();
 	for (const hint of identity?.hints ?? []) hints.add(hint);
-	// A fixed dummy authority lets URL normalize the recovered path even when
-	// the manifest authority was invalid. Neither form can establish trust.
+	// The raw path and its normalization frontiers retain refusals even when
+	// the manifest authority was invalid. Neither can establish trust.
 	if (path !== undefined) {
-		const normalized = new URL(`https://release.invalid${path}`).pathname;
-		for (const hint of [...releasePathIdentity(normalized).hints, ...releasePathIdentity(path).hints]) hints.add(hint);
+		for (const hint of releasePathIdentity(path, true).hints) hints.add(hint);
 	}
 	return { tag: undefined, trusted: false, hints: [...hints] };
 }

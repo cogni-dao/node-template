@@ -186,6 +186,34 @@ describe("source qualification against six current consumers", () => {
 		manifests.map(({ repo }) => ({ repo, manifest: current() }));
 	const assess = (rows: ReturnType<typeof cohort>) =>
 		assessFleetTrainLag("0.24.0", MEMBERS, rows, publisher);
+	it.each(["dependencies", "devDependencies"] as const)("retains marker-internal normalization identities before tag erasure in %s", (section) => {
+		for (const member of MEMBERS) {
+			const tag = `%${member.tagPrefix.charCodeAt(0).toString(16)}${member.tagPrefix.slice(1).replace("-v", "%2dv")}0.2.0%FF`;
+			for (const marker of [
+				`releases/./download/${tag}`,
+				`releases/%2e/download/${tag}`,
+				`releases/drop/../download/${tag}`,
+				`releases/download/./${tag}`,
+				`releases/download/drop/../${tag}`,
+				`%72eleases/a/b/%2e%2e/../%64ownload/c/d/../%2e%2E/${tag}`,
+				`releases%2fdownload/drop/../${tag}`,
+				`releases/drop/../download%5c${tag}`,
+			]) {
+				for (const authority of ["github.com:bad", "foreign.example", "user@github.com", "[invalid", "github.com"]) {
+					for (const prefix of ["tmp/%2e%2e/", "releases/download/unrelated-v9.0.0/a/../../../../"]) {
+						const raw = `https://${authority}/${publisher}/${prefix}${marker}/%2e%2e/unrelated-v8.0.0/p%FF.tgz`;
+						for (const pin of [raw, ` \t${raw.replace(/\//g, "\\").replace("releases", "rel\teases")}\r\n`]) {
+							const rows = cohort();
+							const first = rows[0] as (typeof rows)[number];
+							first.manifest[section]["legacy-any-name"] = pin;
+							expect(assess(rows), pin).toEqual([{ repo: first.repo, reasons: ["invalid:legacy-any-name@pin"] }]);
+						}
+					}
+				}
+			}
+		}
+	});
+
 	it.each(["dependencies", "devDependencies"] as const)("retains every Release marker despite combined prefix and suffix traversal in %s", (section) => {
 		for (const member of MEMBERS) {
 			for (const authority of ["github.com", "github.com:bad", "foreign.example", "user@github.com", "[invalid"]) {

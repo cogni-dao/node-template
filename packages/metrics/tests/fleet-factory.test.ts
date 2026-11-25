@@ -61,6 +61,29 @@ describe("public fleet calculator", () => {
 					}
 				}
 			}
+			// Marker formation and tag erasure happen in the same native parse.
+			for (const member of members) {
+				const tag = `%${member.tagPrefix.charCodeAt(0).toString(16)}${member.tagPrefix.slice(1).replace("-v", "%2dv")}0.2.0%FF`;
+				for (const marker of [
+					`releases/./download/${tag}`, `releases/%2e/download/${tag}`,
+					`releases/drop/../download/${tag}`, `releases/download/./${tag}`,
+					`releases/download/drop/../${tag}`,
+					`%72eleases/a/b/../%2e%2e/%64ownload/c/d/%2e%2e/../${tag}`,
+				]) {
+					for (const authority of ["github.com:bad", "foreign.example", "user@github.com", "github.com"]) {
+						for (const asset of ["p%FF.tgz", "x.tgz"]) {
+							const raw = `https://${authority}/cogni-dao/node-template/tmp/%2e%2e/${marker}/%2e%2e/unrelated-v8.0.0/${asset}`;
+							for (alias of [raw, ` \t${raw.replace(/\//g, "\\")}\r\n`]) {
+								await compute(authority === "github.com" && asset === "x.tgz" ? undefined : "invalid:legacy-any-name@pin");
+							}
+						}
+					}
+					for (const target of members.map((m) => `${m.tagPrefix}0.26.0/x.tgz`)) {
+						alias = `https://github.com/cogni-dao/node-template/tmp/%2e%2e/${marker}/../${target}`;
+						await compute();
+					}
+				}
+			}
 			for (const slashes of ["", "/", "//", "///", "////"]) {
 				for (const { scheme, authority } of ["https", "http"].flatMap((scheme) => ["github.com", "github.com:bad", "[invalid", "foreign.example", "user@github.com"].map((authority) => ({ scheme, authority })))) {
 					for (const suffix of ["", "%FF", "%C3%28"]) {
