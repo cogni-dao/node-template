@@ -11,6 +11,284 @@ const params = {
 };
 
 describe("public fleet calculator", () => {
+	it.each((["dependencies", "devDependencies"] as const).flatMap((section) => [1, 5].map((size) => ({ section, size }))))("retains member refusals through combined prefix/suffix traversal ($section, $size members)", async ({ section, size }) => {
+		const calculator = createFleetTrainLagCalculator();
+		const members = ["metrics", "work-items", "knowledge-store", "knowledge-base-ui", "ai-tools"].slice(0, size).map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));
+		const consumers = Array.from({ length: size === 1 ? 1 : 6 }, (_, i) => ({ repo: `cogni-dao/consumer${i}`, manifestPath: "package.json" }));
+		const official = Object.fromEntries(members.map((m) => [m.name, `https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.26.0/x.tgz`]));
+		let alias: string | undefined;
+		const calls: string[] = [];
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			calls.push(address);
+			expect(["https://api.github.com", "https://raw.githubusercontent.com"]).toContain(new URL(address).origin);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			const body = address.includes("matching-refs") ? [{ ref: "refs/tags/train-v0.26.0" }]
+				: tag ? { tag_name: decodeURIComponent(tag), published_at: "2026-11-20T00:00:00Z" }
+				: { dependencies: { ...official, "@cogni/metrics": "workspace:*", ...(section === "dependencies" && alias && address.includes("consumer0/") ? { "legacy-any-name": alias } : {}) }, devDependencies: { "@cogni/knowledge-store": "workspace:*", ...(section === "devDependencies" && alias && address.includes("consumer0/") ? { "legacy-any-name": alias } : {}) } };
+			return new Response(JSON.stringify(body), { headers: { date: "Sun, 22 Nov 2026 00:00:00 GMT" } });
+		});
+		const controller = new AbortController();
+		const compute = async (reason?: string) => {
+			calls.length = 0;
+			const result = await calculator.compute({ ...params, members, consumers }, {
+				window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+				signal: controller.signal, budget: calculator.budget, read: async (source) => source(controller.signal, calculator.budget),
+			});
+			const lagging = reason ? 1 : 0;
+			expect(result, alias).toMatchObject({ complete: true, value: lagging });
+			expect(result.evidenceRefs).toContain(`fleet:train-lag:counts:evaluated=${consumers.length};lagging=${lagging};train=0.26.0`);
+			if (reason) expect(result.evidenceRefs).toContain(`fleet:train-lag:lagging=cogni-dao/consumer0:${reason}`);
+			expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(1 + size);
+			expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(consumers.length);
+		};
+		try {
+			await compute();
+			alias = "https://github.com:bad/cogni-dao/node-template/tmp/../releases/download/metrics-v0.1.0/../other";
+			await compute("invalid:legacy-any-name@pin");
+			for (const member of members) {
+				const encodedTag = `%${member.tagPrefix.charCodeAt(0).toString(16)}${member.tagPrefix.slice(1).replace("-v", "%2dv")}0.1.0`;
+				for (const authority of ["github.com", "github.com:bad", "[invalid", "foreign.example", "user@github.com"]) {
+					for (const { path, validTarget } of [
+						{ path: `/cogni-dao/node-template/tmp/../releases/download/${member.tagPrefix}0.1.0/../other`, validTarget: false },
+						{ path: `/%63ogni-dao/node%2dtemplate/tmp/%2e%2E/%72eleases/%64ownload/${encodedTag}%FF/%2e%2e/unrelated-v1.0.0/x.tgz`, validTarget: true },
+						{ path: `/cogni-dao/node-template/tmp/../releases%2fdownload/${encodedTag}%C3%28/../unrelated-v1.0.0/p%FF.tgz`, validTarget: false },
+					]) {
+						const raw = `https://${authority}${path}`;
+						for (alias of [raw, ` \t${raw.replace(/\//g, "\\")}\n`]) {
+							await compute(authority === "github.com" && validTarget ? undefined : "invalid:legacy-any-name@pin");
+						}
+					}
+				}
+			}
+			// Marker formation and tag erasure happen in the same native parse.
+			for (const member of members) {
+				const tag = `%${member.tagPrefix.charCodeAt(0).toString(16)}${member.tagPrefix.slice(1).replace("-v", "%2dv")}0.2.0%FF`;
+				for (const marker of [
+					`releases/./download/${tag}`, `releases/%2e/download/${tag}`,
+					`releases/drop/../download/${tag}`, `releases/download/./${tag}`,
+					`releases/download/drop/../${tag}`,
+					`%72eleases/a/b/../%2e%2e/%64ownload/c/d/%2e%2e/../${tag}`,
+				]) {
+					for (const authority of ["github.com:bad", "foreign.example", "user@github.com", "github.com"]) {
+						for (const asset of ["p%FF.tgz", "x.tgz"]) {
+							const raw = `https://${authority}/cogni-dao/node-template/tmp/%2e%2e/${marker}/%2e%2e/unrelated-v8.0.0/${asset}`;
+							for (alias of [raw, ` \t${raw.replace(/\//g, "\\")}\r\n`]) {
+								await compute(authority === "github.com" && asset === "x.tgz" ? undefined : "invalid:legacy-any-name@pin");
+							}
+						}
+					}
+					for (const target of members.map((m) => `${m.tagPrefix}0.26.0/x.tgz`)) {
+						alias = `https://github.com/cogni-dao/node-template/tmp/%2e%2e/${marker}/../${target}`;
+						await compute();
+					}
+				}
+			}
+			for (const slashes of ["", "/", "//", "///", "////"]) {
+				for (const { scheme, authority } of ["https", "http"].flatMap((scheme) => ["github.com", "github.com:bad", "[invalid", "foreign.example", "user@github.com"].map((authority) => ({ scheme, authority })))) {
+					for (const suffix of ["", "%FF", "%C3%28"]) {
+						for (const tail of ["/x.tgz", "/../other", "/%2e%2e/other", "/../other/x.tgz"]) {
+							const raw = `${scheme}:${slashes}${authority}/cogni-dao/node-template/%72eleases/%64ownload/%6detrics%2dv0.1.0${suffix}${tail}`;
+							for (alias of [raw, raw.replace("%72eleases/%64ownload/%6detrics%2dv", "releases/download/metrics-v"), ` \t${raw.replace(/\//g, "\\").replace("node-template", "node-\ttemplate")}\n`]) {
+								const trusted = scheme === "https" && authority === "github.com";
+								await compute(trusted && tail === "/../other/x.tgz" ? undefined
+									: trusted && tail === "/x.tgz" && !suffix ? "behind:legacy-any-name@0.1.0" : "invalid:legacy-any-name@pin");
+							}
+						}
+					}
+				}
+			}
+			for (const target of [...members.map((m) => `${m.tagPrefix}0.26.0/x.tgz`), "unrelated-v1.0.0/x.tgz"]) {
+				alias = `https://github.com/cogni-dao/node-template/tmp/%2e%2e/releases/download/%6detrics-v0.1.0%FF/../${target}`;
+				await compute();
+			}
+			for (const authority of ["github.com", "github.com:bad", "[invalid"]) {
+				alias = `https:/${authority}/cogni-dao/node-template/tmp/../releases/download/unrelated-v1.0.0%FF/../other`;
+				await compute();
+			}
+		} finally { fetchMock.mockRestore(); }
+	});
+
+	it.each((["dependencies", "devDependencies"] as const).flatMap((section) => [
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x.tgz", invalid: false },
+		{ section, path: "/cogni-dao/node-template/releases/%64ownload/metrics-vVERSION/x.tgz", invalid: false },
+		{ section, path: "/cogni-dao/node-template/%72eleases/download/metrics-vVERSION/x.tgz", invalid: false },
+		{ section, path: "/%63ogni-dao/node%2dtemplate/%72eleases/%64ownload/%6detrics-vVERSION/%78.tgz", invalid: false },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/..", invalid: true },
+		{ section, path: "/cogni-dao/node-template/%72eleases/%64ownload/metrics-vVERSION/%2e%2E", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases%2fdownload/metrics-vVERSION/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download%5cmetrics-vVERSION/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x%2ftgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x%broken", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x%0A%FF", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics-vVERSION/x.tgz", invalid: true, authority: "[invalid" },
+		{ section, path: "/cogni-dao/node-template/tmp/../%72eleases/%64ownload/metrics-vVERSION/x.tgz", invalid: true, authority: "[invalid" },
+		{ section, path: "\\cogni-dao\\node-template\\releases\\download\\metrics-vVERSION\\x.tgz", invalid: true, authority: "github.com:bad" },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics%2dvVERSION%zz/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/%6detrics%2dvVERSION%C3%28/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/%6detrics%2dvVERSION%FF/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics%2dvVERSION%/x.tgz", invalid: true },
+		{ section, path: "/cogni-dao/node-template/releases/download/metrics%2dvVERSION%zz/..", invalid: true, authority: "[invalid" },
+	]))("qualifies escaped identity in $section: $path (invalid: $invalid)", async ({ section, path, invalid, authority }) => {
+		const calculator = createFleetTrainLagCalculator();
+		const members = ["work-items", "knowledge-store", "knowledge-base-ui", "metrics", "ai-tools"].map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));
+		const consumers = Array.from({ length: 6 }, (_, i) => ({ repo: `cogni-dao/consumer${i}`, manifestPath: "package.json" }));
+		const official = Object.fromEntries(members.map((m) => [m.name, `https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.26.0/x.tgz`]));
+		const calls: string[] = [];
+		let alias: string | undefined;
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			calls.push(address);
+			expect(["https://api.github.com", "https://raw.githubusercontent.com"]).toContain(new URL(address).origin);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			const body = address.includes("matching-refs") ? [{ ref: "refs/tags/train-v0.26.0" }]
+				: tag ? { tag_name: decodeURIComponent(tag), published_at: "2026-11-20T00:00:00Z" }
+				: { dependencies: { ...official, "@cogni/ai-tools": "workspace:*", ...(section === "dependencies" && alias && (!invalid || address.includes("consumer0/")) ? { "old-metrics": alias } : {}) }, devDependencies: { "@cogni/knowledge-store": "workspace:*", ...(section === "devDependencies" && alias && (!invalid || address.includes("consumer0/")) ? { "old-metrics": alias } : {}) } };
+			return new Response(JSON.stringify(body));
+		});
+		const controller = new AbortController();
+		const compute = async (lagging: number) => {
+			calls.length = 0;
+			const result = await calculator.compute({ ...params, members, consumers }, {
+				window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+				signal: controller.signal, budget: calculator.budget, read: async (source) => source(controller.signal, calculator.budget),
+			});
+			expect(result, alias).toMatchObject({ complete: true, value: lagging });
+			expect(result.evidenceRefs).toContain(`fleet:train-lag:counts:evaluated=6;lagging=${lagging};train=0.26.0`);
+			if (lagging) expect(result.evidenceRefs).toContain(`fleet:train-lag:lagging=cogni-dao/consumer0:${invalid ? "invalid:old-metrics@pin" : "behind:old-metrics@0.25.0"}`);
+			expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(6);
+			expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(6);
+		};
+		try {
+			await compute(0);
+			for (const version of ["0.25.0", "0.26.0"]) {
+				for (const prefix of ["", "\t", " \r\n", "\u0000\u001f"]) {
+					alias = `${prefix}https://${authority ?? "github.com"}${path.replace("VERSION", version)}`;
+					await compute(invalid ? 1 : version === "0.25.0" ? 6 : 0);
+				}
+			}
+		} finally { fetchMock.mockRestore(); }
+	});
+	it.each(["dependencies", "devDependencies"] as const)("retains invalid Release aliases in %s beside five current pins", async (section) => {
+		const calculator = createFleetTrainLagCalculator();
+		const members = ["work-items", "knowledge-store", "knowledge-base-ui", "metrics", "ai-tools"].map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));
+		const consumers = Array.from({ length: 6 }, (_, i) => ({ repo: `cogni-dao/consumer${i}`, manifestPath: "package.json" }));
+		const official = Object.fromEntries(members.map((m) => [m.name, `https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.25.0/x.tgz`]));
+		let bad: string | undefined;
+		const calls: string[] = [];
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			calls.push(address);
+			expect(["https://api.github.com", "https://raw.githubusercontent.com"]).toContain(new URL(address).origin);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			const body = address.includes("matching-refs") ? [{ ref: "refs/tags/train-v0.25.0" }]
+				: tag ? { tag_name: decodeURIComponent(tag), published_at: "2026-11-20T00:00:00Z" }
+				: { dependencies: { ...official, ...(section === "dependencies" && bad && address.includes("consumer0/") ? { "old-metrics": bad } : {}) }, devDependencies: section === "devDependencies" && bad && address.includes("consumer0/") ? { "old-metrics": bad } : {} };
+			return new Response(JSON.stringify(body));
+		});
+		const controller = new AbortController();
+		const compute = async () => {
+			calls.length = 0;
+			const result = await calculator.compute({ ...params, members, consumers }, {
+				window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+				signal: controller.signal, budget: calculator.budget, read: async (source) => source(controller.signal, calculator.budget),
+			});
+			expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(6);
+			expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(6);
+			return result;
+		};
+		try {
+			expect(await compute()).toMatchObject({ complete: true, value: 0 });
+			for (bad of [
+				"https://github.com.evil.test/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"http://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://foreign.example/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://user@github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://[invalid/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0/",
+				"https://github.com/cogni-dao/node-template/releases/download/metrics-v0.1.0%2Fbad/x.tgz",
+				"https://github.com/outsider/temporary/../node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://foreign.example/cogni-dao/staging/%2E%2e/node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://github.com.evil.test/cogni-dao/node-template/tmp/../releases/download/metrics-v0.1.0/x.tgz",
+				"https:\\github.com\\outsider\\removed\\..\\node-template\\releases\\download\\metrics-v0.1.0\\x.tgz",
+				" \tHTTPS://FOREIGN.EXAMPLE/cogni-dao/node-template/releases/download/metrics-v0.1.0/x.tgz\r\n",
+				"http://github.com/cogni-dao/deleted/%2e./node-template/releases/download/metrics-v0.1.0/x.tgz",
+				"https://user:secret@github.com/cogni-dao/node-template/./releases/download/metrics-v0.1.0/x.tgz",
+				"https://[invalid/cogni-dao/node-template/releases/download/metrics-v0.1.0%broken/x.tgz",
+			]) {
+				const result = await compute();
+				expect(result, bad).toMatchObject({ complete: true, value: 1 });
+				expect(result.evidenceRefs).toContain("fleet:train-lag:counts:evaluated=6;lagging=1;train=0.25.0");
+			}
+			for (const normalized of [
+				"https://github.com/cogni-dao/staging/../node-template/releases/download/metrics-vVERSION/x.tgz",
+				"https://github.com/cogni-dao/node-template/removed/%2e%2E/releases/download/metrics-vVERSION/x.tgz",
+				"https:\\github.com\\cogni-dao\\node-template\\releases\\download\\metrics-vVERSION\\x.tgz",
+				"\tHTTPS://GITHUB.COM/cogni-dao/node-template/./releases/download/metrics-vVERSION/x.tgz\n",
+			]) {
+				bad = normalized.replace("VERSION", "0.1.0");
+				const old = await compute();
+				expect(old, bad).toMatchObject({ complete: true, value: 1 });
+				expect(old.evidenceRefs).toContain("fleet:train-lag:lagging=cogni-dao/consumer0:behind:old-metrics@0.1.0");
+				bad = normalized.replace("VERSION", "0.25.0");
+				expect(await compute(), bad).toMatchObject({ complete: true, value: 0 });
+			}
+		} finally { fetchMock.mockRestore(); }
+	});
+	it.each([false, true])("selects the first mature train through the factory (two young trains: %s)", async (twoYoung) => {
+		const calculator = createFleetTrainLagCalculator();
+		const members = ["work-items", "knowledge-store", "knowledge-base-ui", "metrics", "ai-tools"].map((name) => ({ name: `@cogni-dao/${name}`, tagPrefix: `${name}-v` }));
+		const consumers = Array.from({ length: 6 }, (_, i) => ({ repo: `cogni-dao/consumer${i}`, manifestPath: "package.json" }));
+		const calls: string[] = [];
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			calls.push(address);
+			const tag = /releases\/tags\/(.+)$/.exec(address)?.[1];
+			const body = address.includes("matching-refs") ? ["0.24.0", "0.26.0", "0.25.0"].map((v) => ({ ref: `refs/tags/train-v${v}` }))
+				: tag ? { tag_name: decodeURIComponent(tag), published_at: twoYoung && !tag.endsWith("0.24.0") ? "2026-11-21T00:00:00.001Z" : "2026-11-21T00:00:00.000Z" }
+				: { dependencies: Object.fromEntries(members.map((m) => [m.name, `https://github.com/cogni-dao/node-template/releases/download/${m.tagPrefix}0.26.0/x.tgz`])), devDependencies: { "@cogni/metrics": "workspace:*" } };
+			return new Response(JSON.stringify(body));
+		});
+		const controller = new AbortController();
+		try {
+			const result = await calculator.compute({ ...params, members, consumers }, {
+				window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+				signal: controller.signal, budget: calculator.budget, read: async (source) => source(controller.signal, calculator.budget),
+			});
+			expect(result).toMatchObject({ complete: true, value: 0 });
+			expect(result.evidenceRefs).toContain(`fleet:train-lag:counts:evaluated=6;lagging=0;train=${twoYoung ? "0.24.0" : "0.26.0"}`);
+			expect(calls.filter((address) => address.startsWith("https://api.github.com/"))).toHaveLength(twoYoung ? 8 : 6);
+			expect(calls.filter((address) => address.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(6);
+			if (!twoYoung) expect(calls.some((address) => /releases\/tags\/.*0\.(24|25)\.0/.test(address))).toBe(false);
+		} finally { fetchMock.mockRestore(); }
+	});
+	it("does not let an official alias mask a foreign canonical pin", async () => {
+		const calculator = createFleetTrainLagCalculator();
+		const official = "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/metrics.tgz";
+		const foreign = "https://github.com/other/fork/releases/download/metrics-v0.1.0/metrics.tgz";
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const address = String(input);
+			const body = address.includes("matching-refs")
+				? [{ ref: "refs/tags/train-v0.25.0" }]
+				: address.includes("releases/tags/")
+					? { tag_name: "metrics-v0.25.0", published_at: "2026-11-20T00:00:00Z" }
+					: { dependencies: { "@cogni/metrics": official, "@cogni-dao/metrics": foreign } };
+			return new Response(JSON.stringify(body));
+		});
+		const controller = new AbortController();
+		try {
+			const result = await calculator.compute(params, {
+				window: { start: "2026-11-21T00:00:00.000Z", end: "2026-11-22T00:00:00.000Z" },
+				signal: controller.signal,
+				budget: calculator.budget,
+				read: async (source) => source(controller.signal, calculator.budget),
+			});
+			expect(result).toMatchObject({ complete: true, value: 1 });
+		} finally {
+			fetchMock.mockRestore();
+		}
+	});
+
 	it("owns the existing descriptor and strictly validates its parameters", () => {
 		const calculator = createFleetTrainLagCalculator();
 		expect(calculator).toMatchObject({
