@@ -2172,9 +2172,11 @@ describe("host-owned research stages", () => {
 	it("dispatches the critic after a successful repair and accepts one revision", async () => {
 		let rootTurn = 0;
 		let childTurns = 0;
+		let childTools = -1;
 		const run = research((req) => {
 			if (!isRoot(req)) {
 				childTurns++;
+				childTools = (req.tools ?? []).length;
 				const fingerprint =
 					JSON.stringify(req.messages).match(/[a-f0-9]{64}/)?.[0] ?? "";
 				return reply(
@@ -2225,6 +2227,8 @@ describe("host-owned research stages", () => {
 		}
 		const output = JSON.parse((await run.final).content ?? "{}");
 		expect(childTurns).toBe(1);
+		// The tool-less critic is offered no scratch or todo tools to loop on.
+		expect(childTools).toBe(0);
 		expect(rootTurn).toBe(4);
 		expect(output.status).toBe("complete");
 		expect(output.packet.missionScope).toBe("bounded mission");
