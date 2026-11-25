@@ -917,7 +917,7 @@ function createContainer(): Container {
 				log.info(
 					{ event: EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KINDS, ...counts, ...(runId ? { runId } : {}) },
 					EVENT_NAMES.WORK_ITEMS_HISTORY_ACTOR_KINDS,
-        );
+				);
 			},
 		);
 		// story.0061: a successful patch also records the (atom, item) pairs it cites; the route and the agent tool share
