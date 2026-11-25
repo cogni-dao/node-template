@@ -150,6 +150,8 @@ describe("useSignEpoch", () => {
     );
     expect(wallet.signTypedDataAsync).not.toHaveBeenCalled();
     expect(result.current.state.phase).toBe("ERROR");
-    expect(result.current.state.errorMessage).toContain("409");
+    expect(result.current.state.errorMessage).toBe(
+      "Safe details are unavailable. Refresh review state."
+    );
   });
 });

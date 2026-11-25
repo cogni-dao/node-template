@@ -51,10 +51,14 @@ describe("useCollectEpoch", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/attribution/epochs/collect",
-      { method: "POST", credentials: "same-origin" }
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        signal: expect.any(AbortSignal),
+      })
     );
     expect(refetch).toHaveBeenCalledWith({
-      queryKey: ["governance"],
+      queryKey: ["governance", "epoch-scope", expect.any(String)],
       type: "active",
     });
     expect(result.current.successMessage).toMatch(/sync started/i);

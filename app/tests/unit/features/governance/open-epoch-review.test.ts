@@ -46,10 +46,16 @@ describe("useOpenEpochReview", () => {
     expect(global.fetch).toHaveBeenCalledOnce();
     expect(global.fetch).toHaveBeenCalledWith(
       "/api/v1/attribution/epochs/epoch-7/review",
-      { method: "POST", credentials: "same-origin" }
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        signal: expect.any(AbortSignal),
+      })
     );
     await waitFor(() =>
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["governance"] })
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: ["governance", "epoch-scope", expect.any(String)],
+      })
     );
   });
 });

@@ -58,6 +58,7 @@ function wrapperFor(): ({ children }: { children: ReactNode }) => ReactNode {
 function mockApi(epochs: readonly EpochDto[], lifecycleOk = true) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    const epochId = url.match(/epochs\/(\d+)\//)?.[1];
     const ok = (body: unknown) =>
       ({ ok: true, json: async () => body }) as Response;
     if (url.includes("settlement-lifecycle")) {
@@ -77,6 +78,7 @@ function mockApi(epochs: readonly EpochDto[], lifecycleOk = true) {
     }
     if (url.includes("/user-projections")) {
       return ok({
+        epochId,
         items: [],
         total: 0,
         totalUnits: "0",
@@ -89,10 +91,10 @@ function mockApi(epochs: readonly EpochDto[], lifecycleOk = true) {
         offset: 0,
       });
     }
-    if (url.includes("/activity")) return ok({ events: [] });
+    if (url.includes("/activity")) return ok({ epochId, events: [] });
     if (url.includes("/claimants")) {
       return ok({
-        epochId: "x",
+        epochId,
         items: [],
         total: 0,
         totalUnits: "0",
