@@ -1,0 +1,40 @@
+{
+  "name": "@cogni-dao/extension-kit",
+  "version": "0.1.0",
+  "license": "LicenseRef-PolyForm-Shield-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cogni-DAO/node-template.git",
+    "directory": "packages/extension-kit"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup && tsc -b --force",
+    "typecheck": "tsc --noEmit --emitDeclarationOnly false",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "peerDependencies": {
+    "@cogni/agent-grants": ">=0.10.0",
+    "@cogni/ai-tools": ">=0.26.0"
+  },
+  "devDependencies": {
+    "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*",
+    "@cogni/ai-tools": "workspace:@cogni-dao/ai-tools@*",
+    "tsup": "^8.5.1",
+    "typescript": "^5",
+    "vitest": "^3.1.4"
+  }
+}

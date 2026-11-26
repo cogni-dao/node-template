@@ -5,8 +5,6 @@ import {
 } from "@cogni/agent-grants";
 import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
 import {
-	buildPermissionCatalog,
-	buildRequiresById,
 } from "@cogni/agent-grants/host";
 import {
 	agentAccessRequestCreateOperation,
@@ -43,8 +41,7 @@ import {
  * @public
  */
 
-import { NODE_TOOL_REQUIRES_RECORDS } from "@/bootstrap/ai/tool-bundle";
-import { nodeExtensions } from "@/node-extensions";
+import { getContainer } from "@/bootstrap/container";
 import {
 	confirmAgentCredentialOperation,
 	creditsSummaryOperation,
@@ -86,10 +83,8 @@ export async function GET(request: Request) {
 	const env = serverEnv();
 	const origin = publicOrigin(request);
 	// DECLARED_ONCE_SHOWN_EVERYWHERE: rendered from the grant declarations on every read, never a copy table.
-	const { permissions: askable } = buildPermissionCatalog(
-		buildRequiresById(NODE_TOOL_REQUIRES_RECORDS),
-		nodeExtensions.routes,
-	);
+	// The authority's catalog is built once from the container's composed bundle and routes (core + node-local + node-extensions).
+	const { permissions: askable } = getContainer().agentAuthority;
 	// Each askable permission says where its approval link opens, from its declared kind (an account permission: the person's profile; any
 	// other: the node-admin page). The ask returns the link itself (`approvalUrl`); this is its shape, so an agent can plan before it asks.
 	const permissions = askable.map((p) => ({

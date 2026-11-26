@@ -65,7 +65,7 @@ describe("composeAgentRoutes", () => {
         sameDoorRoutes: { poly__x: { scope: trade.scope, routes: ["poly.x"] } },
         noRouteTwin: { poly__x: "a reason that is long enough" },
       })
-    ).toThrow(/both twinned|route twin and is also/);
+    ).toThrow(/ROUTE_COLLISION: tool "poly__x" is declared by/);
     expect(() => composeAgentRoutes({ sameDoorRoutes: { poly__x: { scope: trade.scope, routes: ["work.items.patch"] } } })).toThrow(/ROUTE_COLLISION: route "work.items.patch"/);
   });
 });

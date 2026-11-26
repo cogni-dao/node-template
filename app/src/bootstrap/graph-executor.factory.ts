@@ -55,7 +55,6 @@ import {
 } from "@/adapters/server";
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import { NODE_LOCAL_CATALOG } from "@/bootstrap/ai/secret-probe";
-import { NODE_TOOL_BUNDLE } from "@/bootstrap/ai/tool-bundle";
 import { resolveNodeSourceContext } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type {
   BillingContext,
@@ -564,7 +563,7 @@ function createInProcProvider(
     inprocAdapter,
     container.toolSource,
     () => cache.getSource(),
-    NODE_TOOL_BUNDLE,
+    container.toolBundle,
     async (required) =>
       resolveNodeSourceContext(
         required,
@@ -587,8 +586,8 @@ function createInProcProvider(
 function createDevProvider(apiUrl: string): LangGraphDevProvider {
   const client = createLangGraphDevClient({ apiUrl });
   const availableGraphs = Object.keys(LANGGRAPH_CATALOG);
-  const secretToolIds = NODE_TOOL_BUNDLE
-    .filter((bt) => declaresSecretArgs(bt.contract))
+  const secretToolIds = getContainer()
+    .toolBundle.filter((bt) => declaresSecretArgs(bt.contract))
     .map((bt) => bt.contract.name);
   return new LangGraphDevProvider(client, { availableGraphs, secretToolIds });
 }

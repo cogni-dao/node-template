@@ -339,7 +339,8 @@ describe("the container hands the tools only the attributed capabilities (task.0
 
   it("binds the EDO tools to the run's attribution and hands that, not the route capability, to the tool bindings", () => {
     expect(code).toMatch(/bindEdoToolCapability\(\s*edoCapability,\s*runAttribution/);
-    const bindings = code.slice(code.indexOf("createToolBindings({"), code.indexOf("createToolBindings({") + 400);
+    const at = code.indexOf("toolBindingDeps: ToolBindingDeps = {");
+    const bindings = code.slice(at, at + 400);
     expect(bindings).toContain("edoCapability: edoToolCapability");
   });
 });

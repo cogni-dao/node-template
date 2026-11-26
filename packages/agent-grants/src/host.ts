@@ -22,6 +22,7 @@
 
 import { type MineListInput, listMine, scopesByPrincipalOf, turnMineOff, turnMineOn } from "./account-access";
 import type { ApprovalCaller } from "./approval";
+import { mergeAddOnly, type Source } from "./add-only";
 import { type AgentRoutes, authorizeCaller, composeAgentRoutes, type ComposedRoutes } from "./same-door";
 import { buildAskView, buildNodeAiView } from "./node-ai";
 import { agentNameKey } from "./names";
@@ -136,7 +137,7 @@ function sameDeclaration(a: ToolRequires, b: ToolRequires): boolean {
 /**
  * The one derivation of a node's permission catalog from its declarations. The role routes (`declaredScopes`), the ask door (`askableScopes`) and agent
  * discovery (`permissions`) all read it. DECLARED_ONCE_SHOWN_EVERYWHERE: a scope with no label and description is not shown. ASKABLE_IS_REACHABLE: an
- * outside agent can ask only for a scope a route twin uses. `routes` is a node's add-only route twins and route-only capabilities (`composeAgentRoutes`).
+ * outside agent can ask only for a scope a route twin uses. `routes` (@beta) is a node's add-only route twins and route-only capabilities (`composeAgentRoutes`).
  * SCOPE_DECLARED_ONCE: a scope declared again with a different kind, subject, label or description throws; a repeat that matches field for field is the same declaration.
  */
 export function buildPermissionCatalog(requiresById: Readonly<Record<string, ToolRequires>>, routes?: AgentRoutes): PermissionCatalog {
@@ -144,17 +145,13 @@ export function buildPermissionCatalog(requiresById: Readonly<Record<string, Too
 }
 
 function catalogOf(requiresById: Readonly<Record<string, ToolRequires>>, composed: ComposedRoutes): PermissionCatalog {
-  const requires: Record<string, ToolRequires> = {};
-  const declaredBy: Record<string, string> = {};
-  const declare = (r: ToolRequires, by: string) => {
-    const prior = requires[r.scope];
-    if (prior && !sameDeclaration(prior, r))
-      throw new Error(`SCOPE_DECLARED_TWICE: scope "${r.scope}" is declared by "${declaredBy[r.scope]}" and again, with different fields, by "${by}"`);
-    requires[r.scope] = r;
-    declaredBy[r.scope] ??= by;
-  };
-  for (const [id, r] of Object.entries(requiresById)) declare(r, id);
-  for (const [id, cap] of Object.entries(composed.routeOnlyCapabilities)) declare(cap.requires, id);
+  // SCOPE_DECLARED_ONCE: one declaration per scope. A repeat that matches field for field (two tools sharing a scope) is the same declaration.
+  const bySource = (source: string, r: ToolRequires): Source<ToolRequires> => ({ source, entries: { [r.scope]: r } });
+  const requires = mergeAddOnly<ToolRequires>(
+    { what: "scope", code: "SCOPE_DECLARED_TWICE", same: sameDeclaration },
+    ...Object.entries(requiresById).map(([id, r]) => bySource(id, r)),
+    ...Object.entries(composed.routeOnlyCapabilities).map(([id, cap]) => bySource(id, cap.requires))
+  );
 
   const declarations: Record<string, PermissionDeclaration> = {};
   const scopeKinds: Record<string, ScopeKind> = {};

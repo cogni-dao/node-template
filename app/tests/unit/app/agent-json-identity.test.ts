@@ -10,8 +10,26 @@
  * Side-effects: none
  */
 
-import { ROUTE_ONLY_CAPABILITIES } from "@cogni/agent-grants";
+import { type AgentRoutes, composeAgentRoutes } from "@cogni/agent-grants";
+import { buildPermissionCatalog, buildRequiresById } from "@cogni/agent-grants/host";
+import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const ROUTE_ONLY_CAPABILITIES = composeAgentRoutes().routeOnlyCapabilities;
+/** Routes a test adds, the way a node's `node-extensions.ts` would. */
+const added = vi.hoisted(() => ({ routes: undefined as AgentRoutes | undefined }));
+
+// The route reads the authority's catalog from the container: the same derivation over the composed bundle and routes, with no database.
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({
+    agentAuthority: {
+      permissions: buildPermissionCatalog(
+        buildRequiresById(CORE_TOOL_BUNDLE.map((t) => ({ id: t.contract.name, requires: t.contract.requires }))),
+        added.routes
+      ).permissions,
+    },
+  }),
+}));
 
 vi.mock("@/shared/env", () => ({
   serverEnv: () => ({ APP_BUILD_SHA: "test-sha" }),
@@ -35,7 +53,7 @@ const read = async () => {
 
 describe("agent.json identity", () => {
   afterEach(() => {
-    delete (ROUTE_ONLY_CAPABILITIES as Record<string, unknown>)["test.cap"];
+    added.routes = undefined;
   });
 
   it("lists the identity actions with their method and path", async () => {
@@ -89,15 +107,19 @@ describe("agent.json identity", () => {
   });
 
   it("shows a new declaration with no discovery edit", async () => {
-    (ROUTE_ONLY_CAPABILITIES as Record<string, unknown>)["test.cap"] = {
-      requires: {
-        scope: "test:cap",
-        kind: "node",
-        subject: "member",
-        label: "Try a test capability",
-        description: "Only a test declares this.",
+    added.routes = {
+      routeOnlyCapabilities: {
+        "test.cap": {
+          requires: {
+            scope: "test:cap",
+            kind: "node",
+            subject: "member",
+            label: "Try a test capability",
+            description: "Only a test declares this.",
+          },
+          routes: ["test.cap"],
+        },
       },
-      routes: ["test.cap"],
     };
     const { permissions } = await read();
     expect(permissions).toContainEqual({

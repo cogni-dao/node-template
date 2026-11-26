@@ -10,25 +10,30 @@
  *   and `expect` from the caller (the package imports no test runner). No database.
  * Invariants: TOOL_HAS_ROUTE_TWIN, SAME_DOOR (one scope on the tool and on its route twin).
  * Side-effects: none
- * @public
+ * @beta
  */
 
 import { type ComposedRoutes, NO_ROUTE_TWIN, SAME_DOOR_ROUTES } from "./same-door";
 import type { ToolRequires } from "./types";
 
-/** What the parity rules read of a tool contract. A node maps its contracts to this shape (an ai-tools contract already has it). */
+/** What the parity rules read of a tool contract. A node maps its contracts to this shape (an ai-tools contract already has it).
+ * @beta
+ */
 export interface ParityContract {
   readonly name: string;
   readonly effect: string;
   readonly requires?: ToolRequires | undefined;
 }
 
-/** A rule returns the offending names; an empty list is a pass. */
+/** A rule returns the offending names; an empty list is a pass.
+ * @beta
+ */
 export interface ParityRule {
   readonly name: string;
   readonly violations: (contracts: readonly ParityContract[], routes: ComposedRoutes, options: ParityOptions) => string[];
 }
 
+/** @beta */
 export interface ParityOptions {
   /**
    * The package baseline names tools a given node may not carry (the operator's VCS tools). Each id listed here may be missing from `contracts`; any other baseline
@@ -40,7 +45,9 @@ export interface ParityOptions {
 const isAbsentOk = (tool: string, options: ParityOptions) =>
   (options.absentBaseline ?? []).includes(tool) && (tool in SAME_DOOR_ROUTES || tool in NO_ROUTE_TWIN);
 
-/** The tools that change state (or have an outside effect) and are neither twinned nor exempt. Exported so a test can show the check fails on a new tool. */
+/** The tools that change state (or have an outside effect) and are neither twinned nor exempt. Exported so a test can show the check fails on a new tool.
+ * @beta
+ */
 export function unmappedWriteTools(
   tools: ReadonlyArray<{ name: string; effect: string }>,
   mapped: Readonly<Record<string, unknown>>,
@@ -53,6 +60,7 @@ export function unmappedWriteTools(
 
 const isGatedReader = (c: ParityContract) => c.effect === "read_only" && c.requires !== undefined;
 
+/** @beta */
 export const SAME_DOOR_PARITY_RULES: readonly ParityRule[] = [
   {
     name: "maps or allowlists every non-read_only tool",
@@ -113,6 +121,7 @@ export const SAME_DOOR_PARITY_RULES: readonly ParityRule[] = [
 // biome-ignore lint/suspicious/noExplicitAny: structural match for vitest's `expect`
 type Expect = (value: unknown) => any;
 
+/** @beta */
 export interface SameDoorParityHarness {
   describe: (name: string, fn: () => void) => void;
   it: (name: string, fn: () => void) => void;
@@ -124,7 +133,9 @@ export interface SameDoorParityHarness {
   readonly options?: ParityOptions | undefined;
 }
 
-/** Register one row per rule over the node's composed set. A failing row lists the offending tool or capability names. */
+/** Register one row per rule over the node's composed set. A failing row lists the offending tool or capability names.
+ * @beta
+ */
 export function runSameDoorParity(h: SameDoorParityHarness): void {
   h.describe("same-door parity", () => {
     for (const rule of SAME_DOOR_PARITY_RULES)

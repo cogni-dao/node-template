@@ -15,12 +15,12 @@ import type { ToolContract } from "./types";
 
 type GuardedContract = Pick<ToolContract<string, unknown, unknown, unknown>, "name" | "effect" | "requires">;
 
-/** The tools that change state (or reach outside) and declare no `requires`. */
+/** The tools that change state (or reach outside) and declare no `requires`. @beta */
 export function contractsMissingRequires(contracts: readonly GuardedContract[]): string[] {
   return contracts.filter((c) => c.effect !== "read_only" && c.requires === undefined).map((c) => c.name);
 }
 
-/** The read_only tools that declare `requires` for anything but one account's data (`kind: "account"`). */
+/** The read_only tools that declare `requires` for anything but one account's data (`kind: "account"`). @beta */
 export function readOnlyContractsWithNonAccountRequires(contracts: readonly GuardedContract[]): string[] {
   return contracts.filter((c) => c.effect === "read_only" && c.requires && c.requires.kind !== "account").map((c) => c.name);
 }

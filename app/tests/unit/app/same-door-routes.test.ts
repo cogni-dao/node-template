@@ -14,10 +14,12 @@ import { composeAgentRoutes, DEFERRED_WRITE_ROUTES, OPEN_BY_DESIGN_ROUTES } from
 import { VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 
-import { NODE_TOOL_BUNDLE } from "@/bootstrap/ai/tool-bundle";
+import type { ToolHost } from "@/bootstrap/ai/node-extensions-host";
+import { composeToolBundle } from "@/bootstrap/ai/tool-bundle";
 import { nodeExtensions } from "@/node-extensions";
 
-// The node's composed routes: the package baseline plus whatever node-extensions.ts adds.
+// The node's composed bundle and routes: the package baseline plus whatever node-extensions.ts adds.
+const NODE_TOOL_BUNDLE = composeToolBundle(nodeExtensions, {} as ToolHost).bundle;
 const { sameDoorRoutes: SAME_DOOR_ROUTES, routeOnlyCapabilities: ROUTE_ONLY_CAPABILITIES, noRouteTwin: NO_ROUTE_TWIN } = composeAgentRoutes(nodeExtensions.routes);
 
 const API = resolve(__dirname, "../../../src/app/api");

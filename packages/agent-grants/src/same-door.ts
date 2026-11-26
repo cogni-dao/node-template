@@ -19,6 +19,7 @@
  * @public
  */
 
+import { mergeAddOnly } from "./add-only";
 import { authorize, authorizeAccount } from "./authorize";
 import type { OrgOwners } from "./orgs";
 import type {
@@ -35,6 +36,7 @@ export interface SameDoorRoute {
 }
 
 /** A route-only capability: the scope a set of routes needs, declared once with the `requires` shape a tool contract uses. */
+/** @beta */
 export interface RouteOnlyCapability {
   readonly requires: ToolRequires;
   readonly routes: readonly string[];
@@ -144,6 +146,7 @@ export const OPEN_BY_DESIGN_ROUTES: Readonly<Record<string, string>> = {
  * What a node adds to the baseline above (NODE_ADDS_ONLY). The same three maps, each keyed as its constant is. A key the package already holds, a route id
  * two entries claim, or a tool that is both twinned and exempt throws in `composeAgentRoutes`. A node never replaces a baseline entry.
  */
+/** @beta */
 export interface AgentRoutes {
   /** Tool id -> its route twins, for a tool the node adds. */
   readonly sameDoorRoutes?: Readonly<Record<string, SameDoorRoute>> | undefined;
@@ -154,38 +157,27 @@ export interface AgentRoutes {
 }
 
 /** The package baseline plus a node's additions: what the catalog, the ask door and `authorizeRoute` read. */
+/** @beta */
 export interface ComposedRoutes {
   readonly sameDoorRoutes: Readonly<Record<string, SameDoorRoute>>;
   readonly routeOnlyCapabilities: Readonly<Record<string, RouteOnlyCapability>>;
   readonly noRouteTwin: Readonly<Record<string, string>>;
 }
 
-function addOnly<T>(what: string, base: Readonly<Record<string, T>>, extra: Readonly<Record<string, T>> | undefined): Record<string, T> {
-  const out: Record<string, T> = { ...base };
-  for (const [key, value] of Object.entries(extra ?? {})) {
-    if (Object.prototype.hasOwnProperty.call(out, key)) throw new Error(`ROUTE_COLLISION: ${what} "${key}" is already declared; a node adds, it never replaces`);
-    out[key] = value;
-  }
-  return out;
-}
-
 /**
  * The one composition of the baseline route maps with a node's additions. Throws (a collision is a build error, not a log line) when a node entry reuses a
  * baseline key, when a tool is both twinned and exempt, or when one route id sits under two entries (one route, two scopes is never a door).
+ * @beta
  */
 export function composeAgentRoutes(extra?: AgentRoutes): ComposedRoutes {
-  const sameDoorRoutes = addOnly("route twin for tool", SAME_DOOR_ROUTES, extra?.sameDoorRoutes);
-  const routeOnlyCapabilities = addOnly("route-only capability", ROUTE_ONLY_CAPABILITIES, extra?.routeOnlyCapabilities);
-  const noRouteTwin = addOnly("no-route-twin tool", NO_ROUTE_TWIN, extra?.noRouteTwin);
-  for (const tool of Object.keys(noRouteTwin))
-    if (tool in sameDoorRoutes) throw new Error(`ROUTE_COLLISION: tool "${tool}" has a route twin and is also listed as having none`);
-  const owner = new Map<string, string>();
-  for (const [key, entry] of [...Object.entries(sameDoorRoutes), ...Object.entries(routeOnlyCapabilities)])
-    for (const routeId of entry.routes) {
-      const prior = owner.get(routeId);
-      if (prior !== undefined && prior !== key) throw new Error(`ROUTE_COLLISION: route "${routeId}" is declared by both "${prior}" and "${key}"`);
-      owner.set(routeId, key);
-    }
+  const code = "ROUTE_COLLISION";
+  const sameDoorRoutes = mergeAddOnly({ what: "route twin for tool", code }, { source: "package", entries: SAME_DOOR_ROUTES }, { source: "node", entries: extra?.sameDoorRoutes });
+  const routeOnlyCapabilities = mergeAddOnly({ what: "route-only capability", code }, { source: "package", entries: ROUTE_ONLY_CAPABILITIES }, { source: "node", entries: extra?.routeOnlyCapabilities });
+  const noRouteTwin = mergeAddOnly({ what: "no-route-twin tool", code }, { source: "package", entries: NO_ROUTE_TWIN }, { source: "node", entries: extra?.noRouteTwin });
+  mergeAddOnly<unknown>({ what: "tool", code }, { source: "route twins", entries: sameDoorRoutes }, { source: "no-route-twin list", entries: noRouteTwin });
+  const routeIds = (entries: Readonly<Record<string, { readonly routes: readonly string[] }>>) =>
+    Object.entries(entries).map(([key, entry]) => ({ source: key, entries: Object.fromEntries(entry.routes.map((routeId) => [routeId, routeId])) }));
+  mergeAddOnly({ what: "route", code }, ...routeIds(sameDoorRoutes), ...routeIds(routeOnlyCapabilities));
   return { sameDoorRoutes, routeOnlyCapabilities, noRouteTwin };
 }
 

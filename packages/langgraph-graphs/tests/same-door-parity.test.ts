@@ -10,7 +10,7 @@
  * Side-effects: none
  */
 
-import { composeAgentRoutes, NO_ROUTE_TWIN, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { composeAgentRoutes } from "@cogni/agent-grants";
 import { runSameDoorParity, unmappedWriteTools } from "@cogni/agent-grants/same-door-parity";
 import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
@@ -20,7 +20,10 @@ const writers = contracts.filter((c) => c.effect !== "read_only");
 /** A read tool is gated only when it declares `requires` (an account read, task.5465): it needs a route twin too. */
 const gatedReaders = contracts.filter((c) => c.effect === "read_only" && c.requires);
 
-runSameDoorParity({ describe, it, expect, contracts, routes: composeAgentRoutes() });
+const routes = composeAgentRoutes();
+const { sameDoorRoutes: SAME_DOOR_ROUTES, routeOnlyCapabilities: ROUTE_ONLY_CAPABILITIES, noRouteTwin: NO_ROUTE_TWIN } = routes;
+
+runSameDoorParity({ describe, it, expect, contracts, routes });
 
 describe("same-door baseline", () => {
   it("has exactly one gated READ tool, the account credits read", () => {
