@@ -20,7 +20,7 @@
  */
 
 import type { SourceSystem, ToolSourcePort } from "@cogni/ai-core";
-import { CORE_TOOL_BUNDLE, declaresSecretArgs } from "@cogni/ai-tools";
+import { declaresSecretArgs } from "@cogni/ai-tools";
 import type {
   ExecutionContext,
   GraphFinal,
@@ -54,10 +54,7 @@ import {
   LangGraphInProcProvider,
 } from "@/adapters/server";
 import { runInScope } from "@/adapters/server/ai/execution-scope";
-import {
-  NODE_LOCAL_CATALOG,
-  NODE_LOCAL_TOOL_BUNDLE,
-} from "@/bootstrap/ai/secret-probe";
+import { NODE_LOCAL_CATALOG } from "@/bootstrap/ai/secret-probe";
 import { resolveNodeSourceContext } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type {
   BillingContext,
@@ -566,7 +563,7 @@ function createInProcProvider(
     inprocAdapter,
     container.toolSource,
     () => cache.getSource(),
-    [...CORE_TOOL_BUNDLE, ...NODE_LOCAL_TOOL_BUNDLE],
+    container.toolBundle,
     async (required) =>
       resolveNodeSourceContext(
         required,
@@ -589,8 +586,8 @@ function createInProcProvider(
 function createDevProvider(apiUrl: string): LangGraphDevProvider {
   const client = createLangGraphDevClient({ apiUrl });
   const availableGraphs = Object.keys(LANGGRAPH_CATALOG);
-  const secretToolIds = [...CORE_TOOL_BUNDLE, ...NODE_LOCAL_TOOL_BUNDLE]
-    .filter((bt) => declaresSecretArgs(bt.contract))
+  const secretToolIds = getContainer()
+    .toolBundle.filter((bt) => declaresSecretArgs(bt.contract))
     .map((bt) => bt.contract.name);
   return new LangGraphDevProvider(client, { availableGraphs, secretToolIds });
 }
