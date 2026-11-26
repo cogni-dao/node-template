@@ -1458,6 +1458,20 @@ describe("critic and evidence failures", () => {
 		]);
 		expect(Date.now() - started).toBeLessThan(1000);
 	});
+	it("still rejects an unobserved URL that a fenced draft cites without a source list", () => {
+		const { draft } = setup();
+		const r = new ResearchReceipts("https://node.example");
+		r.domains.add("strategy");
+		const { sources: _omitted, ...unlisted } = draft;
+		const invented = "https://invented.example/claim";
+		const fencedDraft = `\`\`\`json\n${JSON.stringify({
+			...unlisted,
+			principles: [{ ...draft.principles[0], sourceUrls: [invented] }],
+		})}\n\`\`\``;
+		expect(r.check(fencedDraft)).toContain(
+			`source ${invented} was not observed this run`,
+		);
+	});
 	it("charges retained passages, not snippets or metadata, to the evidence budget", () => {
 		const r = new ResearchReceipts("https://node.example");
 		for (let i = 0; i < 4; i++)
