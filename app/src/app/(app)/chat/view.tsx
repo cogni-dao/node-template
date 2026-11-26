@@ -31,6 +31,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { BillToSelect } from "@cogni/knowledge-base-ui/orgs";
 import { Button, ErrorAlert, Thread } from "@/components";
 import { BrainLoading } from "@/components/kit/feedback/BrainLoading";
 import { useChatSidebarStore } from "@/features/ai/chat/components/ChatSidebarContext";
@@ -84,6 +85,11 @@ export function ChatView(): ReactNode {
     null
   );
   const [selectedGraph, setSelectedGraph] = useState(DEFAULT_GRAPH_ID);
+  // Bill to (task.0181): the org account chosen in the composer, or null for the person's own account.
+  const [billTo, setBillTo] = useState<string | null>(null);
+  // The chosen org's balance: when the run is billed to an org, THAT balance (not the person's own) decides which models are open.
+  const [billToBalance, setBillToBalance] = useState<number | null>(null);
+  const effectiveBalance = billTo ? (billToBalance ?? 0) : balance;
   const [chatError, setChatError] = useState<ChatError | null>(null);
   const [isBlocked, setIsBlocked] = useState(false);
 
@@ -161,6 +167,49 @@ export function ChatView(): ReactNode {
     defaultPreferredModelId,
   ]);
   // NOTE: selectedModelRef intentionally NOT in deps to prevent re-init loop
+
+  // The model ref for an id: ChatGPT models are not in the server list (hardcoded in ModelPicker), so they get the codex provider.
+  const refForModel = (modelId: string): ModelRef => {
+    const matchedModel = models.find((m) => m.ref.modelId === modelId);
+    if (matchedModel) return matchedModel.ref;
+    return CHATGPT_MODELS.some((m) => m.id === modelId) ? { providerKey: "codex", modelId } : { providerKey: "platform", modelId };
+  };
+
+  // Bill to changed after the page started: the model gate follows the PAYING balance. An org with credits opens paid models for a person with none (and unblocks the page);
+  // going back to an empty own account drops a paid choice to the free default (or blocks, as at start).
+  useEffect(() => {
+    if (!hasInitializedRef.current || !modelsQuery.data) return;
+    const current = selectedModelRef?.modelId ?? null;
+    const choice = current && (effectiveBalance > 0 || freeModelIds.includes(current)) ? current : null;
+    const selected = pickDefaultModel({
+      balanceCredits: effectiveBalance,
+      userChoice: choice,
+      defaultFreeModelId,
+      defaultPaidModelId: defaultPreferredModelId,
+    });
+    if (selected) {
+      setSelectedModelRef(refForModel(selected));
+      setIsBlocked(false);
+      setChatError((error) => (error?.code === "NO_FREE_MODELS" ? null : error));
+    } else {
+      setSelectedModelRef(null);
+      setIsBlocked(true);
+      setChatError({
+        code: "NO_FREE_MODELS",
+        message: "No free models available. Add credits to continue chatting.",
+        retryable: false,
+        blocking: true,
+        suggestedAction: "add_credits",
+      });
+    }
+    // Only a change of the paying balance reselects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveBalance]);
+
+  const handleBillToChange = useCallback((billingAccountId: string | null, orgBalance: number | null) => {
+    setBillTo(billingAccountId);
+    setBillToBalance(orgBalance);
+  }, []);
 
   // Model change handler - marks user intent
   const handleModelChange = useCallback((ref: ModelRef) => {
@@ -287,6 +336,8 @@ export function ChatView(): ReactNode {
               onAddCredits={handleAddCredits}
             />
           )}
+          {/* A person with no credits of their own may still bill an org they hold org:spend on: choosing one reopens the models (renders nothing without an org). */}
+          <BillToSelect endpoint="/api/v1/orgs" value={billTo} onChange={(id, org) => handleBillToChange(id, org?.balance ?? null)} className="justify-center pt-3" />
         </div>
       </div>
     );
@@ -295,7 +346,7 @@ export function ChatView(): ReactNode {
   // Compute UI default model based on credits (NO HARDCODED FALLBACKS)
   // INV-NO-CLIENT-INVENTED-MODEL-IDS: UI must NEVER invent model IDs
   const uiDefaultModelId =
-    balance <= 0 ? defaultFreeModelId : defaultPreferredModelId;
+    effectiveBalance <= 0 ? defaultFreeModelId : defaultPreferredModelId;
 
   // Invariant: selectedModelRef is guaranteed non-null after initialization gate
   if (!selectedModelRef) {
@@ -363,6 +414,7 @@ export function ChatView(): ReactNode {
           key={activeThreadKey ?? "new"}
           modelRef={selectedModelRef}
           selectedGraph={selectedGraph}
+          billTo={billTo}
           defaultModelId={uiDefaultModelId}
           initialMessages={initialMessages}
           initialStateKey={activeThreadKey}
@@ -377,9 +429,11 @@ export function ChatView(): ReactNode {
                 selectedModel={selectedModelRef.modelId}
                 onModelChange={handleModelChange}
                 defaultModelId={uiDefaultModelId}
-                balance={balance}
+                balance={effectiveBalance}
                 selectedGraph={selectedGraph}
                 onGraphChange={handleGraphChange}
+                billTo={billTo}
+                onBillToChange={handleBillToChange}
               />
             }
             errorMessage={

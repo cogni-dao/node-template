@@ -19,6 +19,7 @@
  */
 
 import { createHash, createHmac } from "node:crypto";
+import { billToRefusalHttp } from "@cogni/agent-grants/http";
 import { isAiExecutionError, type ModelRef } from "@cogni/ai-core";
 import { toUserId } from "@cogni/ids";
 import { aiChatOperation, type ChatInput } from "@cogni/node-contracts";
@@ -149,6 +150,13 @@ function handleRouteError(
   error: unknown,
   model?: string
 ): NextResponse | null {
+  // Bill to (task.0181): a chosen org account the caller may not use, or a suspended one, is a refusal with its own code, never a silent other payer.
+  const billToRefusal = billToRefusalHttp(error);
+  if (billToRefusal) {
+    logRequestWarn(ctx.log, error, (billToRefusal.body as { error: string }).error.toUpperCase());
+    return NextResponse.json(billToRefusal.body, { status: billToRefusal.status, headers: billToRefusal.headers });
+  }
+
   // Zod validation errors
   if (error && typeof error === "object" && "issues" in error) {
     logRequestWarn(ctx.log, error, "VALIDATION_ERROR");
@@ -491,6 +499,7 @@ export const POST = wrapRouteHandlerWithLogging(
           sessionUser,
           abortSignal: request.signal,
           graphName: input.graphName,
+          ...(input.billTo ? { billToAccountId: input.billTo } : {}),
           stateKey,
           idempotencyKey,
           serverRunId: runId,

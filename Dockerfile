@@ -136,6 +136,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/config/mcp.servers.json ./app/con
 # No default: if CI forgets to pass the arg, APP_BUILD_SHA is empty and the pod visibly reports it.
 ARG BUILD_SHA
 ENV APP_BUILD_SHA=$BUILD_SHA
+# The build commit's time (epoch seconds): the org statement's version. CI passes --build-arg BUILD_COMMIT_TIME. Empty = this build serves NO org statement (/.well-known/cogni-org is 404,
+# logged as org.statement.unversioned) and connects to no node; the app still boots.
+ARG BUILD_COMMIT_TIME
+ENV APP_BUILD_COMMIT_TIME=$BUILD_COMMIT_TIME
 
 # bug.5183: bake a SHA-addressed marker into the static layer so the external
 # candidate gate can prove the served browser assets and `/version` came from

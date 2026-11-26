@@ -42,8 +42,8 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   executeStream,
 } from "@/features/ai/public.server";
+import { billToRefusalHttp } from "@cogni/agent-grants/http";
 import { commitUsageFact } from "@/features/ai/services/billing";
-import { payerScopeUserFor } from "@/app/_facades/ai/payer.server";
 import { preflightCreditCheck } from "@/features/ai/services/preflight-credit-check";
 import type { PreflightCreditCheckFn } from "@/ports";
 import { isInsufficientCreditsPortError } from "@/ports";
@@ -597,33 +597,52 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     }
     if (!stateKey) sessionId = `run:${runId}`;
 
-    // A run billed to a bound account (story.0038) reads and charges it in the account owner's scope, only when the actor's live binding names it.
-    const accountService = container.accountsForUser(
-      toUserId(
-        await payerScopeUserFor(
-          {
-            payerFor: (id) => container.agentAuthority.payerFor(id),
-            getBillingAccountById: (id) =>
-              container.serviceAccountService.getBillingAccountById(id),
-          },
-          { actorUserId, billingAccountId }
-        )
-      )
-    );
+    // ONE_RESOLVER (task.0181): an org account is read and charged in the org's own scope only for an actor entitled to it right now; a bound account (story.0038) in its owner's scope.
+    // A suspended account is an EXPLICIT refusal: the run is finalized as failed with its code and the caller gets the 403, never a silent fallback to another payer or scope.
+    let chargeScopeUserId: string;
+    try {
+      chargeScopeUserId = await container.agentAuthority.billToScopeUserFor({
+        actorUserId,
+        billingAccountId,
+        getAccount: (id) =>
+          container.serviceAccountService.getBillingAccountById(id),
+      });
+    } catch (error) {
+      const refusal = billToRefusalHttp(error);
+      if (!refusal) throw error;
+      // The refusal's own code (`org_suspended`, `bill_to_not_allowed`) is in the response body and the run record's message; the stored execution code stays in the closed set.
+      const refusalName = (refusal.body as { error: string }).error;
+      const code = "internal" as const;
+      await container.executionRequestPort
+        .finalizeRequest(idempotencyKey, { ok: false, errorCode: code })
+        .catch((err) => log.warn({ runId, err }, "Refusal finalize failed"));
+      await container.graphRunRepository
+        .markRunCompleted(SYSTEM_ACTOR, runId, "error", `Refused: ${refusalName}`, code)
+        .catch((err) => log.warn({ runId, err }, "Refusal run record failed"));
+      await container.runStream
+        .publish(runId, { type: "error", error: code })
+        .then(() => container.runStream.expire(runId, RUN_STREAM_DEFAULT_TTL_SECONDS))
+        .catch((err) => log.warn({ runId, err }, "Refusal stream publish failed"));
+      return NextResponse.json({ ok: false, runId, ...(refusal.body as object) }, { status: refusal.status });
+    }
+    const accountService = container.accountsForUser(toUserId(chargeScopeUserId));
 
     // Create preflight credit check closure
     // Per CREDITS_ENFORCED_AT_EXECUTION_PORT: decorator handles all execution paths
-    const preflightCheckFn: PreflightCreditCheckFn = (
+    const preflightCheckFn: PreflightCreditCheckFn = async (
       billingAccountId,
       m,
       msgs
-    ) =>
-      preflightCreditCheck({
+    ) => {
+      // CHARGE_TIME_CHECK (task.0181): every model call re-asks the package whether the account may still be charged, so a suspension stops the NEXT call.
+      await container.agentAuthority.assertChargeable(billingAccountId);
+      return preflightCreditCheck({
         billingAccountId,
         messages: [...msgs],
         model: m,
         accountService,
       });
+    };
 
     // The run record names the run's kind (user_immediate, system_scheduled, system_webhook); every run write records it (task.0133).
     // An unreadable ledger never fails the run: its writes simply carry no `Run:` line.

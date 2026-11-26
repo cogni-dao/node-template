@@ -15,6 +15,7 @@
 "use client";
 
 import type { GraphId, ModelRef } from "@cogni/ai-core";
+import { BillToSelect } from "@cogni/knowledge-base-ui/orgs";
 import { useEffect, useState } from "react";
 import {
   type GraphOption,
@@ -59,6 +60,10 @@ export interface ChatComposerExtrasProps {
   balance?: number;
   selectedGraph?: GraphId;
   onGraphChange?: (graphId: GraphId) => void;
+  /** Bill to (task.0181): the org account chosen for this chat, or null for the person's own. Shown only when the person holds a role on an org. */
+  billTo?: string | null;
+  /** The choice and the chosen org's balance (null for the person's own): the chat page gates models on that balance. */
+  onBillToChange?: (billingAccountId: string | null, orgBalance: number | null) => void;
 }
 
 export function ChatComposerExtras({
@@ -68,6 +73,8 @@ export function ChatComposerExtras({
   balance = 0,
   selectedGraph = DEFAULT_GRAPH_ID,
   onGraphChange,
+  billTo = null,
+  onBillToChange,
 }: Readonly<ChatComposerExtrasProps>) {
   const modelsQuery = useModels();
   const [localModel, setLocalModel] = useState(selectedModel);
@@ -119,6 +126,9 @@ export function ChatComposerExtras({
         onValueChange={handleGraphChange}
         disabled={!onGraphChange}
       />
+      {onBillToChange ? (
+        <BillToSelect endpoint="/api/v1/orgs" value={billTo} onChange={(id, org) => onBillToChange(id, org?.balance ?? null)} />
+      ) : null}
     </div>
   );
 }

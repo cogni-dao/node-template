@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
     if (event.type === "done") throw new Error("redis unavailable");
   }),
   saveThread: vi.fn().mockResolvedValue(undefined),
+  billToScope: vi.fn(),
 }));
 
 vi.mock("@/bootstrap/http", () => ({
@@ -102,6 +103,7 @@ vi.mock("@/bootstrap/container", () => ({
       getRunByRunId: mocks.getRunByRunId,
     },
     accountsForUser: () => ({}),
+    agentAuthority: { billToScopeUserFor: (input: unknown) => mocks.billToScope(input), assertChargeable: async () => undefined },
     executionGrantWorkerPort: { validateGrantForGraph: vi.fn().mockResolvedValue({ userId: USER_ID, billingAccountId: BILLING_ID }) },
     serviceAccountService: { getBillingAccountById: vi.fn().mockResolvedValue({ defaultVirtualKeyId: VIRTUAL_KEY_ID }) },
     providerResolver: {},
@@ -130,6 +132,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     mocks.scopedRunKind = "unset";
     mocks.checkIdempotency.mockResolvedValue({ status: "new" });
     mocks.getRunByRunId.mockResolvedValue(null);
+    mocks.billToScope.mockImplementation(async ({ actorUserId }: { actorUserId: string }) => actorUserId);
   });
 
   it.each(["cogni", "work-prioritizer"])("marks only a validated schedule of %s unattended", async (graph) => {
@@ -179,6 +182,20 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
       expect(mocks.scopedRunKind).toBe(runKind);
     }
   );
+
+  it("a suspended org account is an explicit refusal: 403 with its code, the run finalized as failed, no fallback to another scope and nothing executed", async () => {
+    const { OrgAccountError } = await import("@cogni/agent-grants/org-accounts");
+    mocks.billToScope.mockRejectedValue(new OrgAccountError("org_suspended", "chargeback"));
+    mocks.finalizeRequest.mockResolvedValueOnce(undefined);
+    mocks.publish.mockResolvedValueOnce(undefined);
+    const response = await runChat();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ ok: false, error: "org_suspended", reason: "chargeback" });
+    expect(mocks.finalizeRequest).toHaveBeenCalledWith(expect.anything(), { ok: false, errorCode: "internal" });
+    expect(mocks.markRunCompleted).toHaveBeenCalledWith(expect.anything(), RUN_ID, "error", "Refused: org_suspended", "internal");
+    expect(mocks.publish).toHaveBeenCalledWith(RUN_ID, { type: "error", error: "internal" });
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
 
   it("an unreadable run record never fails the run: it runs with no run kind (task.0133)", async () => {
     mocks.getRunByRunId.mockRejectedValue(new Error("ledger down"));

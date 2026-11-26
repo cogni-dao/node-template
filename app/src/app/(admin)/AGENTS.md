@@ -35,7 +35,7 @@ admin-only surfaces in one role-gated shell.
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/admin` (index), `/admin/payments` (Financials: read-only report plus row actions — fund steward, top-up links; authorization also enforced before snapshot reads)
+- **Routes:** `/admin` (index), `/admin/orgs` (org accounts on this node: Suspend and Restore with a reason, paged; `@cogni/knowledge-base-ui/orgs`), `/admin/connections` (this node as an org: Connect and Disconnect by origin, directory nodes only; admin-checked route `/api/v1/admin/org-connections`), `/admin/payments` (Financials: read-only report plus row actions — fund steward, top-up links; authorization also enforced before snapshot reads)
 - **Files considered API:** `layout.tsx`, `admin/page.tsx`
 
 ## Auth contract

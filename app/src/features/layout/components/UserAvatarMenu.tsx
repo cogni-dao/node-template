@@ -13,17 +13,19 @@
 
 "use client";
 
+import { clearOrgsCache, YourOrgs } from "@cogni/knowledge-base-ui/orgs";
 import { cn } from "@cogni/node-ui-kit/util/cn";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { LogOut, Monitor, Moon, Sun, User } from "lucide-react";
 import Link from "next/link";
 import { signOut, useSession } from "next-auth/react";
 import { useTheme } from "next-themes";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useDisconnect } from "wagmi";
 import { Avatar, AvatarFallback } from "@/components/kit/data-display/Avatar";
 import { EthereumIcon } from "@/components/kit/data-display/ProviderIcons";
+import { creditsToUsd } from "@/features/payments/public";
 
 /** Default avatar color when none is set */
 const DEFAULT_AVATAR_COLOR = "hsl(var(--primary))";
@@ -34,6 +36,17 @@ const DROPDOWN_CONTENT_CLASSES =
 
 const MENU_ITEM_CLASSES =
   "group mx-1 flex h-9 cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-sm outline-none transition-colors hover:bg-accent focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+
+/** A "Your orgs" row as a real item of this menu (focus and keyboard behave like Profile). Module level: one identity across renders. */
+function OrgMenuLink({ href, children }: { href: string; className?: string; children: ReactNode }): ReactElement {
+  return (
+    <DropdownMenuPrimitive.Item asChild>
+      <Link href={href} className={cn(MENU_ITEM_CLASSES, "h-auto min-w-0 flex-wrap justify-between py-1.5")}>
+        {children}
+      </Link>
+    </DropdownMenuPrimitive.Item>
+  );
+}
 
 function truncateWallet(address: string): string {
   if (address.length <= 9) return address;
@@ -103,10 +116,21 @@ export function UserAvatarMenu(): ReactElement | null {
             </Link>
           </DropdownMenuPrimitive.Item>
 
+          {/* Your orgs (task.0181): rendered only when the person holds a role on an org account */}
+          <YourOrgs
+            endpoint="/api/v1/orgs"
+            href={(org) => `/orgs/${org.orgUserId}`}
+            LinkComponent={OrgMenuLink}
+            formatBalance={(credits) => `$${creditsToUsd(credits).toFixed(2)}`}
+            className="mx-1"
+          />
+
           {/* Sign out */}
           <DropdownMenuPrimitive.Item
             className={MENU_ITEM_CLASSES}
             onClick={() => {
+              // The shared "my orgs" read belongs to the person who is leaving.
+              clearOrgsCache();
               disconnect();
               signOut({ callbackUrl: "/" });
             }}

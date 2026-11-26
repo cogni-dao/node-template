@@ -33,7 +33,7 @@ const billingAccounts = pgTable("billing_accounts", { id: text("id").primaryKey(
 
 const MIGRATIONS = path.resolve(path.dirname(createRequire(import.meta.url).resolve("@cogni/agent-grants")), "../migrations");
 // The README's order: base tails first (the credentials trigger reads agent_principals).
-const TAILS = ["agent_authority.sql", "agent_account_grants.sql", "agent_credentials.sql"] as const;
+const TAILS = ["agent_authority.sql", "agent_account_grants.sql", "agent_credentials.sql", "payer_bindings.sql", "org_accounts.sql"] as const;
 
 const statementsOf = (sqlText: string): string[] =>
   sqlText
@@ -78,16 +78,24 @@ describe("agent authority: the factory plus the SQL tails on a fresh database", 
     await app.end({ timeout: 1 });
   });
 
-  it("forces row-level security on the three authority tables", async () => {
+  it("forces row-level security on the authority, payer and org tables", async () => {
     const rows = await app`
       SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = ${schema} AND c.relname IN ('agent_principals', 'agent_roles', 'agent_credentials')
+      WHERE n.nspname = ${schema}
+        AND c.relname IN ('agent_principals', 'agent_roles', 'agent_credentials', 'payer_bindings', 'org_accounts', 'org_events', 'org_wallet_holds', 'org_connections', 'org_service_principals', 'org_connect_jtis')
       ORDER BY c.relname`;
     expect(rows.map((r) => [r.relname, r.relrowsecurity, r.relforcerowsecurity])).toEqual([
       ["agent_credentials", true, true],
       ["agent_principals", true, true],
       ["agent_roles", true, true],
+      ["org_accounts", true, true],
+      ["org_connect_jtis", true, true],
+      ["org_connections", true, true],
+      ["org_events", true, true],
+      ["org_service_principals", true, true],
+      ["org_wallet_holds", true, true],
+      ["payer_bindings", true, true],
     ]);
   });
 
@@ -99,11 +107,12 @@ describe("agent authority: the factory plus the SQL tails on a fresh database", 
       "agent_credential_state",
       "agent_credentials_require_external_principal",
       "agent_has_scope",
+      "org_events_append_only",
     ]);
     const triggers = await app`
       SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = ${schema} AND NOT t.tgisinternal`;
-    expect(triggers.map((r) => r.tgname)).toEqual(["agent_credentials_external_principal_only"]);
+      WHERE n.nspname = ${schema} AND NOT t.tgisinternal ORDER BY t.tgname`;
+    expect(triggers.map((r) => r.tgname)).toEqual(["agent_credentials_external_principal_only", "org_events_no_truncate", "org_events_no_update_delete"]);
     const policies = await app`SELECT policyname FROM pg_policies WHERE schemaname = ${schema} ORDER BY policyname`;
     expect(policies.map((r) => r.policyname)).toEqual(["agent_principals_read", "agent_roles_account_self_read"]);
   });

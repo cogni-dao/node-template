@@ -78,3 +78,7 @@ All require `Authorization: Bearer ${SCHEDULER_API_TOKEN}`.
 - Extracted from `apps/operator/src/contracts/` (task.0248 Phase 1)
 - `ChatMessage` exported from `ai.completions.v1.contract` (OpenAI-compatible format); chat contract's `ChatMessage` excluded from barrel to avoid TS2308
 - `work.items.get.v1` (0.4.0, task.0118): the single-item read is additive. `WORK_ITEM_INCLUDES` (`["links", "artifacts", "history"]`, story.0058) is the allowed `?include=` list, and `artifact=<id>` (`^[A-Za-z0-9_-]{1,128}$`) asks for one artifact in full; `output` is `WorkItemReadDtoSchema`, so each `moves` entry may carry `metric`, `kpi`, `goal` or `context: "unavailable"`, `links` appears only with `include=links`, `artifactRefs` with `include=artifacts`, `historyRefs` with `include=history` and `artifact` with `artifact=`.
+
+## Release notes
+
+- 0.5.0 (task.0181, breaking for a fork): the `orgs.ensure.v1` contract (`ensureOrgOperation`) is REMOVED, because no person creates an org on a node any more (an org connects from its own node; the org routes and contracts live in `@cogni-dao/agent-grants/http`). `ai.chat.v1` input gains the optional `billTo` (an org account's billing account id). A fork that imported `ensureOrgOperation` deletes that route with the same change.

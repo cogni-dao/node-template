@@ -30,6 +30,11 @@
       "import": "./dist/work-item.js",
       "default": "./dist/work-item.js"
     },
+    "./orgs": {
+      "types": "./dist/orgs.d.ts",
+      "import": "./dist/orgs.js",
+      "default": "./dist/orgs.js"
+    },
     "./graph-3d": {
       "types": "./dist/graph-3d.d.ts",
       "import": "./dist/graph-3d.js",

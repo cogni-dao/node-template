@@ -30,7 +30,7 @@ Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `A
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/chat`, `/dashboard`, `/work`, `/work/items/[id]`, `/activity`, `/gov`, `/credits`, `/schedules`, `/setup`
+- **Routes:** `/orgs/[orgId]` (an org account page, reached from "Your orgs" in the account menu, no tab; `@cogni/knowledge-base-ui/orgs`), `/chat` (the composer's Bill to), `/dashboard`, `/work`, `/work/items/[id]`, `/activity`, `/gov`, `/credits`, `/schedules`, `/setup`
 - **Files considered API:** `layout.tsx`
 
 ## Responsibilities

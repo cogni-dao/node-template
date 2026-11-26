@@ -35,6 +35,8 @@ const CLOCK_SKEW_SECONDS = 30;
 export const JWKS_REFETCH_MIN_INTERVAL_MS = 60_000;
 /** A cached JWKS is refetched after this age, so a withdrawn key stops working. */
 export const JWKS_MAX_AGE_MS = 60 * 60_000;
+/** JWKS states kept for issuers that are not configured homes (the org connect door). */
+const MAX_DYNAMIC_HOMES = 256;
 const MAX_TOKEN_CHARS = 4096;
 const JWKS_FETCH_TIMEOUT_MS = 5_000;
 const JWKS_MAX_BYTES = 64 * 1024;
@@ -64,13 +66,13 @@ export interface Ed25519PrivateJwk {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-function toB64Url(bytes: Uint8Array): string {
+export function toB64Url(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function fromB64Url(text: string): Uint8Array | null {
+export function fromB64Url(text: string): Uint8Array | null {
   if (!B64URL.test(text)) return null;
   try {
     const bin = atob(text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4));
@@ -80,9 +82,9 @@ function fromB64Url(text: string): Uint8Array | null {
   }
 }
 
-const jsonB64Url = (value: unknown): string => toB64Url(enc.encode(JSON.stringify(value)));
+export const jsonB64Url = (value: unknown): string => toB64Url(enc.encode(JSON.stringify(value)));
 
-function parseJsonObject(bytes: Uint8Array): Record<string, unknown> | null {
+export function parseJsonObject(bytes: Uint8Array): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(dec.decode(bytes));
     return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -121,6 +123,11 @@ export interface ServiceAssertionSigner {
   sign(request: ServiceAssertionRequest): Promise<string>;
   /** `Bearer <jwt>`: a fresh assertion per call. */
   authorizationHeader(request: ServiceAssertionRequest): Promise<string>;
+  /**
+   * Sign arbitrary claims with the same key (an EdDSA JWT whose header `typ` is `typ`). The org statement and the org's connect/disconnect calls use it; the caller owns
+   * every claim, including `iss`, `iat` and `exp`. Never returns or logs the private member.
+   */
+  signClaims(claims: Readonly<Record<string, unknown>>, typ: string): Promise<string>;
   /** The public key set to serve at `/.well-known/jwks.json`. Never carries the private member. */
   jwks(): { keys: PublicJwk[] };
 }
@@ -171,8 +178,16 @@ export function createServiceAssertionSigner(opts: {
     return `${input}.${toB64Url(new Uint8Array(signature))}`;
   };
 
+  const signClaims = async (claims: Readonly<Record<string, unknown>>, typ: string): Promise<string> => {
+    if (!typ || /\s/.test(typ)) throw new TypeError("typ is required");
+    const input = `${jsonB64Url({ alg: "EdDSA", kid, typ })}.${jsonB64Url(claims)}`;
+    const signature = await crypto.subtle.sign({ name: "Ed25519" }, await signingKey(), enc.encode(input));
+    return `${input}.${toB64Url(new Uint8Array(signature))}`;
+  };
+
   return {
     sign,
+    signClaims,
     authorizationHeader: async (request) => `Bearer ${await sign(request)}`,
     jwks: () => ({ keys: [{ ...publicJwk }] }),
   };
@@ -359,15 +374,39 @@ export async function assertSigningKeyMatches(privateJwk: Ed25519PrivateJwk): Pr
   if (!(await crypto.subtle.verify({ name: "Ed25519" }, pub, signature, probe))) throw new Error("signing key: public x does not match private d");
 }
 
+/** Read a response body as text, refusing more than `maxBytes` (a declared length over it, or a stream that crosses it) BEFORE the whole body is buffered. */
+export async function readTextCapped(res: Response, maxBytes: number): Promise<string> {
+  if (Number(res.headers.get("content-length") ?? 0) > maxBytes) throw new Error("too large");
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("no body");
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("too large");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return dec.decode(bytes);
+}
+
 /** Default JWKS fetch: https only, 5 s timeout, 64 KiB cap. */
 async function defaultFetchJwks(jwksUri: string): Promise<unknown> {
   const url = new URL(jwksUri);
   if (url.protocol !== "https:") throw new Error("jwks uri must be https");
   const res = await fetch(url, { signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS), redirect: "error", headers: { accept: "application/json" } });
   if (!res.ok) throw new Error(`jwks status ${res.status}`);
-  const text = await res.text();
-  if (text.length > JWKS_MAX_BYTES) throw new Error("jwks too large");
-  return JSON.parse(text);
+  return JSON.parse(await readTextCapped(res, JWKS_MAX_BYTES));
 }
 
 interface JwksState {
@@ -385,6 +424,11 @@ export function createServiceAssertionVerifier(opts: {
   /** This node's id: the audience every assertion must name. */
   selfNodeId: string;
   trustedHomes: readonly TrustedHome[];
+  /**
+   * A home for an issuer that is not in `trustedHomes`, or undefined to refuse it. The ORG CONNECT door uses it (task.0181: an origin of the fleet directory may
+   * connect, as a single service). The state kept per such issuer is bounded (`MAX_DYNAMIC_HOMES`, oldest first), so a flood of issuers cannot grow memory.
+   */
+  homeFor?: (issuer: string) => TrustedHome | undefined;
   /** Fetch and parse a JWKS document. Default: https, 5 s, 64 KiB. */
   fetchJwks?: (jwksUri: string) => Promise<unknown>;
   replay: ReplayStore;
@@ -430,7 +474,16 @@ export function createServiceAssertionVerifier(opts: {
   /** The verification key for `kid`, or why there is none. A key older than `JWKS_MAX_AGE_MS` is never used. */
   const keyFor = async (home: TrustedHome, kid: string): Promise<CryptoKey | "unknown_kid" | "jwks_unavailable"> => {
     let state = states.get(home.issuer);
-    if (!state) states.set(home.issuer, (state = { keys: new Map(), okAt: null, attemptAt: null, failed: false, refresh: null }));
+    if (!state) {
+      if (!homes.has(home.issuer) && states.size >= homes.size + MAX_DYNAMIC_HOMES) {
+        for (const issuer of states.keys()) {
+          if (homes.has(issuer)) continue;
+          states.delete(issuer);
+          break;
+        }
+      }
+      states.set(home.issuer, (state = { keys: new Map(), okAt: null, attemptAt: null, failed: false, refresh: null }));
+    }
     const current = state;
     const fresh = () => current.okAt !== null && now() - current.okAt < JWKS_MAX_AGE_MS;
     const cached = current.keys.get(kid);
@@ -482,7 +535,7 @@ export function createServiceAssertionVerifier(opts: {
         return refuse("malformed");
 
       who = { issuer: iss.slice(0, 200), service: sub.slice(0, 100) };
-      const home = homes.get(iss);
+      const home = homes.get(iss) ?? opts.homeFor?.(iss);
       if (!home) return refuse("untrusted_issuer");
 
       const key = await keyFor(home, header.kid);

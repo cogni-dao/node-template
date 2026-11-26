@@ -5,21 +5,14 @@
 A fresh node:
 
 1. Call `defineAgentAuthoritySchema({ users, billingAccounts })` in the node's own schema package, re-export the result, and run the node's `db:generate`. drizzle-kit writes every table, index, CHECK and policy, and the snapshot, against the node's own prior snapshot. Never copy a snapshot.
-2. Append these tails, in this order, to that generated migration (or to the next one): `agent_authority.sql` (FORCE RLS and the seed of `node-ai` and `prioritizer`), `agent_account_grants.sql` (the table privilege and `agent_has_scope()`), `agent_credentials.sql` (FORCE RLS, `agent_credential_state()` and the external-principal trigger). Each file says what it needs first.
+2. Append these tails, in this order, to that generated migration (or to the next one): `agent_authority.sql` (FORCE RLS and the seed of `node-ai` and `prioritizer`), `agent_account_grants.sql` (the table privilege and `agent_has_scope()`), `agent_credentials.sql` (FORCE RLS, `agent_credential_state()` and the external-principal trigger), `payer_bindings.sql` (FORCE RLS) and `org_accounts.sql` (FORCE RLS on the six org tables, the append-only trigger and revoked privileges on `org_events`). Each file says what it needs first.
 3. Add one delegated select policy per node table that holds an account's data (the comment at the end of `agent_account_grants.sql` shows two).
 4. Write the AGENT_WALLET_IS_NOT_A_PAYEE trigger (node-template 0043) and the principal backfill (0044) yourself: they change tables the node owns (`user_bindings`, the payout leaf tables). `runAgentWalletGuardConformance` fails the node's real-SQL run when the trigger is missing from a leaf table.
 5. Run `db:check`. The journal `when` must be greater than every earlier entry. Run the conformance suites over the node's real SQL store as the app role.
 
-`agent_roles` and `agent_principals` carry the org columns on every node; they stay null until a node adopts orgs. The tests `app/tests/component/db/agent-authority-tails.int.test.ts` (node-template) generate the migration from the factory on an empty database, append these tails and assert the guard objects, so the factory and the tails cannot drift apart unseen.
+`agent_roles` and `agent_principals` carry the org columns on every node; they stay null until an org connects. The tests `app/tests/component/db/agent-authority-tails.int.test.ts` (node-template) generate the migration from the factory on an empty database, append these tails and assert the guard objects, so the factory and the tails cannot drift apart unseen.
 
-# payer_bindings migration template
-
-`payer_bindings.sql` is the shape a node applies for payer bindings (`@cogni-dao/agent-grants`, story.0038 phase 2, `createPostgresPayerBindingStore`). node-template keeps it as `0046_payer_bindings.sql`. Do not copy it blind into a fork:
-
-1. Add the `payerBindings` table (the columns, the unique partial index `payer_bindings_open_per_subject` on `subject_user_id WHERE revoked_at IS NULL`, the account index and the two CHECKs) to the node's own schema package, then run the node's `db:generate`. drizzle-kit writes the DDL and the snapshot against the node's own prior snapshot. Never copy a snapshot.
-2. Append the hand-written part (everything after the line `Hand-written below`): `FORCE ROW LEVEL SECURITY`. The table has no policy, so the app role sees nothing.
-3. The store needs a BYPASSRLS (service role) connection, like `agent_roles`.
-4. Run `db:check`. The journal `when` must be greater than every earlier entry.
+An older fork that already has its own `payer_bindings` table does not change it: the factory's definition is the same DDL, so `db:generate` emits nothing for it.
 
 # Adopting org accounts: three releases, three deploys (task.0181)
 

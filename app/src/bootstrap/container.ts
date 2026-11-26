@@ -163,6 +163,7 @@ import {
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { getCurrentTraceId } from "@/bootstrap/otel";
+import { buildOrgIdentity } from "@/bootstrap/org-identity";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
@@ -1282,6 +1283,7 @@ function createContainer(): Container {
 
 	// story.0038: the signer (this node as a home), the verifier over the trusted homes (this node as a target) and the org owner source.
 	const agentSql = serviceDb.$client as unknown as AgentAuthoritySql;
+	const orgIdentity = buildOrgIdentity(env);
 	const serviceAuth = createServiceAuth({
 		env,
 		trustedHomes: serviceLinksConfig.trustedHomes,
@@ -1294,6 +1296,12 @@ function createContainer(): Container {
 		// Service role: agent_roles / agent_principals are deny-all for the app role.
 		sql: agentSql,
 		owners: serviceAuth.owners,
+		// task.0181: this node as an org account host (connect door) and as an org (its statement, its outbound connect).
+		nodeId,
+		signer: () => serviceAuth.getSigner(),
+		// The fleet directory is this node's `.cogni/service-links.yaml` targets: only those origins (with their node ids) may connect.
+		directory: serviceLinksConfig.targets.map((t) => ({ origin: t.origin, nodeId: t.nodeId })),
+		...(orgIdentity ? { orgIdentity } : {}),
 		nodeAdmin: adminRoster,
 		log,
 		toolBundle: [...CORE_TOOL_BUNDLE],

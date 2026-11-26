@@ -35,9 +35,9 @@ AI feature owns all LLM interaction endpoints, runtimes, and services. Provides 
 ## Public Surface
 
 - **Exports (via public.ts/public.server.ts):**
-  - `ChatRuntimeProvider` (chat runtime state with thread switching)
+  - `ChatRuntimeProvider` (chat runtime state with thread switching; carries `billTo` and sends it on the chat request when set, the route's one resolver decides, never this provider)
   - `ModelPicker` (model selection dialog)
-  - `ChatComposerExtras` (composer toolbar with model and graph selection)
+  - `ChatComposerExtras` (composer toolbar with model and graph selection; with `onBillToChange` it mounts `BillToSelect` from `@cogni/knowledge-base-ui/orgs` (task.0181): the chosen org's billing account id (`billTo`) and its balance go up to the chat page, which gates models on that balance; nothing shows when the person holds no org role)
   - `GraphPicker` (graph/agent selection dialog)
   - `useModels` (React Query hook for models list)
   - `useThreads`, `useLoadThread`, `useDeleteThread` (React Query hooks for thread list/load/delete)

@@ -64,6 +64,9 @@ export const serverSchema = z.object({
 
   // Build SHA for observability (canonical source for /metrics, /readyz, agent.json)
   APP_BUILD_SHA: z.string().optional(),
+  // The build commit's time in epoch seconds (CI passes --build-arg BUILD_COMMIT_TIME): the org statement's `version`, so every replica of one build shares it.
+  // The image sets it empty when CI passes no build arg: "" is unset (never a boot failure), garbage is refused.
+  APP_BUILD_COMMIT_TIME: z.preprocess(emptyToUndefined, z.string().regex(/^[0-9]{9,11}$/).optional()),
 
   // Service identity for observability (multi-service deployments)
   SERVICE_NAME: z.string().default("app"),

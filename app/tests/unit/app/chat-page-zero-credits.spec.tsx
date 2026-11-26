@@ -21,6 +21,7 @@ import {
   createModelsPaidOnly,
   createModelsWithFree,
 } from "@tests/_fixtures/ai/fixtures";
+import { clearOrgsCache } from "@cogni/knowledge-base-ui/orgs";
 import { ChatView as ChatPage } from "@/app/(app)/chat/view";
 
 const threadRequest = vi.hoisted(() => ({ key: null as string | null }));
@@ -39,10 +40,12 @@ vi.mock("@/features/ai/public", async () => {
     ChatComposerExtras: (props: {
       selectedModel: string;
       defaultModelId: string;
+      balance?: number;
     }) => (
       <div data-testid="composer-extras">
         <div data-testid="selected-model">{props.selectedModel}</div>
         <div data-testid="default-model">{props.defaultModelId}</div>
+        <div data-testid="composer-balance">{String(props.balance)}</div>
       </div>
     ),
   };
@@ -112,6 +115,7 @@ describe("ChatPage - Zero Credits Invariant", () => {
       defaultOptions: { queries: { retry: false } },
     });
     vi.clearAllMocks();
+    clearOrgsCache();
     threadRequest.key = null;
   });
 
@@ -203,6 +207,28 @@ describe("ChatPage - Zero Credits Invariant", () => {
 
     // Should show error
     expect(screen.getByTestId("error-code").textContent).toBe("NO_FREE_MODELS");
+  });
+
+  it("a spender with no credits of their own opens paid models by choosing Bill to an org that has credits: the page is no longer blocked and the composer gates on the ORG's balance", async () => {
+    mockUseCreditsSummary.mockReturnValue({ data: { balanceCredits: 0, ledger: [] }, isLoading: false });
+    queryClient.setQueryData(["ai-models"], createModelsPaidOnly());
+    const orgs = { orgs: [{ orgUserId: "o1", billingAccountId: "acct-org", name: "toks5.example.com", role: "spend", balance: 5000, status: "connected" }], next: null };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => new Response(JSON.stringify(String(url).includes("/api/v1/orgs") ? orgs : {}), { status: 200 }));
+    render(
+      <SessionProvider session={null}>
+        <QueryClientProvider client={queryClient}>
+          <ChatPage />
+        </QueryClientProvider>
+      </SessionProvider>
+    );
+    // Own balance 0 and no free model: blocked, exactly as before, but Bill to is offered.
+    await waitFor(() => expect(screen.getByTestId("error-code").textContent).toBe("NO_FREE_MODELS"));
+    expect(screen.queryByTestId("runtime-provider")).toBeNull();
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "acct-org" } });
+    await waitFor(() => expect(screen.getByTestId("runtime-provider")).toBeInTheDocument());
+    expect(screen.queryByTestId("error-alert")).toBeNull();
+    expect(screen.getByTestId("composer-balance").textContent).toBe("5000");
+    expect(screen.getByTestId("selected-model").textContent).not.toBe("");
   });
 
   it("keeps one indicator while initialization hands off to a pending thread", async () => {

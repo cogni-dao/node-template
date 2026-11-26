@@ -72,6 +72,7 @@ import {
 	getNodeBrandColor,
 	getNodeBrandIcon,
 	getNodeHook,
+	getNodeId,
 	getNodeMission,
 	getNodeName,
 	getNodeThumbnail,
@@ -107,6 +108,8 @@ export async function GET(request: Request) {
 		name: "Cogni Node API",
 		version: "v1",
 		buildSha: env.APP_BUILD_SHA,
+		// The audience of an org's signed connect (`urn:cogni:node:<nodeId>`): an org's node reads it here before it connects (task.0181).
+		nodeId: getNodeId(),
 		// IDENTITY_IS_REPO_SPEC_PROJECTION: the node's display identity, projected from its own repo-spec
 		// `intent` (never hardcoded). The operator reads THIS to render gallery cards — no operator-side
 		// per-node literals. A node customizes itself by editing repo-spec, not operator code.

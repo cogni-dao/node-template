@@ -65,6 +65,7 @@ pnpm build
 
 ## Notes
 
+- The account menu (`UserAvatarMenu`) mounts `YourOrgs` from `@cogni/knowledge-base-ui/orgs` (task.0181): one "Your orgs" read of `/api/v1/orgs`, each row a real menu item through the local `OrgMenuLink`, shown only when the person holds a role on an org account; sign-out calls `clearOrgsCache`. The package owns the list, the cursor and the states; this directory keeps only the mount, the link target and the balance format. The menu keeps its original `w-32`.
 - `AppHeader` is used in `(public)` layout; `AppSidebar` + `AppTopBar` are used in `(app)` layout.
 - `AppShell` is shared by protected pages and the authenticated SIWE handoff; its geometry must stay identical across that navigation.
 - Chat thread state bridged via Zustand because sidebar is a sibling of page content, not an ancestor (React context wouldn't work).
