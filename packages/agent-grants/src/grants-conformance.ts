@@ -29,6 +29,7 @@ import {
   revokeAccountRow,
   revokeRole,
 } from "./roles";
+import type { SqlTag } from "./postgres";
 import type { AgentGrantsStore } from "./types";
 
 // biome-ignore lint/suspicious/noExplicitAny: structural match for vitest's `expect`
@@ -353,6 +354,41 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
       const token = await asker(store, ids.other as string);
       await expect(turnMineOff(store, { me: person(ids.agent as string), off: { token } })).rejects.toMatchObject({ code: "not_allowed" });
       expect(await turnMineOff(store, { me, off: { token } })).toEqual({ changed: true, via: "link" });
+    });
+  });
+}
+
+/** The trigger function a node's payout guard (node-template 0043) installs on each payout leaf table. */
+export const AGENT_WALLET_GUARD_FUNCTION = "agent_wallet_is_not_a_payee" as const;
+
+export interface AgentWalletGuardHarness {
+  describe: (name: string, fn: () => void) => void;
+  it: (name: string, fn: () => Promise<void>) => void;
+  expect: Expect;
+  /** A connection to the node's real database (any role that can read the catalog). */
+  sql: SqlTag;
+  /** The node's payout leaf tables, by name (node-template: `epoch_distribution_leaves`, `distribution_settlement_leaves`). */
+  leafTables: readonly string[];
+}
+
+/**
+ * AGENT_WALLET_IS_NOT_A_PAYEE exists (SUITE_GATES_RELEASE): the node wrote its own reviewed migration for the guard (the package cannot,
+ * because the leaf tables are the node's), and this row fails when the trigger function is missing or a leaf table lacks its trigger.
+ * Run it inside the node's real-SQL conformance run.
+ */
+export function runAgentWalletGuardConformance(h: AgentWalletGuardHarness): void {
+  h.describe("payout guard: an agent's wallet is never a payee (the node's own migration)", () => {
+    h.it("the guard function exists and every payout leaf table has a trigger that calls it", async () => {
+      const fn = await h.sql`SELECT 1 AS found FROM pg_proc WHERE proname = ${AGENT_WALLET_GUARD_FUNCTION} LIMIT 1`;
+      h.expect(fn.length).toBe(1);
+      const rows = (await h.sql`
+        SELECT c.relname AS table_name
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_proc p ON p.oid = t.tgfoid
+        WHERE p.proname = ${AGENT_WALLET_GUARD_FUNCTION} AND NOT t.tgisinternal`) as ReadonlyArray<{ table_name: string }>;
+      const guarded = rows.map((r) => r.table_name).sort();
+      h.expect(guarded).toEqual([...h.leafTables].sort());
     });
   });
 }

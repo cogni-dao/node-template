@@ -20,7 +20,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createPostgresAgentGrantsStore, type SqlTag } from "@cogni/agent-grants";
-import { runGrantConformance } from "@cogni/agent-grants/grants-conformance";
+import { runAgentWalletGuardConformance, runGrantConformance } from "@cogni/agent-grants/grants-conformance";
 import { toUserId } from "@cogni/ids";
 import { NODE_AI_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import postgres, { type Sql } from "postgres";
@@ -137,6 +137,16 @@ describe("account grants (real Postgres, real roles)", () => {
       broken: () =>
         createPostgresAgentGrantsStore((() => Promise.reject(new Error("db down"))) as unknown as SqlTag),
     });
+  });
+
+  // 1b. The payout guard (node-template 0043) the package cannot write for the node: the package-owned row fails when it is missing.
+  runAgentWalletGuardConformance({
+    describe,
+    it,
+    expect,
+    sql: ((strings: TemplateStringsArray, ...values: unknown[]) =>
+      (service as unknown as SqlTag)(strings, ...values)) as SqlTag,
+    leafTables: ["distribution_settlement_leaves", "epoch_distribution_leaves"],
   });
 
   // 2. RLS as the app role: the database repeats the app's test, so the two cannot disagree.

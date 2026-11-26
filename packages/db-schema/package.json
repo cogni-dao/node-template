@@ -77,7 +77,8 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.44.7",
-    "@cogni-dao/metrics": "workspace:*"
+    "@cogni-dao/metrics": "workspace:*",
+    "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

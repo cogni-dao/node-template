@@ -3,21 +3,16 @@
 
 /**
  * Module: `@shared/constants/agent-principals`
- * Purpose: Seeded internal agent principals: the users graphs act as (catalog slug -> user id).
- * Scope: Deterministic UUIDs and slugs. Does not contain authorization logic.
- * Invariants: IDs match the rows seeded by migration 0037_seed_agent_principals.sql. Each user has no credential,
- *   and AGENT_WALLET_IS_NOT_A_PAYEE (a payout guard) keeps any wallet it binds out of payouts.
+ * Purpose: The seeded internal agent principals (catalog slug -> user id), re-exported from `@cogni-dao/agent-grants`, their one home (task.0175).
+ * Scope: Re-export only.
  * Side-effects: none
- * Links: https://cognidao.org/knowledge/node-capability-grants-standard
+ * Links: packages/agent-grants/src/internal-principals.ts
  * @public
  */
 
-/** `node-ai`: the general node agent (brain). */
-export const NODE_AI_PRINCIPAL_SLUG = "node-ai" as const;
-export const NODE_AI_PRINCIPAL_USER_ID =
-  "00000000-0000-4000-a000-0000000a0001" as const;
-
-/** `prioritizer`: the mission-loop scorer (work-prioritizer). */
-export const PRIORITIZER_PRINCIPAL_SLUG = "prioritizer" as const;
-export const PRIORITIZER_PRINCIPAL_USER_ID =
-  "00000000-0000-4000-a000-0000000a0002" as const;
+export {
+  NODE_AI_PRINCIPAL_SLUG,
+  NODE_AI_PRINCIPAL_USER_ID,
+  PRIORITIZER_PRINCIPAL_SLUG,
+  PRIORITIZER_PRINCIPAL_USER_ID,
+} from "@cogni/agent-grants";

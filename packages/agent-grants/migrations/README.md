@@ -1,3 +1,13 @@
+# agent_authority migration template
+
+`agent_authority.sql` is the FINAL base shape of `agent_principals` and `agent_roles` and the seed of the two internal principals (`node-ai`, `prioritizer`); node-template keeps it as `0036_agent_authority.sql`, `0037_seed_agent_principals.sql` and `0038_agent_access_requests.sql`. Do not copy it blind into a fork:
+
+1. Call `defineAgentAuthoritySchema` from `@cogni-dao/agent-grants/schema` in the node's own schema package with its `users` and `billingAccounts` tables, then run the node's `db:generate`. drizzle-kit writes the table DDL and the snapshot against the node's own prior snapshot. Never copy a snapshot. The table part of the file shows the shape to expect for the base columns.
+2. Append the hand-written part (everything after the line `Hand-written below`): FORCE RLS and the seed. The seed ids and slugs are `INTERNAL_AGENT_PRINCIPALS` in `@cogni-dao/agent-grants`.
+3. Add the other templates in this folder in the order of the node-template journal: `agent_account_grants.sql`, `agent_principals_orgs.sql` (only when the node adopts orgs), `agent_credentials.sql`.
+4. The AGENT_WALLET_IS_NOT_A_PAYEE trigger (node-template 0043) and the principal backfill (0044) change tables the node owns (`user_bindings`, the payout leaf tables). Each node writes and reviews them itself. `runAgentWalletGuardConformance` fails the node's real-SQL run when the trigger is missing from a leaf table.
+5. Run `db:check`. The journal `when` must be greater than every earlier entry. Run the conformance suites over the node's real SQL store as the app role.
+
 # agent_credentials migration template
 
 `agent_credentials.sql` is the FINAL shape a node applies for the `@cogni-dao/agent-grants/credentials` store: node-template's `0039_agent_credentials.sql`
