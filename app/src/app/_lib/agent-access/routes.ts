@@ -35,6 +35,7 @@ export function mineRoute(routeId: string, call: MineCall, withBody: boolean) {
     return send(
       await mineHttp(httpDeps(ctx.log), call, {
         me: { userId: user.id, admin: null },
+        via: "session",
         ...(withBody ? { body: await readJsonBody(request) } : {}),
         authority,
       })

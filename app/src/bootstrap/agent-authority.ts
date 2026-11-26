@@ -4,7 +4,7 @@
 /**
  * Module: `@bootstrap/agent-authority`
  * Purpose: This node's authority object: `createAgentToolAuthority` from `@cogni/agent-grants/host` (the guard store, decision log, admin check, and the role, ask
- *   and mine calls) plus this node's org, service-assertion and payer methods, which join the package after task.0181 (agent-grants 0.10.0).
+ *   and mine calls) plus this node's org, service-assertion and payer methods, which join the package after task.0181's release.
  * Scope: Composition only. Takes the service-role (BYPASSRLS) postgres.js client from the container: `agent_roles` and `agent_principals` are deny-all for the app
  *   role. Decides nothing itself (ONE_AUTHORIZE_FN lives in the package).
  * Invariants:

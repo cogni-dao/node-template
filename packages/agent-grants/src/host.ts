@@ -6,7 +6,7 @@
  * Purpose: A node's wiring of this package, written once (task.0175): the store wrapper, the guard's decision log, the admin check over wallet bindings,
  *   and the role, ask and mine calls. A node passes its SQL client, its admin authority, its logger and its tool contracts, and gets one authority object.
  * Scope: Composition over this package's own functions. The first release has no org, service-auth or payer methods; they join `createAgentToolAuthority`
- *   after task.0181 (agent-grants 0.10.0). Takes a connection that bypasses row-level security: `agent_roles` and `agent_principals` are deny-all for the app
+ *   after task.0181's release. Takes a connection that bypasses row-level security: `agent_roles` and `agent_principals` are deny-all for the app
  *   role. Decides nothing itself (ONE_AUTHORIZE_FN lives in `./authorize`).
  * Invariants:
  *   - ADMIN_FROM_USER_BINDINGS: the human's wallet(s) come from `user_bindings` (provider = wallet), never from the request. Any bound admin wallet passes;
@@ -24,7 +24,6 @@ import { type MineListInput, listMine, scopesByPrincipalOf, turnMineOff, turnMin
 import type { ApprovalCaller } from "./approval";
 import { authorizeCaller, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "./same-door";
 import { buildAskView, buildNodeAiView } from "./node-ai";
-import type { OrgOwners } from "./orgs";
 import { agentNameKey } from "./names";
 import { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 import {
@@ -79,6 +78,14 @@ export interface HostLog {
 /** The node's admin authority, as the admin check reads it: one wallet at a time, by the DAO's repo-spec list. */
 export interface NodeAdminCheckPort {
   check(input: { userId: string; walletAddress?: string }): Promise<{ ok: true } | { ok: false; errorCode: string }>;
+}
+
+/**
+ * The owner source for org accounts, as the host reads it: it hands the source straight to the decision functions and looks inside nothing. A local
+ * structural type, so this file does not import `orgs.ts` (task.0181 rewrites that file).
+ */
+export interface HostOwners {
+  owners(source: never): Promise<readonly string[]>;
 }
 
 /** The service-role postgres.js client: a tagged template that can also open a transaction. */
@@ -232,9 +239,7 @@ export interface AgentToolAuthority extends AgentAuthorityPort {
     via: "bearer" | "session";
     accountId?: string;
   }): Promise<AuthzDecision>;
-  /** The decision log and store wrapper the node's extensions (org, payer, service) reuse until they join the package. */
-  readonly withStore: WithStore;
-  readonly declarations: PermissionCatalog["declarations"];
+  /** The scopes an outside agent may ask for; the node's service-assertion extension reads it until that joins the package. */
   readonly askableScopes: readonly string[];
 }
 
@@ -251,7 +256,7 @@ export interface AgentToolAuthorityDeps {
   /** Create the person's billing account when they turn an account row On and have none yet. */
   readonly ensureBillingAccount?: ((userId: string) => Promise<string>) | undefined;
   /** The owner source for org accounts; absent means every account is owned by its owner user alone. */
-  readonly owners?: OrgOwners | undefined;
+  readonly owners?: HostOwners | undefined;
   /** The node's failure-class fields for an unavailable-store log (name, SQLSTATE, never a message). */
   readonly failureFields?: ((error: unknown) => object) | undefined;
 }
@@ -300,9 +305,7 @@ export function createAgentToolAuthority(deps: AgentToolAuthorityDeps): AgentToo
     scopeKinds,
     declaredScopes,
     permissions,
-    declarations,
     askableScopes,
-    withStore,
     adminCheck,
     async listNodeAi() {
       const scopesByPrincipal = scopesOf("node");

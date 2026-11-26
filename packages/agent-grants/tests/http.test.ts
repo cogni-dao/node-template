@@ -11,10 +11,12 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import {
   accessRequestCreateHttp,
   accessRequestListHttp,
+  accountCreditsHttp,
   adminAiAccessHttp,
   agentMeHttp,
   type AdminAiAccessCalls,
@@ -73,23 +75,23 @@ describe("the person's own table", () => {
 
   it("a node scope from the profile is 400 invalid_scope before anything is written", async () => {
     const turnMineOn = vi.fn();
-    const res = await mineHttp(deps, "on", { me, body: { principalUserId: "ai", scope: "work_item:transition" }, authority: authority({ turnMineOn }) });
+    const res = await mineHttp(deps, "on", { me, via: "session", body: { principalUserId: "ai", scope: "work_item:transition" }, authority: authority({ turnMineOn }) });
     expect(res).toMatchObject({ status: 400, body: { error: "invalid_scope" } });
     expect(turnMineOn).not.toHaveBeenCalled();
   });
 
   it("a person who owns no account gets the same quiet changed:false", async () => {
     const turnMineOff = vi.fn().mockRejectedValue(new AgentRolesError("not_allowed", "no"));
-    const res = await mineHttp(deps, "off", { me, body: { rowId: "0b6c9a4e-6f55-4d0c-9a3b-1d2f3a4b5c6d" }, authority: authority({ turnMineOff }) });
+    const res = await mineHttp(deps, "off", { me, via: "session", body: { rowId: "0b6c9a4e-6f55-4d0c-9a3b-1d2f3a4b5c6d" }, authority: authority({ turnMineOff }) });
     expect(res).toMatchObject({ status: 200, body: { changed: false } });
   });
 
   it("a preview with a token of the wrong shape, or an unknown token, is one 404", async () => {
     const previewAsk = vi.fn().mockResolvedValue(null);
-    expect((await mineHttp(deps, "preview", { me, body: { token: "short" }, authority: authority({ previewAsk }) })).status).toBe(404);
+    expect((await mineHttp(deps, "preview", { me, via: "session", body: { token: "short" }, authority: authority({ previewAsk }) })).status).toBe(404);
     expect(previewAsk).not.toHaveBeenCalled();
     const token = "A".repeat(43);
-    expect((await mineHttp(deps, "preview", { me, body: { token }, authority: authority({ previewAsk }) })).status).toBe(404);
+    expect((await mineHttp(deps, "preview", { me, via: "session", body: { token }, authority: authority({ previewAsk }) })).status).toBe(404);
   });
 });
 
@@ -143,5 +145,41 @@ describe("agent/me", () => {
 
   it("is 503 when the admin roster is unavailable", async () => {
     expect((await agentMeHttp(deps, { userId: "u", via: "session", authority: authority("unavailable") })).status).toBe(503);
+  });
+});
+
+describe("account credits", () => {
+  const contract = {
+    input: z.object({ limit: z.number().int().positive().max(50).optional() }),
+    output: z.object({ balance: z.number() }),
+  };
+  it("reads with the parsed limit and sends the contract-parsed body", async () => {
+    const read = vi.fn().mockResolvedValue({ balance: 7, extra: "dropped" });
+    const res = await accountCreditsHttp({ limitParam: "5", contract, read });
+    expect(read).toHaveBeenCalledWith(5);
+    expect(res).toMatchObject({ status: 200, body: { balance: 7 }, headers: { "cache-control": "no-store" } });
+  });
+  it("a bad limit is 400 and reads nothing", async () => {
+    const read = vi.fn();
+    expect((await accountCreditsHttp({ limitParam: "nope", contract, read })).status).toBe(400);
+    expect(read).not.toHaveBeenCalled();
+  });
+  it("a foreign, expired, revoked or missing account is one 404", async () => {
+    expect(await accountCreditsHttp({ limitParam: null, contract, read: async () => null })).toMatchObject({ status: 404, body: { error: "not_found" } });
+  });
+});
+
+describe("success paths", () => {
+  it("mine on turns an own-AI row on with the person as approver", async () => {
+    const turnMineOn = vi.fn().mockResolvedValue({ changed: true });
+    const authority = { scopeKinds: { "account:read": "account" }, turnMineOn } as unknown as AgentAccessAuthority;
+    const res = await mineHttp(deps, "on", { me, via: "session", body: { principalUserId: "ai", scope: "account:read" }, authority });
+    expect(turnMineOn).toHaveBeenCalledWith(me, { principalUserId: "ai", scope: "account:read" });
+    expect(res).toMatchObject({ status: 200, body: { changed: true } });
+  });
+  it("admin preview returns the waiting row", async () => {
+    const permission = { section: "pending", principalUserId: "u", who: "agent", outside: true, hint: null, scope: "s", label: "L", description: "D", on: false, until: null, resource: "node", rowId: null };
+    const res = await adminAiAccessHttp(deps, "preview", { body: { token: "A".repeat(43) }, calls: { preview: async () => permission } as unknown as AdminAiAccessCalls });
+    expect(res).toMatchObject({ status: 200, body: { permission } });
   });
 });

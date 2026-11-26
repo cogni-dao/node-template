@@ -27,6 +27,7 @@ import {
   agentAccessRequestListOperation,
   agentMineListOperation,
   agentMineOffOperation,
+  agentMeOperation,
   agentMineOnOperation,
   agentPreviewOperation,
   agentRolesListOperation,
@@ -144,7 +145,8 @@ export type MineCall = "list" | "on" | "off" | "preview";
 export async function mineHttp(
   deps: AgentHttpDeps,
   call: MineCall,
-  input: { me: ApprovalCaller; body?: unknown; authority: AgentAccessAuthority }
+  /** `via` is the literal `"session"`: the human plane takes a signed-in person only, and the node has refused every other credential before this call. */
+  input: { me: ApprovalCaller; via: "session"; body?: unknown; authority: AgentAccessAuthority }
 ): Promise<AgentHttpResponse> {
   const routeId = `agent.mine.${call}`;
   const { authority, me } = input;
@@ -240,6 +242,30 @@ export async function adminAiAccessHttp(
   }
 }
 
+/** The credits read's wire contract, passed in by the node (it is shared with the node's own credits summary route): the query shape and the 2xx body. */
+export interface AccountCreditsContract {
+  readonly input: z.ZodType<{ limit?: number | undefined }>;
+  readonly output: z.ZodType;
+}
+
+/**
+ * `GET /api/v1/accounts/{accountId}/credits`: the gated read of ONE account, the route twin of `core__account_credits_read`. The node's door
+ * (`sameDoor` + `sameDoorAccountParam`) already decided owner, delegated or nothing; the node's `read` runs as the caller under row-level security
+ * and answers null for a foreign, expired, revoked, wrong-scope or missing account (ACCOUNT_404_NON_DISCLOSING: one 404). A read failure is not caught:
+ * the node's route wrapper answers it.
+ */
+export async function accountCreditsHttp(input: {
+  /** The raw `limit` query value, or null when the query has none. */
+  readonly limitParam: string | null;
+  readonly contract: AccountCreditsContract;
+  readonly read: (limit: number | undefined) => Promise<unknown | null>;
+}): Promise<AgentHttpResponse> {
+  const parsed = input.contract.input.safeParse({ limit: input.limitParam ? Number(input.limitParam) : undefined });
+  if (!parsed.success) return respond({ error: "Invalid query" }, 400);
+  const summary = await input.read(parsed.data.limit);
+  return summary ? respond(input.contract.output.parse(summary)) : notFound();
+}
+
 /** `GET /api/v1/agent/me`: the caller's own access, the same probe on every node. */
 export async function agentMeHttp(
   deps: AgentHttpDeps,
@@ -254,14 +280,16 @@ export async function agentMeHttp(
       authority.principalKind(userId),
     ]);
     if (admin === "unavailable") return respond({ error: "authz_unavailable" }, 503);
-    return respond({
-      userId,
-      via: input.via,
-      kind,
-      wallets,
-      isAdmin: admin === "allow",
-      grants: rows.filter((row) => row.state === "granted").map((row) => ({ scope: row.scope, accountId: row.accountId, since: row.at })),
-    });
+    return respond(
+      agentMeOperation.output.parse({
+        userId,
+        via: input.via,
+        kind,
+        wallets,
+        isAdmin: admin === "allow",
+        grants: rows.filter((row) => row.state === "granted").map((row) => ({ scope: row.scope, accountId: row.accountId, since: row.at })),
+      })
+    );
   } catch (error) {
     return unavailable(deps, "agent.me", error);
   }

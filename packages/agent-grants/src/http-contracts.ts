@@ -179,3 +179,16 @@ export const agentAccessRequestListOperation = {
     ),
   }),
 } as const;
+
+/** `GET /api/v1/agent/me`: the caller's own access, the same probe on every node. `grants` lists live grants only. */
+export const agentMeOperation = {
+  id: "agent.me.v1",
+  output: z.object({
+    userId: z.string(),
+    via: z.enum(["bearer", "session"]),
+    kind: z.enum(["human", "agent", "org"]),
+    wallets: z.array(z.string()),
+    isAdmin: z.boolean(),
+    grants: z.array(z.object({ scope: z.string(), accountId: z.string().nullable(), since: z.string() })),
+  }),
+} as const;

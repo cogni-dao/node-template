@@ -15,18 +15,16 @@
  * @public
  */
 
+import { accountCreditsHttp } from "@cogni/agent-grants/http";
 import { creditsSummaryOperation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
 
+import { send } from "@/app/_lib/agent-access/respond";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { readAccountCredits } from "@/app/_facades/payments/account-credits.server";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const NO_STORE = { "cache-control": "no-store" } as const;
-const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: NO_STORE });
 
 type Ctx = { params: Promise<{ accountId: string }> };
 
@@ -40,14 +38,13 @@ export const GET = wrapRouteHandlerWithLogging<Ctx>(
   async (_ctx, request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     const { accountId } = await context.params;
-    const parsed = creditsSummaryOperation.input.safeParse({
-      limit: new URL(request.url).searchParams.get("limit")
-        ? Number(new URL(request.url).searchParams.get("limit"))
-        : undefined,
-    });
-    if (!parsed.success) return json({ error: "Invalid query" }, 400);
-    // The caller is the RLS actor: an owner reads through the owner policy, an agent through agent_has_scope.
-    const summary = await readAccountCredits({ callerUserId: sessionUser.id, accountId, limit: parsed.data.limit });
-    return summary ? json(creditsSummaryOperation.output.parse(summary)) : json({ error: "not_found" }, 404);
+    return send(
+      await accountCreditsHttp({
+        limitParam: new URL(request.url).searchParams.get("limit"),
+        contract: creditsSummaryOperation,
+        // The caller is the RLS actor: an owner reads through the owner policy, an agent through agent_has_scope.
+        read: (limit) => readAccountCredits({ callerUserId: sessionUser.id, accountId, limit }),
+      })
+    );
   }
 );
