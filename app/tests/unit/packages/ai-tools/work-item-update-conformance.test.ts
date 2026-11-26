@@ -10,7 +10,7 @@ import {
   WorkItemUpdateSuccessSchema,
   workItemUpdateContract,
 } from "@cogni/ai-tools";
-import { SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { composeAgentRoutes } from "@cogni/agent-grants";
 import { KnowledgeEntryIdSchema } from "@cogni/knowledge-store";
 import {
   CHANGE_REASON_REQUIRED_MESSAGE,
@@ -50,7 +50,7 @@ describe("core__work_item_update mirrors the PATCH route", () => {
   });
 
   it("requires the scope the route declares through sameDoor", () => {
-    const door = SAME_DOOR_ROUTES.core__work_item_update;
+    const door = composeAgentRoutes().sameDoorRoutes.core__work_item_update;
     expect(door?.routes).toContain("work.items.patch");
     expect(workItemUpdateContract.requires?.scope).toBe(door?.scope);
   });

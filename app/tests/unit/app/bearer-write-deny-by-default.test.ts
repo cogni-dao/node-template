@@ -12,8 +12,10 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { DEFERRED_WRITE_ROUTES, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { composeAgentRoutes, DEFERRED_WRITE_ROUTES, OPEN_BY_DESIGN_ROUTES } from "@cogni/agent-grants";
 import { describe, expect, it } from "vitest";
+
+import { nodeExtensions } from "@/node-extensions";
 
 const API = resolve(__dirname, "../../../src/app/api");
 const WRITE_METHODS = "POST|PUT|PATCH|DELETE";
@@ -114,8 +116,10 @@ function writeExports(file: string): WriteExport[] {
 
 const ALL = routeFiles(API).flatMap(writeExports);
 const isInternal = (e: WriteExport) => e.path.startsWith("internal/");
+// The node's composed routes (package baseline plus node-extensions.ts), so a node's own twins count as declared doors.
+const composedRoutes = composeAgentRoutes(nodeExtensions.routes);
 const declaredByDoor = new Set(
-  [...Object.values(SAME_DOOR_ROUTES), ...Object.values(ROUTE_ONLY_CAPABILITIES)].flatMap((e) => e.routes)
+  [...Object.values(composedRoutes.sameDoorRoutes), ...Object.values(composedRoutes.routeOnlyCapabilities)].flatMap((e) => e.routes)
 );
 
 describe("DENY_BY_DEFAULT: the scan itself", () => {

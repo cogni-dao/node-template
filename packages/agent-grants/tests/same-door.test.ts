@@ -10,12 +10,11 @@ import {
   guardTools,
   OPEN_BY_DESIGN_ROUTES,
   offeredToolIds,
-  ROUTE_ONLY_CAPABILITIES,
   SAFE_METHODS,
-  SAME_DOOR_ROUTES,
   type TerminalDenial,
   type ToolRequires,
 } from "../src";
+import { ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "../src/same-door";
 import { memoryStore } from "./memory-store";
 
 const node = (subject: "member" | "admin" = "member"): ToolRequires => ({ scope: "work_item:transition", kind: "node", subject });

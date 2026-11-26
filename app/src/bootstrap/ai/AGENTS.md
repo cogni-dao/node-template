@@ -29,7 +29,7 @@ AI tool bindings and tool source factory. Wires tool implementations with inject
 ## Public Surface
 
 - **Exports:** `createToolBindings()`, `createBoundToolSource()`, `ToolBindings`, `ToolBindingDeps`, `NODE_LOCAL_TOOL_BUNDLE`, `NODE_LOCAL_TOOL_BINDINGS`, `NODE_LOCAL_CATALOG`, `secretProbeBoundTool`
-- **Files considered API:** `tool-bindings.ts`, `tool-source.factory.ts`, `secret-probe.ts`
+- **Files considered API:** `tool-bindings.ts`, `tool-source.factory.ts`, `secret-probe.ts`, `tool-bundle.ts` (`composeToolBundle`: core + node-local + the `@/node-extensions` tool factory's tools; the container builds it once as `container.toolBundle`, which the tool source, the graph executor and the permission catalog read), `node-extensions-host.ts` (`defineNodeExtensions`, `NodeExtensions`, `ToolHost`)
 
 ## Responsibilities
 

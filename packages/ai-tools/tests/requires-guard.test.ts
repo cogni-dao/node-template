@@ -10,18 +10,10 @@
 
 import { describe, expect, it } from "vitest";
 import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "../src/catalog";
+import { contractsMissingRequires, readOnlyContractsWithNonAccountRequires } from "../src/requires-guard";
 import type { ToolContract } from "../src/types";
 
 type AnyContract = ToolContract<string, unknown, unknown, unknown>;
-
-/** The guard itself, reusable by a node for its own bundle. */
-export function contractsMissingRequires(
-  contracts: readonly Pick<AnyContract, "name" | "effect" | "requires">[]
-): string[] {
-  return contracts
-    .filter((c) => c.effect !== "read_only" && c.requires === undefined)
-    .map((c) => c.name);
-}
 
 describe("requires guard", () => {
   const contracts = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map(
@@ -64,6 +56,18 @@ describe("requires guard", () => {
         { name: "core__new_reader", effect: "read_only" },
       ])
     ).toEqual(["core__new_writer", "core__new_effect"]);
+  });
+
+  it("flags a read_only tool that declares a non-account requires", () => {
+    const requires = { scope: "x:y", kind: "node", subject: "member" } as const;
+    expect(
+      readOnlyContractsWithNonAccountRequires([
+        { name: "core__reader_node", effect: "read_only", requires },
+        { name: "core__reader_account", effect: "read_only", requires: { ...requires, kind: "account" } },
+        { name: "core__writer", effect: "state_change", requires },
+      ])
+    ).toEqual(["core__reader_node"]);
+    expect(readOnlyContractsWithNonAccountRequires(contracts)).toEqual([]);
   });
 
   it("puts requires on a read_only tool only when it reads one account's data (kind account)", () => {
