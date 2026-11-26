@@ -31,7 +31,8 @@ export function ContributorReceiptRows({
   readonly renderRows?: (
     contributor: EpochContributor,
     membershipPending?: boolean,
-    receiptOffset?: number
+    receiptOffset?: number,
+    canWriteReceipt?: (receiptId: string) => boolean
   ) => ReactElement[] | null;
 }) {
   const { client, queryKeyPrefix } = useEpochContext();
@@ -44,34 +45,60 @@ export function ContributorReceiptRows({
   const setOffset = (offset: number) =>
     setPage({ readId: epoch.membershipReadId, offset });
   const reconciled = useRef(false);
+  const detailAttempt = useRef<string | null>(null);
+  const queryKey = [
+    ...queryKeyPrefix,
+    "epochs",
+    epoch.id,
+    epoch.status,
+    "contributor",
+    contributor.claimantKey,
+    epoch.membershipReadId,
+    offset,
+  ];
   const query = useQuery({
-    queryKey: [
-      ...queryKeyPrefix,
-      "epochs",
-      epoch.id,
-      epoch.status,
-      "contributor",
-      contributor.claimantKey,
-      epoch.membershipReadId,
-      offset,
-    ],
+    behavior: {
+      onFetch: () => {
+        detailAttempt.current = crypto.randomUUID();
+      },
+    },
+    queryKey,
     enabled: membershipReady,
     staleTime: 0,
     gcTime: 0,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     retry: false,
-    queryFn: ({ signal }) =>
-      epochJson<{ total: number; events: ReceiptEvent[] }>(
+    queryFn: async ({ signal }) => {
+      const readId = detailAttempt.current;
+      const data = await epochJson<{ total: number; events: ReceiptEvent[] }>(
         client,
         withEpochQuery(client.endpoints.activity(epoch.id), {
           claimantKey: contributor.claimantKey,
           limit: 50,
           offset,
         }),
-        signal,
-      ),
+        signal
+      );
+      return { ...data, readId };
+    },
   });
+  const detailVerified =
+    query.isSuccess &&
+    query.fetchStatus === "idle" &&
+    query.data.readId === detailAttempt.current;
+  // Query state is read again at the caller boundary, including a fetch started
+  // before React has rendered its pending/error state. Draft context is never authority.
+  const canWriteReceipt = (receiptId: string) => {
+    const current = queryClient.getQueryState<typeof query.data>(queryKey);
+    return (
+      membershipReady &&
+      current?.status === "success" &&
+      current.fetchStatus === "idle" &&
+      current.data?.readId === detailAttempt.current &&
+      current.data.events.some((receipt) => receipt.receiptId === receiptId)
+    );
+  };
   // An identity may have been linked since the summary was read. Refresh the
   // active summary once; repeated empty results must not trigger a read loop.
   useEffect(() => {
@@ -115,7 +142,7 @@ export function ContributorReceiptRows({
   ]);
   const receipts: readonly IngestionReceipt[] = useMemo(
     () =>
-      (!membershipReady || query.fetchStatus !== "idle" || !query.isSuccess
+      (!membershipReady || !detailVerified
         ? []
         : (query.data?.events ?? [])
       ).map((receipt) => ({
@@ -136,18 +163,18 @@ export function ContributorReceiptRows({
     [
       membershipReady,
       query.fetchStatus,
-      query.isSuccess,
+      detailVerified,
       query.data,
       epoch.weightConfig,
     ]
   );
   // Only verified bounded membership may move an existing local draft's owner.
   useEffect(() => {
-    if (membershipReady && query.isSuccess && query.fetchStatus === "idle")
+    if (membershipReady && detailVerified)
       onMembership?.({ ...contributor, receipts }, offset);
   }, [
     membershipReady,
-    query.isSuccess,
+    detailVerified,
     query.fetchStatus,
     query.data,
     onMembership,
@@ -177,18 +204,32 @@ export function ContributorReceiptRows({
           </TableCell>
         </TableRow>
       ) : null}
+      {membershipReady &&
+      !detailVerified &&
+      !query.error &&
+      query.fetchStatus === "idle" ? (
+        <TableRow>
+          <TableCell colSpan={6}>
+            <p role="alert">Could not verify current contributions.</p>
+            <Button onClick={() => void query.refetch()}>
+              Retry contributions
+            </Button>
+          </TableCell>
+        </TableRow>
+      ) : null}
       {renderRows
         ? renderRows(
             { ...contributor, receipts },
             !membershipReady || query.fetchStatus !== "idle" || query.isPending,
-            offset
+            offset,
+            canWriteReceipt
           )
         : receipts.map((receipt) => (
             <ContributionRow key={receipt.receiptId} receipt={receipt} />
           ))}
       {membershipReady &&
       query.fetchStatus === "idle" &&
-      !query.error &&
+      detailVerified &&
       receipts.length === 0 ? (
         <TableRow>
           <TableCell colSpan={6}>No contributions</TableCell>

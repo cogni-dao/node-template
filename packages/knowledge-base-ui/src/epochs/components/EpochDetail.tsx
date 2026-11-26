@@ -47,7 +47,8 @@ export interface EpochDetailProps {
   readonly renderExpandedRows?: (
     contributor: EpochContributor,
     membershipPending?: boolean,
-    receiptOffset?: number
+    receiptOffset?: number,
+    canWriteReceipt?: (receiptId: string) => boolean
   ) => ReactElement[] | null;
 }
 

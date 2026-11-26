@@ -206,12 +206,19 @@ function CurrentEpochContributors({
 function CurrentEpochSection({
   epoch,
   lifecycle,
+  listReady,
+  listReadId,
 }: {
+  readonly listReady: boolean;
+  readonly listReadId: string | undefined;
   readonly epoch: EpochDto;
   readonly lifecycle: SettlementLifecycleEvidence | undefined;
 }): ReactElement {
   const collectEpoch = useCollectEpoch();
-  const view = useEpochView(epoch);
+  const view = useEpochView(epoch, {
+    enabled: listReady,
+    parentReadId: listReadId,
+  });
 
   return (
     <div className="space-y-6">
@@ -317,7 +324,7 @@ function CurrentEpochSection({
       {view.data ? (
         <CurrentEpochContributors
           epoch={view.data}
-          membershipReady={view.membershipReady}
+          membershipReady={listReady && view.membershipReady}
         />
       ) : (
         <ContributorsSkeleton />
@@ -330,11 +337,18 @@ function CurrentEpochSection({
 function PastEpochDetail({
   epoch,
   lifecycle,
+  listReady,
+  listReadId,
 }: {
+  readonly listReady: boolean;
+  readonly listReadId: string | undefined;
   readonly epoch: EpochDto;
   readonly lifecycle: SettlementLifecycleEvidence | undefined;
 }): ReactElement {
-  const view = useEpochView(epoch);
+  const view = useEpochView(epoch, {
+    enabled: listReady,
+    parentReadId: listReadId,
+  });
   return (
     <div className="space-y-4">
       <LifecycleRail epoch={epoch} lifecycle={lifecycle} />
@@ -358,7 +372,10 @@ function PastEpochDetail({
         </div>
       ) : null}
       {view.data ? (
-        <EpochDetail epoch={view.data} membershipReady={view.membershipReady} />
+        <EpochDetail
+          epoch={view.data}
+          membershipReady={listReady && view.membershipReady}
+        />
       ) : (
         <ContributorsSkeleton />
       )}
@@ -369,7 +386,11 @@ function PastEpochDetail({
 function PastEpochsSection({
   epochs,
   lifecycle,
+  listReady,
+  listReadId,
 }: {
+  readonly listReady: boolean;
+  readonly listReadId: string | undefined;
   readonly epochs: readonly EpochDto[];
   readonly lifecycle: SettlementLifecycleEvidence | undefined;
 }): ReactElement {
@@ -416,7 +437,12 @@ function PastEpochsSection({
                   "text-right",
                 ]}
                 expandedContent={
-                  <PastEpochDetail epoch={epoch} lifecycle={lifecycle} />
+                  <PastEpochDetail
+                    epoch={epoch}
+                    lifecycle={lifecycle}
+                    listReady={listReady}
+                    listReadId={listReadId}
+                  />
                 }
                 cells={[
                   <span key="id" className="text-foreground/60 font-bold">
@@ -444,25 +470,10 @@ function PastEpochsSection({
 
 export function CurrentEpochView(): ReactElement {
   const { state, setState } = useEpochContext();
-  const { data, isLoading, error } = useEpochsPage();
+  const { data, isLoading, error, refetch, membershipReady } = useEpochsPage();
   const lifecycle = useSettlementLifecycle().data;
 
-  if (error) {
-    return (
-      <div className="flex flex-col gap-8">
-        <div className="border-destructive bg-destructive/10 rounded-lg border p-6">
-          <h2 className="text-destructive text-lg font-semibold">
-            Error loading epoch data
-          </h2>
-          <p className="text-muted-foreground text-sm">
-            {error instanceof Error ? error.message : "Unknown error"}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (isLoading || !data) {
+  if (!data && !error) {
     return (
       <div className="flex flex-col gap-8">
         <div className="animate-pulse space-y-8">
@@ -476,22 +487,31 @@ export function CurrentEpochView(): ReactElement {
 
   return (
     <div className="space-y-10">
-      {data.current ? (
+      {error || (!membershipReady && !isLoading) ? (
+        <div role="alert">
+          <h2>Error loading epoch data</h2>
+          <p>{error?.message ?? "Could not verify current epochs."}</p>
+          <Button onClick={() => void refetch()}>Retry epochs</Button>
+        </div>
+      ) : null}
+      {data?.current ? (
         <CurrentEpochSection
           key={data.current.id}
           epoch={data.current}
           lifecycle={lifecycle}
+          listReady={membershipReady}
+          listReadId={data.membershipReadId}
         />
-      ) : (
+      ) : data ? (
         <div className="bg-card rounded-lg border p-12 text-center">
           <p className="text-muted-foreground">No active epoch</p>
           <p className="text-muted-foreground mt-2 text-sm">
             A new epoch will appear here when one is opened.
           </p>
         </div>
-      )}
+      ) : null}
 
-      {data.pastEpochs.length > 0 && (
+      {data && data.pastEpochs.length > 0 && (
         <div className="space-y-4">
           <div>
             <h2 className="text-xl font-semibold tracking-tight">
@@ -502,7 +522,12 @@ export function CurrentEpochView(): ReactElement {
               state.
             </p>
           </div>
-          <PastEpochsSection epochs={data.pastEpochs} lifecycle={lifecycle} />
+          <PastEpochsSection
+            epochs={data.pastEpochs}
+            lifecycle={lifecycle}
+            listReady={membershipReady}
+            listReadId={data.membershipReadId}
+          />
           {(data.historyTotal > 200 || state.historyOffset > 0) && (
             <div className="flex flex-wrap items-center justify-between gap-4">
               <Button

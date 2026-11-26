@@ -452,7 +452,8 @@ function ReviewEpochSection({
     (
       contributor: EpochContributor,
       membershipPending = false,
-      receiptOffset = 0
+      receiptOffset = 0,
+      canWriteReceipt: (receiptId: string) => boolean = () => false
     ): ReactElement[] | null => {
       const ownsEditor = (id: string) => {
         const context = draftContext.get(id);
@@ -490,30 +491,39 @@ function ReviewEpochSection({
           // This is local edit/operation context, never a retired membership link.
           receipts.push({ ...context.receipt, artifactUrl: null });
       }
-      return receipts.map((receipt) => (
-        <ReviewReceiptRow
-          key={receipt.receiptId}
-          receipt={receipt}
-          override={overrides.overridesByRef.get(receipt.receiptId) ?? null}
-          draft={session.drafts[receipt.receiptId] ?? null}
-          onStart={() => {
-            setDraftContext((previous) =>
-              new Map(previous).set(receipt.receiptId, {
-                claimantKey: contributor.claimantKey,
-                receipt,
-                offset: receiptOffset,
-                readId: epoch.membershipReadId,
-              })
-            );
-            session.startDraft(receipt.receiptId);
-          }}
-          onChange={(patch) => session.changeDraft(receipt.receiptId, patch)}
-          onCancel={() => session.cancelDraft(receipt.receiptId)}
-          onSave={() => session.submit(receipt.receiptId, "save")}
-          onRemove={() => session.submit(receipt.receiptId, "reset")}
-          isSaving={session.writesDisabled}
-        />
-      ));
+      return receipts.map((receipt) => {
+        const canWriteSubject = () => canWriteReceipt(receipt.receiptId);
+        return (
+          <ReviewReceiptRow
+            key={receipt.receiptId}
+            receipt={receipt}
+            override={overrides.overridesByRef.get(receipt.receiptId) ?? null}
+            draft={session.drafts[receipt.receiptId] ?? null}
+            onStart={() => {
+              setDraftContext((previous) =>
+                new Map(previous).set(receipt.receiptId, {
+                  claimantKey: contributor.claimantKey,
+                  receipt,
+                  offset: receiptOffset,
+                  readId: epoch.membershipReadId,
+                })
+              );
+              session.startDraft(receipt.receiptId);
+            }}
+            onChange={(patch) => session.changeDraft(receipt.receiptId, patch)}
+            onCancel={() => session.cancelDraft(receipt.receiptId)}
+            onSave={async () => {
+              if (canWriteSubject())
+                return session.submit(receipt.receiptId, "save");
+            }}
+            onRemove={async () => {
+              if (canWriteSubject())
+                return session.submit(receipt.receiptId, "reset");
+            }}
+            isSaving={session.writesDisabled || !canWriteSubject()}
+          />
+        );
+      });
     },
     [
       draftContext,

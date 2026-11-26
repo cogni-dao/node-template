@@ -148,6 +148,8 @@ function fixture(initialNavigation?: EpochNavigationState) {
     permission: "authorized",
     published: false,
     pendingPublish: false,
+    confirmedPublish: false,
+    failRootRefetch: false,
     error: null as Error | null,
     overrides: [] as {
       id: string;
@@ -159,6 +161,63 @@ function fixture(initialNavigation?: EpochNavigationState) {
   const requests: { url: string; method: string }[] = [];
   const writeContract = vi.fn();
   const switchChain = vi.fn();
+  function useReadContract(args: {
+    functionName: "hasPermission";
+    args: readonly [`0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`];
+  }): {
+    data: boolean | undefined;
+    isLoading: boolean;
+    error: null;
+    refetch: () => Promise<void>;
+  };
+  function useReadContract(args: { functionName: "merkleRoot" }): {
+    data: `0x${string}`;
+    isLoading: boolean;
+    error: null;
+    refetch: () => Promise<void>;
+  };
+  function useReadContract(args: {
+    functionName: "hasPermission" | "merkleRoot";
+    args?: readonly [
+      `0x${string}`,
+      `0x${string}`,
+      `0x${string}`,
+      `0x${string}`,
+    ];
+  }): {
+    data: boolean | `0x${string}` | undefined;
+    isLoading: boolean;
+    error: null;
+    refetch: () => Promise<void>;
+  } {
+    if (args.functionName === "merkleRoot")
+      return {
+        data: state.published ? ROOT : ZERO,
+        isLoading: false,
+        error: null,
+        refetch: async () => {
+          if (state.failRootRefetch)
+            throw new Error("fixture root read unavailable");
+        },
+      };
+    const decoded = args.args?.[3]
+      ? decodeFunctionData({
+          abi: DAO_ABI,
+          data: args.args[3],
+        })
+      : null;
+    const allowed =
+      decoded?.functionName === "execute" && decoded.args[2] === 0n;
+    return {
+      data:
+        state.permission === "unknown"
+          ? undefined
+          : state.permission === "authorized" && allowed,
+      isLoading: state.permission === "unknown",
+      error: null,
+      refetch: async () => undefined,
+    };
+  }
   const wallet = {
     useAccount: () => ({
       address: state.connected ? WALLET : undefined,
@@ -170,41 +229,13 @@ function fixture(initialNavigation?: EpochNavigationState) {
       writeContract,
       isPending: state.pendingPublish,
       error: state.error,
-      data: undefined,
+      data: state.confirmedPublish ? ROOT : undefined,
     }),
     useWaitForTransactionReceipt: () => ({
       isLoading: false,
-      isSuccess: false,
+      isSuccess: state.confirmedPublish,
     }),
-    useReadContract: (args: {
-      functionName: string;
-      args?: readonly unknown[];
-    }) => {
-      if (args.functionName === "merkleRoot")
-        return {
-          data: state.published ? ROOT : ZERO,
-          isLoading: false,
-          error: null,
-          refetch: vi.fn(),
-        };
-      const decoded = args.args?.[3]
-        ? decodeFunctionData({
-            abi: DAO_ABI,
-            data: args.args[3] as `0x${string}`,
-          })
-        : null;
-      const allowed =
-        decoded?.functionName === "execute" && decoded.args[2] === 0n;
-      return {
-        data:
-          state.permission === "unknown"
-            ? undefined
-            : state.permission === "authorized" && allowed,
-        isLoading: state.permission === "unknown",
-        error: null,
-        refetch: vi.fn(),
-      };
-    },
+    useReadContract,
     distributorAbi: [
       {
         type: "function",
@@ -219,7 +250,7 @@ function fixture(initialNavigation?: EpochNavigationState) {
     ),
     getChainName: () => "Base",
     getTransactionExplorerUrl: () => "https://example.com/tx",
-  } as unknown as EpochWallet; // Fake SDK boundary; the node binding is separately checked against real SDK types.
+  } satisfies EpochWallet;
   const client: EpochsClient = {
     dataScope: "fixture-scope",
     wallet,
@@ -1555,6 +1586,214 @@ describe("public epochs capability", () => {
     expect(
       screen.queryByLabelText("Override weight (units)")
     ).not.toBeInTheDocument();
+  });
+
+  it("r6 keeps current and historical contributor shells through actual list failure via Sync", async () => {
+    const f = fixture({
+      historyOffset: 0,
+      selectedEpochId: null,
+      expandedEpochIds: ["14"],
+    });
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("button", { name: "Expand details" })
+          .map(containingRow)
+      ).toHaveLength(2)
+    );
+    for (const row of screen
+      .getAllByRole("button", { name: "Expand details" })
+      .map(containingRow))
+      fireEvent.click(
+        within(row).getByRole("button", { name: "Expand details" })
+      );
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("link", { name: "Contribution r1" })
+      ).toHaveLength(2)
+    );
+    f.state.failList = true;
+    fireEvent.click(screen.getByRole("button", { name: "Sync contributions" }));
+    await screen.findByText("Error loading epoch data");
+    expect(
+      screen.getAllByRole("button", { name: "Collapse details" })
+    ).toHaveLength(3);
+    expect(
+      screen.queryByRole("link", { name: "Contribution r1" })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).not.toHaveTextContent(
+      "fixture unavailable"
+    );
+    f.state.failList = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry epochs" }));
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("link", { name: "Contribution r1" })
+      ).toHaveLength(2)
+    );
+    expect(
+      screen.getAllByRole("button", { name: "Collapse details" })
+    ).toHaveLength(3);
+  });
+
+  it.each([
+    403, 503,
+  ])("r6 gates moved draft writes on current bounded membership after HTTP %s", async (status) => {
+    const f = fixture();
+    f.state.events = ["moving", "remaining"].map((id) => ({
+      ...event(id, "external"),
+      platformLogin: "Pending",
+      selection: { userId: null, included: true, weightOverrideMilli: null },
+    }));
+    f.state.events.push({ ...event("linked"), platformLogin: "Linked" });
+    const view = await readyReview(f);
+    fireEvent.click(
+      within(screen.getByRole("row", { name: /Pending/ })).getByRole("button", {
+        name: "Expand details",
+      })
+    );
+    fireEvent.click(
+      within(
+        containingRow(
+          await screen.findByRole("link", { name: "Contribution moving" })
+        )
+      ).getByRole("button", { name: "Adjust weight" })
+    );
+    fireEvent.change(screen.getByLabelText("Override weight (units)"), {
+      target: { value: " 00090071992547409931234567890 " },
+    });
+    fireEvent.change(screen.getByLabelText("Reason (optional)"), {
+      target: { value: "  keep exact moved reason  " },
+    });
+    let refused = true;
+    const request = f.client.request;
+    vi.spyOn(f.client, "request").mockImplementation((url, init) =>
+      refused && url.includes("claimantKey=")
+        ? Promise.resolve(
+            new Response(JSON.stringify({ error: "SECRET refused detail" }), {
+              status,
+            })
+          )
+        : request(url, init)
+    );
+    f.state.events = f.state.events.map((item) =>
+      item.receiptId === "moving"
+        ? {
+            ...item,
+            platformLogin: "Linked",
+            selection: {
+              userId: "a",
+              included: true,
+              weightOverrideMilli: null,
+            },
+          }
+        : item
+    );
+    await act(async () => {
+      await f.queryClient.refetchQueries({
+        predicate: (q) => q.queryKey.includes("finish-epoch"),
+      });
+    });
+    await screen.findByRole("button", { name: "Retry contributions" });
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue(
+      " 00090071992547409931234567890 "
+    );
+    expect(screen.getByLabelText("Reason (optional)")).toHaveValue(
+      "  keep exact moved reason  "
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(f.requests.filter((r) => r.method === "PATCH")).toHaveLength(0);
+    expect(
+      screen.queryByRole("link", { name: "Contribution moving" })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/SECRET/)).not.toBeInTheDocument();
+    fireEvent.click(
+      within(screen.getByRole("row", { name: /Linked/ })).getByRole("button", {
+        name: "Expand details",
+      })
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: "Retry contributions" })
+      ).toHaveLength(2)
+    );
+    expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    refused = false;
+    // Recovering the old claimant cannot authorize the retained moved receipt.
+    fireEvent.click(
+      first(
+        screen.getAllByRole("button", { name: "Retry contributions" }).reverse()
+      )
+    );
+    await screen.findByRole("link", { name: "Contribution remaining" });
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Retry contributions" })
+    );
+    await screen.findByRole("link", { name: "Contribution linked" });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled()
+    );
+    expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(1);
+    expect(f.requests.filter((r) => r.method === "PATCH")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(f.state.overrides[0]?.overrideUnits).toBe(
+        "90071992547409931234567890"
+      )
+    );
+    expect(f.requests.filter((r) => r.method === "PATCH")).toHaveLength(1);
+    view.unmount();
+  });
+
+  it.each([
+    false,
+    true,
+  ])("r6 confirmed fake receipt refreshes only owning keys (root refuses=%s)", async (rootRefuses) => {
+    const f = fixture();
+    f.state.kind = "publish";
+    const other = fixture();
+    other.state.kind = "publish";
+    // Two live scope owners share one real cache.
+    const view = render(
+      <QueryClientProvider client={f.queryClient}>
+        <EpochsProvider client={f.client}>{reviewElement()}</EpochsProvider>
+        <EpochsProvider client={other.client}>{reviewElement()}</EpochsProvider>
+      </QueryClientProvider>
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: "Publish latest settlement" })
+      ).toHaveLength(2)
+    );
+    const before = f.requests.length;
+    const otherBefore = other.requests.length;
+    f.state.failRootRefetch = rootRefuses;
+    f.state.confirmedPublish = true;
+    view.rerender(
+      <QueryClientProvider client={f.queryClient}>
+        <EpochsProvider client={f.client}>{reviewElement()}</EpochsProvider>
+        <EpochsProvider client={other.client}>{reviewElement()}</EpochsProvider>
+      </QueryClientProvider>
+    );
+    await waitFor(() => {
+      expect(
+        f.requests.slice(before).some((r) => r.url.endsWith("/distribution"))
+      ).toBe(true);
+      expect(
+        f.requests.slice(before).some((r) => r.url === "/fixture/lifecycle")
+      ).toBe(true);
+      expect(
+        f.requests
+          .slice(before)
+          .some((r) => r.url.startsWith("/fixture/epochs"))
+      ).toBe(true);
+    });
+    expect(other.requests).toHaveLength(otherBefore);
+    expect(f.writeContract).not.toHaveBeenCalled();
   });
 
   it("r5 retains historical contributor expansion through a failed parent refresh", async () => {

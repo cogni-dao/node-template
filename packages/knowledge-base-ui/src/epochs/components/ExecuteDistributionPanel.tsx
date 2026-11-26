@@ -32,6 +32,7 @@
 
 "use client";
 
+import { finishWorkspaceKey } from "../hooks/useFinishEpochWorkspace";
 import { useEpochContext } from "../context";
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -62,6 +63,7 @@ import {
 } from "../ui";
 import {
   type ExecuteDistributionPayload,
+  executeDistributionKey,
   useExecuteDistribution,
   useHasExecutePermission,
 } from "../hooks/useExecuteDistribution";
@@ -362,7 +364,7 @@ function PublishStep({
   chainName: string;
   onConfirmed: (explorerUrl: string) => void;
 }) {
-  const { client } = useEpochContext();
+  const { client, queryKeyPrefix, state, isCurrentScope } = useEpochContext();
   const {
     useWriteContract,
     useWaitForTransactionReceipt,
@@ -410,15 +412,25 @@ function PublishStep({
         await Promise.all([
           refetchOnChainRoot(),
           queryClient.refetchQueries({
-            queryKey: ["governance", "execute-distribution", payload.epochId],
+            queryKey: executeDistributionKey(queryKeyPrefix, payload.epochId),
+            exact: true,
           }),
         ]);
+        if (!isCurrentScope()) return;
         await queryClient.refetchQueries({
-          queryKey: ["governance", "finish-epoch"],
+          queryKey: finishWorkspaceKey(
+            queryKeyPrefix,
+            state.contributorPages ?? {}
+          ),
+          exact: true,
         });
       } catch {
         await queryClient.invalidateQueries({
-          queryKey: ["governance", "finish-epoch"],
+          queryKey: finishWorkspaceKey(
+            queryKeyPrefix,
+            state.contributorPages ?? {}
+          ),
+          exact: true,
         });
       }
     })().catch(() => undefined);
@@ -428,6 +440,9 @@ function PublishStep({
     onConfirmed,
     payload.epochId,
     queryClient,
+    queryKeyPrefix,
+    state.contributorPages,
+    isCurrentScope,
     refetchOnChainRoot,
   ]);
 

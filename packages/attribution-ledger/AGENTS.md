@@ -34,7 +34,7 @@ Published attribution runtime shared by node apps and workers. Contains model ty
 }
 ```
 
-**External deps:** viem, Zod, OpenZeppelin Merkle trees; optional Drizzle and pino peers. The pure root and workflow-safe subpaths never import adapters or HTTP contracts.
+**External deps:** viem, Zod, OpenZeppelin Merkle trees; optional Drizzle and pino 9/10 peers. The pure root and workflow-safe subpaths never import adapters or HTTP contracts.
 
 ## Public Surface
 
@@ -113,7 +113,7 @@ pnpm --filter @cogni-dao/attribution build
 ## Dependencies
 
 - **Internal:** none (standalone package)
-- **External:** viem, Zod, OpenZeppelin; Drizzle and pino peers
+- **External:** viem, Zod, OpenZeppelin; Drizzle and optional pino 9/10 peers
 
 ## Change Protocol
 

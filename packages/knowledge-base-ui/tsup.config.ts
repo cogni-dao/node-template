@@ -21,7 +21,6 @@ export default defineConfig({
     "@cogni/attribution-ledger",
     "@cogni/attribution-ledger/contracts",
     "viem",
-    "wagmi",
     "@cogni/attribution-ledger/distribution",
     "@cogni/attribution-ledger/presentation",
     "react",

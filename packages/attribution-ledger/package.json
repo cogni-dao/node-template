@@ -347,7 +347,7 @@
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.7",
-    "pino": "^9"
+    "pino": "^9 || ^10"
   },
   "peerDependenciesMeta": {
     "drizzle-orm": {

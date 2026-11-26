@@ -28,11 +28,12 @@ export interface EpochListData {
   readonly current: EpochDto | null;
   readonly pastEpochs: readonly EpochDto[];
   readonly historyTotal: number;
+  readonly membershipReadId?: string;
 }
 export async function epochJson<T>(
   client: EpochsClient,
   url: string,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<T> {
   try {
     const response = await client.request(url, {
@@ -66,32 +67,49 @@ export function partitionEpochs(epochs: readonly EpochDto[]): EpochListData {
 }
 export function useEpochsPage() {
   const { client, state, queryKeyPrefix } = useEpochContext();
-  return useQuery({
+  // Cached list shells survive refusal; a completed list attempt admits fresh child reads.
+  const membership = useEpochMembership();
+  const query = useQuery({
+    behavior: membership.behavior,
     queryKey: [...queryKeyPrefix, "epochs", "list", state.historyOffset],
     staleTime: 60_000,
     retry: false,
     placeholderData: keepPreviousData,
-    queryFn: async ({ signal }): Promise<EpochListData> => {
-      const result = await epochJson<{
-        current: EpochDto | null;
-        epochs: EpochDto[];
-        total: number;
-      }>(
-        client,
-        withEpochQuery(client.endpoints.epochs, {
-          view: "overview",
-          limit: 200,
-          offset: state.historyOffset,
-        }),
+    queryFn: ({ signal }) =>
+      membership.read(
+        undefined,
         signal,
-      );
-      return {
-        current: result.current,
-        pastEpochs: result.epochs,
-        historyTotal: result.total,
-      };
-    },
+        async (readId): Promise<EpochListData> => {
+          const result = await epochJson<{
+            current: EpochDto | null;
+            epochs: EpochDto[];
+            total: number;
+          }>(
+            client,
+            withEpochQuery(client.endpoints.epochs, {
+              view: "overview",
+              limit: 200,
+              offset: state.historyOffset,
+            }),
+            signal
+          );
+          return {
+            current: result.current,
+            pastEpochs: result.epochs,
+            historyTotal: result.total,
+            membershipReadId: readId,
+          };
+        }
+      ),
   });
+  return {
+    ...query,
+    membershipReady:
+      query.isSuccess &&
+      query.fetchStatus === "idle" &&
+      !query.isPlaceholderData &&
+      membership.isCurrent(query.data.membershipReadId),
+  };
 }
 export function useSettlementLifecycle() {
   const { client, queryKeyPrefix } = useEpochContext();
@@ -145,7 +163,7 @@ export async function fetchEpochView(
 }
 export function useEpochView(
   epoch: EpochDto,
-  options: { readonly enabled?: boolean } = {},
+  options: { readonly enabled?: boolean; readonly parentReadId?: string } = {}
 ) {
   const { client, state, queryKeyPrefix } = useEpochContext();
   const offset = state.contributorPages?.[epoch.id] ?? 0;
@@ -159,6 +177,7 @@ export function useEpochView(
       epoch.id,
       epoch.status,
       offset,
+      options.parentReadId,
     ],
     staleTime: 60_000,
     retry: false,

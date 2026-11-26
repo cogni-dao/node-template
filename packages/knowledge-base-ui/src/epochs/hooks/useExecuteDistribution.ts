@@ -114,15 +114,20 @@ export interface UseExecuteDistribution {
  * Resolve the execute payload for `epochId` (single-node: THIS node's epoch route). `enabled` gates
  * the fetch (e.g. only run when the epoch is finalized and a distributor is recorded).
  */
+export const executeDistributionKey = (
+  prefix: readonly string[],
+  epochId: string | undefined
+) => [...prefix, "execute-distribution", epochId] as const;
+
 export function useExecuteDistribution(
   epochId: string | undefined,
-  enabled = true,
+  enabled = true
 ): UseExecuteDistribution {
   const { client, queryKeyPrefix } = useEpochContext();
   const active = enabled && Boolean(epochId);
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: [...queryKeyPrefix, "execute-distribution", epochId],
+    queryKey: executeDistributionKey(queryKeyPrefix, epochId),
     queryFn: () => fetchExecutePayload(client, epochId as string),
     enabled: active,
     staleTime: 30_000,
@@ -236,8 +241,8 @@ export function useHasExecutePermission(params: {
   });
 
   const permissionState = classifyPublishPermission(
-    validProbe.data as boolean | undefined,
-    invalidFailureProbe.data as boolean | undefined,
+    validProbe.data,
+    invalidFailureProbe.data
   );
 
   return {

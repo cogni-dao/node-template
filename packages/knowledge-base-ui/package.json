@@ -73,8 +73,7 @@
     "recharts": "^2.15.4",
     "@cogni/agent-grants": ">=0.6.0",
     "@cogni/attribution-ledger": "^0.2.0",
-    "viem": "^2.21.0",
-    "wagmi": "^2.19.0"
+    "viem": "^2.21.0"
   },
   "peerDependenciesMeta": {
     "@cogni/knowledge-store": {
@@ -93,9 +92,6 @@
       "optional": true
     },
     "viem": {
-      "optional": true
-    },
-    "wagmi": {
       "optional": true
     }
   },
