@@ -51,7 +51,7 @@ export const TYPE_LABELS: Record<string, string> = {
 
 export function receiptTitle(receipt: IngestionReceipt): string | null {
   const title = receipt.metadata?.title;
-  return typeof title === "string" && title.length > 0 ? title : null;
+  return typeof title === "string" && title.trim().length > 0 ? title : null;
 }
 
 export function ContributionRow({
@@ -87,7 +87,7 @@ export function ContributionRow({
                   href={receipt.artifactUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="group text-foreground/80 hover:text-foreground flex min-w-0 items-center gap-1 text-xs"
+                  className="group text-foreground/80 hover:text-foreground flex min-h-6 min-w-6 items-center gap-1 text-xs"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <span className="truncate">{title}</span>

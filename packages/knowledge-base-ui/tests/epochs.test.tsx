@@ -977,12 +977,17 @@ describe("public epochs capability", () => {
     const f = fixture();
     f.state.events = [
       { ...event("untitled"), metadata: {} },
+      { ...event("whitespace"), metadata: { title: " \t\n " } },
       event("titled"),
     ];
     render(<CurrentEpochView />, { wrapper: f.wrapper });
     const row = await screen.findByRole("row", { name: /Alpha/ });
     fireEvent.click(within(row).getByRole("button", { name: "Expand details" }));
-    const artifact = await screen.findByRole("link", { name: "Open contribution artifact" });
+    const artifacts = await screen.findAllByRole("link", { name: "Open contribution artifact" });
+    expect(artifacts).toHaveLength(2);
+    const [artifact, whitespace] = artifacts;
+    if (!artifact || !whitespace) throw new Error("Expected two artifact links");
+    expect(whitespace).toHaveAttribute("href", "https://example.com/whitespace");
     expect(artifact).toHaveAttribute("href", "https://example.com/untitled");
     expect(artifact).toHaveAttribute("target", "_blank");
     expect(artifact).toHaveAttribute("rel", "noopener noreferrer");
@@ -990,6 +995,8 @@ describe("public epochs capability", () => {
     expect(titled).toHaveAttribute("href", "https://example.com/titled");
     artifact.focus();
     expect(artifact).toHaveFocus();
+    await userEvent.tab();
+    expect(whitespace).toHaveFocus();
     await userEvent.tab();
     expect(titled).toHaveFocus();
   });
