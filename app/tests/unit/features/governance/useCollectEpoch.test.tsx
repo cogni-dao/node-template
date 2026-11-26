@@ -35,7 +35,7 @@ function setup() {
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client: queryClient }, epochTestProvider(children));
   const hook = renderHook(() => useCollectEpoch(), { wrapper });
-  return { ...hook, refetch };
+  return { ...hook, refetch, queryClient };
 }
 
 describe("useCollectEpoch", () => {
@@ -45,7 +45,7 @@ describe("useCollectEpoch", () => {
       status: 200,
     } as Response);
     vi.stubGlobal("fetch", fetchMock);
-    const { result, refetch } = setup();
+    const { result, refetch, queryClient } = setup();
 
     await act(async () => result.current.trigger());
 
@@ -59,8 +59,44 @@ describe("useCollectEpoch", () => {
     );
     expect(refetch).toHaveBeenCalledWith({
       queryKey: ["governance", "epoch-scope", expect.any(String)],
+      predicate: expect.any(Function),
       type: "active",
     });
+
+    // Exercise the actual production filter with real scoped Query instances.
+    const filters = refetch.mock.calls[0]?.[0];
+    expect(filters?.queryKey).toHaveLength(3);
+    const prefix = filters?.queryKey ?? [];
+    const parents = [
+      [...prefix, "epochs", "list", 0],
+      [...prefix, "epochs", "view", "15", "open", 0],
+      [...prefix, "finish-epoch", {}],
+      [...prefix, "epochs", "15", "review-subject-overrides"],
+    ];
+    const excluded = [
+      [...prefix, "epochs", "15", "open", "contributor", "user:a", "G", 0],
+      [
+        ...prefix,
+        "epochs",
+        "15",
+        "review",
+        "contributor",
+        "identity:github:x",
+        "G",
+        50,
+      ],
+      ["governance", "epoch-scope", "another-scope", "epochs", "view", "15"],
+      ["unrelated", "epochs", "view", "15"],
+    ];
+    for (const key of [...parents, ...excluded])
+      queryClient.setQueryData(key, { fixture: true });
+    // The separate call expectation verifies active-only refetch; here inspect scope/exclusion for every cached key.
+    expect(
+      queryClient
+        .getQueryCache()
+        .findAll({ ...filters, type: "all" })
+        .map((query) => query.queryKey)
+    ).toEqual(parents);
     expect(result.current.successMessage).toMatch(/sync started/i);
     expect(result.current.cooldownSeconds).toBe(300);
     expect(result.current.loading).toBe(false);

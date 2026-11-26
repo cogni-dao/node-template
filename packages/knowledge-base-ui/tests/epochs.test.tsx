@@ -1282,7 +1282,7 @@ describe("public epochs capability", () => {
         screen.queryByRole("link", { name: "Contribution moving" })
       ).not.toBeInTheDocument()
     );
-    if (surface === "review" || failure === "cancel") {
+    {
       const before = f.requests.filter((item) =>
         item.url.includes("claimantKey=")
       ).length;
@@ -1304,14 +1304,305 @@ describe("public epochs capability", () => {
       await f.queryClient.refetchQueries({ predicate: owner });
     });
     const userRow = await screen.findByRole("row", { name: /Linked/ });
-    const expand = within(userRow).queryByRole("button", {
-      name: "Expand details",
-    });
-    if (expand) fireEvent.click(expand);
+    expect(
+      within(userRow).getByRole("button", { name: "Collapse details" })
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(
+      within(await screen.findByRole("row", { name: /Pending/ })).getByRole(
+        "button",
+        { name: "Collapse details" }
+      )
+    ).toHaveAttribute("aria-expanded", "true");
     await screen.findByRole("link", { name: "Contribution moving" });
     expect(
       screen.getAllByRole("link", { name: "Contribution moving" })
     ).toHaveLength(1);
+  });
+
+  it.each([
+    "overview",
+    "review",
+  ] as const)("r5 keeps retired membership hidden after offline pause and reverting cancel in %s", async (surface) => {
+    const f = fixture();
+    if (surface === "review") await readyReview(f);
+    else render(<CurrentEpochView />, { wrapper: f.wrapper });
+    fireEvent.click(
+      within(await screen.findByRole("row", { name: /Alpha/ })).getByRole(
+        "button",
+        { name: "Expand details" }
+      )
+    );
+    await screen.findByRole("link", { name: "Contribution r1" });
+    const owner = (query: { queryKey: readonly unknown[] }) =>
+      query.queryKey.includes(surface === "review" ? "finish-epoch" : "view");
+    // Keep an older detail response pending across the paused/cancelled parent.
+    const request = f.client.request;
+    let release: (() => void) | undefined;
+    vi.spyOn(f.client, "request").mockImplementation(async (url, init) => {
+      const response = await request(url, init);
+      if (url.includes("claimantKey="))
+        return new Promise<Response>((resolve) => {
+          release = () => resolve(response);
+        });
+      return response;
+    });
+    let obsolete!: Promise<void>;
+    act(() => {
+      obsolete = f.queryClient.refetchQueries({
+        predicate: (q) => q.queryKey.includes("contributor"),
+      });
+    });
+    await waitFor(() => expect(release).toBeDefined());
+    const before = f.requests.length;
+    await act(async () => {
+      onlineManager.setOnline(false);
+      await f.queryClient.refetchQueries({ predicate: owner });
+    });
+    expect(
+      f.queryClient.getQueryCache().findAll({ predicate: owner })[0]?.state
+        .fetchStatus
+    ).toBe("paused");
+    expect(f.requests).toHaveLength(before);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("link", { name: "Contribution r1" })
+      ).not.toBeInTheDocument()
+    );
+    await act(async () => {
+      await f.queryClient.cancelQueries({ predicate: owner });
+    });
+    expect(
+      f.queryClient.getQueryCache().findAll({ predicate: owner })[0]?.state
+        .fetchStatus
+    ).toBe("idle");
+    expect(onlineManager.isOnline()).toBe(false);
+    expect(
+      screen.queryByRole("link", { name: "Contribution r1" })
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("row", { name: /Alpha/ })).getByRole("button", {
+        name: "Collapse details",
+      })
+    ).toHaveAttribute("aria-expanded", "true");
+    if (surface === "review")
+      expect(
+        screen.queryByRole("button", { name: "Adjust weight" })
+      ).not.toBeInTheDocument();
+    await act(async () => {
+      release?.();
+      await obsolete;
+    });
+    expect(
+      screen.queryByRole("link", { name: "Contribution r1" })
+    ).not.toBeInTheDocument();
+    vi.mocked(f.client.request).mockRestore();
+    // A descendant's retained paused data cannot reopen membership either.
+    await act(async () => {
+      await f.queryClient.refetchQueries({
+        predicate: (q) => q.queryKey.includes("contributor"),
+      });
+    });
+    expect(
+      screen.queryByRole("link", { name: "Contribution r1" })
+    ).not.toBeInTheDocument();
+    await act(async () => {
+      onlineManager.setOnline(true);
+      await f.queryClient.refetchQueries({ predicate: owner });
+    });
+    await screen.findByRole("link", { name: "Contribution r1" });
+    expect(
+      screen.getAllByRole("link", { name: "Contribution r1" })
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    false,
+    true,
+  ])("r5 keeps a moved last-page draft reachable after the old claimant shrinks (accepted=%s)", async (accepted) => {
+    const f = fixture();
+    f.state.events = [
+      ...Array.from({ length: 50 }, (_, i) => ({
+        ...event(`remaining-${i}`, "external"),
+        platformLogin: "Pending",
+        selection: { userId: null, included: true, weightOverrideMilli: null },
+      })),
+      {
+        ...event("moving", "external"),
+        platformLogin: "Pending",
+        selection: { userId: null, included: true, weightOverrideMilli: null },
+      },
+      { ...event("linked"), platformLogin: "Linked" },
+    ];
+    await readyReview(f);
+    fireEvent.click(
+      within(await screen.findByRole("row", { name: /Pending/ })).getByRole(
+        "button",
+        { name: "Expand details" }
+      )
+    );
+    await screen.findByRole("link", { name: "Contribution remaining-0" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "More contributions" })
+    );
+    const moving = await screen.findByRole("link", {
+      name: "Contribution moving",
+    });
+    fireEvent.click(
+      within(containingRow(moving)).getByRole("button", {
+        name: "Adjust weight",
+      })
+    );
+    fireEvent.change(screen.getByLabelText("Override weight (units)"), {
+      target: { value: "000" },
+    });
+    fireEvent.change(screen.getByLabelText("Reason (optional)"), {
+      target: { value: "exact moved draft" },
+    });
+    if (accepted) {
+      f.state.failList = true;
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText("Saved. Could not verify current values.");
+      expect(screen.getByLabelText("Override weight (units)")).toHaveValue(
+        "000"
+      );
+      expect(screen.getByLabelText("Reason (optional)")).toHaveValue(
+        "exact moved draft"
+      );
+      expect(f.requests.filter((r) => r.method === "PATCH")).toHaveLength(1);
+      f.state.failList = false;
+      f.state.failOverrideMethod = "GET";
+    }
+    f.state.events = f.state.events.map((item) =>
+      item.receiptId === "moving"
+        ? {
+            ...item,
+            platformLogin: "Linked",
+            selection: {
+              userId: "a",
+              included: true,
+              weightOverrideMilli: null,
+            },
+          }
+        : item
+    );
+    await act(async () => {
+      await f.queryClient.refetchQueries({
+        predicate: (q) => q.queryKey.includes("finish-epoch"),
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Override weight (units)")).toHaveValue(
+        "000"
+      )
+    );
+    expect(screen.getByLabelText("Reason (optional)")).toHaveValue(
+      "exact moved draft"
+    );
+    expect(
+      screen.queryByRole("link", { name: "Contribution moving" })
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      within(screen.getByRole("row", { name: /Linked/ })).getByRole("button", {
+        name: "Expand details",
+      })
+    );
+    await screen.findByRole("link", { name: "Contribution linked" });
+    await waitFor(() =>
+      expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(
+        1
+      )
+    );
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("000");
+    // Once U's membership is verified, collapsing I cannot hide U's editor.
+    fireEvent.click(
+      within(screen.getByRole("row", { name: /Pending/ })).getByRole("button", {
+        name: "Collapse details",
+      })
+    );
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("000");
+    if (accepted) {
+      expect(
+        screen.getByText("Saved. Could not verify current values.")
+      ).toBeInTheDocument();
+      expect(f.requests.filter((r) => r.method === "PATCH")).toHaveLength(1);
+      f.state.failOverrideMethod = null;
+      fireEvent.click(screen.getByRole("button", { name: "Retry refresh" }));
+    } else fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(
+        f.state.overrides.find((o) => o.subjectRef === "moving")?.overrideUnits
+      ).toBe("0")
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Override weight (units)")
+      ).not.toBeInTheDocument()
+    );
+    fireEvent.click(
+      within(
+        containingRow(
+          await screen.findByRole("link", { name: "Contribution moving" })
+        )
+      ).getByRole("button", { name: "Adjust weight" })
+    );
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("0");
+    expect(screen.getByLabelText("Reason (optional)")).toHaveValue(
+      "exact moved draft"
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel weight adjustment" })
+    );
+    expect(
+      screen.queryByLabelText("Override weight (units)")
+    ).not.toBeInTheDocument();
+  });
+
+  it("r5 retains historical contributor expansion through a failed parent refresh", async () => {
+    const f = fixture({
+      historyOffset: 0,
+      selectedEpochId: null,
+      expandedEpochIds: ["14"],
+    });
+    f.state.current = null;
+    let fail = false;
+    const request = f.client.request;
+    vi.spyOn(f.client, "request").mockImplementation((url, init) =>
+      fail && url.includes("/claimants")
+        ? Promise.resolve(new Response("{}", { status: 503 }))
+        : request(url, init)
+    );
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    fireEvent.click(
+      within(
+        first((await screen.findAllByRole("row", { name: /Alpha/ })).reverse())
+      ).getByRole("button", { name: "Expand details" })
+    );
+    await screen.findByRole("link", { name: "Contribution r1" });
+    fail = true;
+    await act(async () => {
+      await f.queryClient.refetchQueries({
+        predicate: (q) => q.queryKey.includes("view"),
+      });
+    });
+    await screen.findByText(/Couldn’t load this epoch/);
+    expect(
+      within(
+        first(screen.getAllByRole("row", { name: /Alpha/ }).reverse())
+      ).getByRole("button", { name: "Collapse details" })
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.queryByRole("link", { name: "Contribution r1" })
+    ).not.toBeInTheDocument();
+    fail = false;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Retry epoch contributions" })
+    );
+    await screen.findByRole("link", { name: "Contribution r1" });
+    expect(
+      within(
+        first(screen.getAllByRole("row", { name: /Alpha/ }).reverse())
+      ).getByRole("button", { name: "Collapse details" })
+    ).toHaveAttribute("aria-expanded", "true");
   });
 
   it.each(["overview", "review"] as const)(

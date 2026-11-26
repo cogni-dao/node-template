@@ -151,6 +151,7 @@ export function useEpochView(
   const offset = state.contributorPages?.[epoch.id] ?? 0;
   const membership = useEpochMembership();
   const query = useQuery({
+    behavior: membership.behavior,
     queryKey: [
       ...queryKeyPrefix,
       "epochs",

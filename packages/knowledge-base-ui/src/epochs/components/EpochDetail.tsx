@@ -38,6 +38,11 @@ export interface EpochDetailProps {
   readonly membershipReady?: boolean;
   /** Hide the header row (pie chart + epoch stats). Useful when shown inline under a parent. */
   readonly hideHeader?: boolean;
+  /** A completed bounded read may reconcile local draft presentation ownership. */
+  readonly onMembership?: (
+    contributor: EpochContributor,
+    offset: number
+  ) => void;
   /** Custom renderer for expanded contributor rows. Each element should be a TableRow. Overrides default ContributionRow list. */
   readonly renderExpandedRows?: (
     contributor: EpochContributor,
@@ -51,6 +56,7 @@ export function EpochDetail({
   hideHeader = false,
   membershipReady = true,
   renderExpandedRows,
+  onMembership,
 }: EpochDetailProps): ReactElement {
   const { state, setState } = useEpochContext();
   const offset = state.contributorPages?.[epoch.id] ?? 0;
@@ -163,6 +169,7 @@ export function EpochDetail({
                       membershipReady={membershipReady}
                       contributor={c}
                       renderRows={renderExpandedRows}
+                      onMembership={onMembership}
                     />,
                   ]}
                   cells={[

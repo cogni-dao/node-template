@@ -3,7 +3,7 @@
 
 "use client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactElement, useEffect, useRef, useState } from "react";
+import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
 import { useEpochContext, withEpochQuery } from "../context";
 import { epochJson } from "../hooks/useEpochsPage";
 import type { ApiIngestionReceipt } from "../lib/compose-epoch";
@@ -19,10 +19,15 @@ export function ContributorReceiptRows({
   contributor,
   membershipReady,
   renderRows,
+  onMembership,
 }: {
   readonly epoch: EpochView;
   readonly contributor: EpochContributor;
   readonly membershipReady: boolean;
+  readonly onMembership?: (
+    contributor: EpochContributor,
+    offset: number
+  ) => void;
   readonly renderRows?: (
     contributor: EpochContributor,
     membershipPending?: boolean,
@@ -73,7 +78,7 @@ export function ContributorReceiptRows({
     if (
       !membershipReady ||
       reconciled.current ||
-      query.isFetching ||
+      query.fetchStatus !== "idle" ||
       query.error ||
       !query.data ||
       contributor.isLinked ||
@@ -104,33 +109,56 @@ export function ContributorReceiptRows({
     epoch.id,
     query.data,
     query.error,
-    query.isFetching,
+    query.fetchStatus,
     queryClient,
     queryKeyPrefix,
   ]);
-  const receipts: readonly IngestionReceipt[] = (
-    !membershipReady || query.isFetching || query.error
-      ? []
-      : (query.data?.events ?? [])
-  ).map((receipt) => ({
-    receiptId: receipt.receiptId,
-    source: receipt.source,
-    eventType: receipt.eventType,
-    platformLogin: receipt.platformLogin,
-    artifactUrl: receipt.artifactUrl,
-    eventTime: receipt.eventTime,
-    metadata: receipt.metadata,
-    units:
-      receipt.selection?.weightOverrideMilli ??
-      String(
-        epoch.weightConfig?.[`${receipt.source}:${receipt.eventType}`] ?? 0,
-      ),
-    override: receipt.reviewOverride ?? null,
-  }));
+  const receipts: readonly IngestionReceipt[] = useMemo(
+    () =>
+      (!membershipReady || query.fetchStatus !== "idle" || !query.isSuccess
+        ? []
+        : (query.data?.events ?? [])
+      ).map((receipt) => ({
+        receiptId: receipt.receiptId,
+        source: receipt.source,
+        eventType: receipt.eventType,
+        platformLogin: receipt.platformLogin,
+        artifactUrl: receipt.artifactUrl,
+        eventTime: receipt.eventTime,
+        metadata: receipt.metadata,
+        units:
+          receipt.selection?.weightOverrideMilli ??
+          String(
+            epoch.weightConfig?.[`${receipt.source}:${receipt.eventType}`] ?? 0
+          ),
+        override: receipt.reviewOverride ?? null,
+      })),
+    [
+      membershipReady,
+      query.fetchStatus,
+      query.isSuccess,
+      query.data,
+      epoch.weightConfig,
+    ]
+  );
+  // Only verified bounded membership may move an existing local draft's owner.
+  useEffect(() => {
+    if (membershipReady && query.isSuccess && query.fetchStatus === "idle")
+      onMembership?.({ ...contributor, receipts }, offset);
+  }, [
+    membershipReady,
+    query.isSuccess,
+    query.fetchStatus,
+    query.data,
+    onMembership,
+    contributor,
+    receipts,
+    offset,
+  ]);
   const total = query.data?.total ?? contributor.receiptCount;
   return (
     <>
-      {!membershipReady || query.isFetching ? (
+      {!membershipReady || query.fetchStatus !== "idle" ? (
         <TableRow>
           <TableCell colSpan={6} role="status">
             Loading contributions…
@@ -152,14 +180,14 @@ export function ContributorReceiptRows({
       {renderRows
         ? renderRows(
             { ...contributor, receipts },
-            !membershipReady || query.isPending,
+            !membershipReady || query.fetchStatus !== "idle" || query.isPending,
             offset
           )
         : receipts.map((receipt) => (
             <ContributionRow key={receipt.receiptId} receipt={receipt} />
           ))}
       {membershipReady &&
-      !query.isFetching &&
+      query.fetchStatus === "idle" &&
       !query.error &&
       receipts.length === 0 ? (
         <TableRow>
@@ -171,7 +199,7 @@ export function ContributorReceiptRows({
           <TableCell colSpan={6}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Button
-                disabled={offset === 0 || query.isFetching}
+                disabled={offset === 0 || query.fetchStatus !== "idle"}
                 onClick={() => setOffset(Math.max(0, offset - 50))}
               >
                 Previous contributions
@@ -181,7 +209,7 @@ export function ContributorReceiptRows({
                 {total}
               </span>
               <Button
-                disabled={offset + 50 >= total || query.isFetching}
+                disabled={offset + 50 >= total || query.fetchStatus !== "idle"}
                 onClick={() => setOffset(offset + 50)}
               >
                 More contributions

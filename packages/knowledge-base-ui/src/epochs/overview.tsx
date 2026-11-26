@@ -290,13 +290,31 @@ function CurrentEpochSection({
       <LifecycleRail epoch={epoch} lifecycle={lifecycle} />
 
       {view.error ? (
-        <div className="border-destructive bg-destructive/10 rounded-lg border p-6">
+        <div
+          role="alert"
+          className="border-destructive bg-destructive/10 rounded-lg border p-6"
+        >
           <h2 className="text-destructive text-lg font-semibold">
             Error loading epoch contributions
           </h2>
           <p className="text-muted-foreground text-sm">{view.error.message}</p>
+          <Button onClick={() => void view.refetch()}>
+            Retry epoch contributions
+          </Button>
         </div>
-      ) : view.data ? (
+      ) : null}
+      {!view.membershipReady &&
+      view.data &&
+      !view.error &&
+      view.fetchStatus === "idle" ? (
+        <div role="alert">
+          Could not verify current contributions.
+          <Button onClick={() => void view.refetch()}>
+            Retry epoch contributions
+          </Button>
+        </div>
+      ) : null}
+      {view.data ? (
         <CurrentEpochContributors
           epoch={view.data}
           membershipReady={view.membershipReady}
@@ -323,8 +341,23 @@ function PastEpochDetail({
       {view.error ? (
         <p role="alert" className="text-destructive text-sm">
           Couldn’t load this epoch: {view.error.message}
+          <Button onClick={() => void view.refetch()}>
+            Retry epoch contributions
+          </Button>
         </p>
-      ) : view.data ? (
+      ) : null}
+      {!view.membershipReady &&
+      view.data &&
+      !view.error &&
+      view.fetchStatus === "idle" ? (
+        <div role="alert">
+          Could not verify current contributions.
+          <Button onClick={() => void view.refetch()}>
+            Retry epoch contributions
+          </Button>
+        </div>
+      ) : null}
+      {view.data ? (
         <EpochDetail epoch={view.data} membershipReady={view.membershipReady} />
       ) : (
         <ContributorsSkeleton />

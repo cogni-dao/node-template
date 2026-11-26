@@ -387,19 +387,55 @@ function ReviewEpochSection({
     ],
   });
   // Draft context belongs to the edit, independently of changing membership pages.
-  const draftContext = useRef(
+  const [draftContext, setDraftContext] = useState(
     new Map<
       string,
-      { claimantKey: string; receipt: IngestionReceipt; offset: number }
+      {
+        claimantKey: string;
+        receipt: IngestionReceipt;
+        offset: number;
+        readId: string | undefined;
+      }
     >()
   );
 
   useEffect(() => {
-    for (const id of draftContext.current.keys()) {
-      if (!session.drafts[id] && session.marker?.submission.subjectRef !== id)
-        draftContext.current.delete(id);
-    }
+    setDraftContext((previous) => {
+      const next = new Map(previous);
+      for (const id of next.keys())
+        if (!session.drafts[id] && session.marker?.submission.subjectRef !== id)
+          next.delete(id);
+      return next.size === previous.size ? previous : next;
+    });
   }, [session.drafts, session.marker]);
+
+  // This is presentation context for existing edits, not a receipt cache.
+  // A successful bounded detail read is authority to move that one editor.
+  const onMembership = useCallback(
+    (contributor: EpochContributor, offset: number) => {
+      setDraftContext((previous) => {
+        let next = previous;
+        for (const receipt of contributor.receipts) {
+          const context = previous.get(receipt.receiptId);
+          if (
+            !context ||
+            (context.claimantKey === contributor.claimantKey &&
+              context.readId === epoch.membershipReadId)
+          )
+            continue;
+          if (next === previous) next = new Map(previous);
+          next.set(receipt.receiptId, {
+            claimantKey: contributor.claimantKey,
+            receipt,
+            offset,
+            readId: epoch.membershipReadId,
+          });
+        }
+        return next;
+      });
+    },
+    [epoch.membershipReadId]
+  );
 
   // Recompute contributor sums with overrides applied
   const adjustedEpoch = useMemo(
@@ -419,7 +455,7 @@ function ReviewEpochSection({
       receiptOffset = 0
     ): ReactElement[] | null => {
       const ownsEditor = (id: string) => {
-        const context = draftContext.current.get(id);
+        const context = draftContext.get(id);
         return (
           !context ||
           context.claimantKey === contributor.claimantKey ||
@@ -433,7 +469,7 @@ function ReviewEpochSection({
           !session.drafts[receipt.receiptId]?.editing ||
           ownsEditor(receipt.receiptId)
       );
-      for (const [id, context] of draftContext.current) {
+      for (const [id, context] of draftContext) {
         const retainEditor =
           session.drafts[id]?.editing ||
           (!membershipReady &&
@@ -442,7 +478,13 @@ function ReviewEpochSection({
         if (
           retainEditor &&
           context.claimantKey === contributor.claimantKey &&
-          context.offset === receiptOffset &&
+          // Clamp only an obsolete generation's page, never intentional navigation.
+          (context.readId === epoch.membershipReadId
+            ? context.offset
+            : Math.min(
+                context.offset,
+                Math.floor(Math.max(0, contributor.receiptCount - 1) / 50) * 50
+              )) === receiptOffset &&
           !receipts.some((receipt) => receipt.receiptId === id)
         )
           // This is local edit/operation context, never a retired membership link.
@@ -455,11 +497,14 @@ function ReviewEpochSection({
           override={overrides.overridesByRef.get(receipt.receiptId) ?? null}
           draft={session.drafts[receipt.receiptId] ?? null}
           onStart={() => {
-            draftContext.current.set(receipt.receiptId, {
-              claimantKey: contributor.claimantKey,
-              receipt,
-              offset: receiptOffset,
-            });
+            setDraftContext((previous) =>
+              new Map(previous).set(receipt.receiptId, {
+                claimantKey: contributor.claimantKey,
+                receipt,
+                offset: receiptOffset,
+                readId: epoch.membershipReadId,
+              })
+            );
             session.startDraft(receipt.receiptId);
           }}
           onChange={(patch) => session.changeDraft(receipt.receiptId, patch)}
@@ -470,7 +515,14 @@ function ReviewEpochSection({
         />
       ));
     },
-    [epoch.contributors, membershipReady, overrides, session]
+    [
+      draftContext,
+      epoch.contributors,
+      epoch.membershipReadId,
+      membershipReady,
+      overrides,
+      session,
+    ]
   );
 
   const activeOverrideCount = overrides.overridesByRef.size;
@@ -532,6 +584,7 @@ function ReviewEpochSection({
           epoch={adjustedEpoch}
           membershipReady={membershipReady}
           renderExpandedRows={renderExpandedRows}
+          onMembership={onMembership}
         />
       )}
 
