@@ -10,6 +10,7 @@
  *   fail-open Loki push sink — stdout emission is unchanged and the sink can never crash or block the app.
  *   Invalid PINO_LOG_LEVEL uses info for diagnostics; environment validation still rejects it.
  * Side-effects: none
+ * Notes: Base fields include buildSha/workload/host (bug.0040) from existing env; see makeIdentityFields.
  * Notes: Use makeLogger for app logger; use makeNoopLogger for tests. Formatting via external pipe (pino-pretty).
  * Notes: Reads logging-specific env vars directly (NODE_ENV, PINO_LOG_LEVEL, SERVICE_NAME) without serverEnv() to avoid triggering full env validation at module load time.
  * Links: Initializes redaction paths via REDACT_PATHS; used by container and route handlers.
@@ -23,6 +24,32 @@ import { getLokiPushStream } from "./loki-push-stream";
 import { REDACT_PATHS } from "./redact";
 
 export type { Logger } from "pino";
+
+/**
+ * Build/lane identity stamped on every app log line (bug.0040). Both candidate-a workloads share
+ * one image family and one Loki node stream, so a line must name the build and lane that wrote it.
+ * Absent values are omitted (never emitted as empty strings).
+ *   buildSha: APP_BUILD_SHA (what /version serves), else the operator-injected COGNI_REPO_SHA.
+ *   workload: COGNI_WORKLOAD when the deployer injects it.
+ *   host:     hostname of APP_BASE_URL (operator-injected, distinct per workload lane).
+ */
+export function makeIdentityFields(
+  env: Readonly<Record<string, string | undefined>>,
+): { buildSha?: string; workload?: string; host?: string } {
+  const buildSha = env.APP_BUILD_SHA || env.COGNI_REPO_SHA || undefined;
+  const workload = env.COGNI_WORKLOAD || undefined;
+  let host: string | undefined;
+  try {
+    host = env.APP_BASE_URL ? new URL(env.APP_BASE_URL).hostname : undefined;
+  } catch {
+    host = undefined;
+  }
+  return {
+    ...(buildSha ? { buildSha } : {}),
+    ...(workload ? { workload } : {}),
+    ...(host ? { host } : {}),
+  };
+}
 
 export function makeLogger(bindings?: Record<string, unknown>): Logger {
   const isVitest = process.env.VITEST === "true";
@@ -44,7 +71,12 @@ export function makeLogger(bindings?: Record<string, unknown>): Logger {
     enabled: !isTestTooling,
     // Stable base: bindings first, then reserved keys (prevents overwrite)
     // env label added by Alloy from DEPLOY_ENVIRONMENT, not in app logs
-    base: { ...bindings, app: "cogni-template", service: serviceName },
+    base: {
+      ...bindings,
+      ...makeIdentityFields(process.env),
+      app: "cogni-template",
+      service: serviceName,
+    },
     messageKey: "msg",
     timestamp: pino.stdTimeFunctions.isoTime, // RFC3339 format (matches Alloy stage.timestamp)
     redact: { paths: REDACT_PATHS, censor: "[REDACTED]" },
