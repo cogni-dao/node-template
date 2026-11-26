@@ -3,9 +3,9 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/tests/inproc/step-budget-per-program`
- * Purpose: bug.0080. The step budget is declared per catalog entry (with a hard ceiling), and the step-budget answer comes from the run that happened: chat reports its sandbox work and the next step, only a scheduled tick uses schedule wording.
+ * Purpose: bug.0080. One runner step limit (a backstop), and the step-limit answer comes from the run that happened: chat reports its sandbox work and the next step, only a scheduled tick uses schedule wording.
  * Scope: Deterministic fake graphs through the real runner, the real coordinator hooks and the real provider.
- * Invariants: STEP_BUDGET_PER_ENTRY, CEILING_IS_HARD, ANSWER_FROM_THE_RUN_THAT_RAN
+ * Invariants: ONE_STEP_LIMIT, ANSWER_FROM_THE_RUN_THAT_RAN
  * Side-effects: none
  * Links: https://node-template.cognidao.org/work/items/bug.0080
  */
@@ -14,15 +14,10 @@ import type { AiEvent } from "@cogni/ai-core";
 import { SANDBOX_SHELL_NAME, sandboxShellContract } from "@cogni/ai-tools";
 import { GraphRecursionError } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
-import { COGNI_CHAT_STEP_BUDGET, LANGGRAPH_CATALOG } from "../../src/catalog";
+import { LANGGRAPH_CATALOG } from "../../src/catalog";
 import { createCoordinatorRunHooks } from "../../src/graphs/coordinator/graph";
 import type { CreateReactAgentGraphOptions } from "../../src/graphs/types";
-import {
-  DEFAULT_RECURSION_LIMIT,
-  MAX_RECURSION_LIMIT,
-  createInProcGraphRunner,
-  resolveRecursionLimit,
-} from "../../src/inproc/runner";
+import { RUN_STEP_LIMIT, createInProcGraphRunner } from "../../src/inproc/runner";
 import type { CompletionFn, CreateGraphFn, ToolExecFn } from "../../src/inproc/types";
 
 const completionFn: CompletionFn = () => ({
@@ -48,7 +43,6 @@ function exhausted(calls: ShellCall[], seenLimit: { value?: number }): CreateGra
 async function run(opts: {
   calls?: ShellCall[];
   interactive?: boolean;
-  recursionLimit?: number;
 }) {
   const calls = opts.calls ?? [];
   const seenLimit: { value?: number } = {};
@@ -66,7 +60,6 @@ async function run(opts: {
     },
     toolContracts: [sandboxShellContract as never],
     ...(opts.interactive !== undefined && { interactive: opts.interactive }),
-    ...(opts.recursionLimit !== undefined && { recursionLimit: opts.recursionLimit }),
     request: {
       runId: "budget",
       messages: [{ role: "user", content: "make a README PR" }],
@@ -79,27 +72,11 @@ async function run(opts: {
   return { result: await final, seenLimit };
 }
 
-describe("the step budget is declared per catalog entry, under a hard ceiling", () => {
-  it("resolves the default, the entry's budget and the ceiling", () => {
-    expect(resolveRecursionLimit(undefined)).toBe(DEFAULT_RECURSION_LIMIT);
-    expect(resolveRecursionLimit(Number.NaN)).toBe(DEFAULT_RECURSION_LIMIT);
-    expect(resolveRecursionLimit(0)).toBe(DEFAULT_RECURSION_LIMIT);
-    expect(resolveRecursionLimit(250)).toBe(250);
-    expect(resolveRecursionLimit(10_000)).toBe(MAX_RECURSION_LIMIT);
-  });
-
-  it("only cogni declares a budget, above the default and within the ceiling", () => {
-    expect(LANGGRAPH_CATALOG.cogni?.stepBudget).toBe(COGNI_CHAT_STEP_BUDGET);
-    expect(COGNI_CHAT_STEP_BUDGET).toBeGreaterThan(DEFAULT_RECURSION_LIMIT);
-    expect(COGNI_CHAT_STEP_BUDGET).toBeLessThanOrEqual(MAX_RECURSION_LIMIT);
-    expect(LANGGRAPH_CATALOG["work-prioritizer"]?.stepBudget).toBeUndefined();
-    expect(LANGGRAPH_CATALOG["work-closeout"]?.stepBudget).toBeUndefined();
-  });
-
-  it("the runner invokes the graph with the declared budget, the default, or the ceiling", async () => {
-    expect((await run({})).seenLimit.value).toBe(DEFAULT_RECURSION_LIMIT);
-    expect((await run({ recursionLimit: COGNI_CHAT_STEP_BUDGET })).seenLimit.value).toBe(COGNI_CHAT_STEP_BUDGET);
-    expect((await run({ recursionLimit: 99_999 })).seenLimit.value).toBe(MAX_RECURSION_LIMIT);
+describe("one runner step limit, a backstop", () => {
+  it("invokes every graph with RUN_STEP_LIMIT (1000), and no catalog entry declares its own", async () => {
+    expect(RUN_STEP_LIMIT).toBe(1000);
+    expect((await run({})).seenLimit.value).toBe(RUN_STEP_LIMIT);
+    expect(Object.values(LANGGRAPH_CATALOG).some((entry) => "stepBudget" in entry)).toBe(false);
   });
 });
 
@@ -130,6 +107,7 @@ describe("the step-budget answer comes from the run that happened", () => {
     expect(result.content).toContain("Pushed: no.");
     expect(result.content).toContain("Pull request: none.");
     expect(result.content).toContain("Next: push the branch and open the pull request.");
+    expect(result.content).toContain("Only pushed work carries over");
   });
 
   it("chat reports the pull request when one was opened", async () => {

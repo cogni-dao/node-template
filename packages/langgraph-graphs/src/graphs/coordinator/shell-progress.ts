@@ -60,7 +60,7 @@ export class ShellProgress {
 }
 
 /**
- * The chat answer for a run that reached its step budget: what it did, and the one next step. A user reads it, so it
+ * The chat answer for a run that reached its step limit: what it did, and the one next step. A user reads it, so it
  * says branch, commit and pull request plainly, and "none" when there is none.
  */
 export function chatStepBudgetAnswer(progress: ShellProgressSummary): string {
@@ -76,5 +76,6 @@ export function chatStepBudgetAnswer(progress: ShellProgressSummary): string {
         : progress.commands
           ? "Next: finish the edit, commit, push and open the pull request. Ask me to continue, or narrow the request."
           : "Next: ask me again with a narrower request, or tell me where to start.";
-  return `I reached this run's step limit before finishing. ${did} ${next}`;
+  // A follow-up is a new run in a fresh sandbox: only work already pushed to the remote carries over.
+  return `I reached this run's step limit before finishing. ${did} Only pushed work carries over; a follow-up run starts in a fresh sandbox. ${next}`;
 }

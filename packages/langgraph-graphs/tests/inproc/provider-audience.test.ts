@@ -39,7 +39,6 @@ const GRAPH: CatalogEntry = {
   description: "a graph that lists the shell and a read tool",
   principal: "node-ai",
   toolIds: ["core__get_current_time", SANDBOX_SHELL_NAME],
-  stepBudget: 250,
   graphFactory: LANGGRAPH_CATALOG.cogni?.graphFactory as CatalogEntry["graphFactory"],
 };
 
@@ -259,17 +258,16 @@ describe("shell audience (shell-caller-run-claim)", () => {
   });
 });
 
-describe("the entry's step budget reaches the runner only for a run with a caller waiting", () => {
-  it("an interactive run gets the entry's budget and tells the hooks it is interactive", async () => {
+describe("the run tells the program hooks whether a caller is waiting", () => {
+  it("an interactive run is marked interactive", async () => {
     const t = setup({ subject: AUDIENCE });
     await t.run({ actorUserId: AUDIENCE, runClaimVerified: true });
-    expect(t.runnerOptions[0]).toMatchObject({ recursionLimit: 250, interactive: true });
+    expect(t.runnerOptions[0]).toMatchObject({ interactive: true });
   });
 
-  it("a scheduled tick keeps the default budget", async () => {
+  it("a scheduled tick is not interactive", async () => {
     const t = setup({ subject: AUDIENCE });
     await t.run({ actorUserId: AUDIENCE, unattended: true });
-    expect(t.runnerOptions[0]?.recursionLimit).toBeUndefined();
     expect(t.runnerOptions[0]?.interactive).toBe(false);
   });
 });

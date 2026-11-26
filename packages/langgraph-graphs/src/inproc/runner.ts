@@ -117,16 +117,12 @@ function extractAssistantContent(messages: BaseMessage[]): string {
   return "";
 }
 
-/** Graph steps a run may take unless its catalog entry declares a budget. A backstop against an infinite graph. */
-export const DEFAULT_RECURSION_LIMIT = 100;
-/** Hard ceiling: no catalog entry or node can raise a run's step budget past this. */
-export const MAX_RECURSION_LIMIT = 400;
-
-export function resolveRecursionLimit(requested: number | undefined): number {
-  if (requested === undefined || !Number.isFinite(requested) || requested < 1)
-    return DEFAULT_RECURSION_LIMIT;
-  return Math.min(Math.floor(requested), MAX_RECURSION_LIMIT);
-}
+/**
+ * The one runner step limit: a loop-safety backstop, not a work bound. Money is bounded by the caller's credits and
+ * context by the model window, so a long legitimate run (about 6 graph steps per model turn, 1000 is about 160 turns)
+ * is never what this stops. A run that reaches it ends with its program's step-limit report.
+ */
+export const RUN_STEP_LIMIT = 1000;
 
 /**
  * Create InProc graph runner.
@@ -383,11 +379,8 @@ export function createInProcGraphRunner<TTool = unknown>(
                   ...request.configurable,
                   thread_id: threadId,
                 },
-                // The run's step budget: the catalog entry's `stepBudget` (a coding-capable chat needs
-                // more than a triage tick), else the 100-step backstop against an infinite graph,
-                // never above MAX_RECURSION_LIMIT. Each graph still self-limits (e.g. cogni's
-                // MAX_INVESTIGATE_STEPS); the budget must exceed any graph's own caps.
-                recursionLimit: resolveRecursionLimit(opts.recursionLimit),
+                // The one hard ceiling of a run (RUN_STEP_LIMIT): a loop and money stop, never the work bound.
+                recursionLimit: RUN_STEP_LIMIT,
               },
             ),
         );

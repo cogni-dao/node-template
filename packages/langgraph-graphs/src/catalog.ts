@@ -89,21 +89,7 @@ export interface CatalogEntry {
    * test harness). Absent means listed.
    */
   readonly listed?: boolean;
-  /**
-   * Graph steps an interactive run of this graph may take (a scheduled tick keeps the default). Declared per entry
-   * because work differs: a coding-capable chat needs far more steps than a triage tick. Clamped to
-   * `MAX_RECURSION_LIMIT` by the runner.
-   */
-  readonly stepBudget?: number;
 }
-
-/**
- * Interactive `cogni` chat budget, sized for a sandbox coding task. A run measured about 6 graph steps per model turn
- * (100 steps was 16 model calls: model node, tool node and middleware nodes). Clone, inspect, edit, commit, push and
- * open the pull request take about 20 turns with the guidance and context reads; 40 turns leaves room for a failed
- * command and a retry: 250 steps. The wrap-up nudge starts at 70 percent (step 175). The ceiling is 400.
- */
-export const COGNI_CHAT_STEP_BUDGET = 250;
 
 /** CatalogEntry.report: the registered event name for the graph's telemetry. */
 export interface GraphReportDecl {
@@ -262,7 +248,6 @@ export const NODE_LANGGRAPH_CATALOG = {
       return cogniSystemPromptOf(NODE_LANGGRAPH_CATALOG);
     },
     program: "cogni",
-    stepBudget: COGNI_CHAT_STEP_BUDGET,
   },
 } as const;
 

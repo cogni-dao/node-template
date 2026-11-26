@@ -672,8 +672,6 @@ export function createLangGraphInProcProvider<TTool = unknown>(
         ...(ctx?.actorUserId ? { trustedActorId: ctx.actorUserId } : {}),
         ...(entry.program && { trustedProgramId: entry.program }),
         interactive: !noInteractiveCaller,
-        // A scheduled tick keeps the default budget; only a run with a caller waiting gets the entry's.
-        ...(!noInteractiveCaller && entry.stepBudget !== undefined && { recursionLimit: entry.stepBudget }),
         ...(resolvedSource !== undefined && { sourceContext: resolvedSource }),
         ...(req.responseFormat !== undefined && {
           responseFormat: req.responseFormat as { prompt?: string; schema: unknown },

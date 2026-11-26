@@ -135,11 +135,6 @@ export interface InProcRunnerOptions<TTool = unknown> {
   readonly trustedProgramId?: string;
   /** A caller is waiting on this run. Passed to the program's run hooks so a step-budget report speaks to the user. */
   readonly interactive?: boolean;
-  /**
-   * Graph-step budget of this run (the catalog entry's `stepBudget`). Absent: `DEFAULT_RECURSION_LIMIT`. Always
-   * clamped to `MAX_RECURSION_LIMIT`.
-   */
-  readonly recursionLimit?: number;
   readonly sourceContext?: CreateReactAgentGraphOptions["sourceContext"];
   /** Graph factory from catalog - creates compiled graph with LLM and tools */
   readonly createGraph: CreateGraphFn;
