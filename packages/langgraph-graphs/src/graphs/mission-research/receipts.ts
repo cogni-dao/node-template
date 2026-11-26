@@ -96,6 +96,10 @@ const materialTargets = [
 ] as const;
 const isMaterialTarget = (id: string): id is (typeof materialTargets)[number] =>
 	(materialTargets as readonly string[]).includes(id);
+const obj = (v: unknown): Record<string, unknown> | undefined =>
+	v && typeof v === "object" && !Array.isArray(v)
+		? (v as Record<string, unknown>)
+		: undefined;
 /** The text inside the first ``` fence, by linear scan (a regex here backtracks cubically). */
 const fenced = (raw: string) => {
 	const open = raw.indexOf("```");
@@ -104,11 +108,35 @@ const fenced = (raw: string) => {
 	const body = raw.slice(open + 3, close).trim();
 	return body.startsWith("json") ? body.slice(4).trim() : body;
 };
+/**
+ * The host does the format work the model need not: it unwraps one markdown fence and adds every
+ * URL a claim cites to the source list. Binding checks still apply to every URL.
+ */
+export const readDraft = (raw: string): unknown => {
+	let data: unknown;
+	try {
+		data = JSON.parse(raw);
+	} catch {
+		const inner = fenced(raw);
+		if (inner === undefined) throw new SyntaxError("not_json");
+		data = JSON.parse(inner);
+	}
+	const draft = obj(data);
+	if (!draft || !Array.isArray(draft.atoms) || !Array.isArray(draft.principles))
+		return data;
+	const urls = new Set<string>();
+	for (const source of Array.isArray(draft.sources) ? draft.sources : []) {
+		const url = obj(source)?.url;
+		if (typeof url === "string") urls.add(url);
+	}
+	for (const claim of [...draft.atoms, ...draft.principles]) {
+		const cited = obj(claim)?.sourceUrls;
+		for (const url of Array.isArray(cited) ? cited : [])
+			if (typeof url === "string") urls.add(url);
+	}
+	return { ...draft, sources: [...urls].map((url) => ({ url })) };
+};
 const size = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
-const obj = (v: unknown): Record<string, unknown> | undefined =>
-	v && typeof v === "object" && !Array.isArray(v)
-		? (v as Record<string, unknown>)
-		: undefined;
 /** One run's receipts; never reuse an instance across runs. */
 export class ResearchReceipts {
 	readonly sources = new Map<string, string>();
@@ -256,7 +284,7 @@ export class ResearchReceipts {
 	}
 	isCompleteDraft(raw: string) {
 		try {
-			return Packet.safeParse(JSON.parse(raw)).success;
+			return Packet.safeParse(readDraft(raw)).success;
 		} catch {
 			return false;
 		}
@@ -264,17 +292,11 @@ export class ResearchReceipts {
 	/** Side-effect-free check of a candidate draft or final answer. */
 	check(raw: string): string[] {
 		if (size(raw) > 24 * 1024) return ["the draft exceeds 24 KiB"];
-		const bare = "the answer is not one bare JSON object (no markdown fences or prose)";
 		let data: unknown;
 		try {
-			data = JSON.parse(raw);
+			data = readDraft(raw);
 		} catch {
-			// Diagnose the JSON inside a fence too, so one repair turn names every problem. The
-			// fenced answer itself is never accepted.
-			const inner = fenced(raw);
-			if (inner === undefined || inner.trim() === raw.trim()) return [bare];
-			const problems = this.check(inner);
-			return [bare, ...problems.filter((problem) => problem !== bare)];
+			return ["the answer is not one JSON object"];
 		}
 		const parsed = PartialPacket.safeParse(data);
 		if (!parsed.success)
@@ -290,7 +312,7 @@ export class ResearchReceipts {
 		}
 		let data: unknown;
 		try {
-			data = JSON.parse(raw);
+			data = readDraft(raw);
 		} catch {
 			this.reasons.add("invalid_draft");
 			return undefined;
@@ -332,7 +354,7 @@ export class ResearchReceipts {
 		}
 		let data: unknown;
 		try {
-			data = JSON.parse(raw);
+			data = readDraft(raw);
 		} catch {
 			this.reasons.add("invalid_critique");
 			return;
@@ -353,7 +375,7 @@ export class ResearchReceipts {
 		if (forcedReason) this.reasons.add(forcedReason);
 		let data: unknown;
 		try {
-			data = JSON.parse(answer);
+			data = readDraft(answer);
 		} catch {
 			this.reasons.add("invalid_packet");
 		}

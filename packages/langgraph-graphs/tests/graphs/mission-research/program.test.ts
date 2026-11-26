@@ -1454,7 +1454,7 @@ describe("critic and evidence failures", () => {
 		const r = new ResearchReceipts("https://node.example");
 		const started = Date.now();
 		expect(r.check(`\`\`\`json${" ".repeat(20000)}`)).toEqual([
-			"the answer is not one bare JSON object (no markdown fences or prose)",
+			"the answer is not one JSON object",
 		]);
 		expect(Date.now() - started).toBeLessThan(1000);
 	});
@@ -2169,8 +2169,8 @@ describe("host-owned research stages", () => {
 			/* drain */
 		}
 		const output = JSON.parse((await run.final).content ?? "{}");
-		// The first repair already names both the fence and the invented domain inside it.
-		expect(firstRepair).toContain("not one bare JSON object");
+		// The host unwraps the fence itself, so the first repair names only the invented domain.
+		expect(firstRepair).not.toContain("not one JSON object");
 		expect(firstRepair).toContain("invented-domain, which is not eligible");
 		expect(repairText).toContain("Eligible domains:");
 		expect(rootTurn).toBe(4);
@@ -2178,6 +2178,47 @@ describe("host-owned research stages", () => {
 		expect(output.status).toBe("incomplete");
 		expect(output.reasons).toContain("missing_critique");
 		expect(output.telemetry).toMatchObject({ repairs: 2, taskAttempts: 0 });
+	});
+
+	it("critiques a fenced draft with no source list without spending a repair turn", async () => {
+		let rootTurn = 0;
+		let childTurns = 0;
+		const { sources: _omitted, ...unlisted } = draft;
+		const run = research((req) => {
+			if (!isRoot(req)) {
+				childTurns++;
+				const fingerprint =
+					JSON.stringify(req.messages).match(/[a-f0-9]{64}/)?.[0] ?? "";
+				return reply(
+					JSON.stringify({
+						fingerprint,
+						explanation: "The evidence and constraints were reviewed carefully.",
+						findings: [],
+					}),
+				);
+			}
+			rootTurn++;
+			if (rootTurn === 1)
+				return reply("", [
+					{
+						id: "w",
+						type: "function" as const,
+						function: {
+							name: "core__web_search",
+							arguments: JSON.stringify({ query: "q" }),
+						},
+					},
+				]);
+			return reply(`Here is the draft.\n\`\`\`json\n${JSON.stringify(unlisted)}\n\`\`\``);
+		}, withBootstrap(search));
+		for await (const _ of run.stream) {
+			/* drain */
+		}
+		const output = JSON.parse((await run.final).content ?? "{}");
+		expect(childTurns).toBe(1);
+		expect(output.status).toBe("complete");
+		expect(output.packet.sources).toEqual([{ url }]);
+		expect(output.telemetry).toMatchObject({ repairs: 0, taskAttempts: 1 });
 	});
 
 	it("dispatches the critic after a successful repair and accepts one revision", async () => {
