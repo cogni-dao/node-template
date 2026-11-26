@@ -973,6 +973,27 @@ describe("public epochs capability", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("names a titleless artifact link while preserving titled receipt identity", async () => {
+    const f = fixture();
+    f.state.events = [
+      { ...event("untitled"), metadata: {} },
+      event("titled"),
+    ];
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    const row = await screen.findByRole("row", { name: /Alpha/ });
+    fireEvent.click(within(row).getByRole("button", { name: "Expand details" }));
+    const artifact = await screen.findByRole("link", { name: "Open contribution artifact" });
+    expect(artifact).toHaveAttribute("href", "https://example.com/untitled");
+    expect(artifact).toHaveAttribute("target", "_blank");
+    expect(artifact).toHaveAttribute("rel", "noopener noreferrer");
+    const titled = screen.getByRole("link", { name: "Contribution titled" });
+    expect(titled).toHaveAttribute("href", "https://example.com/titled");
+    artifact.focus();
+    expect(artifact).toHaveFocus();
+    await userEvent.tab();
+    expect(titled).toHaveFocus();
+  });
+
   it("resets receipt paging when a workspace generation replaces membership", async () => {
     const f = fixture();
     f.state.events = Array.from({ length: 70 }, (_, i) => event(`page-${i}`));

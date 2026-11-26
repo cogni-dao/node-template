@@ -103,9 +103,10 @@ export function ContributionRow({
           {!title && receipt.artifactUrl && (
             <a
               href={receipt.artifactUrl}
+              aria-label="Open contribution artifact"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-muted-foreground hover:text-foreground"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
               onClick={(e) => e.stopPropagation()}
             >
               <ExternalLink className="h-3 w-3" />

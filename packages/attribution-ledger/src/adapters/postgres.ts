@@ -7,7 +7,7 @@
  * Scope: Single adapter shared by app (via container.ts) and scheduler-worker. Implements all AttributionStore methods including identity resolution via user_bindings (cross-domain). Does not contain domain logic or define port interfaces.
  * Invariants:
  * - Uses serviceDb (BYPASSRLS) — no RLS in V0.
- * - SCOPE_GATED_QUERIES: Every epochId-based method enforces scope_id = this.scopeId. Scope mismatches throw EpochNotFoundError.
+ * - SCOPE_GATED_QUERIES: Epoch and statement references resolve through scope_id = this.scopeId; child node/scope envelopes match their actual parent before effects or retry returns. Mismatches throw EpochNotFoundError.
  * - RECEIPT_SCOPE_AGNOSTIC: ingestion_receipts has no scope_id — scope assigned at selection via epoch membership.
  * - SELECTION_POLICY_AUTHORITY: getSelectionCandidates excludes receipts already selected in prior same-scope epochs (NOT EXISTS subquery). No time-window filter — the selection policy decides epoch membership within remaining candidates.
  * - SELECTION_AUTO_POPULATE: insertSelectionDoNothing uses onConflictDoNothing; updateSelectionUserId only sets userId where NULL.
@@ -98,6 +98,7 @@ import {
 import type {
   AttributionDatabase as Database,
   AttributionIdentityTables,
+  AttributionQueryOperations,
 } from "./types";
 import type { AttributionSchema } from "../schema";
 import type { AttributionRuntimeStore } from "../read/presentation";
@@ -634,46 +635,99 @@ export function bindDrizzleAttributionAdapter(
      * (indistinguishable from a genuinely missing epoch).
      */
     private async resolveEpochScoped(
-      epochId: bigint
+      epochId: bigint,
+      runner: AttributionQueryOperations = this.db,
+      lock = false
     ): Promise<AttributionEpoch> {
-      const rows = await this.db
+      const query = runner
         .select()
         .from(epochs)
         .where(and(eq(epochs.id, epochId), eq(epochs.scopeId, this.scopeId)))
         .limit(1);
+      const rows = lock ? await query.for("update") : await query;
       if (!rows[0]) throw new EpochNotFoundError(epochId.toString());
       return toEpoch(rows[0]);
     }
 
-    /**
-     * Like resolveEpochScoped but acquires a row-level lock (SELECT ... FOR UPDATE).
-     * Use for write operations that must serialize against concurrent finalization.
-     * Accepts optional `tx` to run within an existing transaction context.
-     */
+    /** Serialize a scoped parent with finalization in the caller's transaction. */
     private async resolveEpochScopedForUpdate(
       epochId: bigint,
-      tx?: Parameters<Parameters<(typeof this.db)["transaction"]>[0]>[0]
+      tx?: AttributionQueryOperations
     ): Promise<AttributionEpoch> {
-      const queryRunner = tx ?? this.db;
-      const rows = await queryRunner
-        .select()
-        .from(epochs)
-        .where(and(eq(epochs.id, epochId), eq(epochs.scopeId, this.scopeId)))
-        .limit(1)
-        .for("update");
-      if (!rows[0]) throw new EpochNotFoundError(epochId.toString());
-      return toEpoch(rows[0]);
+      return this.resolveEpochScoped(epochId, tx ?? this.db, true);
     }
 
-    /**
-     * Validate that all epochIds in a batch belong to this adapter's scope.
-     * Deduplicates before querying. Throws on first mismatch.
-     */
-    private async validateEpochIds(epochIds: bigint[]): Promise<void> {
-      const unique = [...new Set(epochIds.map((id) => id.toString()))];
-      for (const id of unique) {
-        await this.resolveEpochScoped(BigInt(id));
+    /** Validate the child's envelope against its actual scoped parent before effects. */
+    private assertEpochEnvelope(
+      epoch: AttributionEpoch,
+      envelope: { nodeId: string; epochId?: bigint; scopeId?: string }
+    ): void {
+      if (
+        envelope.nodeId !== epoch.nodeId ||
+        (envelope.epochId !== undefined && envelope.epochId !== epoch.id) ||
+        (envelope.scopeId !== undefined && envelope.scopeId !== epoch.scopeId)
+      )
+        throw new EpochNotFoundError(epoch.id.toString());
+    }
+
+    /** One ID-bounded parent read; lock in ID order when the caller owns a transaction. */
+    private async resolveEpochsScoped(
+      epochIds: readonly bigint[],
+      runner: AttributionQueryOperations = this.db,
+      lock = false
+    ): Promise<Map<bigint, AttributionEpoch>> {
+      const ids = [...new Set(epochIds)];
+      if (ids.length === 0) return new Map();
+      const query = runner
+        .select()
+        .from(epochs)
+        .where(and(inArray(epochs.id, ids), eq(epochs.scopeId, this.scopeId)))
+        .orderBy(epochs.id);
+      const rows = lock ? await query.for("update") : await query;
+      const parents = new Map(rows.map((row) => [row.id, toEpoch(row)]));
+      for (const id of ids) {
+        if (!parents.has(id)) throw new EpochNotFoundError(id.toString());
       }
+      return parents;
+    }
+
+    private async validateEpochIds(epochIds: bigint[]): Promise<void> {
+      await this.resolveEpochsScoped(epochIds);
+    }
+
+    private async validateEpochEnvelopes(
+      envelopes: readonly { nodeId: string; epochId: bigint }[]
+    ): Promise<void> {
+      const parents = await this.resolveEpochsScoped(
+        envelopes.map((p) => p.epochId)
+      );
+      for (const envelope of envelopes) {
+        const parent = parents.get(envelope.epochId);
+        if (!parent) throw new EpochNotFoundError(envelope.epochId.toString());
+        this.assertEpochEnvelope(parent, envelope);
+      }
+    }
+
+    /** Statement IDs confer no authority: resolve through the scoped epoch in the caller's transaction. */
+    private async resolveStatementEpochScoped(
+      statementId: string,
+      runner: AttributionQueryOperations = this.db
+    ): Promise<AttributionEpoch> {
+      const [row] = await runner
+        .select({ epoch: epochs, nodeId: epochStatements.nodeId })
+        .from(epochStatements)
+        .innerJoin(epochs, eq(epochs.id, epochStatements.epochId))
+        .where(
+          and(
+            eq(epochStatements.id, statementId),
+            eq(epochs.scopeId, this.scopeId)
+          )
+        )
+        .limit(1);
+      if (!row) throw new EpochNotFoundError(statementId);
+      const epoch = toEpoch(row.epoch);
+      this.assertEpochEnvelope(epoch, row);
+      return epoch;
     }
 
     // ── Epochs ──────────────────────────────────────────────────
@@ -1069,6 +1123,12 @@ export function bindDrizzleAttributionAdapter(
           };
         }
 
+        // A closed epoch is immutable. Only the existing-window retry above
+        // may succeed after its stale parent has left open.
+        if (stale.status !== "open") {
+          throw new EpochNotOpenError(staleId.toString());
+        }
+
         // 2. Close the stale open epoch (different window, since step 1 didn't match)
         // Insert locked evaluations for the stale epoch
         for (const evaluation of params.closeParams.evaluations) {
@@ -1178,7 +1238,8 @@ export function bindDrizzleAttributionAdapter(
     }
 
     async upsertDraftEvaluation(params: UpsertEvaluationParams): Promise<void> {
-      await this.resolveEpochScoped(params.epochId);
+      const epoch = await this.resolveEpochScoped(params.epochId);
+      this.assertEpochEnvelope(epoch, params);
       await this.db
         .insert(epochEvaluations)
         .values({
@@ -1414,7 +1475,8 @@ export function bindDrizzleAttributionAdapter(
       nodeId: string,
       epochId: bigint
     ): Promise<IngestionReceipt[]> {
-      await this.resolveEpochScoped(epochId);
+      const epoch = await this.resolveEpochScoped(epochId);
+      this.assertEpochEnvelope(epoch, { nodeId });
       const rows = await this.db
         .select({ receipt: ingestionReceipts })
         .from(ingestionReceipts)
@@ -1438,7 +1500,8 @@ export function bindDrizzleAttributionAdapter(
       window: { periodStart: Date; periodEnd: Date },
       page: { limit: number; offset: number }
     ): Promise<{ receipts: IngestionReceipt[]; total: number }> {
-      await this.resolveEpochScoped(epochId);
+      const epoch = await this.resolveEpochScoped(epochId);
+      this.assertEpochEnvelope(epoch, { nodeId });
       // One predicate over ingestion_receipts: in the window, or selected into this epoch.
       // A receipt matching both appears once (no UNION, no in-memory dedup).
       const selectedIntoEpoch = this.db
@@ -1478,7 +1541,7 @@ export function bindDrizzleAttributionAdapter(
 
     async upsertSelection(params: UpsertSelectionParams[]): Promise<void> {
       if (params.length === 0) return;
-      await this.validateEpochIds(params.map((p) => p.epochId));
+      await this.validateEpochEnvelopes(params);
       for (const p of params) {
         await this.db
           .insert(epochSelection)
@@ -1508,7 +1571,7 @@ export function bindDrizzleAttributionAdapter(
       params: InsertSelectionAutoParams[]
     ): Promise<void> {
       if (params.length === 0) return;
-      await this.validateEpochIds(params.map((p) => p.epochId));
+      await this.validateEpochEnvelopes(params);
       for (const p of params) {
         await this.db
           .insert(epochSelection)
@@ -1581,7 +1644,7 @@ export function bindDrizzleAttributionAdapter(
       params: InsertUserProjectionParams[]
     ): Promise<void> {
       if (params.length === 0) return;
-      await this.validateEpochIds(params.map((a) => a.epochId));
+      await this.validateEpochEnvelopes(params);
       await this.db.insert(epochUserProjections).values(
         params.map((a) => ({
           nodeId: a.nodeId,
@@ -1597,7 +1660,7 @@ export function bindDrizzleAttributionAdapter(
       params: InsertUserProjectionParams[]
     ): Promise<void> {
       if (params.length === 0) return;
-      await this.validateEpochIds(params.map((a) => a.epochId));
+      await this.validateEpochEnvelopes(params);
       for (const a of params) {
         await this.db
           .insert(epochUserProjections)
@@ -1757,6 +1820,7 @@ export function bindDrizzleAttributionAdapter(
     params: InsertPoolComponentParams
   ): Promise<PoolComponentInsertResult> {
     const epoch = await this.resolveEpochScoped(params.epochId);
+    this.assertEpochEnvelope(epoch, params);
     // POOL_LOCKED_AT_REVIEW: reject pool component inserts after closeIngestion
     if (epoch.status !== "open") {
       throw new EpochNotOpenError(params.epochId.toString());
@@ -1810,24 +1874,34 @@ export function bindDrizzleAttributionAdapter(
     async insertEpochStatement(
       params: InsertStatementParams
     ): Promise<AttributionStatement> {
-      await this.resolveEpochScoped(params.epochId);
-      const [row] = await this.db
-        .insert(epochStatements)
-        .values({
-          nodeId: params.nodeId,
-          epochId: params.epochId,
-          finalAllocationSetHash: params.finalAllocationSetHash,
-          poolTotalCredits: params.poolTotalCredits,
-          statementLinesJson: toStatementLinesJson(params.statementLines),
-          reviewOverridesJson: params.reviewOverrides
-            ? toReviewOverridesJson(params.reviewOverrides)
-            : null,
-          supersedesStatementId: params.supersedesStatementId ?? null,
-        })
-        .returning();
-      if (!row)
-        throw new Error("insertEpochStatement: INSERT returned no rows");
-      return toStatement(row);
+      return this.db.transaction(async (tx) => {
+        const epoch = await this.resolveEpochScopedForUpdate(params.epochId, tx);
+        this.assertEpochEnvelope(epoch, params);
+        if (params.supersedesStatementId != null) {
+          const predecessor = await this.resolveStatementEpochScoped(
+            params.supersedesStatementId,
+            tx
+          );
+          this.assertEpochEnvelope(predecessor, { nodeId: epoch.nodeId });
+        }
+        const [row] = await tx
+          .insert(epochStatements)
+          .values({
+            nodeId: params.nodeId,
+            epochId: params.epochId,
+            finalAllocationSetHash: params.finalAllocationSetHash,
+            poolTotalCredits: params.poolTotalCredits,
+            statementLinesJson: toStatementLinesJson(params.statementLines),
+            reviewOverridesJson: params.reviewOverrides
+              ? toReviewOverridesJson(params.reviewOverrides)
+              : null,
+            supersedesStatementId: params.supersedesStatementId ?? null,
+          })
+          .returning();
+        if (!row)
+          throw new Error("insertEpochStatement: INSERT returned no rows");
+        return toStatement(row);
+      });
     }
 
     async getStatementForEpoch(
@@ -1853,8 +1927,9 @@ export function bindDrizzleAttributionAdapter(
     async upsertDistributionManifest(
       params: InsertDistributionManifestParams
     ): Promise<DistributionManifestRecord> {
-      await this.resolveEpochScoped(params.epochId);
       return await this.db.transaction(async (tx) => {
+        const epoch = await this.resolveEpochScopedForUpdate(params.epochId, tx);
+        this.assertEpochEnvelope(epoch, params);
         const [manifest] = await tx
           .insert(epochDistributionManifests)
           .values({
@@ -2475,6 +2550,13 @@ export function bindDrizzleAttributionAdapter(
           (allocation) => allocation.epochId !== epochRow.id || allocation.nodeId !== epochRow.nodeId
         ))
           throw new EpochNotFoundError(params.epochId.toString());
+        const parent = toEpoch(epochRow);
+        this.assertEpochEnvelope(parent, params.statement);
+        this.assertEpochEnvelope(parent, params.signature);
+        if (params.statement.supersedesStatementId != null) {
+          const predecessor = await this.resolveStatementEpochScoped(params.statement.supersedesStatementId, tx);
+          this.assertEpochEnvelope(predecessor, { nodeId: parent.nodeId });
+        }
         const status = epochRow.status as string;
 
         if (status === "open") {
@@ -2763,29 +2845,35 @@ export function bindDrizzleAttributionAdapter(
 
     // ── Statement signatures ───────────────────────────────────
 
-    async insertStatementSignature(
-      params: InsertSignatureParams
-    ): Promise<void> {
-      await this.db
-        .insert(epochStatementSignatures)
-        .values({
-          nodeId: params.nodeId,
-          statementId: params.statementId,
-          signerWallet: params.signerWallet,
-          signature: params.signature,
-          signedAt: params.signedAt,
-        })
-        .onConflictDoNothing({
-          target: [
-            epochStatementSignatures.statementId,
-            epochStatementSignatures.signerWallet,
-          ],
-        });
+    async insertStatementSignature(params: InsertSignatureParams): Promise<void> {
+      await this.db.transaction(async (tx) => {
+        const epoch = await this.resolveStatementEpochScoped(
+          params.statementId,
+          tx
+        );
+        this.assertEpochEnvelope(epoch, params);
+        await tx
+          .insert(epochStatementSignatures)
+          .values({
+            nodeId: params.nodeId,
+            statementId: params.statementId,
+            signerWallet: params.signerWallet,
+            signature: params.signature,
+            signedAt: params.signedAt,
+          })
+          .onConflictDoNothing({
+            target: [
+              epochStatementSignatures.statementId,
+              epochStatementSignatures.signerWallet,
+            ],
+          });
+      });
     }
 
     async getSignaturesForStatement(
       statementId: string
     ): Promise<AttributionStatementSignature[]> {
+      await this.resolveStatementEpochScoped(statementId);
       const rows = await this.db
         .select()
         .from(epochStatementSignatures)
@@ -2803,6 +2891,7 @@ export function bindDrizzleAttributionAdapter(
           params.epochId,
           tx
         );
+        this.assertEpochEnvelope(epoch, params);
         if (epoch.status !== "review") {
           throw new EpochNotInReviewError(
             params.epochId.toString(),
@@ -2850,20 +2939,19 @@ export function bindDrizzleAttributionAdapter(
       const firstParams = paramsList[0];
       if (!firstParams) return [];
       return await this.db.transaction(async (tx) => {
-        // Lock once for the batch — all params share the same epochId
-        const epoch = await this.resolveEpochScopedForUpdate(
-          firstParams.epochId,
-          tx
+        // The public array contract permits multiple review epochs. Validate every
+        // distinct parent in one bounded, deterministically ordered lock read.
+        const parents = await this.resolveEpochsScoped(
+          paramsList.map((params) => params.epochId), tx, true
         );
-        if (paramsList.some(
-          (params) => params.epochId !== epoch.id || params.nodeId !== epoch.nodeId
-        ))
-          throw new EpochNotFoundError(firstParams.epochId.toString());
-        if (epoch.status !== "review") {
-          throw new EpochNotInReviewError(
-            firstParams.epochId.toString(),
-            epoch.status
-          );
+        for (const params of paramsList) {
+          const epoch = parents.get(params.epochId);
+          if (!epoch || params.nodeId !== firstParams.nodeId)
+            throw new EpochNotFoundError(params.epochId.toString());
+          this.assertEpochEnvelope(epoch, params);
+          if (epoch.status !== "review") {
+            throw new EpochNotInReviewError(params.epochId.toString(), epoch.status);
+          }
         }
 
         const results: ReviewSubjectOverrideRecord[] = [];
@@ -3009,7 +3097,8 @@ export function bindDrizzleAttributionAdapter(
       nodeId: string,
       epochId: bigint
     ): Promise<UnselectedReceipt[]> {
-      await this.resolveEpochScoped(epochId);
+      const epoch = await this.resolveEpochScoped(epochId);
+      this.assertEpochEnvelope(epoch, { nodeId });
       const rows = await this.db
         .select({
           receipt: ingestionReceipts,

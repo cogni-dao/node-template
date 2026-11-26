@@ -26,7 +26,7 @@ import type {
 	WebSearchCapability,
 } from "@cogni/ai-tools";
 import { CORE_TOOL_BUNDLE, withoutRemoteNodeArgument } from "@cogni/ai-tools";
-import type { AttributionRuntimeStore as AttributionStore } from "@cogni/attribution-ledger/http";
+import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
 	createDefaultRegistries,
 	type DefaultRegistries,
@@ -36,6 +36,7 @@ import {
 	type RunFinalizeEpochDeps,
 	runFinalizeEpoch,
 } from "@cogni/attribution-ledger/pipeline";
+import type { EpochPresentationStore } from "@cogni/attribution-ledger/http";
 import {
 	DrizzleAttributionAdapter,
 	DrizzleClaimantWalletResolver,
@@ -336,7 +337,7 @@ export interface Container {
 	/** Governance status queries (system tenant scope) */
 	governanceStatus: GovernanceStatusPort;
 	/** Epoch ledger store — shared by app and scheduler-worker */
-	attributionStore: AttributionStore;
+	attributionStore: AttributionStore & EpochPresentationStore;
 	/** Work item queries — reads from markdown files via WorkItemQueryPort */
 	workItemQuery: WorkItemQueryPort;
 	/** Node-local Doltgres work-item query/create/patch/delete surface. */
