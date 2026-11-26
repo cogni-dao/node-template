@@ -17,7 +17,8 @@ import { isValidAmountInput, parseDollarsToCents } from "@cogni/node-shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Card,
   HintText,
@@ -40,11 +41,34 @@ function formatDollars(credits: number): string {
   });
 }
 
+/** The org account's name for the funding header, from the person's own org list; null until known. */
+function useOrgName(billingAccountId: string | undefined): string | null {
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!billingAccountId) return;
+    let alive = true;
+    void fetch("/api/v1/orgs", { credentials: "same-origin", cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { orgs?: { billingAccountId: string; name: string }[] } | null) => {
+        const org = body?.orgs?.find((o) => o.billingAccountId === billingAccountId);
+        if (alive) setName(org?.name ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [billingAccountId]);
+  return name;
+}
+
 export function CreditsPageClient(): ReactElement {
   const [amountInput, setAmountInput] = useState<string>("");
   const queryClient = useQueryClient();
+  // Fund an org account (story.0080): the org page's Fund link names it; the server decides (org:admin only).
+  const billingAccountId = useSearchParams().get("billingAccountId") ?? undefined;
+  const orgName = useOrgName(billingAccountId);
 
-  const summaryQuery = useCreditsSummary({ limit: 1 });
+  const summaryQuery = useCreditsSummary({ limit: 1, billingAccountId });
 
   // Parse amount using string-to-cents utility (no float math)
   const amountCents = parseDollarsToCents(amountInput);
@@ -52,10 +76,11 @@ export function CreditsPageClient(): ReactElement {
 
   const paymentFlow = usePaymentFlow({
     amountUsdCents: amountCents ?? 200, // Default to $2.00 if invalid
+    billingAccountId,
     onSuccess: () => {
       // Refetch balance but DON'T clear amount (would unmount dialog)
       void queryClient.invalidateQueries({
-        queryKey: ["payments-summary", { limit: 1 }],
+        queryKey: ["payments-summary", { limit: 1, billingAccountId }],
       });
     },
   });
@@ -74,6 +99,9 @@ export function CreditsPageClient(): ReactElement {
     <PageContainer maxWidth="2xl">
       {/* Balance Card */}
       <Card className="flex items-center justify-between p-6">
+        {billingAccountId ? (
+          <span className="font-semibold text-lg">{orgName ?? "Org"}</span>
+        ) : null}
         <span
           className={`font-bold text-4xl ${isNegative ? "text-destructive" : ""}`}
         >

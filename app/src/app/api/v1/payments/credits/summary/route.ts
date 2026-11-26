@@ -12,6 +12,7 @@
  * @public
  */
 
+import { billToRefusalHttp } from "@cogni/agent-grants/http";
 import { creditsSummaryOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { readAccountCredits } from "@/app/_facades/payments/account-credits.server";
@@ -31,6 +32,13 @@ function handleRouteError(
   ctx: RequestContext,
   error: unknown
 ): NextResponse | null {
+  // Funding an org account (story.0080): identity's refusal keeps its own code and status.
+  const fundingRefusal = billToRefusalHttp(error);
+  if (fundingRefusal) {
+    logRequestWarn(ctx.log, error, (fundingRefusal.body as { error: string }).error.toUpperCase());
+    return NextResponse.json(fundingRefusal.body, { status: fundingRefusal.status, headers: fundingRefusal.headers });
+  }
+
   // Zod validation errors
   if (error && typeof error === "object" && "issues" in error) {
     logRequestWarn(ctx.log, error, "VALIDATION_ERROR");
@@ -64,7 +72,10 @@ export const GET = wrapRouteHandlerWithLogging(
       const parsedLimit = searchParams.get("limit");
       const limit = parsedLimit ? Number(parsedLimit) : undefined;
 
-      const input = creditsSummaryOperation.input.parse({ limit });
+      const input = creditsSummaryOperation.input.parse({
+        limit,
+        billingAccountId: searchParams.get("billingAccountId") ?? undefined,
+      });
 
       // The named account was authorized by the door above: read it as the caller under row-level security.
       const namedAccount = searchParams.get("accountId");
@@ -81,6 +92,7 @@ export const GET = wrapRouteHandlerWithLogging(
         {
           sessionUser,
           limit: input.limit,
+          billingAccountId: input.billingAccountId,
         },
         ctx
       );

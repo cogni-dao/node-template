@@ -474,6 +474,25 @@ async function verifyAndSettle(
 				},
 			});
 
+			// At least once after the credit commits (the callee dedupes on paymentRef); a failure is logged, never fails the payment.
+			if (postCreditFundingDeps?.onCredited) {
+				try {
+					await postCreditFundingDeps.onCredited({
+						billingAccountId: attempt.billingAccountId,
+						amountUsdCents: attempt.amountUsdCents,
+						paymentRef: clientPaymentId,
+					});
+				} catch (error) {
+					log.error(
+						{
+							attemptId: attempt.id,
+							error: error instanceof Error ? error.message : error,
+						},
+						"onCredited failed for payment attempt",
+					);
+				}
+			}
+
 			if (isValidTransition(attempt.status, "CREDITED")) {
 				attempt = await serviceRepo.updateStatus(
 					attempt.id,

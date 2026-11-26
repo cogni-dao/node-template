@@ -68,6 +68,12 @@ export interface PostCreditFundingDeps {
 	treasurySettlement: TreasurySettlementPort | undefined;
 	financialLedger: FinancialLedgerPort | undefined;
 	log: Logger;
+	/** Runs after the credit commits (an org account's `org.funded` history row). At least once; the callee dedupes on `paymentRef`. Never fails the payment. */
+	onCredited?: (credited: {
+		billingAccountId: string;
+		amountUsdCents: number;
+		paymentRef: string;
+	}) => Promise<unknown>;
 }
 
 export interface PostCreditFundingResult {

@@ -12,45 +12,29 @@
  * @public
  */
 
-import { toUserId } from "@cogni/ids";
 import type { CreditsSummaryOutput } from "@cogni/node-contracts";
 import type { SessionUser } from "@cogni/node-shared";
 import { getContainer } from "@/bootstrap/container";
-import { AuthUserNotFoundError } from "@/features/payments/errors";
 import { getCreditsSummary } from "@/features/payments/services/creditsSummary";
-import { getOrCreateBillingAccountForUser } from "@/lib/auth/mapping";
 import type { RequestContext } from "@/shared/observability";
+import { resolvePaymentAccount } from "./funding-account.server";
 
 export async function getCreditsSummaryFacade(
   params: {
     sessionUser: SessionUser;
     limit?: number | undefined;
+    /** An org account the caller funds (org:admin only, decided by identity); else the caller's own. */
+    billingAccountId?: string | undefined;
   },
   _ctx: RequestContext
 ): Promise<CreditsSummaryOutput> {
-  const accountService = getContainer().accountsForUser(
-    toUserId(params.sessionUser.id)
+  const container = getContainer();
+  const { scopeUserId, billingAccount } = await resolvePaymentAccount(
+    container,
+    params.sessionUser,
+    params.billingAccountId
   );
-
-  let billingAccount: Awaited<
-    ReturnType<typeof getOrCreateBillingAccountForUser>
-  >;
-  try {
-    billingAccount = await getOrCreateBillingAccountForUser(accountService, {
-      userId: params.sessionUser.id,
-      ...(params.sessionUser.walletAddress
-        ? { walletAddress: params.sessionUser.walletAddress }
-        : {}),
-    });
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes("billing_accounts_owner_user_id_users_id_fk")
-    ) {
-      throw new AuthUserNotFoundError(params.sessionUser.id);
-    }
-    throw error;
-  }
+  const accountService = container.accountsForUser(scopeUserId);
 
   const result = await getCreditsSummary(accountService, {
     billingAccountId: billingAccount.id,

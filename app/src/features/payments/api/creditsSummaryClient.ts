@@ -72,6 +72,9 @@ export const creditsSummaryClient = {
       if (input?.limit !== undefined) {
         params.set("limit", String(input.limit));
       }
+      if (input?.billingAccountId) {
+        params.set("billingAccountId", input.billingAccountId);
+      }
 
       const url = `/api/v1/payments/credits/summary${
         params.toString() ? `?${params}` : ""

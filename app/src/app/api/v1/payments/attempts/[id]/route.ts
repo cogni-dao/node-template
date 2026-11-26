@@ -12,6 +12,7 @@
  * @public
  */
 
+import { billToRefusalHttp } from "@cogni/agent-grants/http";
 import { paymentStatusOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getPaymentStatusFacade } from "@/app/_facades/payments/attempts.server";
@@ -33,6 +34,13 @@ function handleRouteError(
   ctx: RequestContext,
   error: unknown
 ): NextResponse | null {
+  // Funding an org account (story.0080): identity's refusal keeps its own code and status.
+  const fundingRefusal = billToRefusalHttp(error);
+  if (fundingRefusal) {
+    logRequestWarn(ctx.log, error, (fundingRefusal.body as { error: string }).error.toUpperCase());
+    return NextResponse.json(fundingRefusal.body, { status: fundingRefusal.status, headers: fundingRefusal.headers });
+  }
+
   // Auth errors
   if (error instanceof AuthUserNotFoundError) {
     logRequestWarn(ctx.log, error, "AUTH_USER_NOT_FOUND");
@@ -61,7 +69,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     routeId: "payments.attempt_status",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, _request, sessionUser, context) => {
+  async (ctx, request, sessionUser, context) => {
     try {
       // Extract attemptId from URL params
       if (!context) throw new Error("context required for dynamic routes");
@@ -73,6 +81,8 @@ export const GET = wrapRouteHandlerWithLogging<{
         {
           sessionUser,
           attemptId,
+          billingAccountId:
+            new URL(request.url).searchParams.get("billingAccountId") ?? undefined,
         },
         ctx
       );

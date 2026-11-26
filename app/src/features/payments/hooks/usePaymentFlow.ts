@@ -29,6 +29,8 @@ export type { PaymentFlowPhase, PaymentFlowState } from "@cogni/node-core";
 
 export interface UsePaymentFlowOptions {
   amountUsdCents: number;
+  /** An org account to fund instead of the caller's own (org:admin only; the server decides). */
+  billingAccountId?: string | undefined;
   onSuccess?: (creditsAdded: number) => void;
   onError?: (message: string) => void;
 }
@@ -345,7 +347,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
 export function usePaymentFlow(
   options: UsePaymentFlowOptions
 ): UsePaymentFlowReturn {
-  const { amountUsdCents, onSuccess, onError } = options;
+  const { amountUsdCents, billingAccountId, onSuccess, onError } = options;
   const [internalState, dispatch] = useReducer(reducer, { phase: "READY" });
 
   const { writeContract, data: txHash, error: writeError } = useWriteContract();
@@ -434,7 +436,7 @@ export function usePaymentFlow(
 
         const result = await paymentsClient.submitTxHash(
           internalState.attemptId,
-          { txHash: internalState.txHash }
+          { txHash: internalState.txHash, billingAccountId }
         );
 
         // Guard: if attempt was reset during await, ignore result
@@ -478,7 +480,7 @@ export function usePaymentFlow(
         }
       })();
     }
-  }, [receipt, internalState, amountUsdCents]);
+  }, [receipt, internalState, amountUsdCents, billingAccountId]);
 
   // Polling effect
   useEffect(() => {
@@ -501,7 +503,7 @@ export function usePaymentFlow(
         return;
       }
 
-      const result = await paymentsClient.getStatus(attemptId);
+      const result = await paymentsClient.getStatus(attemptId, billingAccountId);
 
       // Guard: check again after await
       if (attemptIdRef.current !== effectAttemptId) {
@@ -543,7 +545,7 @@ export function usePaymentFlow(
     }, 3000); // Poll every 3 seconds (backend throttles to 10s)
 
     return () => clearInterval(pollInterval);
-  }, [internalState, amountUsdCents]);
+  }, [internalState, amountUsdCents, billingAccountId]);
 
   // Success callback
   useEffect(() => {
@@ -576,7 +578,7 @@ export function usePaymentFlow(
 
     dispatch({ type: "START_CREATE_INTENT" });
 
-    const result = await paymentsClient.createIntent({ amountUsdCents });
+    const result = await paymentsClient.createIntent({ amountUsdCents, billingAccountId });
 
     // Guard: if attempt was reset/restarted during await, ignore result
     if (attemptIdRef.current !== currentAttemptId) {
@@ -607,7 +609,7 @@ export function usePaymentFlow(
       functionName: "transfer",
       args: [to as `0x${string}`, BigInt(amountRaw)],
     });
-  }, [internalState.phase, amountUsdCents, writeContract]);
+  }, [internalState.phase, amountUsdCents, billingAccountId, writeContract]);
 
   const reset = useCallback(() => {
     // Invalidate any in-flight async operations from prior attempt

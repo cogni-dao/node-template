@@ -22,6 +22,8 @@ export interface UseCreditsSummaryOptions {
    * Defaults to undefined (server default applies).
    */
   limit?: number;
+  /** An org account the caller funds (org:admin only); else the caller's own. */
+  billingAccountId?: string | undefined;
 }
 
 /**
@@ -43,12 +45,15 @@ export interface UseCreditsSummaryOptions {
 export function useCreditsSummary(
   options: UseCreditsSummaryOptions = {}
 ): UseQueryResult<CreditsSummaryOutput, Error> {
-  const { limit } = options;
+  const { limit, billingAccountId } = options;
 
   return useQuery({
-    queryKey: ["payments-summary", { limit }],
+    queryKey: ["payments-summary", { limit, billingAccountId }],
     queryFn: async () => {
-      const result = await creditsSummaryClient.getSummary({ limit });
+      const result = await creditsSummaryClient.getSummary({
+        limit,
+        billingAccountId,
+      });
       if (!result.ok) {
         throw new Error(result.error);
       }
