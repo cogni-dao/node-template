@@ -82,8 +82,8 @@ export const GET = wrapRouteHandlerWithLogging<{
     }
 
     if (result.pendingSelectionUpdates.length > 0) {
-      // Background: fill selection rows so later reads need no resolution.
-      void persistSelectionUpdates(store, result.pendingSelectionUpdates);
+      // Finish these bounded page updates before a subsequent summary reads membership.
+      await persistSelectionUpdates(store, result.pendingSelectionUpdates);
     }
     if (result.resolvedCount > 0) {
       logEvent(ctx.log, EVENT_NAMES.LEDGER_IDENTITY_RESOLVED_AT_READ, {

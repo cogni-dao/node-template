@@ -591,6 +591,9 @@ export function bindDrizzleAttributionAdapter(
         eq(epochSelection.nodeId, nodeId),
         eq(epochSelection.epochId, epochId),
         eq(epochSelection.included, true),
+        frozenReceiptIds === undefined
+          ? sql`COALESCE(${epochSelection.weightOverrideMilli}, (${JSON.stringify(epoch.weightConfig)}::jsonb ->> (${ingestionReceipts.source} || ':' || ${ingestionReceipts.eventType}))::bigint, 0) > 0`
+          : undefined,
         membership
       );
       return this.db.transaction(async (tx) => {

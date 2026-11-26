@@ -111,8 +111,14 @@ export async function fetchEpochView(
   signal?: AbortSignal,
   offset = 0,
 ) {
-  const [summary, activity] = await Promise.all([
-    epochJson<ContributorSummaryPage>(
+  // Activity resolves identities; read the summary afterwards so its claimant keys
+  // agree with the selections persisted by the activity request.
+  const activity = await epochJson<{ epochId: string; events: ApiIngestionReceipt[] }>(
+    client,
+    withEpochQuery(client.endpoints.activity(epoch.id), { limit: 200, offset: 0 }),
+    signal,
+  );
+  const summary = await epochJson<ContributorSummaryPage>(
       client,
       withEpochQuery(
         epoch.status === "finalized"
@@ -121,16 +127,7 @@ export async function fetchEpochView(
         { view: "summary", limit: 200, offset },
       ),
       signal,
-    ),
-    epochJson<{ epochId: string; events: ApiIngestionReceipt[] }>(
-      client,
-      withEpochQuery(client.endpoints.activity(epoch.id), {
-        limit: 200,
-        offset: 0,
-      }),
-      signal,
-    ),
-  ]);
+    );
   const parsed = EpochContributorSummaryPageSchema.safeParse(summary);
   if (
     !parsed.success ||

@@ -25,6 +25,7 @@ import userEvent from "@testing-library/user-event";
 import { type ReactElement, type ReactNode, StrictMode, useState } from "react";
 import { decodeFunctionData } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchEpochView } from "../src/epochs/hooks/useEpochsPage";
 import {
   type ApiIngestionReceipt,
   applyOverridesToEpochView,
@@ -773,6 +774,28 @@ describe("public epochs capability", () => {
         within(screen.getByRole("row", { name: /Alpha/ })).getByText("1000"),
       ).toBeVisible(),
     );
+  });
+
+  it("waits for activity identity resolution before reading the summary", async () => {
+    const f = fixture();
+    f.state.events = [{ ...event("resolved"), selection: { userId: null, included: true, weightOverrideMilli: null } }];
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const request = f.client.request;
+    const client: EpochsClient = { ...f.client, request: async (url, init) => {
+      if (url.includes("/activity")) {
+        await pending;
+        f.state.events = [{ ...event("resolved"), selection: { userId: "a", included: true, weightOverrideMilli: null } }];
+      }
+      return request(url, init);
+    } };
+    const result = fetchEpochView(client, epoch);
+    await Promise.resolve();
+    expect(f.requests.some((r) => r.url.includes("/projections"))).toBe(false);
+    release();
+    const view = await result;
+    expect(view.contributors[0]?.claimantKey).toBe("user:a");
+    expect(view.contributors[0]?.receipts.map((receipt) => receipt.receiptId)).toEqual(["resolved"]);
   });
 
   it("keeps complete unresolved facts independent of contributor and activity windows", async () => {

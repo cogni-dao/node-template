@@ -262,6 +262,22 @@ describe("public attribution presentation on PostgreSQL", () => {
     });
   });
 
+  it("uses original weight for live details and frozen IDs for finalized membership", async () => {
+    await db.execute(sql`UPDATE epochs SET status = 'review' WHERE id = ${epochId} AND node_id = ${nodeId}::uuid`);
+    await db.execute(sql`UPDATE epoch_selection SET weight_override_milli = 0 WHERE epoch_id = ${epochId} AND receipt_id = ${`${prefix}:b:0`}`);
+    for (const [receiptId, units] of [[`${prefix}:b:0`, 500n], [`${prefix}:b:1`, 0n]] as const) {
+      await store.upsertReviewSubjectOverride({ nodeId, epochId, subjectRef: receiptId, overrideUnits: units, overrideReason: "eligibility" });
+    }
+    const summary = await readEpochContributorSummary(store, nodeId, epochId, { limit: 200, offset: 0 });
+    expect(summary?.items.find((item) => item.claimantKey === `user:${b}`)).toMatchObject({ units: "0", receiptCount: 1 });
+    const live = await store.getContributorReceiptsPage(nodeId, epochId, `user:${b}`, { limit: 1, offset: 0 });
+    expect(live.total).toBe(1);
+    expect(live.receipts.map((receipt) => receipt.receiptId)).toEqual([`${prefix}:b:1`]);
+    const frozen = await store.getContributorReceiptsPage(nodeId, epochId, `user:${b}`, { limit: 1, offset: 0 }, [`${prefix}:b:0`]);
+    expect(frozen.total).toBe(1);
+    expect(frozen.receipts.map((receipt) => receipt.receiptId)).toEqual([`${prefix}:b:0`]);
+  });
+
   it("returns stable complete unresolved facts across actual dense contributor and receipt pages", async () => {
     const receipts = Array.from({ length: 201 }, (_, i) => ({
       nodeId,
