@@ -273,6 +273,10 @@ describe("public attribution presentation on PostgreSQL", () => {
     const live = await store.getContributorReceiptsPage(nodeId, epochId, `user:${b}`, { limit: 1, offset: 0 });
     expect(live.total).toBe(1);
     expect(live.receipts.map((receipt) => receipt.receiptId)).toEqual([`${prefix}:b:1`]);
+    await store.upsertUserProjections([{ nodeId, epochId, userId: b, projectedUnits: 1000n, receiptCount: 1 }]);
+    const projected = await readEpochContributorSummary(store, nodeId, epochId, { limit: 200, offset: 0 });
+    expect(projected?.items.find((item) => item.claimantKey === `user:${b}`)).toMatchObject({ units: "0", receiptCount: 1 });
+    expect(projected?.totalUnits).toBe(summary?.totalUnits);
     const frozen = await store.getContributorReceiptsPage(nodeId, epochId, `user:${b}`, { limit: 1, offset: 0 }, [`${prefix}:b:0`]);
     expect(frozen.total).toBe(1);
     expect(frozen.receipts.map((receipt) => receipt.receiptId)).toEqual([`${prefix}:b:0`]);

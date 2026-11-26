@@ -66,7 +66,7 @@ export async function readLiveContributorSummaryPage(
       SELECT claimant_key AS "claimantKey", source, platform_login AS "platformLogin", event_count AS "eventCount"
       FROM unresolved ORDER BY event_count DESC, claimant_key ASC LIMIT ${EPOCH_PAGE_MAX_LIMIT}
     ), projection_deltas AS (
-      SELECT user_id, SUM(units - base_units) AS delta, MAX(platform_login) AS platform_login FROM selected WHERE user_id IS NOT NULL GROUP BY user_id
+      SELECT user_id, SUM(units - base_units) AS delta, MAX(platform_login) AS platform_login FROM selected WHERE user_id IS NOT NULL AND base_units > 0 GROUP BY user_id
     ), projected AS (
       SELECT p.user_id, p.projected_units + COALESCE(d.delta,0) AS units, p.receipt_count, d.platform_login
       FROM ${tables.epochUserProjections} p JOIN scoped_epoch e ON e.id = p.epoch_id AND e.node_id = p.node_id

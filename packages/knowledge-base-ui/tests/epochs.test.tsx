@@ -938,6 +938,134 @@ describe("public epochs capability", () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each(["overview", "review"] as const)(
+    "uses persisted membership for %s disclosures after partial identity persistence",
+    async (surface) => {
+      const f = fixture();
+      f.state.events = [
+        { ...event("linked"), platformLogin: "Linked" },
+        {
+          ...event("pending", "external"),
+          platformLogin: "Pending",
+          selection: {
+            userId: null,
+            included: true,
+            weightOverrideMilli: null,
+          },
+        },
+        {
+          ...event("pending2", "external"),
+          platformLogin: "Pending",
+          selection: {
+            userId: null,
+            included: true,
+            weightOverrideMilli: null,
+          },
+        },
+      ];
+      const request = f.client.request;
+      vi.spyOn(f.client, "request").mockImplementation(async (url, init) => {
+        const response = await request(url, init);
+        if (url.includes("/activity") && !url.includes("claimantKey=")) {
+          const body = await response.json();
+          return new Response(
+            JSON.stringify({
+              ...body,
+              events: body.events.map((item: ApiIngestionReceipt) => ({
+                ...item,
+                selection: { ...item.selection, userId: "a" },
+              })),
+            }),
+            { status: 200 },
+          );
+        }
+        return response;
+      });
+      if (surface === "review") await readyReview(f);
+      else render(<CurrentEpochView />, { wrapper: f.wrapper });
+      for (const name of ["Linked", "Pending"]) {
+        const row = await screen.findByRole("row", { name: new RegExp(name) });
+        fireEvent.click(
+          within(row).getByRole("button", { name: "Expand details" }),
+        );
+      }
+      for (const id of ["linked", "pending", "pending2"]) {
+        expect(
+          await screen.findAllByRole("link", { name: `Contribution ${id}` }),
+        ).toHaveLength(1);
+      }
+      if (surface === "review")
+        expect(
+          screen.getAllByRole("button", { name: "Adjust weight" }),
+        ).toHaveLength(3);
+      expect(
+        f.requests.filter((r) => r.url.includes("claimantKey=")),
+      ).toHaveLength(2);
+    },
+  );
+
+  it.each(["overview", "review"] as const)(
+    "refreshes an obsolete identity summary once in %s",
+    async (surface) => {
+      const f = fixture();
+      f.state.events = [
+        {
+          ...event("moved", "external"),
+          platformLogin: "Pending",
+          selection: {
+            userId: null,
+            included: true,
+            weightOverrideMilli: null,
+          },
+        },
+      ];
+      if (surface === "review") await readyReview(f);
+      else render(<CurrentEpochView />, { wrapper: f.wrapper });
+      const row = await screen.findByRole("row", { name: /Pending/ });
+      f.state.events = [{ ...event("moved"), platformLogin: "Linked" }];
+      fireEvent.click(
+        within(row).getByRole("button", { name: "Expand details" }),
+      );
+      await screen.findByRole("row", { name: /Linked/ });
+      expect(
+        screen.queryByRole("row", { name: /Pending/ }),
+      ).not.toBeInTheDocument();
+      expect(
+        f.requests.filter((r) => r.url.includes("claimantKey=identity")),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("loads unchanged finalized membership from its frozen detail page", async () => {
+    const f = fixture();
+    f.state.current = { ...epoch, status: "finalized" };
+    f.state.events = [event("frozen")];
+    const request = f.client.request;
+    vi.spyOn(f.client, "request").mockImplementation(async (url, init) => {
+      const response = await request(url, init);
+      if (url.includes("/activity") && !url.includes("claimantKey=")) {
+        const body = await response.json();
+        return new Response(
+          JSON.stringify({
+            ...body,
+            events: [...body.events, event("unfrozen")],
+          }),
+          { status: 200 },
+        );
+      }
+      return response;
+    });
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    const row = await screen.findByRole("row", { name: /Alpha/ });
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Expand details" }),
+    );
+    await screen.findByRole("link", { name: "Contribution frozen" });
+    expect(
+      screen.queryByRole("link", { name: "Contribution unfrozen" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows loading, empty, list error and unknown lifecycle states", async () => {
     const f = fixture();
     f.state.empty = true;

@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 "use client";
-import { useQuery } from "@tanstack/react-query";
-import { type ReactElement, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { type ReactElement, useEffect, useRef, useState } from "react";
 import { useEpochContext, withEpochQuery } from "../context";
 import { epochJson } from "../hooks/useEpochsPage";
 import type { ApiIngestionReceipt } from "../lib/compose-epoch";
@@ -26,23 +26,21 @@ export function ContributorReceiptRows({
   ) => ReactElement[] | null;
 }) {
   const { client, queryKeyPrefix } = useEpochContext();
+  const queryClient = useQueryClient();
   const [offset, setOffset] = useState(0);
-  const complete =
-    epoch.status !== "finalized" &&
-    offset === 0 &&
-    contributor.receipts.length >= contributor.receiptCount;
+  const reconciled = useRef(false);
   const query = useQuery({
     queryKey: [
       ...queryKeyPrefix,
       "epochs",
       epoch.id,
+      epoch.status,
       "contributor",
       contributor.claimantKey,
       offset,
     ],
-    staleTime: 60_000,
+    staleTime: 0,
     retry: false,
-    enabled: !complete,
     queryFn: ({ signal }) =>
       epochJson<{ total: number; events: ReceiptEvent[] }>(
         client,
@@ -54,29 +52,66 @@ export function ContributorReceiptRows({
         signal,
       ),
   });
-  const receipts: readonly IngestionReceipt[] = complete
-    ? contributor.receipts
-    : (query.data?.events ?? []).map((receipt) => ({
-        receiptId: receipt.receiptId,
-        source: receipt.source,
-        eventType: receipt.eventType,
-        platformLogin: receipt.platformLogin,
-        artifactUrl: receipt.artifactUrl,
-        eventTime: receipt.eventTime,
-        metadata: receipt.metadata,
-        units:
-          receipt.selection?.weightOverrideMilli ??
-          String(
-            epoch.weightConfig?.[`${receipt.source}:${receipt.eventType}`] ?? 0,
-          ),
-        override: receipt.reviewOverride ?? null,
-      }));
-  const total = complete
-    ? contributor.receiptCount
-    : (query.data?.total ?? contributor.receiptCount);
+  // An identity may have been linked since the summary was read. Refresh the
+  // active summary once; repeated empty results must not trigger a read loop.
+  useEffect(() => {
+    if (
+      reconciled.current ||
+      query.isFetching ||
+      query.error ||
+      !query.data ||
+      contributor.isLinked ||
+      contributor.receiptCount === 0 ||
+      query.data.total !== 0
+    )
+      return;
+    reconciled.current = true;
+    void queryClient.invalidateQueries({
+      predicate: (entry) => {
+        const key = entry.queryKey;
+        const start = queryKeyPrefix.length;
+        if (!queryKeyPrefix.every((part, index) => key[index] === part))
+          return false;
+        return (
+          (key[start] === "epochs" &&
+            key[start + 1] === "view" &&
+            key[start + 2] === epoch.id) ||
+          key[start] === "finish-epoch"
+        );
+      },
+      type: "active",
+    });
+  }, [
+    contributor.isLinked,
+    contributor.receiptCount,
+    epoch.id,
+    query.data,
+    query.error,
+    query.isFetching,
+    queryClient,
+    queryKeyPrefix,
+  ]);
+  const receipts: readonly IngestionReceipt[] = (
+    query.isFetching || query.error ? [] : (query.data?.events ?? [])
+  ).map((receipt) => ({
+    receiptId: receipt.receiptId,
+    source: receipt.source,
+    eventType: receipt.eventType,
+    platformLogin: receipt.platformLogin,
+    artifactUrl: receipt.artifactUrl,
+    eventTime: receipt.eventTime,
+    metadata: receipt.metadata,
+    units:
+      receipt.selection?.weightOverrideMilli ??
+      String(
+        epoch.weightConfig?.[`${receipt.source}:${receipt.eventType}`] ?? 0,
+      ),
+    override: receipt.reviewOverride ?? null,
+  }));
+  const total = query.data?.total ?? contributor.receiptCount;
   return (
     <>
-      {!complete && query.isLoading ? (
+      {query.isFetching ? (
         <TableRow>
           <TableCell colSpan={6} role="status">
             Loading contributions…
@@ -100,12 +135,12 @@ export function ContributorReceiptRows({
         : receipts.map((receipt) => (
             <ContributionRow key={receipt.receiptId} receipt={receipt} />
           ))}
-      {!query.isLoading && !query.error && receipts.length === 0 ? (
+      {!query.isFetching && !query.error && receipts.length === 0 ? (
         <TableRow>
           <TableCell colSpan={6}>No contributions</TableCell>
         </TableRow>
       ) : null}
-      {(total > 50 && !complete) || offset > 0 ? (
+      {total > 50 || offset > 0 ? (
         <TableRow>
           <TableCell colSpan={6}>
             <div className="flex flex-wrap items-center justify-between gap-2">
