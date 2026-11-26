@@ -178,7 +178,7 @@ describe("the person's own table and decisions", () => {
     const on = await post({ principalUserId: "ai-1", scope: "account:read" });
     expect(await on.json()).toEqual({ changed: true });
     expect(await store.hasLiveAccountGrant("ai-1", "account:read", "acct-alice")).toBe(true);
-    expect(await (await post({ principalUserId: "ai-1", scope: "account:read" })).json()).toEqual({ changed: false }); // already open (v0 limit)
+    expect(await (await post({ principalUserId: "ai-1", scope: "account:read" })).json()).toEqual({ changed: false }); // already open on this account
     expect((await post({ principalUserId: "ext-1", scope: "account:read" })).status).toBe(409); // an outside AI must ask
     expect(await store.hasLiveAccountGrant("ext-1", "account:read", "acct-alice")).toBe(false);
   });

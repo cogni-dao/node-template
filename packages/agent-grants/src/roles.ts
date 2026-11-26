@@ -314,7 +314,7 @@ export async function grantInternalOnAccount(
     scope: input.scope,
     approvedBy: input.me.userId,
   });
-  // `false` with an internal AI means a live or pending row already exists (the v0 limit: one open row per AI and scope).
+  // `false` with an internal AI means a live or pending row already exists (one open row per AI, scope and account).
   return { principalUserId: input.principalUserId, created };
 }
 
