@@ -99,15 +99,23 @@ describe("the step-budget answer comes from the run that happened", () => {
     expect(result.content).not.toMatch(/coordinating tick|Schedule changes/);
   });
 
-  it("chat reports branch, commit, push and the next step from the shell receipts", async () => {
+  it("a committed but unpushed run says the commit is lost and never promises to continue it", async () => {
     const { result } = await run({ interactive: true, calls: [clone, branch, commit] });
     expect(result.content).toContain("I ran 3 sandbox commands.");
     expect(result.content).toContain("Branch: docs/readme.");
     expect(result.content).toContain("Commit: yes.");
     expect(result.content).toContain("Pushed: no.");
     expect(result.content).toContain("Pull request: none.");
-    expect(result.content).toContain("Next: push the branch and open the pull request.");
-    expect(result.content).toContain("Only pushed work carries over");
+    expect(result.content).toContain("A follow-up run starts in a fresh sandbox.");
+    expect(result.content).toContain("never pushed, so it is lost");
+    expect(result.content).toContain("starts over from the last pushed state");
+    expect(result.content).not.toMatch(/Ask me to continue|push the branch and open/);
+  });
+
+  it("a pushed branch carries over and the next step is the pull request", async () => {
+    const { result } = await run({ interactive: true, calls: [clone, branch, commit, push] });
+    expect(result.content).toContain("Pushed: yes.");
+    expect(result.content).toContain("The pushed branch keeps that work. Next: open the pull request.");
   });
 
   it("chat reports the pull request when one was opened", async () => {
@@ -116,9 +124,41 @@ describe("the step-budget answer comes from the run that happened", () => {
     expect(result.content).toContain("The pull request is open");
   });
 
+  it.each([
+    ["a piped push", "git push origin docs/readme 2>&1 | tail -1"],
+    ["a push followed by another step", "git push origin docs/readme; echo done"],
+    ["a push with a fallback", "git push origin docs/readme || true"],
+    ["a multi-line script", "git status\ngit push origin docs/readme"],
+  ])("%s exits 0 but does not prove the push: Pushed is unknown, never yes", async (_name, command) => {
+    const { result } = await run({ interactive: true, calls: [{ command, exitCode: 0, output: "" }] });
+    expect(result.content).toContain("Pushed: unknown.");
+    expect(result.content).not.toContain("Pushed: yes.");
+    expect(result.content).toContain("check the remote branch");
+  });
+
+  it("an && chain proves the push, and a dry run proves nothing", async () => {
+    const chained = await run({
+      interactive: true,
+      calls: [{ command: "git add -A && git commit -m x && git push origin b", exitCode: 0, output: "" }],
+    });
+    expect(chained.result.content).toContain("Commit: yes.");
+    expect(chained.result.content).toContain("Pushed: yes.");
+    const merged = await run({
+      interactive: true,
+      calls: [{ command: "git push origin b 2>&1", exitCode: 0, output: "" }],
+    });
+    expect(merged.result.content).toContain("Pushed: yes.");
+    const dry = await run({
+      interactive: true,
+      calls: [{ command: "git push --dry-run origin b", exitCode: 0, output: "" }],
+    });
+    expect(dry.result.content).toContain("Pushed: no.");
+  });
+
   it("a failed command is never counted as a commit", async () => {
     const { result } = await run({ interactive: true, calls: [{ ...commit, exitCode: 1 }] });
     expect(result.content).toContain("Commit: none.");
+    expect(result.content).toContain("Nothing was committed");
   });
 
   it("a scheduled tick keeps the schedule wording", async () => {
