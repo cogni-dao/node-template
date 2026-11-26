@@ -48,6 +48,8 @@ interface ChatRuntimeProviderProps {
   /** Fully-resolved model reference (provider + model + optional connection) */
   modelRef: ModelRef;
   selectedGraph: GraphId;
+  /** Bill to (task.0181): the org account's billing account id the person chose, or null/absent for their own account. */
+  billTo?: string | null;
   defaultModelId: string;
   /** Pre-loaded messages for an existing thread, or [] for a new thread. */
   initialMessages: UIMessage[];
@@ -63,6 +65,7 @@ export function ChatRuntimeProvider({
   children,
   modelRef,
   selectedGraph,
+  billTo = null,
   defaultModelId,
   initialMessages,
   initialStateKey,
@@ -73,6 +76,7 @@ export function ChatRuntimeProvider({
   const queryClient = useQueryClient();
   const modelRefRef = useRef(modelRef);
   const selectedGraphRef = useRef(selectedGraph);
+  const billToRef = useRef(billTo);
 
   // State key for multi-turn conversations
   // When initialStateKey is provided (existing thread), seed the map so stateKey is
@@ -92,6 +96,10 @@ export function ChatRuntimeProvider({
   useEffect(() => {
     selectedGraphRef.current = selectedGraph;
   }, [selectedGraph]);
+
+  useEffect(() => {
+    billToRef.current = billTo;
+  }, [billTo]);
 
   useEffect(() => {
     stateKeyRef.current = stateKey;
@@ -166,6 +174,7 @@ export function ChatRuntimeProvider({
           message: extractLastUserText(messages),
           modelRef: modelRefRef.current,
           graphName: selectedGraphRef.current,
+          ...(billToRef.current ? { billTo: billToRef.current } : {}),
           ...(stateKeyRef.current ? { stateKey: stateKeyRef.current } : {}),
         },
       }),

@@ -171,6 +171,10 @@ jobs:
           repository: ${{ needs.resolve.outputs.checkout_repo }}
           ref: ${{ needs.resolve.outputs.checkout_ref }}
 
+      - name: Build commit time
+        id: commit_time
+        run: echo "value=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
@@ -199,6 +203,7 @@ jobs:
             org.opencontainers.image.revision=${{ needs.resolve.outputs.source_sha }}
           build-args: |
             BUILD_SHA=${{ needs.resolve.outputs.source_sha }}
+            BUILD_COMMIT_TIME=${{ steps.commit_time.outputs.value }}
           cache-from: type=gha,scope=node-template-${{ matrix.target.artifact }}
           # Trusted main seeds the base cache; each PR reads it without exporting.
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope=node-template-{0}', matrix.target.artifact) || '' }}

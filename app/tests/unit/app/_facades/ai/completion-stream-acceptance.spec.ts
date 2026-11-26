@@ -61,7 +61,7 @@ vi.mock("@/bootstrap/container", () => ({
   }),
   getContainer: () => ({
     runStream: { subscribe: mocks.subscribe },
-    agentAuthority: { payerFor: async () => null },
+    agentAuthority: { resolveBillTo: async ({ own }: { own: { ownerUserId?: string } }) => ({ account: own, source: "own", chargeScopeUserId: own.ownerUserId }) },
     serviceAccountService: { getBillingAccountById: async () => null },
     log: { info: () => undefined },
     executionRequestPort: {

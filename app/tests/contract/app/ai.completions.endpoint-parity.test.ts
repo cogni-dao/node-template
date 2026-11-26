@@ -55,7 +55,7 @@ vi.mock("@/bootstrap/container", () => ({
       child: vi.fn().mockReturnThis(),
     },
     clock: { now: () => new Date("2025-01-15T12:00:00.000Z") },
-    agentAuthority: { payerFor: async () => null },
+    agentAuthority: { resolveBillTo: async ({ own }: { own: { ownerUserId?: string } }) => ({ account: own, source: "own", chargeScopeUserId: own.ownerUserId }) },
     serviceAccountService: { getBillingAccountById: async () => null },
     runStream: {
       subscribe: async function* () {
@@ -154,7 +154,7 @@ function setupMocks(
       child: vi.fn().mockReturnThis(),
     },
     clock: fakeClock,
-    agentAuthority: { payerFor: async () => null },
+    agentAuthority: { resolveBillTo: async ({ own }: { own: { ownerUserId?: string } }) => ({ account: own, source: "own", chargeScopeUserId: own.ownerUserId }) },
     serviceAccountService: { getBillingAccountById: async () => null },
     executionRequestPort,
     runStream,
@@ -199,7 +199,7 @@ function setupMocksWithError(error: Error) {
       child: vi.fn().mockReturnThis(),
     },
     clock: fakeClock,
-    agentAuthority: { payerFor: async () => null },
+    agentAuthority: { resolveBillTo: async ({ own }: { own: { ownerUserId?: string } }) => ({ account: own, source: "own", chargeScopeUserId: own.ownerUserId }) },
     serviceAccountService: { getBillingAccountById: async () => null },
     executionRequestPort: createExecutionRequestPortMock(),
     runStream: createRunStreamMock({ responseContent: "" }),

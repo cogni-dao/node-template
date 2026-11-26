@@ -26,6 +26,11 @@ describe("package event names", () => {
       roleRequested: EVENT_NAMES.AGENT_ROLE_REQUESTED,
       roleDenied: EVENT_NAMES.AGENT_ROLE_DENIED,
       rolesUnavailable: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE,
+      payerBound: EVENT_NAMES.PAYER_BOUND,
+      payerRevoked: EVENT_NAMES.PAYER_REVOKED,
+      payerSelected: EVENT_NAMES.PAYER_SELECTED,
+      orgEnsured: EVENT_NAMES.ORG_ENSURED,
+      orgAct: EVENT_NAMES.ORG_ACT,
     }).toEqual(AGENT_HOST_EVENTS);
   });
 

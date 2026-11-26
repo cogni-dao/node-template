@@ -21,6 +21,24 @@ const refusesDates = (seen: unknown[][]): SqlTag =>
     return Promise.resolve([]);
   }) as unknown as SqlTag;
 
+describe("approving an ask onto an account where the AI already holds the scope", () => {
+  const failing = (error: unknown): SqlTag => (() => Promise.reject(error)) as unknown as SqlTag;
+  const duplicate = Object.assign(new Error("duplicate key"), { code: "23505", constraint_name: "agent_roles_live_account_unique" });
+
+  it("answers false (nothing to approve), never a 503, for the live-row unique violation, on the person's own account and an org's", async () => {
+    const store = createPostgresAgentGrantsStore(failing(duplicate));
+    await expect(store.approveAccountByLink({ linkHash: "h", approvedBy: "u" })).resolves.toBe(false);
+    await expect(store.approveAccountByLinkOnOrg?.({ linkHash: "h", approvedBy: "u", accountId: "a" })).resolves.toBe(false);
+  });
+
+  it("still throws every other error, so an outage stays a 503", async () => {
+    const store = createPostgresAgentGrantsStore(failing(Object.assign(new Error("down"), { code: "CONNECTION_CLOSED" })));
+    await expect(store.approveAccountByLink({ linkHash: "h", approvedBy: "u" })).rejects.toThrow("down");
+    const other = createPostgresAgentGrantsStore(failing(Object.assign(new Error("dup"), { code: "23505", constraint_name: "some_other_unique" })));
+    await expect(other.approveAccountByLink({ linkHash: "h", approvedBy: "u" })).rejects.toThrow("dup");
+  });
+});
+
 describe("the Postgres store passes no JS Date as a parameter", () => {
   it("an ask (new row, and a re-ask) sends the link end as an ISO string", async () => {
     const seen: unknown[][] = [];

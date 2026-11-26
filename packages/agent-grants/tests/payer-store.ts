@@ -42,6 +42,9 @@ export function memoryPayerStore(init: {
   return {
     rows,
     clock,
+    async isOrgAccount(billingAccountId) {
+      return init.orgAccounts?.includes(billingAccountId) ?? false;
+    },
     async openFor(subjectUserId) {
       const b = open(subjectUserId);
       return b ? view(b) : null;
@@ -59,6 +62,7 @@ export function memoryPayerStore(init: {
       if (current && !expired(current) && current.account === billingAccountId) return { result: "existing", id: current.id };
       if (current?.approvedBy) return { result: "already_bound", id: null };
       if (!(billingAccountId in init.accounts)) return { result: "unknown_account", id: null };
+      if (init.orgAccounts?.includes(billingAccountId)) return { result: "org_account", id: null };
       if (current) {
         current.revoked = true;
         current.revokedBy = subjectUserId;
@@ -71,8 +75,7 @@ export function memoryPayerStore(init: {
     async approve({ id, approvedBy }) {
       const b = rows.find((x) => x.id === id && !x.revoked && !x.approvedBy && !expired(x));
       if (!b || b.subject === approvedBy) return false;
-      const owner = init.accounts[b.account];
-      if (owner !== approvedBy && !init.orgAccounts?.includes(b.account)) return false;
+      if (init.accounts[b.account] !== approvedBy) return false;
       b.approvedBy = approvedBy;
       return true;
     },

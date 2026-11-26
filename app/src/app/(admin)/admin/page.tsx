@@ -12,10 +12,12 @@
  */
 
 import {
+	Building2,
 	ChevronRight,
 	FileSignature,
 	KeyRound,
 	Layers,
+	Link2,
 	PieChart,
 	ShieldCheck,
 	Sparkles,
@@ -47,6 +49,11 @@ const GOVERNANCE_VIEWS = [
 		description: "Aggregated attribution shares across claimants.",
 		icon: PieChart,
 	},
+] as const;
+
+const ORG_VIEWS = [
+	{ href: "/admin/orgs", title: "Org accounts", icon: Building2 },
+	{ href: "/admin/connections", title: "Connections", icon: Link2 },
 ] as const;
 
 function shortWallet(address: string): string {
@@ -182,6 +189,27 @@ export default async function AdminIndexPage(): Promise<ReactElement> {
 						</CardContent>
 					</Card>
 				</Link>
+			</section>
+
+			<section className="space-y-3">
+				<h2 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
+					Orgs
+				</h2>
+				<div className="grid gap-3 sm:grid-cols-2">
+					{ORG_VIEWS.map((item) => (
+						<Link key={item.href} href={item.href} className="group block">
+							<Card className="h-full transition hover:border-primary/50 hover:shadow-md">
+								<CardContent className="flex items-center gap-4 p-5">
+									<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+										<item.icon className="h-5 w-5 text-primary" />
+									</div>
+									<h3 className="flex-1 font-semibold">{item.title}</h3>
+									<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-1 group-hover:text-primary" />
+								</CardContent>
+							</Card>
+						</Link>
+					))}
+				</div>
 			</section>
 
 			<p className="text-muted-foreground text-xs">

@@ -38,6 +38,7 @@ import type { AdminDecision, GrantResource, NodeAiPermissionView, RoleState, Sco
 import type { PrincipalKind } from "./principals";
 
 export * from "./http-contracts";
+export * from "./org-http";
 
 export const NO_STORE = { "cache-control": "no-store" } as const;
 

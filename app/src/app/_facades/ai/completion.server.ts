@@ -39,7 +39,6 @@ import type { AiEvent, StreamFinalResult } from "@/features/ai/public";
 // Import from public.server.ts - never from services/* directly (dep-cruiser enforced)
 import type { MessageDto } from "@/features/ai/public.server";
 import { getOrCreateBillingAccountForUser } from "@/lib/auth/mapping";
-import { selectRunPayer } from "./payer.server";
 import {
   isBillingAccountNotFoundPortError,
   isInsufficientCreditsPortError,
@@ -227,6 +226,8 @@ export interface ChatCompletionInput {
   sessionUser: SessionUser;
   /** Graph name or fully-qualified graphId to execute */
   graphName?: string;
+  /** Bill to (task.0181): the org account the caller chose. Absent = the caller's own account. */
+  billToAccountId?: string;
   /** Conversation state key for multi-turn conversations */
   stateKey?: string;
   /** Idempotency key for workflow start dedupe */
@@ -252,6 +253,7 @@ export async function chatCompletion(
       modelRef: input.modelRef,
       sessionUser: input.sessionUser,
       graphName,
+      ...(input.billToAccountId ? { billToAccountId: input.billToAccountId } : {}),
       ...(input.stateKey ? { stateKey: input.stateKey } : {}),
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
     },
@@ -384,7 +386,7 @@ export async function chatCompletionStream(
  * NO business logic here - delegates to feature layer via public.ts.
  */
 export async function completionStream(
-  input: CompletionInput & { abortSignal?: AbortSignal },
+  input: CompletionInput & { abortSignal?: AbortSignal; billToAccountId?: string },
   ctx: RequestContext
 ): Promise<{
   stream: AsyncIterable<AiEvent>;
@@ -402,18 +404,16 @@ export async function completionStream(
       ? { walletAddress: input.sessionUser.walletAddress }
       : {}),
   });
-  // PAYER_IS_AUTHORIZED: a caller with a live payer binding is billed to the account its owners approved; everyone else to its own account.
+  // ONE_RESOLVER (task.0181): the org account the caller chose and may spend from, the org account of a calling service, a live payer binding, else the caller's own account.
   const container = getContainer();
-  const billingAccount = await selectRunPayer(
-    {
-      payerFor: (subjectUserId) =>
-        container.agentAuthority.payerFor(subjectUserId),
-      getBillingAccountById: (id) =>
-        container.serviceAccountService.getBillingAccountById(id),
-      log: container.log,
-    },
-    { subjectUserId: input.sessionUser.id, own: ownAccount }
-  );
+  const billingAccount = (
+    await container.agentAuthority.resolveBillTo({
+      subjectUserId: input.sessionUser.id,
+      own: ownAccount,
+      chosenAccountId: input.billToAccountId,
+      getAccount: (id) => container.serviceAccountService.getBillingAccountById(id),
+    })
+  ).account;
   aiChatPhaseDurationMs.observe(
     { phase: "billing_resolve" },
     performance.now() - billingStartMs

@@ -76,6 +76,11 @@ export const AssistantUiInputSchema = z.object({
   /** Graph name or fully-qualified graphId to execute (required) */
   graphName: z.string(),
   /**
+   * Bill to (task.0181): the billing account id of an org account the caller holds `org:spend` (or `org:admin`) on, from `GET /api/v1/orgs`. Absent = the caller's own account.
+   * A choice the caller may not use is refused (403), never billed to another payer.
+   */
+  billTo: z.string().min(1).max(100).optional(),
+  /**
    * Conversation state key for multi-turn conversations.
    * If absent, server generates one and returns it via X-State-Key header.
    * Client should reuse for subsequent messages in same conversation.

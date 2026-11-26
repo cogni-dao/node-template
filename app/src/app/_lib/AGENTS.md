@@ -30,7 +30,7 @@ Private app-layer helpers for route handlers. Provides server-side utilities lik
 ## Public Surface
 
 - **Exports:** models-cache (getCachedModels, isModelAllowed, getDefaultModelId), auth/session helpers, request-identity resolver + agent key issuer, operator attestation verifier (verifyOperatorAttestation with exact node audience/nonce claims, getOperatorIssuerUrl)
-- **Files considered API:** models-cache.ts, auth/session.ts, auth/request-identity.ts, auth/operator-attestation.ts, agent-access/respond.ts (reads the JSON body, sends a `@cogni/agent-grants/http` response, logs an unavailable store), agent-access/routes.ts (`mineRoute`: the human-plane builder, `refuseNonSession()` before any read)
+- **Files considered API:** models-cache.ts, auth/session.ts, auth/request-identity.ts, auth/operator-attestation.ts, agent-access/respond.ts (reads the JSON body, sends a `@cogni/agent-grants/http` response, logs an unavailable store), orgs/routes.ts (the session-only builders of the org account routes: mine, view with its `historyBefore` and `peopleAfter` cursors, spend; each calls its `@cogni/agent-grants/http` core), agent-access/routes.ts (`mineRoute`: the human-plane builder, `refuseNonSession()` before any read)
 
 ## Responsibilities
 

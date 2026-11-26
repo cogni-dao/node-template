@@ -26,6 +26,7 @@ vi.mock("@/shared/config/repoSpec.server", () => ({
   getNodeBrandColor: () => "#000000",
   getNodeBrandIcon: () => "circle",
   getNodeHook: () => "Test hook",
+  getNodeId: () => "test-node",
   getNodeMission: () => "Test mission",
   getNodeName: () => "Test node",
   getNodeThumbnail: () => null,

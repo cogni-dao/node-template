@@ -292,7 +292,8 @@ export function memoryStore(init?: {
       const account = init?.accounts?.[approvedBy];
       if (!account || principalUserId === approvedBy || !isInternal(principalUserId)) return false;
       closeExpired(principalUserId, scope);
-      if (openRow(principalUserId, scope)) return false;
+      // One live row per (principal, scope, account): another account's row does not block this one.
+      if (roles.some((r) => r.principal === principalUserId && r.scope === scope && r.resource === "account" && r.accountId === account && !r.revoked)) return false;
       roles.push(mk({ principal: principalUserId, scope, approvedBy, resource: "account", accountId: account, grantedAt: clock.now, expiresAt: null }));
       return true;
     },

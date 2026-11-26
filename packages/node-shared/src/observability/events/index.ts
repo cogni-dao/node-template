@@ -97,6 +97,8 @@ export const EVENT_NAMES = {
 	SERVICE_AUTH_SIGNER_UNAVAILABLE: "service_auth.signer_unavailable",
 	/** An org was created or found for an owner source (story.0038): orgUserId, sourceRef. */
 	ORG_ENSURED: "org.ensured",
+	/** One line per act on an org account (task.0181): act, orgUserId, actor. Owned by `@cogni/agent-grants/host`. */
+	ORG_ACT: "org.act",
 	/** A payer binding was turned On by an owner of the account (story.0038): subject, billingAccountId, approvedBy. */
 	PAYER_BOUND: "payer.bound",
 	/** A payer binding ended, Off or dismissed (story.0038): subject, billingAccountId, revokedBy. */

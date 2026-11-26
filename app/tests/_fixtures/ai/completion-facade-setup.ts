@@ -240,7 +240,7 @@ export function createContainerMock(
       runStream: createRunStreamMock(streamOptions),
       executionRequestPort: createExecutionRequestPortMock(),
       // No payer binding: the run bills the caller's own account.
-      agentAuthority: { payerFor: async () => null },
+      agentAuthority: { resolveBillTo: async ({ own }: { own: { ownerUserId?: string } }) => ({ account: own, source: "own", chargeScopeUserId: own.ownerUserId }) },
       serviceAccountService: { getBillingAccountById: async () => null },
       log: { info: () => undefined },
     }),

@@ -102,6 +102,7 @@ describe("ADMIN_ACTS_IN_ADMIN", () => {
       "bootstrap/node-admin-gate.ts": "the roster authority beneath adminCheck",
       "shared/config/repoSpec.server.ts": "definition, and the isDaoAdmin roster lookup",
       "bootstrap/container.ts": "builds the roster once and hands it to the agent authority",
+      "bootstrap/org-identity.ts": "lists the approvers as DATA in the org statement this node signs (its admins by its own repo-spec); an admin decision still runs the one adminCheck",
     };
     const callers = files.filter((f) => /\b(getLedgerApprovers|createApproversNodeAdminAuthority)\(/.test(code(f.text))).map((f) => f.rel);
     expect(callers.filter((rel) => !(rel in ROSTER_READERS))).toEqual([]);

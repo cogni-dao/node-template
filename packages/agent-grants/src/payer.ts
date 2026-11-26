@@ -48,7 +48,7 @@ export interface PayerBindingRow {
   readonly state: PayerBindingState;
 }
 
-export type PayerAskResult = "created" | "existing" | "already_bound" | "unknown_account" | "too_many";
+export type PayerAskResult = "created" | "existing" | "already_bound" | "unknown_account" | "too_many" | "org_account";
 
 /** Persistence port for payer bindings. */
 export interface PayerBindingStore {
@@ -68,6 +68,8 @@ export interface PayerBindingStore {
     billingAccountId: string;
     maxPendingPerAccount: number;
   }): Promise<{ result: PayerAskResult; id: string | null }>;
+  /** Is this account owned by an org principal? A binding to one is never asked for or approved (task.0181: an org is billed with `org:spend`); only an old row can still be denied or turned Off. */
+  isOrgAccount(billingAccountId: string): Promise<boolean>;
   /** Approves the pending binding. False when none is pending (or it expired), the approver is the subject, or the account is neither a person's nor an org's. */
   approve(input: { id: string; approvedBy: string }): Promise<boolean>;
   /** Ends a pending (deny) or live (Off) binding. False when none is open. */
@@ -83,7 +85,8 @@ export interface PayerAskOutcome {
 /**
  * A subject asks to be billed to `billingAccountId`. Idempotent for the same account. The ask grants nothing: only an owner's decision opens `payerFor`. An account that does not exist answers
  * exactly like one that does (a fresh pending id) and writes nothing.
- * Throws `AgentRolesError`: `too_many_requests` (the account's pending cap), `not_allowed` (`already_bound`: turn the live binding off first).
+ * Throws `AgentRolesError`: `too_many_requests` (the account's pending cap), `not_allowed` (`already_bound`: turn the live binding off first; or the account is an ORG's, which is billed with
+ * `org:spend`, never with a binding).
  */
 export async function requestPayerBinding(
   payer: PayerBindingStore,
@@ -92,6 +95,7 @@ export async function requestPayerBinding(
   const { result, id } = await payer.request({ ...input, maxPendingPerAccount: MAX_PENDING_PER_ACCOUNT });
   if (result === "too_many") throw new AgentRolesError("too_many_requests", "too many open payer requests");
   if (result === "already_bound") throw new AgentRolesError("not_allowed", "a live payer binding must be turned Off before asking for another account");
+  if (result === "org_account") throw new AgentRolesError("not_allowed", "an org account is billed with org:spend, not with a payer binding");
   if (result === "unknown_account" || !id) return { id: crypto.randomUUID(), state: "pending", created: true };
   const open = await payer.get(id);
   return { id, state: open?.state ?? "pending", created: result === "created" };
@@ -132,7 +136,7 @@ export async function ownersForBinding(
   const source = await grants.orgSourceOfAccount(row.billingAccountId);
   if (!source) return undefined;
   const list = await owners.owners(source);
-  const key = (s: OrgSource) => `${s.kind}\u0000${s.ref}\u0000${s.path ?? ""}`;
+  const key = (s: OrgSource) => `${s.kind}\u0000${s.ref}\u0000${"path" in s ? (s.path ?? "") : ""}`;
   return { owners: async (asked) => (key(asked) === key(source) ? list : []) };
 }
 
@@ -147,6 +151,8 @@ export async function decidePayerBinding(
 ): Promise<{ decided: boolean; subjectUserId?: string; billingAccountId?: string }> {
   const row = await payer.get(input.id);
   if (!row) return { decided: false };
+  // NO_APPROVAL_FOR_ORG_ACCOUNTS: an old ask for an org's account can be dismissed, never turned On.
+  if (input.approve && (await payer.isOrgAccount(row.billingAccountId))) throw new AgentRolesError("not_allowed", "an org account is billed with org:spend, not with a payer binding");
   await requireOwnerDecision(grants, input.me, row, input.owners);
   if (row.state !== "pending") return { decided: false };
   const decided = input.approve
@@ -155,7 +161,10 @@ export async function decidePayerBinding(
   return decided ? { decided, subjectUserId: row.subjectUserId, billingAccountId: row.billingAccountId } : { decided };
 }
 
-/** An owner of the account turns a binding Off (pending or live). The subject's next run falls back to its own account. */
+/**
+ * An owner of the account turns a binding Off (pending or live). The subject's next run falls back to its own account. SUBJECT_CAN_TURN_OFF_AN_ORG_BINDING: an org account no longer takes a new
+ * binding (and its old ones are refused by the resolver), so the SUBJECT of a binding to an org account may turn its own Off, with no owner read: nobody else is needed to unblock it.
+ */
 export async function revokePayerBinding(
   payer: PayerBindingStore,
   grants: AgentGrantsStore,
@@ -163,7 +172,8 @@ export async function revokePayerBinding(
 ): Promise<{ revoked: boolean; subjectUserId?: string; billingAccountId?: string }> {
   const row = await payer.get(input.id);
   if (!row) return { revoked: false };
-  await requireOwnerDecision(grants, input.me, row, input.owners);
+  const ownOrgBinding = input.me.userId === row.subjectUserId && (await payer.isOrgAccount(row.billingAccountId));
+  if (!ownOrgBinding) await requireOwnerDecision(grants, input.me, row, input.owners);
   const revoked = await payer.close({ id: row.id, closedBy: input.me.userId });
   return revoked ? { revoked, subjectUserId: row.subjectUserId, billingAccountId: row.billingAccountId } : { revoked };
 }
@@ -212,6 +222,8 @@ const str = (value: unknown): string | null => (typeof value === "string" ? valu
 /** The Postgres adapter over the same injected tagged-template client as `createPostgresAgentGrantsStore`. The client must be a service-role connection (the table has no policy). */
 export function createPostgresPayerBindingStore(sql: SqlTag): PayerBindingStore {
   const ttl = PENDING_BINDING_TTL_DAYS;
+  const isOrgAccount = async (billingAccountId: string): Promise<boolean> =>
+    (await sql`SELECT 1 AS org FROM billing_accounts b JOIN agent_principals ap ON ap.user_id = b.owner_user_id AND ap.kind = 'org' WHERE b.id = ${billingAccountId} LIMIT 1`).length > 0;
   const toRow = (row: Record<string, unknown> | undefined): PayerBindingRow | null => {
     const id = str(row?.id);
     const subjectUserId = str(row?.subject_user_id);
@@ -220,6 +232,7 @@ export function createPostgresPayerBindingStore(sql: SqlTag): PayerBindingStore 
     return { id, subjectUserId, billingAccountId, state: row?.approved_by ? "live" : "pending" };
   };
   return {
+    isOrgAccount,
     async openFor(subjectUserId) {
       const rows = await sql`
         SELECT id, subject_user_id, billing_account_id, approved_by FROM payer_bindings
@@ -254,6 +267,7 @@ export function createPostgresPayerBindingStore(sql: SqlTag): PayerBindingStore 
       // The account must exist BEFORE anything is closed: an ask for an unknown account writes nothing and leaves the subject's other pending ask alone.
       const known = await sql`SELECT 1 AS ok FROM billing_accounts WHERE id = ${billingAccountId} LIMIT 1`;
       if (known.length === 0) return { result: "unknown_account", id: null };
+      if (await isOrgAccount(billingAccountId)) return { result: "org_account", id: null };
       if (current) {
         // A pending ask for another account, or this subject's own expired ask, is replaced: the unique index allows one open row.
         await sql`
@@ -279,7 +293,7 @@ export function createPostgresPayerBindingStore(sql: SqlTag): PayerBindingStore 
       return { result: "too_many", id: null };
     },
     async approve({ id, approvedBy }) {
-      // `canApprove` (with the org's owners) already said yes; this statement pins the write: not the subject, a pending unexpired row, and an account that a person or an org owns.
+      // `canApprove` already said yes; this statement pins the write: not the subject, a pending unexpired row, and an account a PERSON owns (an org's is never approved).
       const rows = await sql`
         UPDATE payer_bindings p
         SET approved_by = ${approvedBy}, approved_at = now()
@@ -288,8 +302,7 @@ export function createPostgresPayerBindingStore(sql: SqlTag): PayerBindingStore 
           AND p.created_at > now() - make_interval(days => ${ttl}::int)
           AND p.subject_user_id <> ${approvedBy}
           AND b.id = p.billing_account_id
-          AND (b.owner_user_id = ${approvedBy}
-               OR EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = b.owner_user_id AND ap.kind = 'org'))
+          AND b.owner_user_id = ${approvedBy}
         RETURNING p.id`;
       return rows.length > 0;
     },

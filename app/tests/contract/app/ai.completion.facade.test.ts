@@ -50,7 +50,7 @@ vi.mock("@/bootstrap/container", () => {
       taskQueue: "scheduler-tasks",
     })),
     getContainer: vi.fn(() => ({
-      agentAuthority: { payerFor: async () => null },
+      agentAuthority: { resolveBillTo: async ({ own }: { own: { ownerUserId?: string } }) => ({ account: own, source: "own", chargeScopeUserId: own.ownerUserId }) },
       serviceAccountService: { getBillingAccountById: async () => null },
       log: { info: () => undefined },
       executionRequestPort,
@@ -138,7 +138,7 @@ describe("app/_facades/ai/completion.server", () => {
 
     const { getContainer } = await import("@/bootstrap/container");
     vi.mocked(getContainer).mockReturnValue({
-      agentAuthority: { payerFor: async () => null },
+      agentAuthority: { resolveBillTo: async ({ own }: { own: { ownerUserId?: string } }) => ({ account: own, source: "own", chargeScopeUserId: own.ownerUserId }) },
       serviceAccountService: { getBillingAccountById: async () => null },
       log: { info: () => undefined },
       executionRequestPort: createExecutionRequestPortMock(),
