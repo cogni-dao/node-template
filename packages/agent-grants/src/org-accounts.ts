@@ -616,7 +616,7 @@ export interface OrgAccountView {
   readonly status: OrgStatus;
   readonly suspendReason: string | null;
   readonly balance: number;
-  /** The org's billing account id: present ONLY when the viewer is `org:admin` (the one role that may fund it). A spender or a service never receives it. */
+  /** The org's billing account id in the SINGLE-ORG view: present only when the viewer is `org:admin` (the one role that may fund it). (The org LIST gives a spender the id too, by design: Bill to needs it.) */
   readonly billingAccountId?: string;
   /** Only an admin manages and reads the history. */
   readonly canManage: boolean;

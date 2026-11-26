@@ -61,7 +61,7 @@ export const orgViewOperation = {
       status,
       suspendReason: z.string().nullable(),
       balance: z.number(),
-      /** Present only for an `org:admin` viewer (the one role that may fund the org). */
+      /** In the single-org view, present only for an `org:admin` viewer (the one role that may fund the org); the org list carries it for every role, for Bill to. */
       billingAccountId: z.string().optional(),
       canManage: z.boolean(),
       adminLapsed: z.boolean(),
