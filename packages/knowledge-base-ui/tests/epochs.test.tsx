@@ -1450,6 +1450,9 @@ describe("public epochs capability", () => {
     ).toHaveLength(1);
   });
 
+  // These bounded cases mount 50 real receipt rows, page, refresh and verify
+  // writes. CI took 4.7–5.35s; allow 15s for shared-runner contention while
+  // retaining the individual query deadlines and all behavior assertions.
   it.each([
     false,
     true,
@@ -1475,18 +1478,21 @@ describe("public epochs capability", () => {
         { name: "Expand details" }
       )
     );
-    await screen.findByRole("link", { name: "Contribution remaining-0" });
+    // Search the displayed title directly: role enumeration over 50 receipt rows
+    // repeatedly computes accessible names for the entire dense table.
+    expect((await screen.findByText("Contribution remaining-0")).closest("a"))
+      .toHaveAttribute("href", "https://example.com/remaining-0");
     fireEvent.click(
-      await screen.findByRole("button", { name: "More contributions" })
+      await screen.findByText("More contributions", { selector: "button" })
     );
-    const moving = await screen.findByRole("link", {
-      name: "Contribution moving",
+    // Resolve title, row and action together in the retry callback. A prior
+    // timed-out test may unmount a once-found element before the next line.
+    const adjustMoving = await waitFor(() => {
+      const title = screen.getByText("Contribution moving");
+      expect(title.closest("a")).toHaveAttribute("href", "https://example.com/moving");
+      return within(containingRow(title)).getByRole("button", { name: "Adjust weight" });
     });
-    fireEvent.click(
-      within(containingRow(moving)).getByRole("button", {
-        name: "Adjust weight",
-      })
-    );
+    fireEvent.click(adjustMoving);
     fireEvent.change(screen.getByLabelText("Override weight (units)"), {
       target: { value: "000" },
     });
@@ -1590,7 +1596,7 @@ describe("public epochs capability", () => {
     expect(
       screen.queryByLabelText("Override weight (units)")
     ).not.toBeInTheDocument();
-  });
+  }, 15_000);
 
   it.each([
     false,
@@ -1617,18 +1623,21 @@ describe("public epochs capability", () => {
         { name: "Expand details" }
       )
     );
-    await screen.findByRole("link", { name: "Contribution remaining-0" });
+    // Search the displayed title directly: role enumeration over 50 receipt rows
+    // repeatedly computes accessible names for the entire dense table.
+    expect((await screen.findByText("Contribution remaining-0")).closest("a"))
+      .toHaveAttribute("href", "https://example.com/remaining-0");
     fireEvent.click(
-      await screen.findByRole("button", { name: "More contributions" })
+      await screen.findByText("More contributions", { selector: "button" })
     );
-    const moving = await screen.findByRole("link", {
-      name: "Contribution moving",
+    // Resolve title, row and action together in the retry callback. A prior
+    // timed-out test may unmount a once-found element before the next line.
+    const adjustMoving = await waitFor(() => {
+      const title = screen.getByText("Contribution moving");
+      expect(title.closest("a")).toHaveAttribute("href", "https://example.com/moving");
+      return within(containingRow(title)).getByRole("button", { name: "Adjust weight" });
     });
-    fireEvent.click(
-      within(containingRow(moving)).getByRole("button", {
-        name: "Adjust weight",
-      })
-    );
+    fireEvent.click(adjustMoving);
     fireEvent.change(screen.getByLabelText("Override weight (units)"), {
       target: { value: "000" },
     });
@@ -1744,7 +1753,7 @@ describe("public epochs capability", () => {
     expect(
       screen.queryByLabelText("Override weight (units)")
     ).not.toBeInTheDocument();
-  });
+  }, 15_000);
 
 
   it.each([false, true])("r7 retains expanded shells when replacement query fails (history key=%s)", async (historyKey) => {

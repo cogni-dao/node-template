@@ -874,6 +874,10 @@ export function bindDrizzleAttributionAdapter(
           throw new EpochNotFoundError(params.epochId.toString());
         }
         const current = epochRows[0];
+        if (params.evaluations.some(
+          (evaluation) => evaluation.epochId !== current.id || evaluation.nodeId !== current.nodeId
+        ))
+          throw new EpochNotFoundError(params.epochId.toString());
         if (current.status === "finalized") {
           // A signed/finalized snapshot is immutable; never repair it in place.
           return toEpoch(current);
@@ -1651,8 +1655,12 @@ export function bindDrizzleAttributionAdapter(
       epochId: bigint,
       allocations: readonly InsertFinalClaimantAllocationParams[]
     ): Promise<void> {
-      await this.resolveEpochScoped(epochId);
       await this.db.transaction(async (tx) => {
+        const epoch = await this.resolveEpochScopedForUpdate(epochId, tx);
+        if (allocations.some(
+          (allocation) => allocation.epochId !== epoch.id || allocation.nodeId !== epoch.nodeId
+        ))
+          throw new EpochNotFoundError(epochId.toString());
         await tx
           .delete(epochFinalClaimantAllocations)
           .where(eq(epochFinalClaimantAllocations.epochId, epochId));
@@ -2463,6 +2471,10 @@ export function bindDrizzleAttributionAdapter(
         }
 
         const epochRow = epochRows[0];
+        if (params.finalClaimantAllocations.some(
+          (allocation) => allocation.epochId !== epochRow.id || allocation.nodeId !== epochRow.nodeId
+        ))
+          throw new EpochNotFoundError(params.epochId.toString());
         const status = epochRow.status as string;
 
         if (status === "open") {
@@ -2843,6 +2855,10 @@ export function bindDrizzleAttributionAdapter(
           firstParams.epochId,
           tx
         );
+        if (paramsList.some(
+          (params) => params.epochId !== epoch.id || params.nodeId !== epoch.nodeId
+        ))
+          throw new EpochNotFoundError(firstParams.epochId.toString());
         if (epoch.status !== "review") {
           throw new EpochNotInReviewError(
             firstParams.epochId.toString(),
@@ -3075,6 +3091,9 @@ export function bindDrizzleAttributionAdapter(
     async upsertDraftClaimants(
       params: InsertReceiptClaimantsParams
     ): Promise<void> {
+      const epoch = await this.resolveEpochScoped(params.epochId);
+      if (epoch.nodeId !== params.nodeId)
+        throw new EpochNotFoundError(params.epochId.toString());
       await this.db
         .insert(epochReceiptClaimants)
         .values({

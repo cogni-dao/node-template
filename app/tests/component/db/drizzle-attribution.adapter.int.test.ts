@@ -1656,6 +1656,64 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       await assertUnchanged();
     });
 
+    it("rejects foreign close evaluations and claimant writes without effects", async () => {
+      const params = transition(ownId).closeParams;
+      await expect(
+        adapter.closeIngestionWithEvaluations({
+          ...params,
+          evaluations: [
+            makeEvaluation({ nodeId, epochId: foreignId, status: "locked" }),
+          ],
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await expect(
+        adapter.upsertDraftClaimants({
+          nodeId,
+          epochId: foreignId,
+          receiptId,
+          resolverRef: "cogni.default-author.v0",
+          algoRef: "default-author-v0",
+          inputsHash: "hostile-change",
+          claimantKeys: ["user:hostile"],
+          createdBy: "system",
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+      const rows = await db.execute(
+        sql`SELECT inputs_hash FROM epoch_receipt_claimants WHERE epoch_id = ${foreignId} AND receipt_id = ${receiptId}`
+      );
+      expect(Array.from(rows, (row) => row.inputs_hash)).toEqual([
+        "scope-hash",
+      ]);
+    });
+
+    it("rejects foreign allocations before deleting existing own allocations", async () => {
+      const own = {
+        nodeId,
+        epochId: ownId,
+        claimantKey: "user:scope",
+        claimant: { kind: "user" as const, userId: "scope" },
+        finalUnits: 5n,
+        receiptIds: [],
+      };
+      await adapter.replaceFinalClaimantAllocations(ownId, [own]);
+      await expect(
+        adapter.replaceFinalClaimantAllocations(ownId, [
+          own,
+          { ...own, epochId: foreignId, claimantKey: "user:foreign" },
+        ])
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(
+        (await adapter.getFinalClaimantAllocationsForEpoch(ownId)).map(
+          (a) => a.claimantKey
+        )
+      ).toEqual([own.claimantKey]);
+      expect(
+        await foreign.getFinalClaimantAllocationsForEpoch(foreignId)
+      ).toHaveLength(0);
+      await assertUnchanged();
+    });
+
     it("permits an authorized retry after the stale epoch is closed", async () => {
       const params = transition(ownId);
       const first = await adapter.transitionEpochForWindow(params);
@@ -1665,6 +1723,70 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       expect(retry.isNew).toBe(false);
       expect(retry.epoch.id).toBe(first.epoch.id);
       expect(retry.closedStaleEpochId).toBe(ownId);
+      const override = {
+        nodeId,
+        epochId: ownId,
+        subjectRef: "scope-own",
+        overrideUnits: 1n,
+      };
+      await expect(
+        adapter.batchUpsertReviewSubjectOverrides([
+          override,
+          { ...override, epochId: foreignId, subjectRef: "scope-foreign" },
+        ])
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(
+        await adapter.getReviewSubjectOverridesForEpoch(ownId)
+      ).toHaveLength(0);
+      expect(
+        await foreign.getReviewSubjectOverridesForEpoch(foreignId)
+      ).toHaveLength(0);
+      const ownAllocation = {
+        nodeId,
+        epochId: ownId,
+        claimantKey: "user:scope",
+        claimant: { kind: "user" as const, userId: "scope" },
+        finalUnits: 5n,
+        receiptIds: [],
+      };
+      await expect(
+        adapter.finalizeEpochAtomic({
+          epochId: ownId,
+          poolTotal: 0n,
+          finalClaimantAllocations: [
+            ownAllocation,
+            {
+              ...ownAllocation,
+              epochId: foreignId,
+              claimantKey: "user:foreign",
+            },
+          ],
+          claimantLiabilities: [],
+          statement: {
+            nodeId,
+            finalAllocationSetHash: "scope-hash",
+            poolTotalCredits: 0n,
+            statementLines: [],
+          },
+          signature: {
+            nodeId,
+            signerWallet: "0xscope",
+            signature: "0xscope",
+            signedAt: new Date(),
+          },
+          expectedFinalAllocationSetHash: "scope-hash",
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      expect((await adapter.getEpoch(ownId))?.status).toBe("review");
+      expect(await adapter.getStatementForEpoch(ownId)).toBeNull();
+      expect(
+        (await adapter.getFinalClaimantAllocationsForEpoch(ownId)).map(
+          (a) => a.claimantKey
+        )
+      ).toEqual([ownAllocation.claimantKey]);
+      expect(
+        await foreign.getFinalClaimantAllocationsForEpoch(foreignId)
+      ).toHaveLength(0);
       await adapter.finalizeEpoch(ownId, 0n);
       const finalizedRetry = await adapter.transitionEpochForWindow(params);
       expect(finalizedRetry.isNew).toBe(false);
