@@ -40,7 +40,7 @@ describe("resolvePaymentAccount", () => {
     getOrCreate.mockResolvedValue({ id: "ba-own", defaultVirtualKeyId: "vk-own" });
     const out = await resolvePaymentAccount(fakeContainer(resolve), session as never, undefined);
     expect(resolve).not.toHaveBeenCalled();
-    expect(out).toMatchObject({ scopeUserId: PERSON, billingAccount: { id: "ba-own" }, orgFunding: false });
+    expect(out).toMatchObject({ rlsUserId: PERSON, billingAccount: { id: "ba-own" }, orgFunding: false });
   });
 
   it("funds an org account under the org user's scope when identity admits the caller", async () => {
@@ -50,7 +50,7 @@ describe("resolvePaymentAccount", () => {
     const out = await resolvePaymentAccount(container, session as never, "ba-org");
     expect(resolve).toHaveBeenCalledWith({ userId: PERSON, billingAccountId: "ba-org" });
     expect(container.accountsForUser).toHaveBeenCalledWith(ORG_USER);
-    expect(out).toMatchObject({ scopeUserId: ORG_USER, billingAccount: { id: "ba-org" }, orgFunding: true });
+    expect(out).toMatchObject({ rlsUserId: ORG_USER, billingAccount: { id: "ba-org" }, orgFunding: true });
   });
 
   it("refuses a caller identity refuses (not an org admin), before any account is read", async () => {

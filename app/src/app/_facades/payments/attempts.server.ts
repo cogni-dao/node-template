@@ -80,13 +80,13 @@ export async function createPaymentIntentFacade(
 	const container = getContainer();
 	const { clock } = container;
 
-	const { scopeUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
+	const { rlsUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
 		container,
 		params.sessionUser,
 		params.billingAccountId,
 	);
-	const accountService = container.accountsForUser(scopeUserId);
-	const userRepo = container.paymentAttemptsForUser(scopeUserId);
+	const accountService = container.accountsForUser(rlsUserId);
+	const userRepo = container.paymentAttemptsForUser(rlsUserId);
 
 	// Enrich context with business identifiers
 	const enrichedCtx: RequestContext = {
@@ -157,13 +157,13 @@ export async function submitPaymentTxHashFacade(
 		clock,
 	} = container;
 
-	const { scopeUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
+	const { rlsUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
 		container,
 		params.sessionUser,
 		params.billingAccountId,
 	);
-	const accountService = container.accountsForUser(scopeUserId);
-	const userRepo = container.paymentAttemptsForUser(scopeUserId);
+	const accountService = container.accountsForUser(rlsUserId);
+	const userRepo = container.paymentAttemptsForUser(rlsUserId);
 
 	// Enrich context with business identifiers
 	const enrichedCtx: RequestContext = {
@@ -259,13 +259,13 @@ export async function getPaymentStatusFacade(
 		clock,
 	} = container;
 
-	const { scopeUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
+	const { rlsUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
 		container,
 		params.sessionUser,
 		params.billingAccountId,
 	);
-	const accountService = container.accountsForUser(scopeUserId);
-	const userRepo = container.paymentAttemptsForUser(scopeUserId);
+	const accountService = container.accountsForUser(rlsUserId);
+	const userRepo = container.paymentAttemptsForUser(rlsUserId);
 
 	// Enrich context with business identifiers
 	const enrichedCtx: RequestContext = {

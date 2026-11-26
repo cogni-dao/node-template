@@ -29,12 +29,12 @@ export async function getCreditsSummaryFacade(
   _ctx: RequestContext
 ): Promise<CreditsSummaryOutput> {
   const container = getContainer();
-  const { scopeUserId, billingAccount } = await resolvePaymentAccount(
+  const { rlsUserId, billingAccount } = await resolvePaymentAccount(
     container,
     params.sessionUser,
     params.billingAccountId
   );
-  const accountService = container.accountsForUser(scopeUserId);
+  const accountService = container.accountsForUser(rlsUserId);
 
   const result = await getCreditsSummary(accountService, {
     billingAccountId: billingAccount.id,

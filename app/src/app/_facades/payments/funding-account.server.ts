@@ -30,7 +30,7 @@ export async function resolvePaymentAccount(
 	sessionUser: SessionUser,
 	billingAccountId: string | undefined,
 ): Promise<{
-	scopeUserId: UserId;
+	rlsUserId: UserId;
 	billingAccount: Awaited<ReturnType<typeof getOrCreateBillingAccountForUser>>;
 	orgFunding: boolean;
 }> {
@@ -42,11 +42,11 @@ export async function resolvePaymentAccount(
 		});
 		scope = funding.chargeScopeUserId;
 	}
-	const scopeUserId = toUserId(scope);
+	const rlsUserId = toUserId(scope);
 	const own = scope === sessionUser.id;
 	try {
 		const billingAccount = await getOrCreateBillingAccountForUser(
-			container.accountsForUser(scopeUserId),
+			container.accountsForUser(rlsUserId),
 			{
 				userId: scope,
 				...(own && sessionUser.walletAddress
@@ -57,7 +57,7 @@ export async function resolvePaymentAccount(
 		if (billingAccountId && billingAccount.id !== billingAccountId) {
 			throw new OrgAccountError("not_allowed", "not allowed to fund this account");
 		}
-		return { scopeUserId, billingAccount, orgFunding: !own };
+		return { rlsUserId, billingAccount, orgFunding: !own };
 	} catch (error) {
 		// Check for FK constraint violation (user not found in DB)
 		// Drizzle wraps Postgres errors - constraint name is in cause.message
