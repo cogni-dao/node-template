@@ -13,6 +13,7 @@
 
 "use client";
 
+import { useIsFetching } from "@tanstack/react-query";
 import {
   CheckCircle2,
   ExternalLink,
@@ -26,12 +27,13 @@ import {
   X,
 } from "lucide-react";
 import type { ReactElement } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   receiptTitle,
   TYPE_ICONS,
   TYPE_LABELS,
 } from "./components/ContributionRow";
+import { useEpochContext } from "./context";
 import { EpochDetail } from "./components/EpochDetail";
 import { EpochReviewAction } from "./components/EpochReviewAction";
 import { ExecuteDistributionPanel } from "./components/ExecuteDistributionPanel";
@@ -271,7 +273,10 @@ export function ReviewView({
 
           {selection.kind === "open_review" && epochView ? (
             <div className="space-y-4">
-              <EpochDetail epoch={epochView} />
+              <EpochDetail
+                epoch={epochView}
+                membershipReady={workspace.membershipReady}
+              />
               {canAct ? (
                 <EpochReviewAction
                   status="open"
@@ -304,9 +309,13 @@ export function ReviewView({
                 key={epochView.id}
                 epoch={epochView}
                 session={session}
+                membershipReady={workspace.membershipReady}
               />
             ) : (
-              <EpochDetail epoch={epochView} />
+              <EpochDetail
+                epoch={epochView}
+                membershipReady={workspace.membershipReady}
+              />
             )
           ) : null}
 
@@ -359,12 +368,38 @@ function LockedActionNotice({
 function ReviewEpochSection({
   epoch,
   session,
+  membershipReady,
 }: {
   readonly epoch: EpochView;
   readonly session: ReviewSession;
+  readonly membershipReady: boolean;
 }): ReactElement {
   const { state, sign, reset } = useSignEpoch(epoch.id);
   const { overrides } = session;
+  const { queryKeyPrefix } = useEpochContext();
+  const loadingDetails = useIsFetching({
+    queryKey: [
+      ...queryKeyPrefix,
+      "epochs",
+      epoch.id,
+      epoch.status,
+      "contributor",
+    ],
+  });
+  // Draft context belongs to the edit, independently of changing membership pages.
+  const draftContext = useRef(
+    new Map<
+      string,
+      { claimantKey: string; receipt: IngestionReceipt; offset: number }
+    >()
+  );
+
+  useEffect(() => {
+    for (const id of draftContext.current.keys()) {
+      if (!session.drafts[id] && session.marker?.submission.subjectRef !== id)
+        draftContext.current.delete(id);
+    }
+  }, [session.drafts, session.marker]);
 
   // Recompute contributor sums with overrides applied
   const adjustedEpoch = useMemo(
@@ -378,15 +413,55 @@ function ReviewEpochSection({
   }, [sign, session]);
 
   const renderExpandedRows = useCallback(
-    (contributor: EpochContributor): ReactElement[] | null => {
-      if (contributor.receipts.length === 0) return null;
-      return contributor.receipts.map((receipt) => (
+    (
+      contributor: EpochContributor,
+      membershipPending = false,
+      receiptOffset = 0
+    ): ReactElement[] | null => {
+      const ownsEditor = (id: string) => {
+        const context = draftContext.current.get(id);
+        return (
+          !context ||
+          context.claimantKey === contributor.claimantKey ||
+          !epoch.contributors.some(
+            (item) => item.claimantKey === context.claimantKey
+          )
+        );
+      };
+      const receipts = contributor.receipts.filter(
+        (receipt) =>
+          !session.drafts[receipt.receiptId]?.editing ||
+          ownsEditor(receipt.receiptId)
+      );
+      for (const [id, context] of draftContext.current) {
+        const retainEditor =
+          session.drafts[id]?.editing ||
+          (!membershipReady &&
+            membershipPending &&
+            session.marker?.submission.subjectRef === id);
+        if (
+          retainEditor &&
+          context.claimantKey === contributor.claimantKey &&
+          context.offset === receiptOffset &&
+          !receipts.some((receipt) => receipt.receiptId === id)
+        )
+          // This is local edit/operation context, never a retired membership link.
+          receipts.push({ ...context.receipt, artifactUrl: null });
+      }
+      return receipts.map((receipt) => (
         <ReviewReceiptRow
           key={receipt.receiptId}
           receipt={receipt}
           override={overrides.overridesByRef.get(receipt.receiptId) ?? null}
           draft={session.drafts[receipt.receiptId] ?? null}
-          onStart={() => session.startDraft(receipt.receiptId)}
+          onStart={() => {
+            draftContext.current.set(receipt.receiptId, {
+              claimantKey: contributor.claimantKey,
+              receipt,
+              offset: receiptOffset,
+            });
+            session.startDraft(receipt.receiptId);
+          }}
           onChange={(patch) => session.changeDraft(receipt.receiptId, patch)}
           onCancel={() => session.cancelDraft(receipt.receiptId)}
           onSave={() => session.submit(receipt.receiptId, "save")}
@@ -395,7 +470,7 @@ function ReviewEpochSection({
         />
       ));
     },
-    [overrides, session],
+    [epoch.contributors, membershipReady, overrides, session]
   );
 
   const activeOverrideCount = overrides.overridesByRef.size;
@@ -439,7 +514,7 @@ function ReviewEpochSection({
           )}
         </Alert>
       )}
-      {activeOverrideCount > 0 && (
+      {activeOverrideCount > 0 && membershipReady && !loadingDetails && (
         <div className="border-warning/30 bg-warning/5 flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
           <Pencil className="text-warning h-3.5 w-3.5" />
           <span className="text-warning">
@@ -455,6 +530,7 @@ function ReviewEpochSection({
       {overrides.data && (
         <EpochDetail
           epoch={adjustedEpoch}
+          membershipReady={membershipReady}
           renderExpandedRows={renderExpandedRows}
         />
       )}

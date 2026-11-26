@@ -87,6 +87,7 @@ export function useCollectEpoch() {
 
       await queryClient.refetchQueries({
         queryKey: queryKeyPrefix,
+        predicate: (query) => !query.queryKey.includes("contributor"),
         type: "active",
       });
       setSuccessMessage(

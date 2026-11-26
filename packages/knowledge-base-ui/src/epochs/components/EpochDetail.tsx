@@ -35,17 +35,21 @@ import { Button } from "../ui";
 
 export interface EpochDetailProps {
   readonly epoch: EpochView;
+  readonly membershipReady?: boolean;
   /** Hide the header row (pie chart + epoch stats). Useful when shown inline under a parent. */
   readonly hideHeader?: boolean;
   /** Custom renderer for expanded contributor rows. Each element should be a TableRow. Overrides default ContributionRow list. */
   readonly renderExpandedRows?: (
-    contributor: EpochContributor
+    contributor: EpochContributor,
+    membershipPending?: boolean,
+    receiptOffset?: number
   ) => ReactElement[] | null;
 }
 
 export function EpochDetail({
   epoch,
   hideHeader = false,
+  membershipReady = true,
   renderExpandedRows,
 }: EpochDetailProps): ReactElement {
   const { state, setState } = useEpochContext();
@@ -156,6 +160,7 @@ export function EpochDetail({
                     <ContributorReceiptRows
                       key={c.claimantKey}
                       epoch={epoch}
+                      membershipReady={membershipReady}
                       contributor={c}
                       renderRows={renderExpandedRows}
                     />,

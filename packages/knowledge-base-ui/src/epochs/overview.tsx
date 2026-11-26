@@ -129,8 +129,10 @@ function ContributorsSkeleton(): ReactElement {
 
 function CurrentEpochContributors({
   epoch,
+  membershipReady,
 }: {
   readonly epoch: EpochView;
+  readonly membershipReady: boolean;
 }): ReactElement {
   const sorted = useMemo(
     () => [...epoch.contributors].sort(compareUnitsDescending),
@@ -196,7 +198,7 @@ function CurrentEpochContributors({
         />
       </div>
 
-      <EpochDetail epoch={epoch} hideHeader />
+      <EpochDetail epoch={epoch} membershipReady={membershipReady} hideHeader />
     </>
   );
 }
@@ -295,7 +297,10 @@ function CurrentEpochSection({
           <p className="text-muted-foreground text-sm">{view.error.message}</p>
         </div>
       ) : view.data ? (
-        <CurrentEpochContributors epoch={view.data} />
+        <CurrentEpochContributors
+          epoch={view.data}
+          membershipReady={view.membershipReady}
+        />
       ) : (
         <ContributorsSkeleton />
       )}
@@ -320,7 +325,7 @@ function PastEpochDetail({
           Couldn’t load this epoch: {view.error.message}
         </p>
       ) : view.data ? (
-        <EpochDetail epoch={view.data} />
+        <EpochDetail epoch={view.data} membershipReady={view.membershipReady} />
       ) : (
         <ContributorsSkeleton />
       )}

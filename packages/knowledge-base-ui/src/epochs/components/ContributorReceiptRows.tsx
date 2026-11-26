@@ -17,17 +17,27 @@ type ReceiptEvent = ApiIngestionReceipt & {
 export function ContributorReceiptRows({
   epoch,
   contributor,
+  membershipReady,
   renderRows,
 }: {
   readonly epoch: EpochView;
   readonly contributor: EpochContributor;
+  readonly membershipReady: boolean;
   readonly renderRows?: (
     contributor: EpochContributor,
+    membershipPending?: boolean,
+    receiptOffset?: number
   ) => ReactElement[] | null;
 }) {
   const { client, queryKeyPrefix } = useEpochContext();
   const queryClient = useQueryClient();
-  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState({
+    readId: epoch.membershipReadId,
+    offset: 0,
+  });
+  const offset = page.readId === epoch.membershipReadId ? page.offset : 0;
+  const setOffset = (offset: number) =>
+    setPage({ readId: epoch.membershipReadId, offset });
   const reconciled = useRef(false);
   const query = useQuery({
     queryKey: [
@@ -37,9 +47,14 @@ export function ContributorReceiptRows({
       epoch.status,
       "contributor",
       contributor.claimantKey,
+      epoch.membershipReadId,
       offset,
     ],
+    enabled: membershipReady,
     staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
     queryFn: ({ signal }) =>
       epochJson<{ total: number; events: ReceiptEvent[] }>(
@@ -56,6 +71,7 @@ export function ContributorReceiptRows({
   // active summary once; repeated empty results must not trigger a read loop.
   useEffect(() => {
     if (
+      !membershipReady ||
       reconciled.current ||
       query.isFetching ||
       query.error ||
@@ -82,6 +98,7 @@ export function ContributorReceiptRows({
       type: "active",
     });
   }, [
+    membershipReady,
     contributor.isLinked,
     contributor.receiptCount,
     epoch.id,
@@ -92,7 +109,9 @@ export function ContributorReceiptRows({
     queryKeyPrefix,
   ]);
   const receipts: readonly IngestionReceipt[] = (
-    query.isFetching || query.error ? [] : (query.data?.events ?? [])
+    !membershipReady || query.isFetching || query.error
+      ? []
+      : (query.data?.events ?? [])
   ).map((receipt) => ({
     receiptId: receipt.receiptId,
     source: receipt.source,
@@ -111,14 +130,14 @@ export function ContributorReceiptRows({
   const total = query.data?.total ?? contributor.receiptCount;
   return (
     <>
-      {query.isFetching ? (
+      {!membershipReady || query.isFetching ? (
         <TableRow>
           <TableCell colSpan={6} role="status">
             Loading contributions…
           </TableCell>
         </TableRow>
       ) : null}
-      {query.error ? (
+      {membershipReady && query.error ? (
         <TableRow>
           <TableCell colSpan={6}>
             <p role="alert">
@@ -131,16 +150,23 @@ export function ContributorReceiptRows({
         </TableRow>
       ) : null}
       {renderRows
-        ? renderRows({ ...contributor, receipts })
+        ? renderRows(
+            { ...contributor, receipts },
+            !membershipReady || query.isPending,
+            offset
+          )
         : receipts.map((receipt) => (
             <ContributionRow key={receipt.receiptId} receipt={receipt} />
           ))}
-      {!query.isFetching && !query.error && receipts.length === 0 ? (
+      {membershipReady &&
+      !query.isFetching &&
+      !query.error &&
+      receipts.length === 0 ? (
         <TableRow>
           <TableCell colSpan={6}>No contributions</TableCell>
         </TableRow>
       ) : null}
-      {total > 50 || offset > 0 ? (
+      {membershipReady && (total > 50 || offset > 0) ? (
         <TableRow>
           <TableCell colSpan={6}>
             <div className="flex flex-wrap items-center justify-between gap-2">

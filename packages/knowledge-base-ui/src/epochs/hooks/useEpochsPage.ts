@@ -22,6 +22,8 @@ import {
   safeReviewError,
 } from "../review-errors";
 
+import { useEpochMembership } from "./useEpochMembership";
+
 export interface EpochListData {
   readonly current: EpochDto | null;
   readonly pastEpochs: readonly EpochDto[];
@@ -147,7 +149,8 @@ export function useEpochView(
 ) {
   const { client, state, queryKeyPrefix } = useEpochContext();
   const offset = state.contributorPages?.[epoch.id] ?? 0;
-  return useQuery({
+  const membership = useEpochMembership();
+  const query = useQuery({
     queryKey: [
       ...queryKeyPrefix,
       "epochs",
@@ -160,6 +163,19 @@ export function useEpochView(
     retry: false,
     enabled: options.enabled ?? true,
     placeholderData: keepPreviousData,
-    queryFn: ({ signal }) => fetchEpochView(client, epoch, signal, offset),
+    refetchOnMount: "always",
+    queryFn: ({ signal }) =>
+      membership.read(epoch.id, signal, async (readId) => ({
+        ...(await fetchEpochView(client, epoch, signal, offset)),
+        membershipReadId: readId,
+      })),
   });
+  return {
+    ...query,
+    membershipReady:
+      query.isSuccess &&
+      query.fetchStatus === "idle" &&
+      !query.isPlaceholderData &&
+      membership.isCurrent(query.data.membershipReadId),
+  };
 }

@@ -61,6 +61,8 @@ export interface UnresolvedActivity {
 
 /** Composite view of a single epoch (current or historical). */
 export interface EpochView {
+  /** Local completed workspace read; isolates dependent membership pages. */
+  readonly membershipReadId?: string;
   readonly weightConfig?: Record<string, number>;
   readonly totalContributorCount?: number;
   readonly totalUnits?: string;

@@ -51,7 +51,10 @@ export function useOpenEpochReview() {
   return useMutation({
     mutationFn: (epochId: string) => openEpochReview(client, epochId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeyPrefix });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeyPrefix,
+        predicate: (query) => !query.queryKey.includes("contributor"),
+      });
     },
   });
 }

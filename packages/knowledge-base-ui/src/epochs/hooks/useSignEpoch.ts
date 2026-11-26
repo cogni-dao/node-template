@@ -243,7 +243,10 @@ export function useSignEpoch(epochId: string): UseSignEpochReturn {
       assertActive();
 
       dispatch({ type: "FINALIZE_SUCCESS", result });
-      void queryClient.invalidateQueries({ queryKey: queryKeyPrefix });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeyPrefix,
+        predicate: (query) => !query.queryKey.includes("contributor"),
+      });
     } catch (err) {
       if (!active.current || !isCurrentScope()) return;
       const message =

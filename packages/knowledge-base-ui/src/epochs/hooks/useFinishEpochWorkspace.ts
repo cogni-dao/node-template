@@ -11,10 +11,16 @@
  * @public
  */
 
-import { type UseQueryResult, useQuery } from "@tanstack/react-query";
+import {
+  type UseQueryResult,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { type EpochsClient, useEpochContext } from "../context";
 import type { EpochView } from "../types";
 import { epochJson, fetchEpochView } from "./useEpochsPage";
+
+import { useEpochMembership } from "./useEpochMembership";
 
 export { isEligibleForFinishEpochWork } from "@cogni/attribution-ledger/presentation";
 
@@ -88,15 +94,43 @@ export const finishWorkspaceKey = (
 export function useFinishEpochWorkspace(): UseQueryResult<
   FinishEpochWorkspaceData,
   Error
-> {
+> & { readonly membershipReady: boolean } {
   const { client, state, queryKeyPrefix } = useEpochContext();
   const contributorPages = state.contributorPages ?? {};
-  return useQuery({
-    queryKey: finishWorkspaceKey(queryKeyPrefix, contributorPages),
+  const queryClient = useQueryClient();
+  const membership = useEpochMembership();
+  const queryKey = finishWorkspaceKey(queryKeyPrefix, contributorPages);
+  const query = useQuery({
+    queryKey,
     queryFn: ({ signal }) =>
-      fetchFinishEpochWorkspace(client, contributorPages, signal),
+      membership.read(
+        queryClient.getQueryData<FinishEpochWorkspaceData>(queryKey)?.epochView
+          ?.id,
+        signal,
+        async (readId) => {
+          const data = await fetchFinishEpochWorkspace(
+            client,
+            contributorPages,
+            signal
+          );
+          return {
+            ...data,
+            epochView: data.epochView
+              ? { ...data.epochView, membershipReadId: readId }
+              : null,
+          };
+        }
+      ),
     staleTime: 15_000,
     retry: false,
     refetchOnMount: "always",
   });
+  return {
+    ...query,
+    membershipReady:
+      query.isSuccess &&
+      query.fetchStatus === "idle" &&
+      !query.data.lifecycleUnavailable &&
+      membership.isCurrent(query.data.epochView?.membershipReadId),
+  };
 }

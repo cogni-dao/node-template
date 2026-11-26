@@ -938,6 +938,35 @@ describe("public epochs capability", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("resets receipt paging when a workspace generation replaces membership", async () => {
+    const f = fixture();
+    f.state.events = Array.from({ length: 70 }, (_, i) => event(`page-${i}`));
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    fireEvent.click(
+      within(await screen.findByRole("row", { name: /Alpha/ })).getByRole(
+        "button",
+        { name: "Expand details" }
+      )
+    );
+    await screen.findByRole("link", { name: "Contribution page-0" });
+    fireEvent.click(screen.getByRole("button", { name: "More contributions" }));
+    await screen.findByRole("link", { name: "Contribution page-50" });
+    f.state.events = f.state.events.slice(0, 20);
+    await act(async () => {
+      await f.queryClient.refetchQueries({
+        predicate: (query) => query.queryKey.includes("view"),
+      });
+    });
+    await screen.findByRole("link", { name: "Contribution page-0" });
+    expect(
+      screen.queryByRole("link", { name: "Contribution page-50" })
+    ).not.toBeInTheDocument();
+    const last = f.requests
+      .filter((item) => item.url.includes("claimantKey="))
+      .at(-1);
+    expect(last?.url).toContain("offset=0");
+  });
+
   it.each(["overview", "review"] as const)(
     "uses persisted membership for %s disclosures after partial identity persistence",
     async (surface) => {
@@ -1003,6 +1032,287 @@ describe("public epochs capability", () => {
       ).toHaveLength(2);
     },
   );
+
+  it.each([
+    ["overview", false, false, false],
+    ["review", false, false, false],
+    ["overview", true, false, false],
+    ["review", true, false, false],
+    ["review", true, true, false],
+    ["overview", false, false, true],
+  ] as const)("replaces expanded membership in %s (deferred: %s, draft: %s, Sync: %s)", async (surface, deferred, editing, sync) => {
+    const f = fixture();
+    f.state.events = [
+      { ...event("linked"), platformLogin: "Linked" },
+      ...["moving", "remaining"].map((id) => ({
+        ...event(id, "external"),
+        platformLogin: "Pending",
+        selection: { userId: null, included: true, weightOverrideMilli: null },
+      })),
+    ];
+    let recover = false;
+    let holdIdentity = false;
+    let recoveredSummary = false;
+    let earlyDetail = false;
+    const pending: {
+      signal: AbortSignal | null | undefined;
+      release: () => void;
+    }[] = [];
+    const request = f.client.request;
+    vi.spyOn(f.client, "request").mockImplementation(async (url, init) => {
+      const params = new URL(url, "https://fixture.invalid").searchParams;
+      const workspaceActivity =
+        url.includes("/activity") && !params.has("claimantKey");
+      if (recover && params.has("claimantKey") && !recoveredSummary)
+        earlyDetail = true;
+      if (recover && workspaceActivity) {
+        // Only A persists; B fails again. Both contributor keys survive.
+        f.state.events = f.state.events.map((item) =>
+          item.receiptId === "moving"
+            ? {
+                ...item,
+                selection: {
+                  ...item.selection,
+                  userId: "a",
+                  included: true,
+                  weightOverrideMilli: null,
+                },
+              }
+            : item
+        );
+      }
+      const response = await request(url, init);
+      if (recover && url.includes("/projections")) recoveredSummary = true;
+      if (workspaceActivity) {
+        const body = await response.json();
+        // Resolution succeeds in the response even when persistence failed.
+        return new Response(
+          JSON.stringify({
+            ...body,
+            events: body.events.map((item: ApiIngestionReceipt) => ({
+              ...item,
+              selection: { ...item.selection, userId: "a" },
+            })),
+          }),
+          { status: 200 }
+        );
+      }
+      if (
+        holdIdentity &&
+        params.get("claimantKey") === "identity:github:external"
+      ) {
+        holdIdentity = false;
+        return new Promise<Response>((resolve) =>
+          pending.push({
+            signal: init?.signal,
+            release: () => resolve(response),
+          })
+        );
+      }
+      return response;
+    });
+    if (surface === "review") await readyReview(f);
+    else render(<CurrentEpochView />, { wrapper: f.wrapper });
+    const identityRow = await screen.findByRole("row", { name: /Pending/ });
+    if (surface === "overview") expect(f.requests).toHaveLength(4);
+    fireEvent.click(
+      within(identityRow).getByRole("button", { name: "Expand details" })
+    );
+    await screen.findByRole("link", { name: "Contribution moving" });
+    await screen.findByRole("link", { name: "Contribution remaining" });
+    if (editing) {
+      fireEvent.click(
+        within(
+          containingRow(
+            screen.getByRole("link", { name: "Contribution moving" })
+          )
+        ).getByRole("button", { name: "Adjust weight" })
+      );
+      fireEvent.change(screen.getByLabelText("Override weight (units)"), {
+        target: { value: "000" },
+      });
+    }
+    let oldRead: Promise<void> | undefined;
+    if (deferred) {
+      holdIdentity = true;
+      act(() => {
+        oldRead = f.queryClient.refetchQueries({
+          predicate: (query) => query.queryKey.includes("contributor"),
+        });
+      });
+      await waitFor(() => expect(pending).toHaveLength(1));
+    }
+    recover = true;
+    if (sync) {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Sync contributions" })
+      );
+      await screen.findByText(/Sync started. Epoch data refreshed/);
+    } else
+      await act(async () => {
+        await f.queryClient.refetchQueries({
+          predicate: (query) =>
+            surface === "review"
+              ? query.queryKey.includes("finish-epoch")
+              : query.queryKey.includes("view"),
+        });
+      });
+    expect(
+      within(await screen.findByRole("row", { name: /Pending/ })).getByRole(
+        "button",
+        { name: "Collapse details" }
+      )
+    ).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(
+      within(await screen.findByRole("row", { name: /Linked/ })).getByRole(
+        "button",
+        { name: "Expand details" }
+      )
+    );
+    await screen.findByRole("link", { name: "Contribution linked" });
+    if (deferred) {
+      // Complete the obsolete HTTP response after the new workspace and user detail.
+      await act(async () => {
+        for (const item of pending) item.release();
+        await oldRead;
+      });
+    }
+    await waitFor(() => {
+      for (const id of editing
+        ? ["remaining", "linked"]
+        : ["moving", "remaining", "linked"])
+        expect(
+          screen.getAllByRole("link", { name: `Contribution ${id}` })
+        ).toHaveLength(1);
+    });
+    if (editing) {
+      expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(
+        1
+      );
+      expect(screen.getByLabelText("Override weight (units)")).toHaveValue(
+        "000"
+      );
+    }
+    expect(earlyDetail).toBe(false);
+    if (surface === "review")
+      expect(
+        screen.getAllByRole("button", { name: "Adjust weight" })
+      ).toHaveLength(editing ? 2 : 3);
+    if (deferred) expect(pending[0]?.signal?.aborted).toBe(true);
+    const details = f.requests.filter((item) =>
+      item.url.includes("claimantKey=")
+    );
+    for (const detail of details)
+      expect(
+        new URL(detail.url, "https://fixture.invalid").searchParams.get("limit")
+      ).toBe("50");
+  });
+
+  it.each([
+    ["overview", "error"],
+    ["review", "error"],
+    ["overview", "cancel"],
+    ["review", "cancel"],
+  ] as const)("retires membership when activity persists but workspace summary ends with %s/%s", async (surface, failure) => {
+    const f = fixture();
+    f.state.events = [
+      { ...event("linked"), platformLogin: "Linked" },
+      ...["moving", "remaining"].map((id) => ({
+        ...event(id, "external"),
+        platformLogin: "Pending",
+        selection: { userId: null, included: true, weightOverrideMilli: null },
+      })),
+    ];
+    let recover = false;
+    let fail = true;
+    let release: (() => void) | undefined;
+    const request = f.client.request;
+    vi.spyOn(f.client, "request").mockImplementation(async (url, init) => {
+      if (recover && url.includes("/activity") && !url.includes("claimantKey="))
+        f.state.events = f.state.events.map((item) =>
+          item.receiptId === "moving"
+            ? {
+                ...item,
+                selection: {
+                  userId: "a",
+                  included: true,
+                  weightOverrideMilli: null,
+                },
+              }
+            : item
+        );
+      const response = await request(url, init);
+      if (recover && fail && url.includes("/projections")) {
+        if (failure === "error") return new Response("{}", { status: 503 });
+        return new Promise<Response>((resolve) => {
+          release = () => resolve(response);
+        });
+      }
+      return response;
+    });
+    if (surface === "review") await readyReview(f);
+    else render(<CurrentEpochView />, { wrapper: f.wrapper });
+    fireEvent.click(
+      within(await screen.findByRole("row", { name: /Pending/ })).getByRole(
+        "button",
+        { name: "Expand details" }
+      )
+    );
+    await screen.findByRole("link", { name: "Contribution moving" });
+    const owner = (query: { queryKey: readonly unknown[] }) =>
+      query.queryKey.includes(surface === "review" ? "finish-epoch" : "view");
+    recover = true;
+    let refreshing!: Promise<void>;
+    act(() => {
+      refreshing = f.queryClient.refetchQueries({ predicate: owner });
+    });
+    if (failure === "cancel") {
+      await waitFor(() => expect(release).toBeDefined());
+      await act(async () => {
+        await f.queryClient.cancelQueries({ predicate: owner });
+        release?.();
+        await refreshing;
+      });
+    } else
+      await act(async () => {
+        await refreshing;
+      });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("link", { name: "Contribution moving" })
+      ).not.toBeInTheDocument()
+    );
+    if (surface === "review" || failure === "cancel") {
+      const before = f.requests.filter((item) =>
+        item.url.includes("claimantKey=")
+      ).length;
+      fireEvent.click(
+        within(await screen.findByRole("row", { name: /Linked/ })).getByRole(
+          "button",
+          { name: "Expand details" }
+        )
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        f.requests.filter((item) => item.url.includes("claimantKey="))
+      ).toHaveLength(before);
+    }
+    fail = false;
+    await act(async () => {
+      await f.queryClient.refetchQueries({ predicate: owner });
+    });
+    const userRow = await screen.findByRole("row", { name: /Linked/ });
+    const expand = within(userRow).queryByRole("button", {
+      name: "Expand details",
+    });
+    if (expand) fireEvent.click(expand);
+    await screen.findByRole("link", { name: "Contribution moving" });
+    expect(
+      screen.getAllByRole("link", { name: "Contribution moving" })
+    ).toHaveLength(1);
+  });
 
   it.each(["overview", "review"] as const)(
     "refreshes an obsolete identity summary once in %s",
