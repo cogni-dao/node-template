@@ -114,8 +114,8 @@ export class ResearchReceipts {
 	tools = 0;
 	searches = 0;
 	tasks = 0;
-	/** Stages (draft, final) that already used their one repair turn. */
-	readonly repaired = new Set<"draft" | "final">();
+	/** Repair turns used per stage (draft, final); at most two each. */
+	readonly repaired = new Map<"draft" | "final", number>();
 	bootstrapped = false;
 	/** The host sent its one critic dispatch, whether or not the assignment was admitted. */
 	criticDispatched = false;
@@ -458,7 +458,7 @@ export class ResearchReceipts {
 				toolCalls: this.tools,
 				searches: this.searches,
 				taskAttempts: this.tasks,
-				repairs: this.repaired.size,
+				repairs: [...this.repaired.values()].reduce((a, b) => a + b, 0),
 				reasonCount: this.reasons.size,
 			},
 		};

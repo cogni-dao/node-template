@@ -111,10 +111,12 @@ export function createMissionResearchGraph(opts: CreateReactAgentGraphOptions) {
 				const problems = receipts.check(answer);
 				if (problems.length) {
 					const stage = critiqued ? "final" : "draft";
-					// Exhausted collection still gets its repair turn: capability calls are refused, so the
-					// researcher can only bind, remove or mark unknown what it already observed.
-					if (receipts.repaired.has(stage)) return;
-					receipts.repaired.add(stage);
+					// Exhausted collection still gets its repair turns: capability calls are refused, so the
+					// researcher can only bind, remove or mark unknown what it already observed. Two turns,
+					// because a format fix first exposes the binding problems behind it.
+					const used = receipts.repaired.get(stage) ?? 0;
+					if (used >= 2) return;
+					receipts.repaired.set(stage, used + 1);
 					return {
 						messages: [
 							new HumanMessage(

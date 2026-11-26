@@ -2110,7 +2110,7 @@ describe("host-owned research stages", () => {
 		expect(output.telemetry.toolCalls).toBe(4);
 	});
 
-	it("repairs an unbindable draft once, then forces critique and one revision", async () => {
+	it("gives an unbindable draft two repair turns, then ends without critique", async () => {
 		let rootTurn = 0;
 		let repairText = "";
 		let fingerprint = "";
@@ -2159,14 +2159,14 @@ describe("host-owned research stages", () => {
 			/* drain */
 		}
 		const output = JSON.parse((await run.final).content ?? "{}");
-		// The draft's one repair turn is spent on the fenced answer; the still-invented domain ends the run.
-		expect(repairText).toContain("not one bare JSON object");
+		// The first repair fixes the fenced format; the second names the invented domain; then the run ends.
+		expect(repairText).toContain("invented-domain, which is not eligible");
 		expect(repairText).toContain("Eligible domains:");
-		expect(rootTurn).toBe(3);
+		expect(rootTurn).toBe(4);
 		expect(fingerprint).toBe("");
 		expect(output.status).toBe("incomplete");
 		expect(output.reasons).toContain("missing_critique");
-		expect(output.telemetry).toMatchObject({ repairs: 1, taskAttempts: 0 });
+		expect(output.telemetry).toMatchObject({ repairs: 2, taskAttempts: 0 });
 	});
 
 	it("dispatches the critic after a successful repair and accepts one revision", async () => {
