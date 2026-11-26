@@ -9,6 +9,10 @@ import {
 	buildRequiresById,
 } from "@cogni/agent-grants/host";
 import {
+	agentAccessRequestCreateOperation,
+	agentAccessRequestListOperation,
+} from "@cogni/agent-grants/http";
+import {
 	GoalsProgressSchema,
 	MetricComputeInputSchema,
 	MetricHistoryInputSchema,
@@ -41,8 +45,6 @@ import {
 
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import {
-	agentAccessRequestCreateOperation,
-	agentAccessRequestListOperation,
 	confirmAgentCredentialOperation,
 	creditsSummaryOperation,
 	knowledgeHistoryOperation,

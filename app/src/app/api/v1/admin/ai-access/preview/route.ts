@@ -15,41 +15,9 @@
  * @public
  */
 
-import { agentPreviewOperation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
-
-import { requireAdminSession } from "@/app/(admin)/_lib/admin-session";
-import { getContainer } from "@/bootstrap/container";
-import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES, failureFields } from "@/shared/observability";
+import { adminRoute } from "@/app/api/v1/admin/_lib/ai-access-route";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const NO_STORE = { "cache-control": "no-store" } as const;
-const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: NO_STORE });
-
-export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "admin.ai-access.preview", auth: { mode: "none" } },
-  async (ctx, request) => {
-    const admin = await requireAdminSession(request, "ai_access.preview");
-    if (!admin.ok) return admin.response;
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid JSON body" }, 400);
-    }
-    const parsed = agentPreviewOperation.input.safeParse(body);
-    // A token of the wrong shape is the same answer as an unknown one.
-    if (!parsed.success) return json({ error: "not_found" }, 404);
-    try {
-      const permission = await getContainer().nodeAdminPort.previewAiRequest(admin.session, parsed.data.token);
-      if (!permission) return json({ error: "not_found" }, 404);
-      return json(agentPreviewOperation.output.parse({ permission }));
-    } catch (error) {
-      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "admin.ai-access.preview", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
-      return json({ error: "authz_unavailable" }, 503);
-    }
-  }
-);
+export const POST = adminRoute("admin.ai-access.preview", "ai_access.preview", "preview", true);

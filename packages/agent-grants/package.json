@@ -49,6 +49,11 @@
       "types": "./dist/host.d.ts",
       "import": "./dist/host.js",
       "default": "./dist/host.js"
+    },
+    "./http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js",
+      "default": "./dist/http.js"
     }
   },
   "types": "./dist/index.d.ts",

@@ -29,11 +29,9 @@ const ASK_ALLOWLIST: ReadonlyArray<{ path: string; reason: string }> = [
   { path: "app/(app)/gov/review/page.tsx", reason: "Finish Epoch eligibility hint: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/_facades/work/items.server.ts", reason: "work-items facade: priority 0/1 through container.nodeAdmin, which is the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "bootstrap/node-admin-gate.ts", reason: "the roster beneath adminCheck, and the adminCheck-backed NodeAdminAuthority" },
-  { path: "bootstrap/agent-authority.ts", reason: "defines the one adminCheck over bound wallets, and the tool guard" },
   { path: "app/(admin)/admin/payments/money-plane.server.ts", reason: "payments page gate: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/(app)/layout.tsx", reason: "shows the Admin nav hint: the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "app/(admin)/layout.tsx", reason: "layout gate: the one adminCheck (ONE_ADMIN_CHECK)" },
-  { path: "app/api/v1/agent/me/route.ts", reason: "self-check reports the one adminCheck (ONE_ADMIN_CHECK)" },
   { path: "shared/config/repoSpec.server.ts", reason: "isDaoAdmin definition: the roster lookup, called only beneath adminCheck" },
 ];
 const ASK = /\b(isDaoAdmin|isLedgerApprover|checkApprover|checkNodeAdmin|adminCheck)\(|\bnodeAdmin\.check\(/;

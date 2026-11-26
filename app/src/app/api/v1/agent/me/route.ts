@@ -17,48 +17,24 @@
  * @public
  */
 
-import { NextResponse } from "next/server";
+import { agentMeHttp } from "@cogni/agent-grants/http";
 
+import { httpDeps, send } from "@/app/_lib/agent-access/respond";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES, failureFields } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const json = (body: unknown, status = 200) =>
-  NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
-
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "agent.me", auth: { mode: "required", getSessionUser } },
-  async (ctx, _request, sessionUser) => {
-    const via = sessionUser.via === "session" ? "session" : "bearer";
-    try {
-      const authority = getContainer().agentAuthority;
-      const [wallets, admin, rows, kind] = await Promise.all([
-        authority.boundWallets(sessionUser.id),
-        authority.adminCheck(sessionUser.id),
-        authority.listOwnAccess(sessionUser.id),
-        authority.principalKind(sessionUser.id),
-      ]);
-      if (admin === "unavailable") return json({ error: "authz_unavailable" }, 503);
-      return json({
+  async (ctx, _request, sessionUser) =>
+    send(
+      await agentMeHttp(httpDeps(ctx.log), {
         userId: sessionUser.id,
-        via,
-        kind,
-        wallets,
-        isAdmin: admin === "allow",
-        grants: rows
-          .filter((row) => row.state === "granted")
-          .map((row) => ({ scope: row.scope, accountId: row.accountId, since: row.at })),
-      });
-    } catch (error) {
-      ctx.log.error(
-        { event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "agent.me", ...failureFields(error) },
-        EVENT_NAMES.AGENT_ROLES_UNAVAILABLE
-      );
-      return json({ error: "authz_unavailable" }, 503);
-    }
-  }
+        via: sessionUser.via === "session" ? "session" : "bearer",
+        authority: getContainer().agentAuthority,
+      })
+    )
 );

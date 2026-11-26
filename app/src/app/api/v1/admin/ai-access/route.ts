@@ -18,91 +18,11 @@
  * @public
  */
 
-import { AgentRolesError, type PrincipalRef } from "@cogni/agent-grants";
-import { agentRolesListOperation, agentRolesOperation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
-
-import { requireAdminSession } from "@/app/(admin)/_lib/admin-session";
-import { getContainer } from "@/bootstrap/container";
-import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES, failureFields } from "@/shared/observability";
+import { adminRoute } from "@/app/api/v1/admin/_lib/ai-access-route";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const NO_STORE = { "cache-control": "no-store" } as const;
-/** Every response, errors included, is `no-store`. */
-const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: NO_STORE });
-
-export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "admin.ai-access.list", auth: { mode: "none" } },
-  async (ctx, request) => {
-    const admin = await requireAdminSession(request, "ai_access.list");
-    if (!admin.ok) return admin.response;
-    try {
-      const view = await getContainer().nodeAdminPort.listNodeAi(admin.session);
-      return json(agentRolesListOperation.output.parse({ canManage: true, ...view }));
-    } catch (error) {
-      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "admin.ai-access.list", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
-      return json({ error: "authz_unavailable" }, 503);
-    }
-  }
-);
-
-function writeRoute(routeId: string, action: string, write: "on" | "off") {
-  return wrapRouteHandlerWithLogging({ routeId, auth: { mode: "none" } }, async (_ctx, request) => {
-    const admin = await requireAdminSession(request, action);
-    if (!admin.ok) return admin.response;
-
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid JSON body" }, 400);
-    }
-    const parsed = agentRolesOperation.input.safeParse(body);
-    if (!parsed.success) return json({ error: "invalid input", issues: parsed.error.issues }, 400);
-
-    const ref: PrincipalRef =
-      parsed.data.principalUserId !== undefined
-        ? { principalUserId: parsed.data.principalUserId }
-        : { principalSlug: parsed.data.principal as string };
-    const target = { ref, scope: parsed.data.scope };
-    const port = getContainer().nodeAdminPort;
-
-    try {
-      const result =
-        write === "on"
-          ? await port.turnAiPermissionOn(admin.session, target)
-          : parsed.data.deny === true
-            ? await port.dismissAiRequest(admin.session, target)
-            : await port.turnAiPermissionOff(admin.session, target);
-      return json(
-        agentRolesOperation.output.parse({
-          ...(parsed.data.principal !== undefined ? { principal: parsed.data.principal } : {}),
-          scope: parsed.data.scope,
-          ...result,
-        })
-      );
-    } catch (error) {
-      if (error instanceof AgentRolesError) {
-        const status =
-          error.code === "principal_not_found"
-            ? 404
-            : error.code === "not_pending"
-              ? 409
-              : error.code === "self_approval" || error.code === "not_allowed"
-                ? 403
-                : 400;
-        return json({ error: error.code }, status);
-      }
-      throw error;
-    }
-  });
-}
-
-/** Turning a permission On: approves a pending ask, or grants one of this node's own AI directly. */
-export const POST = writeRoute("admin.ai-access.on", "ai_access.on", "on");
-
-/** Turning a permission Off (revoke), or the x on a pending ask (`deny: true`). */
-export const DELETE = writeRoute("admin.ai-access.off", "ai_access.off", "off");
+export const GET = adminRoute("admin.ai-access.list", "ai_access.list", "list", false);
+export const POST = adminRoute("admin.ai-access.on", "ai_access.on", "on", true);
+export const DELETE = adminRoute("admin.ai-access.off", "ai_access.off", "off", true);

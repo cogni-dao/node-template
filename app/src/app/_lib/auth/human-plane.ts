@@ -16,7 +16,7 @@
  * @public
  */
 
-import { HUMAN_SESSION_REQUIRED } from "@cogni/node-contracts";
+import { HUMAN_SESSION_REQUIRED } from "@cogni/agent-grants/http";
 import { NextResponse } from "next/server";
 
 import { EVENT_NAMES } from "@/shared/observability";
