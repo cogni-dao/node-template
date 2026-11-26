@@ -24,7 +24,7 @@ import {
   workItemsGetOperation,
   workItemsPatchOperation,
 } from "@cogni/node-contracts";
-import { handleWorkItemGet, handleWorkItemPatch } from "@cogni/work-items";
+import { handleWorkItemGet, handleWorkItemPatch, routeAttribution } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
 import {
@@ -36,7 +36,6 @@ import {
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { routeAttribution } from "@/bootstrap/write-attribution";
 import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";

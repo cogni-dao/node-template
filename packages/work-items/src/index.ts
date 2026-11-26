@@ -52,13 +52,26 @@ export {
   workItemsHistoryOperation,
 } from "./history-contract.js";
 export type { WorkItemPatchInput } from "./patch-contract.js";
-export type { WriteAttribution, WriteRunKind } from "./attribution.js";
+export type {
+  RunAttributionLog,
+  RunAttributionScope,
+  WriteAttribution,
+  WriteRunKind,
+} from "./attribution.js";
 export {
+  actingPrincipal,
   attributionCommitLines,
+  attributionFields,
+  createRunAttribution,
   requireWriteAttribution,
+  routeAttribution,
+  runAttribution,
+  WORK_ITEM_ATTRIBUTION_EVENTS,
   WRITE_RUN_KINDS,
   WriteAttributionInvalidError,
 } from "./attribution.js";
+export type { WorkItemWritersDeps, WorkItemWritersLog } from "./tool-writers.js";
+export { createWorkItemWriters } from "./tool-writers.js";
 export { composeItemEnvelope } from "./envelope.js";
 export type {
   EnvelopeDegradedEvent,

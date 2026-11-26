@@ -13,7 +13,7 @@
  *     (`subjectUserId`, the authenticated caller, bearer agents included; absent for a run with no caller) and a payer (`billing`). The launcher
  *     sets the subject; the tool guard binds the principal around each tool call. RLS and user-scoped
  *     capabilities use the subject, else the principal (`scopeUserId`).
- *   - ACTING_PRINCIPAL_FOR_WRITES (task.0133): a write records `actingPrincipal(scope)` as its actor, never `scopeUserId`; the subject
+ *   - ACTING_PRINCIPAL_FOR_WRITES (task.0133): a write records `actingPrincipal(scope)` (`@cogni/work-items`) as its actor, never `scopeUserId`; the subject
  *     is recorded as the requester, and `runId` with `runKind` (host-set) as the run. An unknown run never blocks a write: it omits the `Run:` line.
  * Side-effects: none (ALS is process-scoped, no I/O)
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/unified-graph-launch.md
@@ -58,17 +58,6 @@ export interface ExecutionScope {
  */
 export function scopeUserId(scope: ExecutionScope): string | undefined {
   return scope.subjectUserId ?? scope.principalId;
-}
-
-/**
- * The actor of a write made inside a run: the run's own acting principal. Fails closed when the scope names none
- * (never falls back to the subject: a run with no principal writes nothing).
- */
-export function actingPrincipal(scope: ExecutionScope): string {
-  if (!scope.principalId) {
-    throw new Error("write denied: the run has no acting principal");
-  }
-  return scope.principalId;
 }
 
 const executionScopeStorage = new AsyncLocalStorage<ExecutionScope>();

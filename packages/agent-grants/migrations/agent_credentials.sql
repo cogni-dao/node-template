@@ -1,29 +1,7 @@
-CREATE TABLE "agent_credentials" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"user_id" text NOT NULL,
-	"token_hash" text NOT NULL,
-	"created_from" text NOT NULL,
-	"predecessor_id" uuid,
-	"issued_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"expires_at" timestamp with time zone NOT NULL,
-	"renew_until" timestamp with time zone NOT NULL,
-	"pending_expires_at" timestamp with time zone,
-	"confirmed_at" timestamp with time zone,
-	"revoked_at" timestamp with time zone,
-	"revoked_reason" text,
-	"revoked_by" text,
-	CONSTRAINT "agent_credentials_created_from_canonical" CHECK ("agent_credentials"."created_from" IN ('spawn_grant','rotation','key_upgrade','binding_recovery','recovery_grant')),
-	CONSTRAINT "agent_credentials_renew_after_expiry" CHECK ("agent_credentials"."renew_until" > "agent_credentials"."expires_at")
-);
---> statement-breakpoint
-ALTER TABLE "agent_credentials" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
-ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_predecessor_id_fk" FOREIGN KEY ("predecessor_id") REFERENCES "public"."agent_credentials"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "agent_credentials_token_hash_unique" ON "agent_credentials" USING btree ("token_hash");--> statement-breakpoint
-CREATE UNIQUE INDEX "agent_credentials_one_pending_successor" ON "agent_credentials" USING btree ("predecessor_id") WHERE "agent_credentials"."confirmed_at" IS NULL AND "agent_credentials"."revoked_at" IS NULL;--> statement-breakpoint
-CREATE INDEX "agent_credentials_user_idx" ON "agent_credentials" USING btree ("user_id");
---> statement-breakpoint
--- Hand-written below: FORCE RLS, a function and a trigger are outside Drizzle's DDL scope (same as 0027 / 0031 / 0036).
+-- agent_credentials: the SQL TAIL for the revocable agent keys (`@cogni-dao/agent-grants/credentials`). The table part is NOT here: `defineAgentAuthoritySchema`
+-- owns it and the node's own `db:generate` writes it. Append this file after that generated SQL (and after `agent_authority.sql`: the trigger reads `agent_principals`).
+-- node-template keeps it as 0039 + 0040 (`agent_credentials` rows belong only to a user with an `external` principal row).
+-- FORCE RLS, a function and a trigger are outside Drizzle's DDL scope.
 -- agent_credentials has NO policy: ENABLE + FORCE = deny-all for the app role. Only the BYPASSRLS service role reads or writes it.
 ALTER TABLE "agent_credentials" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 -- STATE_IS_DERIVED: the one derivation of a credential's state from its timestamps, against the DATABASE clock. Never stored.

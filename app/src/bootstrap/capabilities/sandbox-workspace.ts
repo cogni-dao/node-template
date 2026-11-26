@@ -12,7 +12,7 @@
  *   - UNCONFIGURED_IS_NULL: missing token or underivable origin returns null (the tool answers `unavailable`), never a guess.
  *   - RUN_FROM_THE_SCOPE: the run id comes from the execution scope the tool guard binds, never from tool params.
  *   - PUSH_TOKEN_PER_CALL: each call gets a 1-hour, one-repo GH_TOKEN minted by the operator; no GitHub key
- *     reaches the sandbox lease (sandbox-push-token).
+ *     reaches the sandbox lease (`createSandboxPushTokenEnv` in `@cogni/sandbox`).
  * Side-effects: logs `adapter.sandbox.tick`
  * Links: packages/sandbox, services/sandbox/
  * @internal
@@ -20,6 +20,7 @@
 
 import type { SandboxShellCapability } from "@cogni/ai-tools";
 import {
+  createSandboxPushTokenEnv,
   createSandboxShellCapability as composeSandboxShellCapability,
   deriveIsolatedServiceOrigin,
   SANDBOX_SERVICE_NAME,
@@ -29,7 +30,6 @@ import { getExecutionScope } from "@/adapters/server";
 import { getNodeName } from "@/shared/config";
 import type { ServerEnv } from "@/shared/env";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
-import { createSandboxPushTokenEnv } from "./sandbox-push-token";
 
 const logger = makeLogger({ component: "SandboxShell" });
 
@@ -60,7 +60,16 @@ export function createSandboxShellCapability(
     baseUrl,
     accessToken,
     runId: () => getExecutionScope().runId,
-    callEnv: createSandboxPushTokenEnv(env, nodeSlug),
+    callEnv: createSandboxPushTokenEnv({
+      operatorKey: env.NODE_AI_OPERATOR_KEY,
+      operatorUrl: env.COGNI_OPERATOR_URL,
+      nodeSlug,
+      onWarn: ({ adapter, errorCode }) =>
+        logger.warn(
+          { event: EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN, adapter, error_code: errorCode },
+          EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN
+        ),
+    }),
     onTick: (report) => {
       if ("errorCode" in report) {
         logger.warn(

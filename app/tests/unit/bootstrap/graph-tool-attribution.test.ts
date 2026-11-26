@@ -22,12 +22,16 @@ import path from "node:path";
 import type { AgentGrantsStore, GuardDeps } from "@cogni/agent-grants";
 import type { AiEvent } from "@cogni/ai-core";
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
-import { createEdoCapability } from "@cogni/knowledge-store";
+import { bindEdoToolCapability, createEdoCapability } from "@cogni/knowledge-store";
 import {
   FakeEdoResolverAdapter,
   FakeKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/fake";
-import type { WorkItemCommandPort, WorkItemQueryPort } from "@cogni/work-items";
+import {
+  createWorkItemWriters,
+  type WorkItemCommandPort,
+  type WorkItemQueryPort,
+} from "@cogni/work-items";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const captured = vi.hoisted(() => ({
@@ -73,15 +77,15 @@ vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
 });
 vi.mock("@/bootstrap/otel", () => ({ getCurrentTraceId: () => "trace-1" }));
 
+import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
 import { LangGraphInProcProvider } from "@/adapters/server/ai/langgraph/inproc.provider";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { NODE_LOCAL_TOOL_BINDINGS, NODE_LOCAL_TOOL_BUNDLE } from "@/bootstrap/ai/secret-probe";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
-import { createWorkItemWriters } from "@/bootstrap/capabilities/work-item-writers";
 import { runGraphWithScope } from "@/bootstrap/graph-executor.factory";
-import { bindEdoToolCapability } from "@/bootstrap/write-attribution";
+import { runAttribution } from "@/bootstrap/run-attribution";
 
 const PRIORITIZER = "user-prioritizer";
 const NODE_AI = "user-node-ai";
@@ -132,7 +136,9 @@ const item = {
 };
 
 const writers = createWorkItemWriters({
-  log: { info: toolLog },
+  log: { info: toolLog, warn: vi.fn() },
+  scope: getExecutionScope,
+  traceId: () => "trace-1",
   store: () => ({ patch: patchStore }),
   artifacts: () =>
     ({
@@ -157,7 +163,7 @@ async function edoWorld() {
 function sourceFor(edoWrite: ReturnType<typeof createEdoCapability>) {
   const bindings = createToolBindings({
     knowledgeCapability: {} as never,
-    edoCapability: bindEdoToolCapability(edoWrite),
+    edoCapability: bindEdoToolCapability(edoWrite, runAttribution),
     metricsCapability: {} as never,
     webSearchCapability: {} as never,
     repoCapability: {} as never,
@@ -332,7 +338,7 @@ describe("the container hands the tools only the attributed capabilities (task.0
   });
 
   it("binds the EDO tools to the run's attribution and hands that, not the route capability, to the tool bindings", () => {
-    expect(code).toContain("bindEdoToolCapability(edoCapability)");
+    expect(code).toMatch(/bindEdoToolCapability\(\s*edoCapability,\s*runAttribution/);
     const bindings = code.slice(code.indexOf("createToolBindings({"), code.indexOf("createToolBindings({") + 400);
     expect(bindings).toContain("edoCapability: edoToolCapability");
   });

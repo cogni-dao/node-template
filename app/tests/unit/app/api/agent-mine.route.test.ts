@@ -192,3 +192,23 @@ describe("the person's own table and decisions", () => {
     expect(store.roles.some((r) => r.scope === "work_item:transition")).toBe(false);
   });
 });
+
+describe("mineRoute refuses before it reads (task.0175)", () => {
+  it("an Authorization header is 403 human_session_required and the body is never read, for every verb", async () => {
+    // Any authority access would throw, so a 403 also proves nothing was read or written.
+    fake.authority = new Proxy({}, { get: () => { throw new Error("authority reached before the plane check"); } });
+    for (const [handler, method] of [
+      [GET, "GET"],
+      [POST, "POST"],
+      [DELETE, "DELETE"],
+      [PREVIEW, "POST"],
+    ] as const) {
+      const request = new NextRequest(URL_, { method, headers: { authorization: "Bearer cogni_ag_sk_v1_x", "content-type": "application/json" } });
+      const readBody = vi.spyOn(request, "json");
+      const res = await handler(request, undefined as never);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: "human_session_required" });
+      expect(readBody).not.toHaveBeenCalled();
+    }
+  });
+});

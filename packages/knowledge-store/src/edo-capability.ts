@@ -18,6 +18,7 @@ import type {
   ChainNodeEntry,
   DecideParams,
   EdoCapability,
+  EdoToolCapability,
   GetChainParams,
   GetChainResult,
   HypothesizeParams,
@@ -207,5 +208,22 @@ export function createEdoCapability(
       }));
       return { root: toEntry(firstNode.entry), chain };
     },
+  };
+}
+
+/**
+ * The EDO capability as a tool sees it: each write is attributed at call time by the host's `attribution` function (the run scope's
+ * acting principal, its requester and its run), so a tool never names or builds an attribution. Routes call the full capability with
+ * their own route attribution.
+ */
+export function bindEdoToolCapability(
+  edo: EdoCapability,
+  attribution: () => WriteAttribution
+): EdoToolCapability {
+  return {
+    hypothesize: async (params) => edo.hypothesize(params, attribution()),
+    decide: async (params) => edo.decide(params, attribution()),
+    recordOutcome: async (params) => edo.recordOutcome(params, attribution()),
+    getChain: (params) => edo.getChain(params),
   };
 }
