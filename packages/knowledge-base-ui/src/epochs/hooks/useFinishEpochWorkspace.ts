@@ -88,8 +88,10 @@ async function fetchFinishEpochWorkspace(
 
 export const finishWorkspaceKey = (
   prefix: readonly string[],
-  pages: Readonly<Record<string, number>>,
-) => [...prefix, "finish-epoch", pages] as const;
+  pages?: Readonly<Record<string, number>>,
+) => pages === undefined
+  ? [...prefix, "finish-epoch"] as const
+  : [...prefix, "finish-epoch", pages] as const;
 
 export function useFinishEpochWorkspace(): UseQueryResult<
   FinishEpochWorkspaceData,

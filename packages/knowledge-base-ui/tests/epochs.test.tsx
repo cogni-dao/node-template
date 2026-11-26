@@ -38,6 +38,7 @@ import {
   type EpochsClient,
   EpochsProvider,
   type EpochWallet,
+  type FinishEpochWorkspaceData,
   ExecuteDistributionPanel,
   ReviewView,
   type SignDataResponse,
@@ -151,6 +152,7 @@ function fixture(initialNavigation?: EpochNavigationState) {
     confirmedPublish: false,
     nullExplorer: false,
     failRootRefetch: false,
+    rootRefetch: null as (() => Promise<void>) | null,
     error: null as Error | null,
     overrides: [] as {
       id: string;
@@ -197,6 +199,7 @@ function fixture(initialNavigation?: EpochNavigationState) {
         isLoading: false,
         error: null,
         refetch: async () => {
+          await state.rootRefetch?.();
           if (state.failRootRefetch)
             throw new Error("fixture root read unavailable");
         },
@@ -1987,6 +1990,73 @@ describe("public epochs capability", () => {
       )
     );
     expect(f.requests.filter((r) => r.method === "PATCH")).toHaveLength(1);
+    view.unmount();
+  });
+
+  it.each([[false, false], [true, false], [false, true], [true, true]])("r8 reconciles deferred root navigation in its live scope (reject=%s, disposed=%s)", async (rejectRoot, disposed) => {
+    const f = fixture();
+    const sibling = fixture();
+    f.state.kind = sibling.state.kind = "publish";
+    f.state.nullExplorer = true;
+    let releaseRoot!: () => void;
+    let rootStarted = false;
+    f.state.rootRefetch = () => {
+      rootStarted = true;
+      return new Promise<void>((resolve, reject) => {
+        releaseRoot = () => rejectRoot ? reject(new Error("root refused")) : resolve();
+      });
+    };
+    let released = false;
+    const request = f.client.request;
+    vi.spyOn(f.client, "request").mockImplementation(async (url, init) => {
+      const response = await request(url, init);
+      return url === "/fixture/lifecycle" && released
+        ? new Response(JSON.stringify({ ...await response.json(), publicationEvidence: "unknown" }))
+        : response;
+    });
+    const tree = (pages: Readonly<Record<string, number>>, live = true) => (
+      <QueryClientProvider client={f.queryClient}>
+        {live && <EpochsProvider client={f.client} state={{ historyOffset: 0, selectedEpochId: null, contributorPages: pages }}>{reviewElement()}</EpochsProvider>}
+        <EpochsProvider client={sibling.client}>{reviewElement()}</EpochsProvider>
+      </QueryClientProvider>
+    );
+    const view = render(tree({}));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Publish latest settlement" })).toHaveLength(2));
+    f.state.confirmedPublish = true;
+    const before = f.requests.length;
+    view.rerender(tree({}));
+    await waitFor(() => expect(rootStarted).toBe(true));
+    const pagesB = { "15": 200 };
+    view.rerender(tree(pagesB));
+    const activeB = () => f.queryClient.getQueryCache().findAll({ predicate: q => q.isActive() && q.queryKey.includes("finish-epoch") && JSON.stringify(q.queryKey.at(-1)) === JSON.stringify(pagesB) })[0];
+    await waitFor(() => expect(activeB()?.state.status).toBe("success"));
+    const queryB = activeB();
+    if (!queryB) throw new Error("Missing active workspace B");
+    const firstB = f.queryClient.getQueryData<FinishEpochWorkspaceData>(queryB.queryKey);
+    expect(firstB?.lifecycleUnavailable).toBe(false);
+    const siblingBefore = sibling.requests.length;
+    const afterNavigation = f.requests.length;
+    if (disposed) {
+      view.rerender(tree(pagesB, false));
+      const beforeDisposalRelease = f.requests.length;
+      await act(async () => { releaseRoot(); });
+      expect(f.requests).toHaveLength(beforeDisposalRelease);
+      expect(sibling.requests).toHaveLength(siblingBefore);
+      expect(activeB()).toBeUndefined();
+      expect(f.writeContract).not.toHaveBeenCalled();
+      expect(f.client.signTypedData).not.toHaveBeenCalled();
+      view.unmount();
+      return;
+    }
+    released = true;
+    await act(async () => { releaseRoot(); });
+    await waitFor(() => expect(f.queryClient.getQueryData<FinishEpochWorkspaceData>(queryB.queryKey)?.readId).not.toBe(firstB?.readId));
+    expect(f.queryClient.getQueryData<FinishEpochWorkspaceData>(queryB.queryKey)?.lifecycleUnavailable).toBe(true);
+    expect(f.requests.slice(afterNavigation).filter(r => r.url === "/fixture/lifecycle")).toHaveLength(1);
+    expect(f.requests.slice(before).some(r => r.url.endsWith("/distribution"))).toBe(true);
+    expect(sibling.requests).toHaveLength(siblingBefore);
+    expect(f.writeContract).not.toHaveBeenCalled();
+    expect(f.client.signTypedData).not.toHaveBeenCalled();
     view.unmount();
   });
 

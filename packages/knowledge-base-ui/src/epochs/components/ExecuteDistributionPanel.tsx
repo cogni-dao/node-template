@@ -368,7 +368,7 @@ function PublishStep({
   chainName: string;
   onConfirmed: (explorerUrl: string | null) => void;
 }) {
-  const { client, queryKeyPrefix, state, isCurrentScope } = useEpochContext();
+  const { client, queryKeyPrefix, isCurrentScope } = useEpochContext();
   const {
     useWriteContract,
     useWaitForTransactionReceipt,
@@ -422,20 +422,15 @@ function PublishStep({
         ]);
         if (!isCurrentScope()) return;
         await queryClient.refetchQueries({
-          queryKey: finishWorkspaceKey(
-            queryKeyPrefix,
-            state.contributorPages ?? {}
-          ),
-          exact: true,
+          // Resolve the owner at continuation time; navigation may replace its page key.
+          queryKey: finishWorkspaceKey(queryKeyPrefix),
+          type: "active",
         });
       } catch {
         if (!isCurrentScope()) return;
         await queryClient.invalidateQueries({
-          queryKey: finishWorkspaceKey(
-            queryKeyPrefix,
-            state.contributorPages ?? {}
-          ),
-          exact: true,
+          queryKey: finishWorkspaceKey(queryKeyPrefix),
+          refetchType: "active",
         });
       }
     })().catch(() => undefined);
@@ -447,7 +442,6 @@ function PublishStep({
     payload.epochId,
     queryClient,
     queryKeyPrefix,
-    state.contributorPages,
     isCurrentScope,
     refetchOnChainRoot,
   ]);
