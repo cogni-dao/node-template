@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@cogni/ai-tools/requires-guard`
+ * Module: `@cogni/ai-tools` (src/requires-guard.ts)
  * Purpose: The tool-contract `requires` guard as pure functions a node's CI runs over its own composed bundle, so a node tool that changes state without
  *   naming its scope fails in the node's pipeline, not only in this package's.
  * Scope: Plain `{ name, effect, requires }` records; no tool runs. A lint, not proof of authority.

@@ -158,13 +158,16 @@ import {
 	createAgentToolAuthority,
 } from "@/bootstrap/agent-authority";
 import { NODE_LOCAL_TOOL_BINDINGS } from "@/bootstrap/ai/secret-probe";
-import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
+import {
+	createToolBindings,
+	type ToolBindingDeps,
+} from "@/bootstrap/ai/tool-bindings";
 import { getCurrentTraceId } from "@/bootstrap/otel";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
 import {
-	NODE_EXTENSION_TOOL_BINDINGS,
+	extensionToolBindings,
 	NODE_TOOL_BUNDLE,
 } from "@/bootstrap/ai/tool-bundle";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
@@ -1127,7 +1130,7 @@ function createContainer(): Container {
 	);
 
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
-	const toolBindings = createToolBindings({
+	const toolBindingDeps: ToolBindingDeps = {
 		nodePublicOrigin: env.APP_BASE_URL,
 		remoteKnowledge: serviceLinks.remoteKnowledge,
 		knowledgeCapability,
@@ -1144,7 +1147,8 @@ function createContainer(): Container {
 			accountsForUser: (userId: UserId) =>
 				new UserDrizzleAccountService(db, userId, financialLedger),
 		}),
-	});
+	};
+	const toolBindings = createToolBindings(toolBindingDeps);
 	const goalProgress = createGoalProgressReader({
 		// knowledgeStorePort uses doltClient, not the reserved knowledgeWriter.
 		pooledGoalReads: true,
@@ -1167,7 +1171,7 @@ function createContainer(): Container {
 			...toolBindings,
 			...metricTools.bindings,
 			...NODE_LOCAL_TOOL_BINDINGS,
-			...NODE_EXTENSION_TOOL_BINDINGS,
+			...extensionToolBindings(nodeExtensions, toolBindingDeps),
 		},
 	);
 

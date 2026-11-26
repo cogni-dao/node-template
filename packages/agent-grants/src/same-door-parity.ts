@@ -31,14 +31,14 @@ export interface ParityRule {
 
 export interface ParityOptions {
   /**
-   * The package baseline names tools a given node may not carry (the operator's VCS tools). True: a baseline entry whose tool is not in `contracts` passes, and only
-   * the node's own entries must be real. False (the default, the package's own run over every shared bundle): every entry must be a real tool.
+   * The package baseline names tools a given node may not carry (the operator's VCS tools). Each id listed here may be missing from `contracts`; any other baseline
+   * or node entry must be a real tool. Absent (the package's own run over every shared bundle): every entry must be a real tool.
    */
-  readonly baselineMayBeAbsent?: boolean | undefined;
+  readonly absentBaseline?: readonly string[] | undefined;
 }
 
 const isAbsentOk = (tool: string, options: ParityOptions) =>
-  options.baselineMayBeAbsent === true && (tool in SAME_DOOR_ROUTES || tool in NO_ROUTE_TWIN);
+  (options.absentBaseline ?? []).includes(tool) && (tool in SAME_DOOR_ROUTES || tool in NO_ROUTE_TWIN);
 
 /** The tools that change state (or have an outside effect) and are neither twinned nor exempt. Exported so a test can show the check fails on a new tool. */
 export function unmappedWriteTools(

@@ -166,14 +166,16 @@ describe("the exported same-door parity suite", () => {
     expect(violations(routes).join("\n")).toContain("trading.dup");
   });
 
-  it("lets a node omit baseline tools it does not carry only when it says so, and still checks its own entries", () => {
+  it("lets a node omit only the baseline tools it names as absent, and still checks its own entries", () => {
     const routes = composeAgentRoutes(nodeRoutes);
     const noVcs = contracts.filter((c) => c.name !== "core__vcs_merge_pr");
-    const run = (set: typeof contracts, r = routes, baselineMayBeAbsent = false) => SAME_DOOR_PARITY_RULES.flatMap((rule) => rule.violations(set, r, { baselineMayBeAbsent }));
+    const run = (set: typeof contracts, r = routes, absentBaseline: string[] = []) => SAME_DOOR_PARITY_RULES.flatMap((rule) => rule.violations(set, r, { absentBaseline }));
     expect(run(noVcs)).toEqual(["core__vcs_merge_pr"]);
-    expect(run(noVcs, routes, true)).toEqual([]);
+    expect(run(noVcs, routes, ["core__vcs_merge_pr"])).toEqual([]);
     const gone = noVcs.filter((c) => c.name !== "poly__sandbox_probe");
-    expect(run(gone, routes, true)).toContain("poly__sandbox_probe");
+    expect(run(gone, routes, ["core__vcs_merge_pr"])).toContain("poly__sandbox_probe");
+    // Naming one absent tool does not waive another baseline tool that went missing.
+    expect(run(noVcs.filter((c) => c.name !== "core__sandbox_shell"), routes, ["core__vcs_merge_pr"])).toContain("core__sandbox_shell");
   });
 
   it("registers one row per rule under the caller's runner", () => {

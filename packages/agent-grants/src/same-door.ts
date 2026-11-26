@@ -163,7 +163,7 @@ export interface ComposedRoutes {
 function addOnly<T>(what: string, base: Readonly<Record<string, T>>, extra: Readonly<Record<string, T>> | undefined): Record<string, T> {
   const out: Record<string, T> = { ...base };
   for (const [key, value] of Object.entries(extra ?? {})) {
-    if (key in out) throw new Error(`ROUTE_COLLISION: ${what} "${key}" is already declared; a node adds, it never replaces`);
+    if (Object.prototype.hasOwnProperty.call(out, key)) throw new Error(`ROUTE_COLLISION: ${what} "${key}" is already declared; a node adds, it never replaces`);
     out[key] = value;
   }
   return out;

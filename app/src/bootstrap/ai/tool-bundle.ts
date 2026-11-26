@@ -14,10 +14,12 @@
 
 import { CORE_TOOL_BUNDLE, type CatalogBoundTool } from "@cogni/ai-tools";
 
-import { type NodeExtensions, nodeExtensions } from "@/node-extensions";
+import { nodeExtensions } from "@/node-extensions";
+
+import type { NodeExtensions } from "./node-extensions.types";
 
 import { NODE_LOCAL_TOOL_BUNDLE } from "./secret-probe";
-import type { ToolBindings } from "./tool-bindings";
+import type { ToolBindingDeps, ToolBindings } from "./tool-bindings";
 
 /** The composition: core, then node-local, then the node's declared tools. Throws on a repeated tool id. */
 export function composeToolBundle(extensions: NodeExtensions): readonly CatalogBoundTool[] {
@@ -31,16 +33,21 @@ export function composeToolBundle(extensions: NodeExtensions): readonly CatalogB
   return bundle;
 }
 
-/** Each declared tool's own implementation, as the tool source reads it. */
-export function extensionToolBindings(extensions: NodeExtensions): ToolBindings {
-  return Object.fromEntries((extensions.tools ?? []).map((tool) => [tool.contract.name, tool.implementation]));
+/** Each declared tool's implementation, as the tool source reads it: its static one, replaced by the factory's for the ids the factory returns. */
+export function extensionToolBindings(extensions: NodeExtensions, deps: ToolBindingDeps): ToolBindings {
+  const declared = new Set((extensions.tools ?? []).map((tool) => tool.contract.name));
+  const bindings: Record<string, ToolBindings[string]> = Object.fromEntries(
+    (extensions.tools ?? []).map((tool) => [tool.contract.name, tool.implementation])
+  );
+  for (const [id, implementation] of Object.entries(extensions.toolBindings?.(deps) ?? {})) {
+    if (!declared.has(id)) throw new Error(`TOOL_BINDING_UNDECLARED: binding for "${id}", which is not a tool in node-extensions tools`);
+    bindings[id] = implementation;
+  }
+  return bindings;
 }
 
 /** The one bundle this node runs with. */
 export const NODE_TOOL_BUNDLE: readonly CatalogBoundTool[] = composeToolBundle(nodeExtensions);
-
-/** Bindings for the tools in `nodeExtensions.tools`. */
-export const NODE_EXTENSION_TOOL_BINDINGS: ToolBindings = extensionToolBindings(nodeExtensions);
 
 /** `{ id, requires }` records of the bundle, the shape the permission catalog and the authority read. */
 export const NODE_TOOL_REQUIRES_RECORDS: ReadonlyArray<{ id: string; requires: CatalogBoundTool["contract"]["requires"] }> =

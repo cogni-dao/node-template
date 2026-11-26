@@ -10,9 +10,15 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
-import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { composeAgentRoutes, DEFERRED_WRITE_ROUTES, OPEN_BY_DESIGN_ROUTES } from "@cogni/agent-grants";
+import { VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
+
+import { NODE_TOOL_BUNDLE } from "@/bootstrap/ai/tool-bundle";
+import { nodeExtensions } from "@/node-extensions";
+
+// The node's composed routes: the package baseline plus whatever node-extensions.ts adds.
+const { sameDoorRoutes: SAME_DOOR_ROUTES, routeOnlyCapabilities: ROUTE_ONLY_CAPABILITIES, noRouteTwin: NO_ROUTE_TWIN } = composeAgentRoutes(nodeExtensions.routes);
 
 const API = resolve(__dirname, "../../../src/app/api");
 function routeFiles(dir: string): string[] {
@@ -46,7 +52,7 @@ describe("same-door routes", () => {
   });
 
   it("S4: no route-twin scope is admin-subject: a bearer on a scoped door needs a role row, and admin routes take the pure admin check instead (task.0144)", () => {
-    const contracts = new Map([...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map((t) => [t.contract.name, t.contract]));
+    const contracts = new Map([...NODE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map((t) => [t.contract.name, t.contract]));
     for (const tool of Object.keys(SAME_DOOR_ROUTES))
       expect(contracts.get(tool)?.requires?.subject, tool).not.toBe("admin");
     for (const [id, cap] of Object.entries(ROUTE_ONLY_CAPABILITIES))
