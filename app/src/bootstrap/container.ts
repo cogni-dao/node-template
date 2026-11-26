@@ -45,6 +45,7 @@ import { createTigerBeetleAdapter } from "@cogni/financial-ledger/adapters";
 import type { UserId } from "@cogni/ids";
 import { toUserId, userActor } from "@cogni/ids";
 import {
+	bindEdoToolCapability,
 	type ContributionService,
 	createContributionService,
 	createEdoCapability,
@@ -80,6 +81,7 @@ import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
 import {
+	createWorkItemWriters,
 	type WorkItemArtifactDeps,
 	type WorkItemQueryPort,
 	withWorkItemLeases,
@@ -131,7 +133,10 @@ import {
 	ProviderResolver,
 } from "@/adapters/server/ai/catalog";
 import { mcpServersToCodexConfig } from "@/adapters/server/ai/codex/codex-mcp-config";
-import { findExecutionScope } from "@/adapters/server/ai/execution-scope";
+import {
+	findExecutionScope,
+	getExecutionScope,
+} from "@/adapters/server/ai/execution-scope";
 import { withReadCounting } from "@/adapters/server/knowledge-usage/counting-knowledge-capability";
 import {
 	CodexModelProvider,
@@ -157,6 +162,7 @@ import {
 	NODE_LOCAL_TOOL_BUNDLE,
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
+import { getCurrentTraceId } from "@/bootstrap/otel";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
@@ -177,7 +183,6 @@ import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createGithubReadVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
-import { createWorkItemWriters } from "@/bootstrap/capabilities/work-item-writers";
 import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import {
@@ -192,7 +197,7 @@ import {
 	createApproversNodeAdminAuthority,
 } from "@/bootstrap/node-admin-gate";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
-import { bindEdoToolCapability } from "@/bootstrap/write-attribution";
+import { runAttribution } from "@/bootstrap/run-attribution";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
 	startGovernanceSyncOnBoot,
@@ -782,9 +787,11 @@ function createContainer(): Container {
 		() => goalMetrics,
 		() => knowledgeStorePort,
 	);
-	// ACTING_PRINCIPAL_FOR_WRITES (task.0133): every tool write of the work-item capability is attributed here, and only here (task.0133): see `work-item-writers.ts`.
+	// ACTING_PRINCIPAL_FOR_WRITES (task.0133): every tool write of the work-item capability is attributed here, and only here: see `createWorkItemWriters` in `@cogni/work-items`.
 	const workItemWriters = createWorkItemWriters({
 		log,
+		scope: getExecutionScope,
+		traceId: getCurrentTraceId,
 		store: () => doltgresWorkItems,
 		artifacts: () => workItemArtifacts,
 	});
@@ -1112,7 +1119,10 @@ function createContainer(): Container {
 	});
 
 	// ACTING_PRINCIPAL_FOR_WRITES (task.0133): a tool never builds an attribution; the host binds the run's at each call.
-	const edoToolCapability: EdoCapability = bindEdoToolCapability(edoCapability);
+	const edoToolCapability: EdoCapability = bindEdoToolCapability(
+		edoCapability,
+		runAttribution,
+	);
 
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
 	const toolBindings = createToolBindings({

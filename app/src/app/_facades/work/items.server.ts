@@ -46,6 +46,7 @@ import {
   toWorkItemId,
   toWorkItemsCreateInput,
   toWorkItemsPatchInput,
+  routeAttribution,
 } from "@cogni/work-items";
 
 import {
@@ -56,7 +57,6 @@ import {
 import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { getContainer } from "@/bootstrap/container";
-import { routeAttribution } from "@/bootstrap/write-attribution";
 import { toHttpWorkItem } from "../read-envelopes.server";
 
 /**

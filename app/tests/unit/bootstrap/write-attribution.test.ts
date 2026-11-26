@@ -12,7 +12,7 @@
  *   - REQUESTER_IS_THE_SUBJECT: a run write records S as the requester and the run's id and kind; a route write has neither.
  *   - NO_SCOPE_USER_ID: no write module imports `scopeUserId`.
  * Side-effects: IO (reads source files for the static check)
- * Links: src/bootstrap/write-attribution.ts, hub activity-attribution
+ * Links: src/bootstrap/run-attribution.ts, packages/work-items/src/attribution.ts, hub activity-attribution
  * @internal
  */
 
@@ -23,7 +23,7 @@ import {
   FakeEdoResolverAdapter,
   FakeKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/fake";
-import { createEdoCapability } from "@cogni/knowledge-store";
+import { bindEdoToolCapability, createEdoCapability } from "@cogni/knowledge-store";
 import type {
   WorkItemCommandPort,
   WorkItemQueryPort,
@@ -51,10 +51,7 @@ import {
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { getContainer } from "@/bootstrap/container";
 import { runGraphWithScope } from "@/bootstrap/graph-executor.factory";
-import {
-  bindEdoToolCapability,
-  runAttribution,
-} from "@/bootstrap/write-attribution";
+import { runAttribution } from "@/bootstrap/run-attribution";
 
 const P = "node-ai-principal";
 const S = "schedule-owner";
@@ -322,7 +319,8 @@ describe("an EDO write records the acting principal (task.0133)", () => {
   it("by tool: the commit names P first, then S as requester and the run", async () => {
     const store = await edoStore();
     const tool = bindEdoToolCapability(
-      createEdoCapability(store, new FakeEdoResolverAdapter(store))
+      createEdoCapability(store, new FakeEdoResolverAdapter(store)),
+      runAttribution
     );
     await inRun({ principal: P, subject: S, runKind: RUN.kind }, () =>
       tool.hypothesize(hypothesis)
@@ -337,7 +335,8 @@ describe("an EDO write records the acting principal (task.0133)", () => {
   it("by tool: a run with no principal writes nothing", async () => {
     const store = await edoStore();
     const tool = bindEdoToolCapability(
-      createEdoCapability(store, new FakeEdoResolverAdapter(store))
+      createEdoCapability(store, new FakeEdoResolverAdapter(store)),
+      runAttribution
     );
     const commits = store.commitLog.length;
     await expect(

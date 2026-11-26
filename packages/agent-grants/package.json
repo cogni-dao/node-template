@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/agent-grants",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -39,6 +39,26 @@
       "types": "./dist/service-auth.d.ts",
       "import": "./dist/service-auth.js",
       "default": "./dist/service-auth.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js",
+      "default": "./dist/schema.js"
+    },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js",
+      "default": "./dist/host.js"
+    },
+    "./http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js",
+      "default": "./dist/http.js"
+    },
+    "./internal-principals": {
+      "types": "./dist/internal-principals.d.ts",
+      "import": "./dist/internal-principals.js",
+      "default": "./dist/internal-principals.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -58,6 +78,15 @@
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^5",
-    "vitest": "^3.1.4"
+    "vitest": "^3.1.4",
+    "drizzle-orm": "^0.44.7"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "^0.44.7"
+  },
+  "peerDependenciesMeta": {
+    "drizzle-orm": {
+      "optional": true
+    }
   }
 }

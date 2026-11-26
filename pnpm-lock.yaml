@@ -489,6 +489,9 @@ importers:
         specifier: ^4.1.12
         version: 4.4.3
     devDependencies:
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.15.5)(pg@8.23.1)(postgres@3.4.9)
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
@@ -734,6 +737,9 @@ importers:
       '@cogni-dao/metrics':
         specifier: workspace:*
         version: link:../metrics
+      '@cogni/agent-grants':
+        specifier: workspace:@cogni-dao/agent-grants@*
+        version: link:../agent-grants
       '@cogni/attribution-ledger':
         specifier: workspace:@cogni-dao/attribution@*
         version: link:../attribution-ledger
@@ -1210,6 +1216,9 @@ importers:
 
   packages/node-shared:
     dependencies:
+      '@cogni/agent-grants':
+        specifier: workspace:@cogni-dao/agent-grants@*
+        version: link:../agent-grants
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core

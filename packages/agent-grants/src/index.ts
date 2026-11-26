@@ -136,3 +136,10 @@ export type {
   ToolRequires,
   WithStore,
 } from "./types";
+export {
+  INTERNAL_AGENT_PRINCIPALS,
+  NODE_AI_PRINCIPAL_SLUG,
+  NODE_AI_PRINCIPAL_USER_ID,
+  PRIORITIZER_PRINCIPAL_SLUG,
+  PRIORITIZER_PRINCIPAL_USER_ID,
+} from "./internal-principals";
