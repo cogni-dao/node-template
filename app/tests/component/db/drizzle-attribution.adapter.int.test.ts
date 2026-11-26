@@ -1498,6 +1498,191 @@ describe("DrizzleAttributionAdapter (Component)", () => {
     });
   });
 
+  describe("transitionEpochForWindow scope authority", () => {
+    const nodeId = "00000000-0000-4000-8000-000000000717";
+    const otherNode = "00000000-0000-4000-8000-000000000718";
+    const foreign = new DrizzleAttributionAdapter(db, OTHER_SCOPE_ID);
+    let ownId: bigint;
+    let foreignId: bigint;
+    const receiptId = "scope-transition-foreign-receipt";
+
+    beforeAll(async () => {
+      const own = await adapter.createEpoch({
+        nodeId,
+        scopeId: TEST_SCOPE_ID,
+        ...epochWindow(600),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      const outside = await foreign.createEpoch({
+        nodeId,
+        scopeId: OTHER_SCOPE_ID,
+        ...epochWindow(601),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      ownId = own.id;
+      foreignId = outside.id;
+      await foreign.insertIngestionReceipts([
+        makeIngestionReceipt({ receiptId, nodeId }),
+      ]);
+      await foreign.insertSelectionDoNothing([
+        makeSelectionAuto({ receiptId, nodeId, epochId: foreignId }),
+      ]);
+      await foreign.upsertDraftClaimants({
+        nodeId,
+        epochId: foreignId,
+        receiptId,
+        resolverRef: "cogni.default-author.v0",
+        algoRef: "default-author-v0",
+        inputsHash: "scope-hash",
+        claimantKeys: ["user:scope-test"],
+        createdBy: "system",
+      });
+    });
+
+    const transition = (staleId: bigint) => ({
+      nodeId,
+      scopeId: TEST_SCOPE_ID,
+      ...epochWindow(602),
+      weightConfig: TEST_WEIGHT_CONFIG,
+      closeParams: {
+        epochId: staleId,
+        approvers: [],
+        approverSetHash: "scope-approvers",
+        allocationAlgoRef: "weight-sum-v0",
+        weightConfigHash: "scope-weights",
+        artifactsHash: "scope-artifacts",
+        evaluations: [
+          makeEvaluation({ nodeId, epochId: staleId, status: "locked" }),
+        ],
+      },
+    });
+    const assertUnchanged = async () => {
+      const [
+        own,
+        outside,
+        ownEvaluations,
+        foreignEvaluations,
+        foreignClaimants,
+      ] = await Promise.all([
+        adapter.getEpoch(ownId),
+        foreign.getEpoch(foreignId),
+        adapter.getEvaluationsForEpoch(ownId),
+        foreign.getEvaluationsForEpoch(foreignId),
+        db.execute(
+          sql`SELECT status FROM epoch_receipt_claimants WHERE epoch_id = ${foreignId} AND receipt_id = ${receiptId}`
+        ),
+      ]);
+      expect(own?.status).toBe("open");
+      expect(outside?.status).toBe("open");
+      expect(ownEvaluations).toHaveLength(0);
+      expect(foreignEvaluations).toHaveLength(0);
+      expect(Array.from(foreignClaimants, (row) => row.status)).toEqual([
+        "draft",
+      ]);
+      expect((await adapter.listEpochs(nodeId)).map((e) => e.id)).toEqual([
+        ownId,
+      ]);
+      expect((await foreign.listEpochs(nodeId)).map((e) => e.id)).toEqual([
+        foreignId,
+      ]);
+    };
+
+    it("rejects a foreign stale epoch before evaluation and claimant writes", async () => {
+      await expect(
+        adapter.transitionEpochForWindow(transition(foreignId))
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+    });
+
+    it.each([
+      false,
+      true,
+    ])("rejects foreign target scope before writes or existing-window return (existing=%s)", async (existing) => {
+      const params = transition(ownId);
+      await expect(
+        adapter.transitionEpochForWindow({
+          ...params,
+          scopeId: OTHER_SCOPE_ID,
+          ...(existing ? epochWindow(601) : epochWindow(603)),
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+    });
+
+    it.each([
+      "node",
+      "epoch",
+    ] as const)("rejects a foreign evaluation %s without partial writes", async (mismatch) => {
+      const params = transition(ownId);
+      const invalid = makeEvaluation({
+        nodeId: mismatch === "node" ? otherNode : nodeId,
+        epochId: mismatch === "epoch" ? foreignId : ownId,
+        evaluationRef: "other",
+        status: "locked",
+      });
+      await expect(
+        adapter.transitionEpochForWindow({
+          ...params,
+          closeParams: {
+            ...params.closeParams,
+            evaluations: [...params.closeParams.evaluations, invalid],
+          },
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+    });
+
+    it("rejects missing stale epochs and mismatched nodes without effects", async () => {
+      await expect(
+        adapter.transitionEpochForWindow(transition(999999999n))
+      ).rejects.toThrow(EpochNotFoundError);
+      const params = transition(ownId);
+      await expect(
+        adapter.transitionEpochForWindow({
+          ...params,
+          nodeId: otherNode,
+          closeParams: {
+            ...params.closeParams,
+            evaluations: [
+              makeEvaluation({
+                nodeId: otherNode,
+                epochId: ownId,
+                status: "locked",
+              }),
+            ],
+          },
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+    });
+
+    it("permits an authorized retry after the stale epoch is closed", async () => {
+      const params = transition(ownId);
+      const first = await adapter.transitionEpochForWindow(params);
+      expect(first.isNew).toBe(true);
+      expect((await adapter.getEpoch(ownId))?.status).toBe("review");
+      const retry = await adapter.transitionEpochForWindow(params);
+      expect(retry.isNew).toBe(false);
+      expect(retry.epoch.id).toBe(first.epoch.id);
+      expect(retry.closedStaleEpochId).toBe(ownId);
+      await adapter.finalizeEpoch(ownId, 0n);
+      const finalizedRetry = await adapter.transitionEpochForWindow(params);
+      expect(finalizedRetry.isNew).toBe(false);
+      expect(finalizedRetry.epoch.id).toBe(first.epoch.id);
+      expect(await adapter.getEvaluationsForEpoch(ownId)).toHaveLength(1);
+      await assertForeignUnchanged();
+    });
+
+    const assertForeignUnchanged = async () => {
+      expect((await foreign.getEpoch(foreignId))?.status).toBe("open");
+      expect(await foreign.getEvaluationsForEpoch(foreignId)).toHaveLength(0);
+      const rows = await db.execute(
+        sql`SELECT status FROM epoch_receipt_claimants WHERE epoch_id = ${foreignId} AND receipt_id = ${receiptId}`
+      );
+      expect(Array.from(rows, (row) => row.status)).toEqual(["draft"]);
+    };
+  });
+
   // ── Evaluations ───────────────────────────────────────────────
 
   describe("upsertDraftEvaluation + reads", () => {

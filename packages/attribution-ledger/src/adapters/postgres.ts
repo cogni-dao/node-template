@@ -1029,6 +1029,20 @@ export function bindDrizzleAttributionAdapter(
       params: TransitionEpochForWindowParams
     ): Promise<TransitionEpochForWindowResult> {
       return await this.db.transaction(async (tx) => {
+        // Validate all authority before either the idempotent return or child writes.
+        const staleId = params.closeParams.epochId;
+        if (params.scopeId !== this.scopeId)
+          throw new EpochNotFoundError(staleId.toString());
+        const stale = await this.resolveEpochScopedForUpdate(staleId, tx);
+        if (
+          stale.nodeId !== params.nodeId ||
+          params.closeParams.evaluations.some(
+            (evaluation) =>
+              evaluation.nodeId !== stale.nodeId || evaluation.epochId !== stale.id
+          )
+        )
+          throw new EpochNotFoundError(staleId.toString());
+
         // 1. Check if epoch already exists for this window (any status) → return it
         const [existing] = await tx
           .select()
