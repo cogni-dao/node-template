@@ -2113,6 +2113,7 @@ describe("host-owned research stages", () => {
 	it("gives an unbindable draft two repair turns, then ends without critique", async () => {
 		let rootTurn = 0;
 		let repairText = "";
+		let firstRepair = "";
 		let fingerprint = "";
 		const call = (id: string, name: string, args: unknown) => ({
 			id,
@@ -2148,6 +2149,7 @@ describe("host-owned research stages", () => {
 					})}\n\`\`\``,
 				);
 			repairText = JSON.stringify(req.messages);
+			if (!firstRepair) firstRepair = repairText;
 			return reply(
 				JSON.stringify({
 					...draft,
@@ -2159,8 +2161,9 @@ describe("host-owned research stages", () => {
 			/* drain */
 		}
 		const output = JSON.parse((await run.final).content ?? "{}");
-		// The first repair fixes the fenced format; the second names the invented domain; then the run ends.
-		expect(repairText).toContain("invented-domain, which is not eligible");
+		// The first repair already names both the fence and the invented domain inside it.
+		expect(firstRepair).toContain("not one bare JSON object");
+		expect(firstRepair).toContain("invented-domain, which is not eligible");
 		expect(repairText).toContain("Eligible domains:");
 		expect(rootTurn).toBe(4);
 		expect(fingerprint).toBe("");

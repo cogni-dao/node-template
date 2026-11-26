@@ -256,11 +256,17 @@ export class ResearchReceipts {
 	/** Side-effect-free check of a candidate draft or final answer. */
 	check(raw: string): string[] {
 		if (size(raw) > 24 * 1024) return ["the draft exceeds 24 KiB"];
+		const bare = "the answer is not one bare JSON object (no markdown fences or prose)";
 		let data: unknown;
 		try {
 			data = JSON.parse(raw);
 		} catch {
-			return ["the answer is not one bare JSON object (no markdown fences or prose)"];
+			// Diagnose the JSON inside a fence too, so one repair turn names every problem. The
+			// fenced answer itself is never accepted.
+			const inner = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/)?.[1];
+			if (inner === undefined || inner.trim() === raw.trim()) return [bare];
+			const problems = this.check(inner);
+			return [bare, ...problems.filter((problem) => problem !== bare)];
 		}
 		const parsed = PartialPacket.safeParse(data);
 		if (!parsed.success)
