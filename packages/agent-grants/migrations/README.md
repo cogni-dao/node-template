@@ -29,4 +29,4 @@ The grants index and the org feature reach a node in this order. Each step is it
 2. **0.12.0, release B.** Adopt it only after A is deployed and no pod of the previous release runs. Run `db:generate` (it emits the `DROP INDEX`), deploy. One principal may now hold a scope on several accounts.
 3. **0.13.0, the org feature.** Adopt it only after B is deployed. Run `db:generate`, append `org_accounts.sql` after the generated SQL, deploy. The feature's migration assumes the old index is gone.
 
-Skipping a step, or deploying two together, leaves pods of one release running against a schema the next one changed.
+Skipping a step, or deploying two together, leaves pods of one release running against a schema the next one changed. The rollback floor after release B is 0.11.0: a node may roll back to 0.11.0 (it writes with a bare `ON CONFLICT DO NOTHING`), never to a release before it, which still names the dropped index.
