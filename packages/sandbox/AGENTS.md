@@ -9,3 +9,5 @@ Design and operation: hub atoms `node-sandbox-design`, `node-sandbox-lifecycle`,
 ```bash
 pnpm --filter @cogni-dao/sandbox test
 ```
+
+`createSandboxPushTokenEnv({ operatorKey, operatorUrl, nodeSlug, onWarn })` (0.3.0) returns the per-call `callEnv` provider that gives each sandbox call a 1-hour, one-repo `GH_TOKEN` minted by the operator (hub `node-ai-push-token`). It caches the token until 20 minutes before expiry, backs off 60 seconds after a failed mint, and reports a missing key or failed mint through `onWarn` (adapter and error code only, never a token). `SANDBOX_PUSH_TOKEN_EVENT` owns the event name; a node's registry repeats it and a parity test pins it.
