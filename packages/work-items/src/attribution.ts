@@ -85,3 +85,96 @@ export function attributionCommitLines(
     lines.push(`Run: ${attribution.run.id} ${attribution.run.kind}`);
   return lines;
 }
+
+/** The terminal event names this module owns; a node's registry repeats them only as these values. */
+export const WORK_ITEM_ATTRIBUTION_EVENTS = {
+  runMissing: "work.items.attribution_run_missing",
+} as const;
+
+/** The run facts a host builds an attribution from. A node's own run scope satisfies this shape; the package imports no scope type. */
+export interface RunAttributionScope {
+  /** The acting agent principal's user id. */
+  readonly principalId?: string | undefined;
+  /** The authenticated caller the run serves; absent for a run with no caller. */
+  readonly subjectUserId?: string | undefined;
+  readonly runId?: string | undefined;
+  /** The run record's kind; absent when the record is missing or unreadable. */
+  readonly runKind?: WriteRunKind | undefined;
+}
+
+/**
+ * The actor of a write made inside a run: the run's own acting principal. Fails closed when the scope names none
+ * (never falls back to the subject: a run with no principal writes nothing).
+ */
+export function actingPrincipal(scope: RunAttributionScope): string {
+  if (!scope.principalId) {
+    throw new Error("write denied: the run has no acting principal");
+  }
+  return scope.principalId;
+}
+
+/** The fields every write's terminal event carries: who acted, who asked, which run. Ids only. */
+export function attributionFields(attribution: WriteAttribution): {
+  actor: string;
+  requestedBy?: string;
+  runId?: string;
+  runKind?: string;
+} {
+  return {
+    actor: attribution.actor,
+    ...(attribution.requestedBy ? { requestedBy: attribution.requestedBy } : {}),
+    ...(attribution.run
+      ? { runId: attribution.run.id, runKind: attribution.run.kind }
+      : {}),
+  };
+}
+
+/** A write made through a route: the authenticated caller (a signed-in person, or the outside AI that holds the key). No requester, no run. */
+export function routeAttribution(callerUserId: string): WriteAttribution {
+  return { actor: callerUserId };
+}
+
+/** The one logger call `runAttribution` makes. */
+export interface RunAttributionLog {
+  warn(fields: Record<string, unknown>, event: string): void;
+}
+
+/**
+ * A write made by a graph tool: the run's acting principal, the run's subject as requester (when it has one) and the run.
+ * The actor rule is fail closed: no principal, no write, and the subject is never the actor. The run is not: when the host
+ * could not name it (no record, no kind, an unreadable ledger) the write still happens as the principal, with no `Run:` line,
+ * and one `work.items.attribution_run_missing` event says so.
+ */
+export function runAttribution(
+  scope: RunAttributionScope,
+  log?: RunAttributionLog
+): WriteAttribution {
+  const actor = actingPrincipal(scope);
+  const run =
+    scope.runId && scope.runKind
+      ? { id: scope.runId, kind: scope.runKind }
+      : undefined;
+  if (!run) {
+    log?.warn(
+      {
+        event: WORK_ITEM_ATTRIBUTION_EVENTS.runMissing,
+        ...(scope.runId ? { runId: scope.runId } : {}),
+        hasRunKind: scope.runKind !== undefined,
+      },
+      WORK_ITEM_ATTRIBUTION_EVENTS.runMissing
+    );
+  }
+  return {
+    actor,
+    ...(scope.subjectUserId ? { requestedBy: scope.subjectUserId } : {}),
+    ...(run ? { run } : {}),
+  };
+}
+
+/** `runAttribution` bound to the node's current run scope, read at each call and never at construction. */
+export function createRunAttribution(deps: {
+  readonly scope: () => RunAttributionScope;
+  readonly log?: RunAttributionLog;
+}): () => WriteAttribution {
+  return () => runAttribution(deps.scope(), deps.log);
+}
