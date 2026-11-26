@@ -124,8 +124,10 @@ export function defineAgentAuthoritySchema(refs: AgentAuthorityRefs) {
     },
     (table) => [
       // RELEASE A of two (task.0181 / task.5484): the old (principal, scope) index stays for a pod on the previous release's ON CONFLICT target and for
-      // rollback; the account-aware index is added beside it and every writer here uses it. Release B drops the old index, after which one principal
-      // may hold the same scope on several accounts (an org spender on two orgs). A node row and a pending account row have no account (the '' key).
+      // rollback; the account-aware index is added beside it. Every writer in this package now says a bare `ON CONFLICT DO NOTHING`, which arbitrates BOTH
+      // indexes: until release B a second account for one (principal, scope) is still refused by the old index (the v0 limit, answered `false`, never an
+      // error), and when B drops the old index no writer names a missing one. After B one principal may hold the same scope on several accounts (an org
+      // spender on two orgs). A node row and a pending account row have no account (the '' key).
       uniqueIndex("agent_roles_live_unique")
         .on(table.principalUserId, table.scope)
         .where(sql`${table.revokedAt} IS NULL`),
