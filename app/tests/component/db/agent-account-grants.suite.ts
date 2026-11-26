@@ -462,14 +462,17 @@ describe("account grants (real Postgres, real roles)", () => {
       await expect(service`INSERT INTO agent_roles (principal_user_id, scope, requested_by, link_consumed_at, link_hash) VALUES (${agent}, 's6', ${agent}, now(), 'h')`).rejects.toThrow(/agent_roles_link_consumed_has_no_hash/);
     });
 
-    it("keeps the old live-row index, so an old pod's ON CONFLICT (principal, scope) still works", async () => {
+    it("keeps the old live-row index beside the account-aware one, so an old pod's ON CONFLICT (principal, scope) and the new writers both still work", async () => {
       const agent = await makeUser();
       const admin = await makeUser();
       await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${agent}, 'edo:write', ${admin}, now())`;
       const again = await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${agent}, 'edo:write', ${admin})
         ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
       expect(again).toHaveLength(0);
-      expect(await service`SELECT indexname FROM pg_indexes WHERE indexname = 'agent_roles_live_unique'`).toHaveLength(1);
+      const viaNew = await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${agent}, 'edo:write', ${admin})
+        ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
+      expect(viaNew).toHaveLength(0);
+      expect(await service`SELECT indexname FROM pg_indexes WHERE indexname IN ('agent_roles_live_unique', 'agent_roles_live_account_unique')`).toHaveLength(2);
     });
   });
 

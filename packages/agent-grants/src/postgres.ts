@@ -265,7 +265,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const inserted = await sql`
         INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by, resource, link_hash, link_expires_at)
         VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId}, ${resource}, ${link.hash}, ${linkEnds})
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       if (inserted.length > 0) return "created";
       // A concurrent ask took the open slot between our read and our insert. Whatever we answer, the link we hand back must be stored: rotate it
@@ -312,7 +312,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         SELECT ${principalUserId}, ${scope}, ${approvedBy}, now(), 'node'
         WHERE EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = ${principalUserId} AND ap.kind = 'internal')
           AND ${principalUserId} <> ${approvedBy}
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       return rows.length > 0;
     },
@@ -391,7 +391,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         WHERE b.owner_user_id = ${approvedBy}
           AND ${principalUserId} <> ${approvedBy}
           AND EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = ${principalUserId} AND ap.kind = 'internal')
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT (principal_user_id, scope, coalesce(account_id, '')) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
       return rows.length > 0;
     },
