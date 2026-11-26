@@ -2,47 +2,54 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@bootstrap/capabilities/sandbox-push-token`
- * Purpose: Give each sandbox call a 1-hour GH_TOKEN for this node's own repo.
- * Scope: Asks the operator's POST /api/v1/vcs/push-token with the node AI's operator key (role developer); the
- *   operator mints from its App, narrowed to this repo and contents + pull_requests write. Caches the token.
- *   No GitHub key ever reaches the sandbox; only the minted token does.
+ * Module: `@cogni-dao/sandbox` push-token
+ * Purpose: Give each sandbox call a 1-hour GH_TOKEN for the node's own repo (hub node-ai-push-token).
+ * Scope: Asks the operator's POST /api/v1/vcs/push-token with the node AI's operator key (role developer); the operator mints from its App,
+ *   narrowed to this repo and contents + pull_requests write. Caches the token. The node passes the result as `callEnv` to
+ *   `createSandboxShellCapability`. Leaf: reads no env, imports no logger; the node passes values and an `onWarn` callback.
  * Invariants:
  *   - ONE_REPO_ONLY: the operator narrows every token to this node's repo and contents + pull_requests write.
- *   - WARN_NEVER_BLOCK: no key, or a failed mint, logs a warning and returns no env; the call still runs and only
- *     git push fails.
+ *   - WARN_NEVER_BLOCK: no key, or a failed mint, calls `onWarn` and returns no env; the call still runs and only git push fails.
  *   - CACHE_UNTIL_NEAR_EXPIRY: one mint serves every call until 20 minutes before expiry, longer than any call (15 min).
  *   - BACK_OFF_ON_FAILURE: after a failed mint, calls skip minting for 60 seconds and keep any unexpired cached token.
- *   - TOKEN_NEVER_LOGGED: logs carry the adapter and error code only.
- * Side-effects: IO (HTTPS to the operator or GitHub); logs `adapter.sandbox.push_token` on failure
+ *   - TOKEN_NEVER_REPORTED: `onWarn` carries the adapter and error code only.
+ *   - EVENT_NAMES_HERE: the node's event registry repeats `SANDBOX_PUSH_TOKEN_EVENT` as this value; a parity test pins it.
+ * Side-effects: IO (HTTPS to the operator)
  * Links: https://node-template.cognidao.org/knowledge/node-ai-push-token
- * @internal
+ * @public
  */
 
-import type { ServerEnv } from "@/shared/env";
-import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+/** The event name a node logs a failed or missing mint under. */
+export const SANDBOX_PUSH_TOKEN_EVENT = "adapter.sandbox.push_token" as const;
 
-const logger = makeLogger({ component: "SandboxPushToken" });
 // Longer than the longest sandbox call (15 min), so a token never expires mid-call.
 const REFRESH_BEFORE_MS = 20 * 60_000;
 const FAILURE_BACKOFF_MS = 60_000;
 const MINT_TIMEOUT_MS = 15_000;
 
-type CallEnv = Readonly<Record<string, string>>;
+export type SandboxCallEnv = Readonly<Record<string, string>>;
+type CallEnv = SandboxCallEnv;
 type Minted = { token: string; expiresAt: string };
 /** One mint attempt: a token, or the error code to log. */
 type Mint = () => Promise<Minted | { errorCode: string }>;
 
-export type PushTokenEnv = Pick<ServerEnv, "NODE_AI_OPERATOR_KEY" | "COGNI_OPERATOR_URL">;
+export interface SandboxPushTokenConfig {
+  /** The node AI's operator principal key (`NODE_AI_OPERATOR_KEY`); absent means no token. */
+  readonly operatorKey?: string | undefined;
+  /** The operator's origin (`COGNI_OPERATOR_URL`); absent means no token. */
+  readonly operatorUrl?: string | undefined;
+  readonly nodeSlug: string;
+  /** Called on a missing key or a failed mint. Carries the adapter name and an error code, never a token. */
+  readonly onWarn: (report: { readonly adapter: string; readonly errorCode: string }) => void;
+  readonly fetch?: typeof fetch;
+  readonly now?: () => number;
+}
 
 /** Returns the per-call env provider for the sandbox: `{ GH_TOKEN }` when a token is available, else `{}`. */
-export function createSandboxPushTokenEnv(
-  env: PushTokenEnv,
-  nodeSlug: string,
-  fetchImpl: typeof fetch = fetch,
-  now: () => number = Date.now
-): () => Promise<CallEnv> {
-  const adapter = selectAdapter(env, nodeSlug, fetchImpl);
+export function createSandboxPushTokenEnv(config: SandboxPushTokenConfig): () => Promise<CallEnv> {
+  const fetchImpl = config.fetch ?? fetch;
+  const now = config.now ?? Date.now;
+  const adapter = selectAdapter(config, fetchImpl);
   let cached: { token: string; expiresAtMs: number } | null = null;
   let inFlight: Promise<CallEnv> | null = null;
   let failedAtMs = Number.NEGATIVE_INFINITY;
@@ -50,10 +57,7 @@ export function createSandboxPushTokenEnv(
 
   const warn = (errorCode: string): CallEnv => {
     failedAtMs = now();
-    logger.warn(
-      { event: EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN, adapter: adapter?.name ?? "none", error_code: errorCode },
-      EVENT_NAMES.ADAPTER_SANDBOX_PUSH_TOKEN
-    );
+    config.onWarn({ adapter: adapter?.name ?? "none", errorCode });
     return stillValid();
   };
   // A failed refresh keeps handing out the cached token while it has not expired.
@@ -90,14 +94,13 @@ export function createSandboxPushTokenEnv(
 }
 
 function selectAdapter(
-  env: PushTokenEnv,
-  nodeSlug: string,
+  config: SandboxPushTokenConfig,
   fetchImpl: typeof fetch
 ): { name: "operator"; mint: Mint } | null {
-  if (!env.NODE_AI_OPERATOR_KEY || !env.COGNI_OPERATOR_URL) return null;
+  if (!config.operatorKey || !config.operatorUrl) return null;
   return {
     name: "operator",
-    mint: operatorMint(env.COGNI_OPERATOR_URL.replace(/\/+$/, ""), env.NODE_AI_OPERATOR_KEY, nodeSlug, fetchImpl),
+    mint: operatorMint(config.operatorUrl.replace(/\/+$/, ""), config.operatorKey, config.nodeSlug, fetchImpl),
   };
 }
 
