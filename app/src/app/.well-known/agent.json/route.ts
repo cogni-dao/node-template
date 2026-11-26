@@ -42,6 +42,7 @@ import {
  */
 
 import { getContainer } from "@/bootstrap/container";
+import { failureFields, makeLogger } from "@/shared/observability";
 import {
 	confirmAgentCredentialOperation,
 	creditsSummaryOperation,
@@ -79,12 +80,36 @@ import { serverEnv } from "@/shared/env";
 export const runtime = "nodejs";
 
 
+/** After a failed container read, the route answers identity-only for this long before it tries again, so a down container is not rebuilt on every public GET. */
+const RETRY_AFTER_FAILURE_MS = 30_000;
+let lastFailureAt: number | undefined;
+
+/**
+ * The askable permissions from the authority the container builds. Identity discovery must not depend on the container: a failure answers `[]`, is logged, and
+ * is retried after `RETRY_AFTER_FAILURE_MS`. Nothing is cached on failure.
+ */
+function askablePermissions() {
+	if (lastFailureAt !== undefined && Date.now() - lastFailureAt < RETRY_AFTER_FAILURE_MS) return [];
+	try {
+		const permissions = getContainer().agentAuthority.permissions;
+		lastFailureAt = undefined;
+		return permissions;
+	} catch (error) {
+		lastFailureAt = Date.now();
+		makeLogger({ service: "cogni-template", route: "meta.agent_json" }).error(
+			{ ...failureFields(error), retryAfterMs: RETRY_AFTER_FAILURE_MS },
+			"agent.json: permissions unavailable, answering identity only",
+		);
+		return [];
+	}
+}
+
 export async function GET(request: Request) {
 	const env = serverEnv();
 	const origin = publicOrigin(request);
 	// DECLARED_ONCE_SHOWN_EVERYWHERE: rendered from the grant declarations on every read, never a copy table.
 	// The authority's catalog is built once from the container's composed bundle and routes (core + node-local + node-extensions).
-	const { permissions: askable } = getContainer().agentAuthority;
+	const askable = askablePermissions();
 	// Each askable permission says where its approval link opens, from its declared kind (an account permission: the person's profile; any
 	// other: the node-admin page). The ask returns the link itself (`approvalUrl`); this is its shape, so an agent can plan before it asks.
 	const permissions = askable.map((p) => ({

@@ -52,6 +52,7 @@ export {
   type TerminalDenial,
   ToolAuthorityError,
 } from "./guard";
+export { addOnly, type Contribution } from "./add-only";
 export {
   type AgentRoutes,
   authorizeCaller,

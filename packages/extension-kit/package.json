@@ -27,7 +27,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "peerDependencies": {
-    "@cogni/agent-grants": ">=0.10.0",
+    "@cogni/agent-grants": ">=0.14.0",
     "@cogni/ai-tools": ">=0.26.0"
   },
   "devDependencies": {

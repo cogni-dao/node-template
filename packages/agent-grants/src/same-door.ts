@@ -19,7 +19,7 @@
  * @public
  */
 
-import { mergeAddOnly } from "./add-only";
+import { addOnly } from "./add-only";
 import { authorize, authorizeAccount } from "./authorize";
 import type { OrgOwners } from "./orgs";
 import type {
@@ -171,13 +171,13 @@ export interface ComposedRoutes {
  */
 export function composeAgentRoutes(extra?: AgentRoutes): ComposedRoutes {
   const code = "ROUTE_COLLISION";
-  const sameDoorRoutes = mergeAddOnly({ what: "route twin for tool", code }, { source: "package", entries: SAME_DOOR_ROUTES }, { source: "node", entries: extra?.sameDoorRoutes });
-  const routeOnlyCapabilities = mergeAddOnly({ what: "route-only capability", code }, { source: "package", entries: ROUTE_ONLY_CAPABILITIES }, { source: "node", entries: extra?.routeOnlyCapabilities });
-  const noRouteTwin = mergeAddOnly({ what: "no-route-twin tool", code }, { source: "package", entries: NO_ROUTE_TWIN }, { source: "node", entries: extra?.noRouteTwin });
-  mergeAddOnly<unknown>({ what: "tool", code }, { source: "route twins", entries: sameDoorRoutes }, { source: "no-route-twin list", entries: noRouteTwin });
+  const sameDoorRoutes = addOnly({ what: "route twin for tool", code }, { source: "package", entries: SAME_DOOR_ROUTES }, { source: "node", entries: extra?.sameDoorRoutes });
+  const routeOnlyCapabilities = addOnly({ what: "route-only capability", code }, { source: "package", entries: ROUTE_ONLY_CAPABILITIES }, { source: "node", entries: extra?.routeOnlyCapabilities });
+  const noRouteTwin = addOnly({ what: "no-route-twin tool", code }, { source: "package", entries: NO_ROUTE_TWIN }, { source: "node", entries: extra?.noRouteTwin });
+  addOnly<unknown>({ what: "tool", code }, { source: "route twins", entries: sameDoorRoutes }, { source: "no-route-twin list", entries: noRouteTwin });
   const routeIds = (entries: Readonly<Record<string, { readonly routes: readonly string[] }>>) =>
     Object.entries(entries).map(([key, entry]) => ({ source: key, entries: Object.fromEntries(entry.routes.map((routeId) => [routeId, routeId])) }));
-  mergeAddOnly({ what: "route", code }, ...routeIds(sameDoorRoutes), ...routeIds(routeOnlyCapabilities));
+  addOnly({ what: "route", code }, ...routeIds(sameDoorRoutes), ...routeIds(routeOnlyCapabilities));
   return { sameDoorRoutes, routeOnlyCapabilities, noRouteTwin };
 }
 

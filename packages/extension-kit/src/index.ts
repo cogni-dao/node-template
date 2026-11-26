@@ -5,7 +5,7 @@
  * Module: `@cogni-dao/extension-kit`
  * Purpose: The host's side of the node plugin contract. A node declares what it adds through `defineNodeExtensions`; the host merges declarations
  *   with `addOnly`. `NodeExtensions` is the one aggregate of the extension points the owning packages export.
- * Scope: Types from the owning packages (type-only imports) and two small functions over plain records. No runtime dependency, no node import.
+ * Scope: Types from the owning packages, one re-export of agent-grants' `addOnly`, and two small functions over plain records. No node import.
  * Invariants:
  *   - NODE_ADDS_ONLY: a key declared twice throws, naming the key and both sources. The result never depends on the order of the sources.
  *   - NODE_OWNS_ITS_PREFIX: a node's tool ids all start with the same `<node>__`; `core__` belongs to the shared bundle and is rejected.
@@ -55,34 +55,7 @@ export function assertOwnedToolIds(tools: ReadonlyArray<{ readonly contract: { r
 }
 
 /**
- * One source of entries: its name (shown in every error) and the entries by key.
+ * The add-only merge and its source type: the one implementation, in `@cogni-dao/agent-grants`, re-exported so a node and the host use the same function.
  * @beta
  */
-export interface Contribution<T> {
-  readonly source: string;
-  readonly entries: Readonly<Record<string, T>> | undefined;
-}
-
-/**
- * The add-only merge. Throws when a key is declared by two sources, naming the key and both sources (sorted, so the message never depends on source order).
- * `same` lets an equal repeat count as one declaration; without it any repeat throws.
- * @beta
- */
-export function addOnly<T>(
-  options: { readonly what: string; readonly code?: string | undefined; readonly same?: ((a: T, b: T) => boolean) | undefined },
-  ...sources: ReadonlyArray<Contribution<T>>
-): Record<string, T> {
-  const merged: Record<string, T> = {};
-  const owner: Record<string, string> = {};
-  for (const { source, entries } of sources)
-    for (const [key, value] of Object.entries(entries ?? {})) {
-      if (Object.prototype.hasOwnProperty.call(merged, key)) {
-        if (options.same?.(merged[key] as T, value)) continue;
-        const [a, b] = [owner[key] as string, source].sort();
-        throw new Error(`${options.code ?? "EXTENSION_CONFLICT"}: ${options.what} "${key}" is declared by "${a}" and again by "${b}"; a node adds, it never replaces`);
-      }
-      merged[key] = value;
-      owner[key] = source;
-    }
-  return merged;
-}
+export { addOnly, type Contribution } from "@cogni/agent-grants";

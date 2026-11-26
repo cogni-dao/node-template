@@ -81,7 +81,7 @@ describe("the node's composed set (node-template baseline)", () => {
     expect(container).not.toMatch(/CORE_TOOL_BUNDLE/);
     expect(executor).not.toMatch(/CORE_TOOL_BUNDLE/);
     expect(container).toMatch(/composeToolBundle\(/);
-    expect(container).toMatch(/toolBundle,\n\t\troutes: nodeExtensions\.routes/);
+    expect(container).toMatch(/toolBundle,\s*routes:\s*nodeExtensions\.routes/);
     expect(executor).toMatch(/container\.toolBundle/);
     // No spread merge of tool bindings.
     expect(container).not.toMatch(/\.\.\.NODE_LOCAL_TOOL_BINDINGS/);

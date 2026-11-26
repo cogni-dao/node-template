@@ -22,7 +22,7 @@
 
 import { type MineListInput, listMine, scopesByPrincipalOf, turnMineOff, turnMineOn } from "./account-access";
 import type { ApprovalCaller } from "./approval";
-import { mergeAddOnly, type Source } from "./add-only";
+import { addOnly, type Contribution } from "./add-only";
 import { type AgentRoutes, authorizeCaller, composeAgentRoutes, type ComposedRoutes } from "./same-door";
 import { buildAskView, buildNodeAiView } from "./node-ai";
 import { agentNameKey } from "./names";
@@ -146,8 +146,8 @@ export function buildPermissionCatalog(requiresById: Readonly<Record<string, Too
 
 function catalogOf(requiresById: Readonly<Record<string, ToolRequires>>, composed: ComposedRoutes): PermissionCatalog {
   // SCOPE_DECLARED_ONCE: one declaration per scope. A repeat that matches field for field (two tools sharing a scope) is the same declaration.
-  const bySource = (source: string, r: ToolRequires): Source<ToolRequires> => ({ source, entries: { [r.scope]: r } });
-  const requires = mergeAddOnly<ToolRequires>(
+  const bySource = (source: string, r: ToolRequires): Contribution<ToolRequires> => ({ source, entries: { [r.scope]: r } });
+  const requires = addOnly<ToolRequires>(
     { what: "scope", code: "SCOPE_DECLARED_TWICE", same: sameDeclaration },
     ...Object.entries(requiresById).map(([id, r]) => bySource(id, r)),
     ...Object.entries(composed.routeOnlyCapabilities).map(([id, cap]) => bySource(id, cap.requires))
