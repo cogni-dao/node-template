@@ -20,5 +20,12 @@ import { creditsToUsd } from "@/features/payments/public";
 
 export function OrgAccount({ orgId }: { orgId: string }): ReactElement {
   const base = `/api/v1/orgs/${encodeURIComponent(orgId)}`;
-  return <OrgAccountPage orgEndpoint={base} spendEndpoint={`${base}/spend`} formatBalance={(credits) => `$${creditsToUsd(credits).toFixed(2)}`} />;
+  return (
+    <OrgAccountPage
+      orgEndpoint={base}
+      spendEndpoint={`${base}/spend`}
+      formatBalance={(credits) => `$${creditsToUsd(credits).toFixed(2)}`}
+      fundHref={(billingAccountId: string) => `/credits?billingAccountId=${encodeURIComponent(billingAccountId)}`}
+    />
+  );
 }

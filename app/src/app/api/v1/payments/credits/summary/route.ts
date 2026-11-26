@@ -12,7 +12,7 @@
  * @public
  */
 
-import { billToRefusalHttp } from "@cogni/agent-grants/http";
+import { fundingRefusalHttp } from "@cogni/agent-grants/http";
 import { creditsSummaryOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { readAccountCredits } from "@/app/_facades/payments/account-credits.server";
@@ -33,7 +33,7 @@ function handleRouteError(
   error: unknown
 ): NextResponse | null {
   // Funding an org account (story.0080): identity's refusal keeps its own code and status.
-  const fundingRefusal = billToRefusalHttp(error);
+  const fundingRefusal = fundingRefusalHttp(error);
   if (fundingRefusal) {
     logRequestWarn(ctx.log, error, (fundingRefusal.body as { error: string }).error.toUpperCase());
     return NextResponse.json(fundingRefusal.body, { status: fundingRefusal.status, headers: fundingRefusal.headers });
