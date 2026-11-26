@@ -117,6 +117,17 @@ function extractAssistantContent(messages: BaseMessage[]): string {
   return "";
 }
 
+/** Graph steps a run may take unless its catalog entry declares a budget. A backstop against an infinite graph. */
+export const DEFAULT_RECURSION_LIMIT = 100;
+/** Hard ceiling: no catalog entry or node can raise a run's step budget past this. */
+export const MAX_RECURSION_LIMIT = 400;
+
+export function resolveRecursionLimit(requested: number | undefined): number {
+  if (requested === undefined || !Number.isFinite(requested) || requested < 1)
+    return DEFAULT_RECURSION_LIMIT;
+  return Math.min(Math.floor(requested), MAX_RECURSION_LIMIT);
+}
+
 /**
  * Create InProc graph runner.
  *
@@ -187,6 +198,7 @@ export function createInProcGraphRunner<TTool = unknown>(
   const hooks = createGraph.createRunHooks?.({
     program: opts.program,
     origin: opts.sourceContext?.origin,
+    ...(opts.interactive !== undefined && { interactive: opts.interactive }),
   });
   const toolExecFn: ToolExecFn = async (name, args, toolCallId) => {
     const result = await executeTool(name, args, toolCallId);
@@ -371,11 +383,11 @@ export function createInProcGraphRunner<TTool = unknown>(
                   ...request.configurable,
                   thread_id: threadId,
                 },
-                // A BACKSTOP against an infinite graph, never the real work bound — each
-                // graph self-limits (e.g. cogni's MAX_INVESTIGATE_STEPS). Must exceed any
-                // graph's budget: a gather round is 2 node visits, so this clears 2×the
-                // largest step cap with margin. Raise it with the caps, never below them.
-                recursionLimit: 100,
+                // The run's step budget: the catalog entry's `stepBudget` (a coding-capable chat needs
+                // more than a triage tick), else the 100-step backstop against an infinite graph,
+                // never above MAX_RECURSION_LIMIT. Each graph still self-limits (e.g. cogni's
+                // MAX_INVESTIGATE_STEPS); the budget must exceed any graph's own caps.
+                recursionLimit: resolveRecursionLimit(opts.recursionLimit),
               },
             ),
         );

@@ -16,7 +16,7 @@
 
 import { MessagesAnnotation } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import type { CreateReactAgentGraphOptions } from "../types";
+import type { CompiledAgentGraph, CreateReactAgentGraphOptions } from "../types";
 import {
 	createPrioritizerRunHooks,
 	createWorkPrioritizerGraph,
@@ -33,7 +33,7 @@ import {
  * @returns Compiled LangGraph ready for invoke()
  * @throws Error if systemPrompt is not provided
  */
-export function createMissionGraph(opts: CreateReactAgentGraphOptions) {
+export function createMissionGraph(opts: CreateReactAgentGraphOptions): CompiledAgentGraph {
 	if (opts.program) return createWorkPrioritizerGraph(opts);
 
 	if (!opts.systemPrompt) {

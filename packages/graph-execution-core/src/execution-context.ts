@@ -33,6 +33,11 @@ export interface ExecutionContext {
    * usable write tool end without a model call; it never grants or removes a tool.
    */
   readonly unattended?: boolean;
+  /**
+   * Host-verified: the internal run route checked this run's signed run claim (shell-caller-run-claim). Set only by that
+   * route, never from a payload. Without it, a run never gets the sandbox shell. A grant-backed or system run lacks it.
+   */
+  readonly runClaimVerified?: true;
   /** Actor who initiated this run (user ID for user-initiated, undefined for system) */
   readonly actorUserId?: string;
   /** Session ID for observability grouping (e.g., Langfuse sessions) */

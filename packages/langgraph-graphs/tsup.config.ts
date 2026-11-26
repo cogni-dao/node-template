@@ -22,8 +22,14 @@ export const tsupConfig = defineConfig({
   ],
   format: ["esm"],
   dts: {
-    resolve: ["@cogni/ai-core"],
-    compilerOptions: { composite: false, incremental: false },
+    resolve: ["@cogni/ai-core", "@cogni/graph-execution-core"],
+    compilerOptions: {
+      composite: false,
+      incremental: false,
+      // graph-execution-core emits its declarations with tsc -b after the tsup pass, so the bundler reads its source.
+      baseUrl: ".",
+      paths: { "@cogni/graph-execution-core": ["../graph-execution-core/src/index.ts"] },
+    },
   },
   outDir: "dist/bundled", // tsc owns dist/*.d.ts; preserve these normal bundled declarations.
   clean: false, // preserve .d.ts files from tsc -b (incremental builds)

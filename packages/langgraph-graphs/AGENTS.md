@@ -38,6 +38,10 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 
 **External deps:** `@langchain/core`, `@langchain/langgraph`, `@langchain/mcp-adapters`, `zod`. Imports `@cogni/ai-core`, `@cogni/ai-tools`.
 
+## Packed-consumer proof
+
+`pnpm test:packed` (run in the root `test` chain) packs this package and its published peers, installs the tarballs in an empty directory and typechecks `tests/packed-consumer/consumer.ts` with `skipLibCheck: false`, then loads each entrypoint in plain Node. A factory's public return type is `CompiledAgentGraph`; an inferred LangChain or deepagents type in a declaration fails this check.
+
 ## Public Surface
 
 - **Exports (subpaths):**
@@ -53,6 +57,9 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
     - `CompletionFn`, `CompletionResult` — Injected completion function types
     - `CreateGraphFn`, `CreateGraphOptions` — Graph factory types. `CreateGraphFn.createRunHooks` returns per-run program hooks: `graphOptions`, `observeTool`, `onSkillReadFailure`, `verifyEffects`, `projectAnswer`, `projectOutput` and `projectStepBudget`. On normal completion the runner awaits bounded `verifyEffects` through registered, request-allowed read-only tools under the run's cancellation signal, then uses `projectAnswer` before final emission and persistence. The runner calls `projectStepBudget` when a run hits `GraphRecursionError`; a program that returns a report ends the run ok with it (writes already made stay), and a program with no hook keeps the error
     - `ToolExecFn`, `ToolExecResult` — Tool execution types
+    - `createLangGraphInProcProvider(deps)` — the in-process `GraphExecutorPort` every node runs (principal lock, tool guard, shell audience filter and exec-time recheck, terminal denial, MCP tools, secret-argument mask, billed completion). A node injects ports through `InProcProviderDeps` (`catalog`, `completion`, `tools`, `toolBundle`, `scope`, `authority`, `log`, `coding`, ...); the package imports no `@/` path, logger library, OpenTelemetry or env. `createRunner` is a test seam
+    - `createNodeCatalog(base, { add, narrow, omit })` — the one way a node registers graphs; rebuilds `cogni` over the composed set. `requiresInProcess(entry, bundle)` — the dispatcher predicate that keeps a graph off the dev server. `INPROC_EVENTS` — event names the provider logs (a node pins them to its registry). `resolveNodeSourceContext()` — the one source-context loader
+    - Step budget: `CatalogEntry.stepBudget` (interactive runs only; `cogni` declares `COGNI_CHAT_STEP_BUDGET`), runner default `DEFAULT_RECURSION_LIMIT` (100), hard ceiling `MAX_RECURSION_LIMIT` (400)
   - `@cogni/langgraph-graphs/runtime` — LangChain utilities (split: `core/` generic, `cogni/` ALS-based):
     - **Core (no ALS):** `makeLangChainTool()`, `toLangChainToolsCaptured()`, `toBaseMessage()`, `fromBaseMessage()`, `AsyncQueue`, `makeServerGraph()`
     - **Cogni (uses ALS):** `CogniCompletionAdapter` (with `withStructuredOutput()` for Zod/JSON Schema response parsing), `runWithCogniExecContext()`, `getCogniExecContext()`, `hasCogniExecContext()`, `toLangChainToolsFromContext()`, `makeCogniGraph()`

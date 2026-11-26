@@ -10,7 +10,7 @@ import {
   WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
-import type { CreateReactAgentGraphOptions } from "../types";
+import type { CompiledAgentGraph, CreateReactAgentGraphOptions } from "../types";
 import { projectTriageAnswer, verifyTriageEffects } from "./completion";
 import { createTriagePreflight } from "./preflight";
 import {
@@ -36,7 +36,7 @@ export {
 } from "./report";
 export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
 
-export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
+export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions): CompiledAgentGraph {
   const receipts = opts.programState as RunReceipts | undefined;
   // The program, not the input channel, owns capability: triage programs bind the guarded
   // writer for chat and scheduled runs alike.

@@ -26,7 +26,7 @@ import {
 	toolCallLimitMiddleware,
 } from "langchain";
 import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
-import type { CreateReactAgentGraphOptions } from "../types";
+import type { CompiledAgentGraph, CreateReactAgentGraphOptions } from "../types";
 import {
 	composeCogniPrompt,
 	hostClockPrompt,
@@ -59,20 +59,24 @@ export function cogniProfile(
 	};
 }
 
-/** Construct the shared core with a host-selected prompt and an explicit child registry. */
-export function createCogniProgram(
-	opts: CreateReactAgentGraphOptions & {
-		readonly children?: readonly {
-			readonly profile: AgentProfile;
-			readonly description: string;
-		}[];
-		readonly disableCheckpointer?: boolean;
-		readonly guardedTools?: readonly StructuredTool[];
-		readonly profile?: AgentProfile;
-		/** Program-owned native middleware; never inherited by isolated readers. */
-		readonly programMiddleware?: readonly AnyAgentMiddleware[];
-	},
-) {
+export interface CogniProgramOptions extends CreateReactAgentGraphOptions {
+	readonly children?: readonly {
+		readonly profile: AgentProfile;
+		readonly description: string;
+	}[];
+	readonly disableCheckpointer?: boolean;
+	readonly guardedTools?: readonly StructuredTool[];
+	readonly profile?: AgentProfile;
+	/** Program-owned native middleware; never inherited by isolated readers. */
+	readonly programMiddleware?: readonly AnyAgentMiddleware[];
+}
+
+/** Construct the shared core with a host-selected prompt and an explicit child registry. The declaration hides the deepagents types of `buildCogniProgram`. */
+export function createCogniProgram(opts: CogniProgramOptions): CompiledAgentGraph {
+	return buildCogniProgram(opts);
+}
+
+function buildCogniProgram(opts: CogniProgramOptions) {
 	if (opts.disableCheckpointer && opts.guardedTools?.length)
 		throw new Error("cogni_child_guarded_write_forbidden");
 	const model = opts.profile
@@ -130,7 +134,7 @@ export function createCogniProgram(
 			name: profile.id,
 			description: child.description,
 			mode: "isolated" as const,
-			runnable: createCogniProgram({
+			runnable: buildCogniProgram({
 				...opts,
 				profile,
 				children: [],

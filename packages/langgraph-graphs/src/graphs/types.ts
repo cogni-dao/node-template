@@ -48,6 +48,15 @@ export type MessageGraphInput = { messages: BaseMessage[] };
 export type MessageGraphOutput = { messages: BaseMessage[] };
 
 /**
+ * What every graph factory returns publicly. Factories annotate this so a LangChain or deepagents type never leaks into
+ * the published declarations, which a consumer would have to resolve against its own zod and langchain versions.
+ */
+export type CompiledAgentGraph = InvokableGraph<
+  MessageGraphInput,
+  MessageGraphOutput & { structuredResponse?: unknown }
+>;
+
+/**
  * Base options for React agent graph factories.
  * Extend per-graph when additional dependencies are needed.
  */

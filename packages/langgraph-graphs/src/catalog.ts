@@ -84,7 +84,26 @@ export interface CatalogEntry {
    * stream as one GRAPH_REPORT_OPEN…GRAPH_REPORT_CLOSE text delta.
    */
   readonly report?: GraphReportDecl;
+  /**
+   * `false` keeps a runnable graph out of agent discovery and out of the `cogni` prompt and guidance (a node-local
+   * test harness). Absent means listed.
+   */
+  readonly listed?: boolean;
+  /**
+   * Graph steps an interactive run of this graph may take (a scheduled tick keeps the default). Declared per entry
+   * because work differs: a coding-capable chat needs far more steps than a triage tick. Clamped to
+   * `MAX_RECURSION_LIMIT` by the runner.
+   */
+  readonly stepBudget?: number;
 }
+
+/**
+ * Interactive `cogni` chat budget, sized for a sandbox coding task. A run measured about 6 graph steps per model turn
+ * (100 steps was 16 model calls: model node, tool node and middleware nodes). Clone, inspect, edit, commit, push and
+ * open the pull request take about 20 turns with the guidance and context reads; 40 turns leaves room for a failed
+ * command and a retry: 250 steps. The wrap-up nudge starts at 70 percent (step 175). The ceiling is 400.
+ */
+export const COGNI_CHAT_STEP_BUDGET = 250;
 
 /** CatalogEntry.report: the registered event name for the graph's telemetry. */
 export interface GraphReportDecl {
@@ -123,16 +142,46 @@ export function graphReportDelta(
 
 export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
 
-/** Bind guidance from the trusted registry; return the native compiled graph directly. */
-function createCatalogCogniGraph(opts: CreateReactAgentGraphOptions) {
-  return createCoordinatorGraph({ ...opts, workflowGuidance: catalogWorkflowGuidance() });
+/** The graphs a catalog advertises: every entry except a `listed: false` one. */
+export function listedCatalogEntries(
+  graphs: LangGraphCatalog,
+): [string, CatalogEntry][] {
+  return Object.entries(graphs).filter(([, entry]) => entry.listed !== false);
 }
-function catalogWorkflowGuidance(): WorkflowGuidance[] {
-  return Object.entries(NODE_LANGGRAPH_CATALOG).flatMap(([id, entry]: [string, CatalogEntry]) =>
+
+/** Guidance cards of the listed graphs, bound from the trusted registry. */
+export function catalogWorkflowGuidanceOf(graphs: LangGraphCatalog): WorkflowGuidance[] {
+  return listedCatalogEntries(graphs).flatMap(([id, entry]) =>
     entry.guidanceId ? [{ graphId: `langgraph:${id}`, guidanceId: entry.guidanceId }] : [],
   );
 }
-createCatalogCogniGraph.createRunHooks = createCoordinatorGraph.createRunHooks;
+
+/** The `cogni` system prompt for a catalog: its host-owned workflow list is the catalog's listed graphs. */
+export function cogniSystemPromptOf(graphs: LangGraphCatalog): string {
+  return coordinatorCatalogPrompt(
+    listedCatalogEntries(graphs).map(([id, entry]) => ({
+      id: `langgraph:${id}`,
+      description: entry.description,
+      toolIds: entry.toolIds,
+      mcpServerIds: entry.mcpServerIds ?? [],
+      duty: entry.duty ?? null,
+      schedulable: Boolean(entry.guidanceId),
+    })),
+  );
+}
+
+/**
+ * The `cogni` graph factory for a catalog. `graphs` is read at graph creation, so the factory follows the catalog it
+ * was built for (the package catalog, or a node's composed one).
+ */
+export function createCogniGraphFactoryFor(graphs: () => LangGraphCatalog): CreateGraphFn {
+  const factory = (opts: CreateReactAgentGraphOptions) =>
+    createCoordinatorGraph({ ...opts, workflowGuidance: catalogWorkflowGuidanceOf(graphs()) });
+  factory.createRunHooks = createCoordinatorGraph.createRunHooks;
+  return factory as CreateGraphFn;
+}
+/** The package `cogni` factory: guidance comes from the package catalog. */
+const createCatalogCogniGraph = createCogniGraphFactoryFor(() => NODE_LANGGRAPH_CATALOG);
 
 /**
  * Node runtime LangGraph catalog — the graphs every sovereign node runs: `cogni` (the node
@@ -210,18 +259,10 @@ export const NODE_LANGGRAPH_CATALOG = {
     toolIds: COORDINATOR_TOOL_IDS,
     graphFactory: createCatalogCogniGraph,
     get systemPrompt(): string {
-      return coordinatorCatalogPrompt(
-        Object.entries(NODE_LANGGRAPH_CATALOG).map(([id, entry]) => ({
-          id: `langgraph:${id}`,
-          description: entry.description,
-          toolIds: entry.toolIds,
-          mcpServerIds: (entry as CatalogEntry).mcpServerIds ?? [],
-          duty: (entry as CatalogEntry).duty ?? null,
-          schedulable: Boolean((entry as CatalogEntry).guidanceId),
-        })),
-      );
+      return cogniSystemPromptOf(NODE_LANGGRAPH_CATALOG);
     },
     program: "cogni",
+    stepBudget: COGNI_CHAT_STEP_BUDGET,
   },
 } as const;
 

@@ -12,6 +12,28 @@
  */
 
 export { createMemoryPersistence } from "./memory-persistence";
+// Node catalog composition and the in-process provider (task.0204)
+export { createNodeCatalog, type NodeCatalogChanges } from "./node-catalog";
+export { INPROC_EVENTS } from "./provider/events";
+export {
+  createLangGraphInProcProvider,
+  LANGGRAPH_INPROC_PROVIDER_ID,
+} from "./provider/provider";
+export { requiresInProcess } from "./provider/routing";
+export { resolveNodeSourceContext } from "./provider/source-context";
+export type {
+  AgentAuthorityPort,
+  CodingCallerPolicy,
+  CompletionUnitFinal,
+  CompletionUnitParams,
+  CompletionUnitPort,
+  InProcProviderDeps,
+  Persistence,
+  ProviderLogger,
+  RunScope,
+  RunScopePort,
+  SourceContext,
+} from "./provider/types";
 // Runner
 export { createInProcGraphRunner } from "./runner";
 

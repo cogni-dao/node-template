@@ -1,8 +1,9 @@
 import { ACCOUNT_CREDITS_READ_NAME, SANDBOX_SHELL_NAME, SCHEDULE_LIST_NAME, SCHEDULE_MANAGE_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
 import { COGNI_TOOL_IDS } from "../cogni/tools";
-import type { CreateReactAgentGraphOptions } from "../types";
+import type { CompiledAgentGraph, CreateReactAgentGraphOptions } from "../types";
 import { COORDINATOR_PROMPT } from "./prompts";
+import { chatStepBudgetAnswer } from "./shell-progress";
 import {
 	createNodeScheduleGuard,
 	createWorkflowGuidancePreflight,
@@ -32,7 +33,7 @@ export function createCoordinatorGraph(
 	opts: CreateReactAgentGraphOptions & {
 		readonly workflowGuidance?: readonly WorkflowGuidance[];
 	},
-) {
+): CompiledAgentGraph {
 	const receipts =
 		opts.programState instanceof CoordinatorReceipts
 			? opts.programState
@@ -65,7 +66,7 @@ export function createCoordinatorGraph(
 	});
 }
 
-export function createCoordinatorRunHooks() {
+export function createCoordinatorRunHooks(context: { interactive?: boolean } = {}) {
 	const receipts = new CoordinatorReceipts();
 	return {
 		graphOptions: { programState: receipts },
@@ -74,10 +75,15 @@ export function createCoordinatorRunHooks() {
 			args: unknown,
 			result: { ok: boolean; value?: unknown },
 		) => receipts.observe(name, args, result),
-		// A tick that hits the step limit ends in a report of its actual schedule writes, not a crash.
+		// A run that hits the step limit ends in a report of what it actually did, not a crash. The words come
+		// from the run that happened: a chat reports its sandbox work and the next step to the user; only a
+		// scheduled coordinating tick reports schedule changes.
 		projectStepBudget: () => {
 			const changes = receipts.scheduleChanges;
-			const answer = `STEP_BUDGET: the coordinating tick reached its step limit. Schedule changes: ${changes.length ? changes.join(", ") : "none"}.`;
+			const progress = receipts.shell.summary();
+			const answer = context.interactive
+				? chatStepBudgetAnswer(progress)
+				: `STEP_BUDGET: the coordinating tick reached its step limit. Schedule changes: ${changes.length ? changes.join(", ") : "none"}.`;
 			return {
 				answer,
 				output: {
@@ -85,6 +91,7 @@ export function createCoordinatorRunHooks() {
 						aborted: true,
 						abortReason: "step_budget",
 						scheduleChanges: [...changes],
+						...(context.interactive && { shell: progress }),
 					},
 				},
 			};
