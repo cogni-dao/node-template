@@ -8,6 +8,6 @@ The host's side of the node plugin contract (https://node-template.cognidao.org/
 
 ## Invariants
 
-- No node import. `@cogni/ai-tools` is a type-only peer; `@cogni/agent-grants` is a peer the kit re-exports `addOnly` from at runtime (floor 0.14.0, the minor that carries `composeAgentRoutes`).
+- No node import. `@cogni/ai-tools` is a type-only peer; `@cogni/agent-grants` is a peer the kit re-exports `addOnly` from at runtime (floor 0.11.0, the minor that carries `composeAgentRoutes`).
 - ONE add-only merge: it lives in agent-grants (`src/add-only.ts`); the kit re-exports it and has no copy. agent-grants never imports the kit, so there is no cycle.
 - Every export is `@beta` until a second node pins it.
