@@ -15,7 +15,7 @@
  *   - ACCOUNT_NEEDS_ACCOUNT (R1, R13): an `account` tool is decided only against one account. With no `accountId` it is denied (`no_account`);
  *     with one, the principal needs a live account row for exactly that account (`hasLiveAccountGrant`). Node rows never satisfy it and
  *     account rows never satisfy a node tool.
- *   - ONE_ACCOUNT_DOOR: `authorizeAccount()` is the one answer for account data on a route: owner | delegated | null (a non-disclosing 404).
+ *   - ONE_ACCOUNT_DOOR: `authorizeAccount()` is the one answer for account data on a route: owner | delegated | null (a non-disclosing 404). A live grant counts for any credential.
  *   - FAIL_CLOSED_NON_DISCLOSING: a store or admin outage is `authz_unavailable`, never an allow.
  *   - NEVER_CACHED: every call reads the store.
  * Side-effects: IO (store reads)
@@ -24,6 +24,7 @@
 
 import { ownsAccountOrOrg } from "./approval";
 import type { OrgOwners } from "./orgs";
+import { holdsAccountRight } from "./rights";
 import type {
   AccountAccess,
   AdminCheck,
@@ -127,29 +128,29 @@ export async function authorize(
 export interface AuthorizeAccountInput {
   /** The caller's user id: the signed-in person, or the bearer agent. */
   readonly callerUserId: string;
-  /** How the request authenticated. A `bearer` caller is an agent, so a delegated row can apply; a session caller is a person. */
-  readonly via: "bearer" | "session";
+  /**
+   * How the request authenticated. Ignored since 0.10.0: a live grant counts for any credential (AUTHORITY_IS_NOT_KIND). It stays on the input so an existing caller
+   * compiles; no decision reads it.
+   */
+  readonly via?: "bearer" | "session" | undefined;
   readonly scope: string;
   readonly accountId: string;
-  /** Owner sources (0.8.0). With them, an account owned by an org is also `owner` to each of the org's owners; a failed owner read throws (the route says 503). */
+  /** Owner sources. With them, an account owned by an org is also `owner` to each of the org's owners (the `grants` source: the holders of `org:owner`). A failed owner read throws (the route says 503). */
   readonly owners?: OrgOwners | undefined;
 }
 
 /**
- * The ONE answer for a read of one account's data on a route: `owner` (the caller owns the account), `delegated` (a bearer agent holds a live
- * account row for this scope and this exact account), or null. The order is the owner user, then the live grant row, then (only when `owners` is given) the
- * owners of an org that owns the account: a live grant never waits on the owner read, so a GitHub outage stops no delegated call. A null is a non-disclosing 404: foreign, expired, revoked, wrong-scope and
- * missing accounts are indistinguishable. A store failure throws (the route says 503), never allows.
+ * The ONE answer for a read of one account's data on a route: `owner` (the caller owns the account), `delegated` (the caller holds a live account grant for this scope, or for
+ * a scope that covers it, on this exact account: `org:owner` ⊇ `org:admin` ⊇ `account:read`), or null. The order is the owner user, then the live grant row, then (only when
+ * `owners` is given) the owners of an org that owns the account. The live grant counts for ANY credential, a signed-in person's session included (AUTHORITY_IS_NOT_KIND); until
+ * 0.10.0 it counted for a bearer agent only. A null is a non-disclosing 404: foreign, expired, revoked, wrong-scope and missing accounts are indistinguishable. A store failure
+ * throws (the route says 503), never allows.
  */
 export async function authorizeAccount(
   store: AgentGrantsStore,
   input: AuthorizeAccountInput
 ): Promise<AccountAccess> {
   if (await store.ownsAccount(input.callerUserId, input.accountId)) return "owner";
-  if (
-    input.via === "bearer" &&
-    (await store.hasLiveAccountGrant(input.callerUserId, input.scope, input.accountId))
-  )
-    return "delegated";
+  if (await holdsAccountRight(store, input.callerUserId, input.scope, input.accountId)) return "delegated";
   return (await ownsAccountOrOrg(store, input.callerUserId, input.accountId, input.owners)) ? "owner" : null;
 }

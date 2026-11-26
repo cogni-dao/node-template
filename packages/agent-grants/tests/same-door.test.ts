@@ -209,8 +209,9 @@ describe("authorizeCaller: an account scope (ONE_ACCOUNT_DOOR)", () => {
     const nodeOnly = memoryStore({ roles: [{ principal: "agent", scope: "account:read" }] });
     expect(await authorizeCaller(nodeOnly, denyAdmin, { userId: "agent", via: "bearer", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny" });
   });
-  it("a session never takes the delegated path: a person who is not the owner is denied even if they hold a row", async () => {
-    expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "session", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny" });
+  it("a live grant counts for any credential (0.10.0): a session caller who holds a row is delegated; one who holds none is denied", async () => {
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "session", requires: account, accountId: "acct-1" })).toEqual({ decision: "allow", basis: "delegated" });
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "stranger", via: "session", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny" });
   });
 });
 

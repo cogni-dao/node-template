@@ -8,8 +8,12 @@
  *   account scope: "Read your account data").
  * Scope: Server-only. The door (`sameDoor` + an account param) has already decided owner | delegated | nothing; this reads under row-level security.
  * Invariants:
- *   - RLS_DECIDES_ROWS: the read runs in an app-role tenant transaction with `app.current_user_id` = the CALLER (the owner, or the agent), never the service
- *     role, so a delegated agent sees rows only through `agent_has_scope` and the door and the database cannot disagree.
+ *   - RLS_DECIDES_ROWS: the read runs in an app-role tenant transaction with `app.current_user_id` = the CALLER (the owner, or the agent), so a delegated agent sees rows only through
+ *     `agent_has_scope` and the door and the database cannot disagree.
+ *   - ORG_OWNER_SCOPE (task.0181): row-level security keys an account on its `owner_user_id`, and an org's account belongs to the org's own users row, so an org role (`org:owner`,
+ *     `org:admin`) can never read it as the caller. After the door allowed, a caller who holds an org role on THIS account reads it through the org owner's scope: the database user is
+ *     the account's `owner_user_id`, taken on the server from the account row, never from the request (the same read the payer path uses, `payerScopeUserFor`). Owner and delegated-AI
+ *     reads are unchanged.
  *   - ACCOUNT_404_NON_DISCLOSING: an account the database hides from the caller is `null`; the route answers one 404.
  * Side-effects: IO (RLS-scoped reads of billing_accounts and credit_ledger)
  * @public
@@ -22,6 +26,17 @@ import { getContainer } from "@/bootstrap/container";
 import { getCreditsSummary } from "@/features/payments/services/creditsSummary";
 import { isBillingAccountNotFoundPortError } from "@/ports";
 
+/**
+ * Whose scope reads this account: the caller's own (an owner, or an AI with an `account:read` grant), or, for a caller who holds an org role on this very account, the org's own users id.
+ * The door has already allowed the caller; this only picks the database user. A caller with no org role keeps their own scope, so a stranger or a removed admin still gets the 404.
+ */
+async function readerOf(container: ReturnType<typeof getContainer>, callerUserId: string, accountId: string): Promise<string> {
+  if (!(await container.agentAuthority.holdsOrgRole({ callerUserId, accountId }))) return callerUserId;
+  const account = await container.serviceAccountService.getBillingAccountById(accountId);
+  if (!account || (await container.agentAuthority.principalKind(account.ownerUserId)) !== "org") return callerUserId;
+  return account.ownerUserId;
+}
+
 export async function readAccountCredits(params: {
   /** The caller's user id: the RLS actor. */
   callerUserId: string;
@@ -29,7 +44,9 @@ export async function readAccountCredits(params: {
   limit?: number | undefined;
 }): Promise<CreditsSummaryOutput | null> {
   try {
-    const summary = await getCreditsSummary(getContainer().accountsForUser(toUserId(params.callerUserId)), {
+    const container = getContainer();
+    const actor = await readerOf(container, params.callerUserId, params.accountId);
+    const summary = await getCreditsSummary(container.accountsForUser(toUserId(actor)), {
       billingAccountId: params.accountId,
       limit: params.limit,
     });

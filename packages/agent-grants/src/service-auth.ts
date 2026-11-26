@@ -15,6 +15,9 @@
  *   - GRANTS_DECIDE_CALLS: a verified assertion only names the caller (issuer, service) and the scope it claims; it grants nothing. The grant row decides.
  *   - ONE_PRINCIPAL_PER_SERVICE: `ensureServicePrincipal` maps (issuer, service) to one external principal on its own users row. No credential rows.
  *   - NO_TOKEN_IN_ERRORS: no result, error or log field holds a token or a key.
+ *   - DURABLE_REPLAY (0.10.0): `createPostgresReplayStore` keeps each `jti` in Postgres until `exp`, so a replay is refused after a restart and by every replica.
+ *   - LINKED_ISSUERS (0.10.0): a verifier may take `resolveHome`, a run-time lookup of issuers that are not in `trustedHomes` (the node's link table). The static list wins.
+ *   - SIGNED_EXTRA_CLAIMS (0.10.0): the signer and the verifier carry primitive claims under non-registered names (a link's `act`, `code`, `org`, `services`), covered by the signature.
  * Side-effects: IO (SQL in the principal helpers; the default JWKS fetch)
  * Links: https://node-template.cognidao.org/knowledge/node-service-enrollment
  * @public
@@ -38,6 +41,9 @@ export const JWKS_MAX_AGE_MS = 60 * 60_000;
 const MAX_TOKEN_CHARS = 4096;
 const JWKS_FETCH_TIMEOUT_MS = 5_000;
 const JWKS_MAX_BYTES = 64 * 1024;
+
+/** The service a node signs as for a link or unlink (`./org-links`). It is never a run principal: no principal row is made for it. */
+export const NODE_CONNECT_SERVICE = "node-connect";
 
 /** A service slug: lowercase, starts with a letter or digit, at most 64 characters. */
 export const SERVICE_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -115,6 +121,31 @@ export interface ServiceAssertionRequest {
   readonly audienceNodeId: string;
   /** The permissions the call uses, space separated, such as `knowledge:read`. */
   readonly scope: string;
+  /**
+   * Extra signed claims (0.10.0): primitive values under names that are not registered claims. They are covered by the signature, so a replayed or edited body changes nothing.
+   * A link carries `act`, `code`, `org` and `services` here. A reserved name or a non-primitive value throws `TypeError`.
+   */
+  readonly claims?: Readonly<Record<string, string | number | boolean>>;
+}
+
+/** Claim names the signer owns: a caller's extra claim can never replace one. */
+const RESERVED_CLAIMS: ReadonlySet<string> = new Set(["iss", "sub", "aud", "client_id", "scope", "iat", "exp", "jti", "nbf", "typ"]);
+const CLAIM_NAME = /^[a-z][a-z0-9_]{0,31}$/;
+const MAX_EXTRA_CLAIMS = 8;
+const MAX_CLAIM_STRING = 200;
+
+/** The extra claims a request may carry, checked, or a `TypeError`. */
+function checkedExtraClaims(claims: ServiceAssertionRequest["claims"]): Record<string, string | number | boolean> {
+  if (claims === undefined) return {};
+  const entries = Object.entries(claims);
+  if (entries.length > MAX_EXTRA_CLAIMS) throw new TypeError("too many extra claims");
+  for (const [name, value] of entries) {
+    if (!CLAIM_NAME.test(name) || RESERVED_CLAIMS.has(name)) throw new TypeError("extra claim name is reserved or malformed");
+    const ok =
+      (typeof value === "string" && value.length <= MAX_CLAIM_STRING) || (typeof value === "number" && Number.isSafeInteger(value)) || typeof value === "boolean";
+    if (!ok) throw new TypeError("extra claim must be a short string, a safe integer or a boolean");
+  }
+  return Object.fromEntries(entries);
 }
 
 export interface ServiceAssertionSigner {
@@ -154,9 +185,11 @@ export function createServiceAssertionSigner(opts: {
     if (!SERVICE_SLUG.test(request.service)) throw new TypeError("service must be a lowercase slug");
     if (!request.audienceNodeId || /\s/.test(request.audienceNodeId)) throw new TypeError("audienceNodeId is required");
     if (!SCOPE_CLAIM.test(request.scope)) throw new TypeError("scope must be space-separated permission names");
+    const extra = checkedExtraClaims(request.claims);
     const iat = Math.floor(now() / 1000);
     const header = jsonB64Url({ alg: "EdDSA", kid, typ: "JWT" });
     const payload = jsonB64Url({
+      ...extra,
       iss: issuer,
       sub: request.service,
       aud: nodeAudience(request.audienceNodeId),
@@ -252,6 +285,35 @@ export function createMemoryReplayStore(opts?: { maxEntries?: number; now?: () =
   };
 }
 
+/** Rows one prune pass removes at most (the table holds only the assertion window, so this keeps a pass cheap). */
+const REPLAY_PRUNE_BATCH = 200;
+
+/**
+ * DURABLE replay store over `service_assertion_jtis` (migration template `migrations/service_assertion_jtis.sql`): the `jti` is the primary key, so a replay is refused by every
+ * replica and after a restart. `seen` inserts the `jti` with its expiry and answers true only when a LIVE row already holds it; an expired row that was not pruned yet is taken
+ * over, not reported as a replay. Each call also prunes at most `REPLAY_PRUNE_BATCH` rows past their expiry, so the table holds one assertion window. The expiry travels as an ISO
+ * string (NO_DATE_PARAMETERS). The prune takes the oldest expired rows with `FOR UPDATE SKIP LOCKED`, so concurrent calls never wait on each other. `sql` is a service-role
+ * connection (the table has no policy). A store failure rejects (the node answers 503); it is never a pass.
+ */
+export function createPostgresReplayStore(sql: SqlTag): ReplayStore {
+  return {
+    async seen(jti, expiresAt) {
+      const until = expiresAt.toISOString();
+      const taken = await sql`
+        INSERT INTO service_assertion_jtis (jti, expires_at) VALUES (${jti}, ${until}::timestamptz)
+        ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at
+          WHERE service_assertion_jtis.expires_at <= now()
+        RETURNING jti`;
+      await sql`
+        DELETE FROM service_assertion_jtis
+        WHERE jti IN (
+          SELECT jti FROM service_assertion_jtis WHERE expires_at <= now() ORDER BY expires_at LIMIT ${REPLAY_PRUNE_BATCH} FOR UPDATE SKIP LOCKED
+        )`;
+      return taken.length === 0;
+    },
+  };
+}
+
 /** One home node the target trusts. */
 export interface TrustedHome {
   /** The home's canonical https origin: must equal the assertion's `iss`. */
@@ -279,6 +341,8 @@ export interface VerifiedServiceAssertion {
   readonly clientId: string;
   readonly scope: string;
   readonly jti: string;
+  /** The signed extra claims (primitives under non-registered names), verified with the rest. Empty for an ordinary call. */
+  readonly claims: Readonly<Record<string, string | number | boolean>>;
 }
 
 /**
@@ -296,6 +360,18 @@ export type ServiceAssertionResult = VerifiedServiceAssertion | ServiceAssertion
 
 export interface ServiceAssertionVerifier {
   verify(token: string): Promise<ServiceAssertionResult>;
+}
+
+/**
+ * The claims of a token WITHOUT checking its signature, or null when it is not a three-part token with a JSON payload. Only for choosing which key to verify with (a link names the
+ * origin its code is bound to); never a basis for any decision. A caller always runs the verifier on the same token before it trusts one value.
+ */
+export function peekUnverifiedClaims(token: string): Record<string, unknown> | null {
+  if (typeof token !== "string" || token.length === 0 || token.length > MAX_TOKEN_CHARS) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const payload = fromB64Url(parts[1] as string);
+  return payload ? parseJsonObject(payload) : null;
 }
 
 /**
@@ -387,10 +463,17 @@ export function createServiceAssertionVerifier(opts: {
   trustedHomes: readonly TrustedHome[];
   /** Fetch and parse a JWKS document. Default: https, 5 s, 64 KiB. */
   fetchJwks?: (jwksUri: string) => Promise<unknown>;
+  /**
+   * Issuers that are not in `trustedHomes`, looked up at verify time (the node's open links). `trustedHomes` wins; a null answer is `untrusted_issuer`. A lookup failure rejects
+   * (the node answers 503), never trusts. REQUIRES `fetchJwks` (the constructor throws without it): a linked origin's keys are fetched only through the pinned fetch.
+   */
+  resolveHome?: (issuer: string) => Promise<TrustedHome | null>;
   replay: ReplayStore;
   /** Epoch milliseconds. Default `Date.now`. */
   now?: () => number;
 }): ServiceAssertionVerifier {
+  // A resolved home is an origin somebody typed, so its keys are an SSRF door: the unpinned default fetch is never allowed for it (`createPinnedJwksFetch` from `./jwks-fetch`).
+  if (opts.resolveHome && !opts.fetchJwks) throw new TypeError("resolveHome requires fetchJwks (use createPinnedJwksFetch)");
   const now = opts.now ?? Date.now;
   const fetchJwks = opts.fetchJwks ?? defaultFetchJwks;
   const audience = nodeAudience(opts.selfNodeId);
@@ -482,8 +565,8 @@ export function createServiceAssertionVerifier(opts: {
         return refuse("malformed");
 
       who = { issuer: iss.slice(0, 200), service: sub.slice(0, 100) };
-      const home = homes.get(iss);
-      if (!home) return refuse("untrusted_issuer");
+      const home = homes.get(iss) ?? (opts.resolveHome ? await opts.resolveHome(iss) : null) ?? undefined;
+      if (!home || home.issuer !== iss) return refuse("untrusted_issuer");
 
       const key = await keyFor(home, header.kid);
       if (key === "jwks_unavailable") return refuse("jwks_unavailable");
@@ -504,7 +587,12 @@ export function createServiceAssertionVerifier(opts: {
       if (iat > nowSeconds + CLOCK_SKEW_SECONDS) return refuse("malformed");
       // Replay is last so only a fully valid assertion can use up a `jti`. A store failure rejects (the node answers 503); it is never a pass.
       if (await opts.replay.seen(`${iss}#${jti}`, new Date((exp + CLOCK_SKEW_SECONDS) * 1000))) return refuse("replayed");
-      return { ok: true, issuer: iss, service: sub, clientId, scope, jti };
+      const extra: Record<string, string | number | boolean> = {};
+      for (const [name, value] of Object.entries(claims)) {
+        if (RESERVED_CLAIMS.has(name)) continue;
+        if (CLAIM_NAME.test(name) && (typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isSafeInteger(value)))) extra[name] = value;
+      }
+      return { ok: true, issuer: iss, service: sub, clientId, scope, jti, claims: extra };
     },
   };
 }
@@ -534,6 +622,8 @@ const serviceDisplayName = (input: { issuer: string; service: string }): string 
  */
 export async function ensureServicePrincipal(tx: SqlTag, input: { issuer: string; service: string }): Promise<string> {
   if (!isCanonicalHttpsOrigin(input.issuer) || !SERVICE_SLUG.test(input.service)) throw new TypeError("issuer and service must be canonical");
+  // `node-connect` only signs links: it is never a run principal, so it never asks for a grant and never holds a payer row.
+  if (input.service === NODE_CONNECT_SERVICE) throw new TypeError("node-connect is not a principal");
   const userId = await servicePrincipalId(input);
   await tx`INSERT INTO users (id, name) VALUES (${userId}, ${serviceDisplayName(input)}) ON CONFLICT (id) DO NOTHING`;
   await writeExternalPrincipal(tx, userId);
@@ -560,9 +650,21 @@ export async function requestServiceAccess(input: {
   declaredScopes: readonly string[];
   askableScopes: readonly string[];
   scopeKinds?: Readonly<Record<string, ScopeKind>>;
+  /**
+   * Runs in the caller's transaction right after the principal exists: the node binds a service of a LINKED issuer to the link's org here, so a principal that appears after
+   * the link is bound when it is created (`bindLinkedService` in `./org-links`).
+   */
+  onPrincipal?: (userId: string) => Promise<void>;
+  /**
+   * Runs FIRST, before the principal is read or written, in the caller's transaction: the node takes the issuer's transaction lock here (`lockIssuer` in `./org-links`), the same lock a
+   * link of that issuer takes, so a principal that enrolls during a link is always bound, in either commit order.
+   */
+  beforePrincipal?: () => Promise<void>;
 }): Promise<{ userId: string; outcome: AskOutcome }> {
   if (!input.assertion.scope.split(" ").includes(input.scope)) throw new AgentRolesError("invalid_scope", "scope is not in the signed assertion");
+  if (input.beforePrincipal) await input.beforePrincipal();
   const userId = await ensureServicePrincipal(input.tx, { issuer: input.assertion.issuer, service: input.assertion.service });
+  if (input.onPrincipal) await input.onPrincipal(userId);
   const outcome = await requestAccess(input.store, {
     principalUserId: userId,
     scope: input.scope,

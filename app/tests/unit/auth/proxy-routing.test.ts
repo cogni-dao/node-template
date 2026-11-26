@@ -172,6 +172,21 @@ describe("proxy — API route protection", () => {
 		expect(mockGetToken).not.toHaveBeenCalled();
 	});
 
+	it("an anonymous POST to the org link preview reaches its handler (task.0181): the preview lives under /api/v1/public/, and the old path outside it is still behind the perimeter", async () => {
+		mockGetToken.mockResolvedValue(null);
+
+		const publicPreview = await proxy(
+			new NextRequest(new URL("/api/v1/public/orgs/link-preview", "http://localhost:3000"), { method: "POST" })
+		);
+		expect(publicPreview.status).toBe(200); // NextResponse.next(): the request goes on to the route handler
+		expect(mockGetToken).not.toHaveBeenCalled();
+
+		const outside = await proxy(
+			new NextRequest(new URL("/api/v1/orgs/link-preview", "http://localhost:3000"), { method: "POST" })
+		);
+		expect(outside.status).toBe(401);
+	});
+
 	it("allows /api/v1/agent/register without auth", async () => {
 		mockGetToken.mockResolvedValue(null);
 

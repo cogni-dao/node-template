@@ -95,11 +95,31 @@ export const EVENT_NAMES = {
 	SERVICE_AUTH_REJECTED: "service_auth.rejected",
 	/** The signing key could not be used (partly configured, unusable, or a public key that is not the private key's): reason only, never the key. */
 	SERVICE_AUTH_SIGNER_UNAVAILABLE: "service_auth.signer_unavailable",
-	/** An org was created or found for an owner source (story.0038): orgUserId, sourceRef. */
-	ORG_ENSURED: "org.ensured",
-	/** A payer binding was turned On by an owner of the account (story.0038): subject, billingAccountId, approvedBy. */
+	/** A person created an org account and became its owner (task.0181): orgUserId, userId. */
+	ORG_CREATED: "org.created",
+	/** An owner or admin invited a wallet to a role (task.0181): orgUserId, inviteId, role, invitedBy. Never the wallet. */
+	ORG_INVITED: "org.invited",
+	/** The invited person accepted and now holds the role (task.0181): orgUserId, userId, role, inviteId. */
+	ORG_INVITE_ACCEPTED: "org.invite_accepted",
+	/** A person's role changed (task.0181): orgUserId, targetUserId, from, to, actorUserId. */
+	ORG_ROLE_CHANGED: "org.role_changed",
+	/** A person was removed from an org (task.0181): orgUserId, targetUserId, role, actorUserId. */
+	ORG_MEMBER_REMOVED: "org.member_removed",
+	/** An org owner made a one-time link code for another node's origin (task.0181): orgUserId, origin, actorUserId. Never the code. */
+	ORG_LINK_CODE_CREATED: "org.link_code_created",
+	/** Another node's signature linked it to an org (task.0181): orgUserId, issuer, services, linkId, bound. */
+	ORG_LINKED: "org.linked",
+	/** A link closed, by the org's owner or by the other node's signature (task.0181): orgUserId, issuer, linkId, closedBindings, by. */
+	ORG_UNLINKED: "org.unlinked",
+	/** The node's admin suspended an org, final in P1 (task.0181): orgUserId, adminUserId. */
+	ORG_SUSPENDED: "org.suspended",
+	/** This node's admin had this node sign a link or unlink for an org on another node (task.0181): act, targetOrigin, httpStatus, error. Never the code or the assertion. */
+	ORG_OUTBOUND_LINK: "org.outbound_link",
+	/** An org action or a signed link was refused (task.0181): routeId, code. Never a token or a code. */
+	ORG_REFUSED: "org.refused",
+	/** A payer binding was written for a service principal of a linked node (task.0181): subject, billingAccountId, linkId, via. */
 	PAYER_BOUND: "payer.bound",
-	/** A payer binding ended, Off or dismissed (story.0038): subject, billingAccountId, revokedBy. */
+	/** A payer binding ended because its link closed (task.0181): linkId, closedBindings, by. */
 	PAYER_REVOKED: "payer.revoked",
 	/** A run was billed to a bound account instead of the caller's own (story.0038): subject, billingAccountId. */
 	PAYER_SELECTED: "payer.selected",

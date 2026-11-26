@@ -9,7 +9,7 @@
  *   - An internal principal row points at a seeded `users` row that has no credential.
  *   - CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: `agent_credentials` rows belong only to a user with an `external` `agent_principals` row
  *     (a trigger in the migration enforces it).
- *   - ROLE_ROWS_ARE_SOFT_REVOKED: a role row is never deleted; `revoked_at` ends it. One live row per (principal, scope).
+ *   - ROLE_ROWS_ARE_SOFT_REVOKED: a role row is never deleted; `revoked_at` ends it. Release 1 keeps ONE live row per (principal, scope) (the old index); the account-aware (principal, scope, account) index sits beside it and release 2 drops the old one.
  *   - ONE_GRANT_ROW (task.5465): node and account grants are one table, `agent_roles`; `resource` and `account_id` say which.
  *   - TOKEN_HASH_ONLY / STATE_IS_DERIVED: `agent_credentials` stores sha256 of the key and timestamps only; state (pending, active,
  *     renew_only, expired, revoked) is derived by the SQL function `agent_credential_state` (migration), never stored.
@@ -37,6 +37,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import { orgLinks } from "./org-accounts";
 import { billingAccounts, users } from "./refs";
 
 /** A marked principal. `internal` rows are seeded for a graph to act as; `external` rows are outside agents and services; `org` rows are orgs (story.0038) whose owners an owner source decides. */
@@ -46,9 +47,15 @@ export const agentPrincipals = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     kind: text("kind").notNull(),
     slug: text("slug"),
-    /** Only an `org` row: where its owners are read from (`repo-spec`) and the source's own key (the repo's canonical https URL). */
+    /** Only an `org` row: where its owners are read from (`grants`: the holders of `org:owner` on the org's account) and the source's own key (`grants`: the org's own `users` id). */
     ownerSourceKind: text("owner_source_kind"),
     ownerSourceRef: text("owner_source_ref"),
+    /** Only an `org` row: set when the node's admin suspends the org. The payer resolver refuses a suspended org with `org_suspended`. */
+    suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+    /** Only a suspended `org` row: the node admin who suspended it. Suspend is final in P1 (no Resume), so this is set once. */
+    suspendedBy: text("suspended_by").references(() => users.id),
+    /** Only an `org` row: the signed-in person who created the org. */
+    createdBy: text("created_by").references(() => users.id),
     userId: text("user_id")
       .notNull()
       .references(() => users.id),
@@ -107,6 +114,8 @@ export const agentRoles = pgTable(
       .notNull()
       .defaultNow(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /** Who ended the row, when a person did (an org role removed or changed). Null while live, and null for a row ended by a migration or by a system path with no actor. */
+    revokedBy: text("revoked_by").references(() => users.id),
     /** What the row covers: the whole node, or one account. Every row before this column is a node row. */
     resource: text("resource").notNull().default("node"),
     /** The account an approved account row covers. Null on a node row and on a pending account row. */
@@ -119,10 +128,15 @@ export const agentRoles = pgTable(
     linkConsumedAt: timestamp("link_consumed_at", { withTimezone: true }),
   },
   (table) => [
-    // EXPAND PHASE: kept as the only live-row uniqueness (one open row per principal and scope). Old pods keep their ON CONFLICT
-    // target. The contract migration (task.5484) replaces it with per-account indexes.
+    // RELEASE 1 of the index change (task.0181): the OLD unique (principal, scope) live index stays, because the previous release's `ON CONFLICT (principal_user_id, scope)` needs it and a
+    // rollback must be safe. It gives a person ONE row per (principal, scope), so a second `org:owner` in another org is refused (`org_role_limit`).
+    // RELEASE 2 (task.0175, after every node runs release 1) drops it and leaves the account-aware index below as the only one.
     uniqueIndex("agent_roles_live_unique")
       .on(table.principalUserId, table.scope)
+      .where(sql`${table.revokedAt} IS NULL`),
+    // The account-aware live index, under its own name: one open row per (principal, scope, account). A node row and a pending account ask have no account, so they read as the empty account.
+    uniqueIndex("agent_roles_live_account_unique")
+      .on(table.principalUserId, table.scope, sql`coalesce(${table.accountId}, '')`)
       .where(sql`${table.revokedAt} IS NULL`),
     uniqueIndex("agent_roles_link_hash_unique").on(table.linkHash),
     index("agent_roles_principal_idx").on(table.principalUserId),
@@ -222,6 +236,8 @@ export const payerBindings = pgTable(
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedBy: text("revoked_by").references(() => users.id),
+    /** The node link that wrote this binding (task.0181). Null for a binding that is not a link's. */
+    linkId: uuid("link_id").references(() => orgLinks.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

@@ -87,7 +87,7 @@ describe("signer and verifier", () => {
     expect(claims).toMatchObject({ iss: ISSUER, sub: "git-review", aud: "urn:cogni:node:node-x", client_id: `${ISSUER}#git-review`, scope: "knowledge:read", iat: T0 / 1000 });
     expect(claims.exp - claims.iat).toBeLessThanOrEqual(300);
     expect(typeof claims.jti).toBe("string");
-    expect(await r.verify(token)).toEqual({ ok: true, issuer: ISSUER, service: "git-review", clientId: `${ISSUER}#git-review`, scope: "knowledge:read", jti: claims.jti });
+    expect(await r.verify(token)).toEqual({ ok: true, claims: {}, issuer: ISSUER, service: "git-review", clientId: `${ISSUER}#git-review`, scope: "knowledge:read", jti: claims.jti });
   });
 
   it("authorizationHeader is Bearer plus a fresh assertion each time; jwks carries no private member", async () => {

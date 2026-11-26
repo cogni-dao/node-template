@@ -3,9 +3,9 @@
 
 /**
  * Module: `@tests/unit/bootstrap/service-auth`
- * Purpose: The node's composition of service assertions and orgs (story.0038). The GitHub read and the trusted-homes parser are package code with package tests;
+ * Purpose: The node's composition of service assertions and orgs (story.0038, task.0181). The trusted-homes parser and the link lookup are package code with package tests;
  *   here: the signer is absent when not configured, loud (one warning naming the reason, never the key) when partly configured or unusable, a valid key signs and
- *   publishes; refusals log at debug for routine noise and warn otherwise; the wallet mapping reads lowercase wallet bindings.
+ *   publishes; refusals log at debug for routine noise and warn otherwise; a replay-store or link-lookup failure is thrown (the route says 503) and logged once.
  * Scope: No network, no database.
  * Side-effects: none
  */
@@ -13,7 +13,7 @@
 import { createServiceAssertionSigner } from "@cogni/agent-grants/service-auth";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentAuthoritySql } from "@/bootstrap/agent-authority";
-import { buildSigner, createServiceAuth, usersForWallets } from "@/bootstrap/service-auth";
+import { buildSigner, createServiceAuth } from "@/bootstrap/service-auth";
 
 const logger = () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() });
 
@@ -87,18 +87,16 @@ describe("createServiceAuth: refusal log levels", () => {
   });
 });
 
-describe("usersForWallets", () => {
-  it("maps lowercase wallets to the users that bound them, and asks nothing for none", async () => {
-    const seen: unknown[][] = [];
-    const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => {
-      seen.push([strings.join("?"), ...values]);
-      return Promise.resolve([{ user_id: "u1" }, { user_id: "u2" }]);
-    }) as unknown as AgentAuthoritySql;
-    expect(await usersForWallets(sql, ["0xabc"])).toEqual(["u1", "u2"]);
-    expect(String(seen[0]?.[0])).toContain("provider = 'wallet'");
-    expect(seen[0]?.[1]).toEqual(["0xabc"]);
-    seen.length = 0;
-    expect(await usersForWallets(sql, [])).toEqual([]);
-    expect(seen).toEqual([]);
+describe("createServiceAuth: a failed durable store is thrown, never a pass", () => {
+  it("rethrows a replay or link-lookup failure and logs it once, without the token", async () => {
+    const log = logger();
+    const broken = (() => Promise.reject(new Error("db down"))) as unknown as AgentAuthoritySql;
+    const auth = createServiceAuth({ env: {}, trustedHomes: [], nodeId: "node-x", sql: broken, log: log as never });
+    const key = await jwk();
+    const signer = createServiceAssertionSigner({ issuer: "https://home.example", kid: "k", privateJwk: key as never });
+    const token = await signer.sign({ service: "git-review", audienceNodeId: "node-x", scope: "knowledge:read" });
+    await expect(auth.verify(token)).rejects.toThrow("db down");
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(log.error.mock.calls)).not.toContain(token);
   });
 });

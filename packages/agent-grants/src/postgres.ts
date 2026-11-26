@@ -11,7 +11,10 @@
  *   - NO_DATE_PARAMETERS: a timestamp is written with `now()`, SQL interval arithmetic or an ISO string, never a JS Date. The node's client is drizzle's postgres.js
  *     client, which replaces the timestamp serializers; timestamps read back as strings too (`iso()` accepts both).
  *   - RESOURCE_SPLIT (R1): every node-plane statement names `resource = 'node'`; every account statement names `resource = 'account'`.
- *     The expand-phase live index stays (principal, scope), so one open row exists per AI and scope.
+ *     RELEASE_1_INDEXES (0.10.0): the OLD live index (principal, scope) stays, and every `ON CONFLICT` here still names it, so a pod of the previous release and a rollback both work. The new
+ *     account-aware index `agent_roles_live_account_unique` sits beside it; only `./org-accounts` writes a row the old index would refuse, and it answers `org_role_limit`.
+ *     The old index is dropped in release 2 (task.0175), when no pod runs the old writer.
+ *   - ORG_ROWS_ARE_NOT_ASK_ROWS (0.10.0): an `org:%` scope is an org role row. The generic account lists and the generic org revoke never see it; `./org-accounts` is its only writer.
  *   - ACCOUNT_LIVE (R1, R14, durable): an account row is live when approved, unrevoked and (`expires_at` is null, i.e. until Off, or in the future); expired is read, and an expired live
  *     row is closed (`revoked_at = now()`) before an ask or a direct On on the same (AI, scope), so the old index frees.
  *   - The decision statements carry the owner join themselves (`billing_accounts.owner_user_id = approver`), so a caller cannot widen them.
@@ -193,13 +196,13 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         FROM agent_roles r
         JOIN users u ON u.id = r.principal_user_id
         LEFT JOIN agent_principals p ON p.user_id = r.principal_user_id
-        WHERE r.resource = 'account' AND r.account_id = ${accountId}
+        WHERE r.resource = 'account' AND r.account_id = ${accountId} AND r.scope NOT LIKE 'org:%'
           AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now())
         ORDER BY r.created_at DESC
         LIMIT ${limit}`;
       const total = await sql`
         SELECT count(*)::int AS n FROM agent_roles r
-        WHERE r.resource = 'account' AND r.account_id = ${accountId}
+        WHERE r.resource = 'account' AND r.account_id = ${accountId} AND r.scope NOT LIKE 'org:%'
           AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now())`;
       const listed = rows.flatMap((row) => {
         const mapped = toRow(row);
@@ -407,7 +410,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
     async accountRoleOf(rowId) {
       const rows = await sql`
         SELECT account_id, principal_user_id FROM agent_roles
-        WHERE id = ${rowId} AND resource = 'account' AND account_id IS NOT NULL LIMIT 1`;
+        WHERE id = ${rowId} AND resource = 'account' AND account_id IS NOT NULL AND scope NOT LIKE 'org:%' LIMIT 1`;
       const accountId = str(rows[0]?.account_id);
       const principalUserId = str(rows[0]?.principal_user_id);
       return accountId && principalUserId ? { accountId, principalUserId } : null;
@@ -449,6 +452,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         UPDATE agent_roles r SET revoked_at = now()
         FROM billing_accounts b
         WHERE r.id = ${rowId} AND r.resource = 'account' AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL
+          AND r.scope NOT LIKE 'org:%'
           AND r.account_id = ${accountId} AND b.id = r.account_id
           AND EXISTS (SELECT 1 FROM agent_principals p WHERE p.user_id = b.owner_user_id AND p.kind = 'org')
         RETURNING r.id`;

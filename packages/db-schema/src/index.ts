@@ -24,7 +24,9 @@ export * from "./identity";
 export * from "./profile";
 export * from "./refs";
 export * from "./scheduling";
+export * from "./service-assertion-jtis";
 
 export * from "./work-item-leases";
 
 export * from "./metric-observations.js";
+export * from "./org-accounts";
