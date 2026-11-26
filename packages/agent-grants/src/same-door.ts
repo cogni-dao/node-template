@@ -6,13 +6,14 @@
  * Purpose: SAME_DOOR. The one declaration of which agent-reachable route twins which guarded tool (a write tool, or a read tool that declares an
  *   `account` scope), or which read route needs a grant, and the one check a route calls. An outside agent that calls the route passes the same `authorize()` lock as the node's own AI.
  * Scope: A static map (tool id -> route ids + scope), an allowlist of tools that have no node route, and `authorizeCaller`.
- *   The parity test (packages/langgraph-graphs/tests/same-door-parity.test.ts) fails when a non-read_only tool is in neither.
+ *   The parity suite (`@cogni-dao/agent-grants/same-door-parity`) fails when a non-read_only tool is in neither; a node runs it over its composed set.
  * Invariants:
  *   - SAME_DOOR: a bearer caller is its own principal. It needs a live role row for the scope: the same principal lock the
  *     tool guard runs. A denied bearer gets 403 `policy_denied`; a store outage gets 503 `authz_unavailable`.
  *   - Humans are subjects, not principals. A signed-in human passes `member`; `admin` needs the node admin check. A human
  *     needs no role row.
  *   - TOOL_HAS_ROUTE_TWIN: every non-read_only tool is in `SAME_DOOR_ROUTES` or in `NO_ROUTE_TWIN` with a reason.
+ *   - NODE_ADDS_ONLY: a node adds route twins and route-only capabilities through `AgentRoutes` (`composeAgentRoutes`); a collision with the baseline throws.
  *   - NEVER_CACHED: every call reads the store.
  * Side-effects: IO (store reads, through `authorize`)
  * @public
@@ -30,6 +31,12 @@ import type {
 /** One tool and the route ids (the `routeId` in each route's wrapper options) that twin it. */
 export interface SameDoorRoute {
   readonly scope: string;
+  readonly routes: readonly string[];
+}
+
+/** A route-only capability: the scope a set of routes needs, declared once with the `requires` shape a tool contract uses. */
+export interface RouteOnlyCapability {
+  readonly requires: ToolRequires;
   readonly routes: readonly string[];
 }
 
@@ -61,9 +68,7 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
  * Routes an outside agent may call that no tool twins (writes, and the knowledge reads). They declare their own scope here, once, with the same
  * `requires` shape a tool contract uses. A signed-in human passes `member`; a bearer agent needs a live role row.
  */
-export const ROUTE_ONLY_CAPABILITIES: Readonly<
-  Record<string, { readonly requires: ToolRequires; readonly routes: readonly string[] }>
-> = {
+export const ROUTE_ONLY_CAPABILITIES: Readonly<Record<string, RouteOnlyCapability>> = {
   "knowledge.read": {
     requires: {
       scope: "knowledge:read",
@@ -134,6 +139,55 @@ export const OPEN_BY_DESIGN_ROUTES: Readonly<Record<string, string>> = {
   "agent.access.requests.create": "the ask door is open by design; NO_SELF_APPROVAL protects activation (only an admin session approves)",
   "agent.register": "the anonymous onboarding door that mints an agent identity and key (bug.0297, an invitation token is tracked there); an identity alone opens no route: only an admin's yes does",
 };
+
+/**
+ * What a node adds to the baseline above (NODE_ADDS_ONLY). The same three maps, each keyed as its constant is. A key the package already holds, a route id
+ * two entries claim, or a tool that is both twinned and exempt throws in `composeAgentRoutes`. A node never replaces a baseline entry.
+ */
+export interface AgentRoutes {
+  /** Tool id -> its route twins, for a tool the node adds. */
+  readonly sameDoorRoutes?: Readonly<Record<string, SameDoorRoute>> | undefined;
+  /** Capability id -> the scope and routes of a route no tool twins. */
+  readonly routeOnlyCapabilities?: Readonly<Record<string, RouteOnlyCapability>> | undefined;
+  /** Tool id -> why the tool has no node route. */
+  readonly noRouteTwin?: Readonly<Record<string, string>> | undefined;
+}
+
+/** The package baseline plus a node's additions: what the catalog, the ask door and `authorizeRoute` read. */
+export interface ComposedRoutes {
+  readonly sameDoorRoutes: Readonly<Record<string, SameDoorRoute>>;
+  readonly routeOnlyCapabilities: Readonly<Record<string, RouteOnlyCapability>>;
+  readonly noRouteTwin: Readonly<Record<string, string>>;
+}
+
+function addOnly<T>(what: string, base: Readonly<Record<string, T>>, extra: Readonly<Record<string, T>> | undefined): Record<string, T> {
+  const out: Record<string, T> = { ...base };
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    if (key in out) throw new Error(`ROUTE_COLLISION: ${what} "${key}" is already declared; a node adds, it never replaces`);
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * The one composition of the baseline route maps with a node's additions. Throws (a collision is a build error, not a log line) when a node entry reuses a
+ * baseline key, when a tool is both twinned and exempt, or when one route id sits under two entries (one route, two scopes is never a door).
+ */
+export function composeAgentRoutes(extra?: AgentRoutes): ComposedRoutes {
+  const sameDoorRoutes = addOnly("route twin for tool", SAME_DOOR_ROUTES, extra?.sameDoorRoutes);
+  const routeOnlyCapabilities = addOnly("route-only capability", ROUTE_ONLY_CAPABILITIES, extra?.routeOnlyCapabilities);
+  const noRouteTwin = addOnly("no-route-twin tool", NO_ROUTE_TWIN, extra?.noRouteTwin);
+  for (const tool of Object.keys(noRouteTwin))
+    if (tool in sameDoorRoutes) throw new Error(`ROUTE_COLLISION: tool "${tool}" has a route twin and is also listed as having none`);
+  const owner = new Map<string, string>();
+  for (const [key, entry] of [...Object.entries(sameDoorRoutes), ...Object.entries(routeOnlyCapabilities)])
+    for (const routeId of entry.routes) {
+      const prior = owner.get(routeId);
+      if (prior !== undefined && prior !== key) throw new Error(`ROUTE_COLLISION: route "${routeId}" is declared by both "${prior}" and "${key}"`);
+      owner.set(routeId, key);
+    }
+  return { sameDoorRoutes, routeOnlyCapabilities, noRouteTwin };
+}
 
 /** Methods that only read. Every other method is a write for DENY_BY_DEFAULT. */
 export const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);

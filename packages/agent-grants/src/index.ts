@@ -53,14 +53,18 @@ export {
   ToolAuthorityError,
 } from "./guard";
 export {
+  type AgentRoutes,
   authorizeCaller,
   type BearerWriteInput,
   bearerWriteRefusal,
   type CallerInput,
+  type ComposedRoutes,
+  composeAgentRoutes,
   DEFERRED_WRITE_ROUTES,
   NO_ROUTE_TWIN,
   OPEN_BY_DESIGN_ROUTES,
   ROUTE_ONLY_CAPABILITIES,
+  type RouteOnlyCapability,
   SAFE_METHODS,
   SAME_DOOR_ROUTES,
   type SameDoorRoute,

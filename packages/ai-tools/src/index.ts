@@ -122,6 +122,8 @@ export {
   SECRET_ARGS_VALIDATION_MESSAGE,
   toBoundToolRuntime,
 } from "./runtime-adapter";
+// Tool-contract requires guard (a node runs it over its own composed bundle)
+export { contractsMissingRequires, readOnlyContractsWithNonAccountRequires } from "./requires-guard";
 // Secret tool arguments
 export { declaresSecretArgs, REDACTION_MARKER } from "./secret-args";
 /** The ladder's triage exits, owned by @cogni-dao/work-items; a triage tool guard reads them here, never keeps a copy. */

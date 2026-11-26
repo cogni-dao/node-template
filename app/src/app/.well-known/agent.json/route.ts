@@ -43,7 +43,8 @@ import {
  * @public
  */
 
-import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { NODE_TOOL_REQUIRES_RECORDS } from "@/bootstrap/ai/tool-bundle";
+import { nodeExtensions } from "@/node-extensions";
 import {
 	confirmAgentCredentialOperation,
 	creditsSummaryOperation,
@@ -86,12 +87,8 @@ export async function GET(request: Request) {
 	const origin = publicOrigin(request);
 	// DECLARED_ONCE_SHOWN_EVERYWHERE: rendered from the grant declarations on every read, never a copy table.
 	const { permissions: askable } = buildPermissionCatalog(
-		buildRequiresById(
-			CORE_TOOL_BUNDLE.map((tool) => ({
-				id: tool.contract.name,
-				requires: tool.contract.requires,
-			})),
-		),
+		buildRequiresById(NODE_TOOL_REQUIRES_RECORDS),
+		nodeExtensions.routes,
 	);
 	// Each askable permission says where its approval link opens, from its declared kind (an account permission: the person's profile; any
 	// other: the node-admin page). The ask returns the link itself (`approvalUrl`); this is its shape, so an agent can plan before it asks.

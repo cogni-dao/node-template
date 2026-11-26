@@ -25,7 +25,7 @@ import type {
 	RepoCapability,
 	WebSearchCapability,
 } from "@cogni/ai-tools";
-import { CORE_TOOL_BUNDLE, withoutRemoteNodeArgument } from "@cogni/ai-tools";
+import { withoutRemoteNodeArgument } from "@cogni/ai-tools";
 import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
 	createDefaultRegistries,
@@ -157,16 +157,18 @@ import {
 	type AgentToolAuthority,
 	createAgentToolAuthority,
 } from "@/bootstrap/agent-authority";
-import {
-	NODE_LOCAL_TOOL_BINDINGS,
-	NODE_LOCAL_TOOL_BUNDLE,
-} from "@/bootstrap/ai/secret-probe";
+import { NODE_LOCAL_TOOL_BINDINGS } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { getCurrentTraceId } from "@/bootstrap/otel";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
+import {
+	NODE_EXTENSION_TOOL_BINDINGS,
+	NODE_TOOL_BUNDLE,
+} from "@/bootstrap/ai/tool-bundle";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
+import { nodeExtensions } from "@/node-extensions";
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import {
 	createGoalMetrics,
@@ -1156,14 +1158,17 @@ function createContainer(): Container {
 		goalProgress,
 	});
 	// The knowledge tools advertise their `node` argument only when this deployment lists a link target (.cogni/service-links.yaml).
+	// ONE_COMPOSED_BUNDLE: NODE_TOOL_BUNDLE (core + node-local + node-extensions.ts) is what the executor and the permission catalog read too.
 	const toolSource = createBoundToolSource(
-		[
-			...(serviceLinks.targets.length > 0
-				? CORE_TOOL_BUNDLE
-				: withoutRemoteNodeArgument(CORE_TOOL_BUNDLE)),
-			...NODE_LOCAL_TOOL_BUNDLE,
-		],
-		{ ...toolBindings, ...metricTools.bindings, ...NODE_LOCAL_TOOL_BINDINGS },
+		serviceLinks.targets.length > 0
+			? NODE_TOOL_BUNDLE
+			: withoutRemoteNodeArgument(NODE_TOOL_BUNDLE),
+		{
+			...toolBindings,
+			...metricTools.bindings,
+			...NODE_LOCAL_TOOL_BINDINGS,
+			...NODE_EXTENSION_TOOL_BINDINGS,
+		},
 	);
 
 	// Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
@@ -1296,7 +1301,8 @@ function createContainer(): Container {
 		owners: serviceAuth.owners,
 		nodeAdmin: adminRoster,
 		log,
-		toolBundle: [...CORE_TOOL_BUNDLE],
+		toolBundle: NODE_TOOL_BUNDLE,
+		routes: nodeExtensions.routes,
 		// The owner join in an account decision needs the person's account to exist; it is created on their first decision.
 		ensureBillingAccount: async (userId) =>
 			(
