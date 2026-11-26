@@ -10,7 +10,7 @@
  * @internal
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   AGENT_HOST_EVENTS,
@@ -18,8 +18,10 @@ import {
   buildRequiresById,
   createAdminCheck,
   createAgentToolAuthority,
+  type AgentAuthorityPort,
   type AgentAuthoritySql,
 } from "../src/host";
+import type { GuardDeps } from "../src/guard";
 
 const requires = { scope: "work_item:transition", kind: "node", subject: "member", label: "Move work items", description: "Change a work item's stage" } as const;
 
@@ -94,5 +96,17 @@ describe("createAgentToolAuthority", () => {
     const decision = await authority.authorizeRoute({ toolId: "unknown", routeId: "r", userId: "u", via: "bearer" });
     expect(decision).toMatchObject({ decision: "deny", code: "policy_denied" });
     expect(log.warn.mock.calls.at(-1)?.[1]).toBe(AGENT_HOST_EVENTS.toolAuthz);
+  });
+
+  it("satisfies the in-process provider's authority shape structurally, so the provider needs no agent-grants import", () => {
+    // The provider's own type (today's `ProviderAgentAuthority`), written out here without importing it.
+    interface ProviderShape {
+      resolvePrincipal(slug: string): Promise<string | null>;
+      readonly guardDeps: Omit<GuardDeps, "runAs">;
+    }
+    expectTypeOf(authority).toExtend<ProviderShape>();
+    expectTypeOf<AgentAuthorityPort>().toExtend<ProviderShape>();
+    expect(typeof authority.resolvePrincipal).toBe("function");
+    expect(Object.keys(authority.guardDeps).sort()).toEqual(["adminCheck", "onDecision", "withStore"]);
   });
 });

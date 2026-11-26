@@ -175,11 +175,18 @@ export function createAdminCheck(sql: SqlTag, nodeAdmin: NodeAdminCheckPort): Ad
 /** The most outside-agent rows the admin table lists (the rest is `more`). */
 export const MAX_ADMIN_OUTSIDE_ROWS = 100;
 
-export interface AgentToolAuthority {
+/**
+ * What the in-process graph provider reads of a node's authority (`AgentAuthorityPort`, the provider's own structural type; task.0175 provider move).
+ * `AgentToolAuthority` extends it, so a change that breaks the provider's shape fails `tsc` here, and the provider package never imports this one.
+ */
+export interface AgentAuthorityPort {
   /** The seeded user id for a catalog principal slug, or null when no row exists (the run is then denied). */
   resolvePrincipal(slug: string): Promise<string | null>;
   /** Guard dependencies. `runAs` is supplied by the provider, which owns the run scope. */
   readonly guardDeps: Omit<GuardDeps, "runAs">;
+}
+
+export interface AgentToolAuthority extends AgentAuthorityPort {
   /** Scopes a role may name. */
   readonly declaredScopes: readonly string[];
   /** The permissions an outside agent may ask for, with the names discovery shows. */
