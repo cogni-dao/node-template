@@ -27,7 +27,7 @@
  * @internal
  */
 
-import { routeAttribution } from "@/bootstrap/write-attribution";
+import { routeAttribution } from "@cogni/work-items";
 import {
   EdoDecideInputSchema,
   EdoHypothesizeInputSchema,

@@ -35,11 +35,12 @@ describe("S1 wiring", () => {
     expect(existsSync(route)).toBe(true);
     const source = readFileSync(route, "utf8");
     for (const verb of ["GET", "POST", "DELETE"])
-      expect(source).toMatch(new RegExp(`export const ${verb} =`));
-    // Every handler takes its AdminSession from the one mint, and writes through the port.
-    expect(source.match(/requireAdminSession\(request, /g)?.length).toBeGreaterThanOrEqual(2);
-    expect(source).toContain("nodeAdminPort");
-    expect(source).not.toMatch(/agentAuthority|adminCheck/);
+      expect(source).toMatch(new RegExp(`export const ${verb} = adminRoute\\(`));
+    // Every handler takes its AdminSession from the one mint (inside the Admin route builder), and writes through the port.
+    const builder = read("app/api/v1/admin/_lib/ai-access-route.ts");
+    expect(builder.match(/requireAdminSession\(request, /g)?.length).toBe(1);
+    expect(builder).toContain("nodeAdminPort");
+    expect(`${source}${builder}`).not.toMatch(/agentAuthority|adminCheck/);
   });
 
   it("uses that endpoint in the admin AI-access client and mounts the block there", () => {
@@ -69,14 +70,14 @@ describe("S1 wiring", () => {
     expect(AGENT_ACCESS_MINE_ENDPOINTS).toEqual({ roles: AGENT_ACCESS_MINE_PATH, preview: AGENT_ACCESS_MINE_PREVIEW_PATH });
     const mine = readFileSync(resolve(SRC, `app${AGENT_ACCESS_MINE_PATH}/route.ts`), "utf8");
     for (const verb of ["GET", "POST", "DELETE"]) expect(mine).toMatch(new RegExp(`export const ${verb} =`));
-    expect(mine.match(/requirePerson\(request, /g)?.length).toBe(3);
-    expect(mine).toContain("refuseNonSession");
-    expect(mine).not.toMatch(/requireAdminSession|nodeAdminPort|adminCheck/); // an account decision never takes an admin session
+    expect(mine.match(/= mineRoute\(/g)?.length).toBe(3);
+    const builder = read("app/_lib/agent-access/routes.ts");
+    expect(builder).toContain("refuseNonSession"); // any Authorization header is refused before a read
+    expect(`${mine}${builder}`).not.toMatch(/requireAdminSession|nodeAdminPort|adminCheck/); // an account decision never takes an admin session
     const preview = readFileSync(resolve(SRC, `app${AGENT_ACCESS_MINE_PREVIEW_PATH}/route.ts`), "utf8");
-    expect(preview).toMatch(/export const POST =/);
-    expect(preview).toContain("refuseNonSession");
+    expect(preview).toMatch(/export const POST = mineRoute\(/);
     const adminPreview = readFileSync(resolve(SRC, "app/api/v1/admin/ai-access/preview/route.ts"), "utf8");
-    expect(adminPreview).toContain("requireAdminSession(request, ");
+    expect(adminPreview).toMatch(/export const POST = adminRoute\(/);
     expect(AGENT_ACCESS_ENDPOINTS.preview).toBe("/api/v1/admin/ai-access/preview");
   });
 

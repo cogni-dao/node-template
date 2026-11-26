@@ -16,7 +16,7 @@
  */
 
 import type { NodeAiAccessView } from "@cogni/agent-grants";
-import type { agentRolesListOperation } from "@cogni/node-contracts";
+import type { agentRolesListOperation } from "@cogni/agent-grants/http";
 import type { z } from "zod";
 
 type Wire = z.infer<typeof agentRolesListOperation.output>;

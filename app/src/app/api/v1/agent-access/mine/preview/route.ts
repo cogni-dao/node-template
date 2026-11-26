@@ -15,43 +15,9 @@
  * @public
  */
 
-import { agentPreviewOperation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
-
-import { refuseNonSession } from "@/app/_lib/auth/human-plane";
-import { getSessionUser } from "@/app/_lib/auth/session";
-import { getContainer } from "@/bootstrap/container";
-import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES, failureFields } from "@/shared/observability";
+import { mineRoute } from "@/app/_lib/agent-access/routes";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const NO_STORE = { "cache-control": "no-store" } as const;
-const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: NO_STORE });
-
-export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "agent.mine.preview", auth: { mode: "none" } },
-  async (ctx, request) => {
-    const refused = refuseNonSession(request, ctx.log);
-    if (refused) return refused;
-    const user = await getSessionUser();
-    if (!user || user.via !== "session") return json({ error: "unauthorized" }, 401);
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid JSON body" }, 400);
-    }
-    const parsed = agentPreviewOperation.input.safeParse(body);
-    if (!parsed.success) return json({ error: "not_found" }, 404);
-    try {
-      const permission = await getContainer().agentAuthority.previewAsk({ token: parsed.data.token, resource: "account" });
-      if (!permission) return json({ error: "not_found" }, 404);
-      return json(agentPreviewOperation.output.parse({ permission }));
-    } catch (error) {
-      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "agent.mine.preview", ...failureFields(error) }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
-      return json({ error: "authz_unavailable" }, 503);
-    }
-  }
-);
+export const POST = mineRoute("agent.mine.preview", "preview", true);

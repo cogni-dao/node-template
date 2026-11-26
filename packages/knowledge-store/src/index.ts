@@ -243,7 +243,7 @@ export type {
   KnowledgeHistoryResult,
 } from "./domain/history-read.js";
 export { readKnowledgeHistory } from "./domain/history-read.js";
-export { createEdoCapability } from "./edo-capability.js";
+export { bindEdoToolCapability, createEdoCapability } from "./edo-capability.js";
 // Entry resolver (task.0086): the shape of the work-items `EntryResolver` port; implemented by the Doltgres adapter entry
 export type {
   EntryCiteRef,

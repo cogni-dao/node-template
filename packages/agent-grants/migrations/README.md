@@ -1,34 +1,16 @@
-# agent_credentials migration template
+# agent authority SQL tails
 
-`agent_credentials.sql` is the FINAL shape a node applies for the `@cogni-dao/agent-grants/credentials` store: node-template's `0039_agent_credentials.sql`
-plus `0040_agent_credentials_key_upgrade.sql` folded into one (node-template keeps them as two migrations; a fresh fork needs only this
-file, and it must not copy node-template's `DROP TABLE IF EXISTS ... CASCADE`, which only cleans a table leaked onto node-template's shared candidate database). Do not copy it blind into a fork:
+**The factory writes the tables; these files hold only the SQL that Drizzle cannot emit** (FORCE row-level security, functions, triggers, the seed, grants). We chose tails over idempotent full templates because the node never edits the package's tables: `defineAgentAuthoritySchema` (`@cogni-dao/agent-grants/schema`) already emits the final shape, including the account columns, the org columns, the widened kind CHECK and both select policies. A second copy of that DDL in a template could only drift or fail on a fresh database.
 
-1. Add the `agentCredentials` table to the node's own schema package, then run the node's `db:generate`. drizzle-kit writes the table DDL and
-   the snapshot against the node's own prior snapshot. Never copy a snapshot.
-2. Append the hand-written part (everything after the line `Hand-written below`): FORCE RLS, `agent_credential_state()` and the
-   external-principal trigger. Drizzle cannot emit them.
-3. The node needs `agent_principals` (migration 0036 shape) first. The trigger reads it.
-4. Run `db:check`. The journal `when` must be greater than every earlier entry.
+A fresh node:
 
-The store needs a BYPASSRLS (service role) connection: the table has no policy, so the app role sees nothing.
+1. Call `defineAgentAuthoritySchema({ users, billingAccounts })` in the node's own schema package, re-export the result, and run the node's `db:generate`. drizzle-kit writes every table, index, CHECK and policy, and the snapshot, against the node's own prior snapshot. Never copy a snapshot.
+2. Append these tails, in this order, to that generated migration (or to the next one): `agent_authority.sql` (FORCE RLS and the seed of `node-ai` and `prioritizer`), `agent_account_grants.sql` (the table privilege and `agent_has_scope()`), `agent_credentials.sql` (FORCE RLS, `agent_credential_state()` and the external-principal trigger). Each file says what it needs first.
+3. Add one delegated select policy per node table that holds an account's data (the comment at the end of `agent_account_grants.sql` shows two).
+4. Write the AGENT_WALLET_IS_NOT_A_PAYEE trigger (node-template 0043) and the principal backfill (0044) yourself: they change tables the node owns (`user_bindings`, the payout leaf tables). `runAgentWalletGuardConformance` fails the node's real-SQL run when the trigger is missing from a leaf table.
+5. Run `db:check`. The journal `when` must be greater than every earlier entry. Run the conformance suites over the node's real SQL store as the app role.
 
-# agent_account_grants migration template
-
-`agent_account_grants.sql` is the FINAL shape a node applies for account-resource grants on `agent_roles` (`@cogni-dao/agent-grants` 0.6.0). node-template keeps it as `0041_agent_account_grants.sql`. Do not copy it blind into a fork:
-
-1. Add the new columns, the five CHECKs, the unique `link_hash` index and the one select policy (`agent_roles_account_self_read`) to the node's own `agentRoles` schema, then run the node's `db:generate`. drizzle-kit writes that part and the snapshot against the node's own prior snapshot. Never copy a snapshot.
-2. Append the hand-written part (everything after the line `Hand-written below`): the table privilege, `agent_has_scope()` (SECURITY INVOKER, no PUBLIC execute) and one delegated select policy per table that holds an account's data. Drizzle cannot emit them.
-3. Keep `agent_roles_live_unique` and the old `ON CONFLICT` targets (EXPAND-ONLY). The contract migration (task.5484) replaces them.
-4. Run `db:check`. The journal `when` must be greater than every earlier entry. Run `runGrantConformance` over the node's real SQL store, and check row-level security as the real app role (owner, live grant, foreign, expired, revoked: 0 rows).
-
-# agent_principals_orgs migration template
-
-`agent_principals_orgs.sql` is the shape a node applies for orgs (`@cogni-dao/agent-grants` 0.8.0, `./orgs`). node-template keeps it as `0045_agent_principals_orgs.sql`. It is plain SQL that drizzle-kit emits, so a node can mirror it exactly:
-
-1. Add the two nullable columns `owner_source_kind` and `owner_source_ref`, the CHECK `agent_principals_org_has_owner_source`, the widened kind CHECK `('internal','external','org')` and the unique partial index `agent_principals_org_source_unique` (one org per owner source, `WHERE kind = 'org'`) to the node's own `agentPrincipals` schema, then run the node's `db:generate`. Never copy a snapshot.
-2. Existing rows are untouched (both columns are null; only an `org` row must carry them).
-3. Run `db:check`. The journal `when` must be greater than every earlier entry.
+`agent_roles` and `agent_principals` carry the org columns on every node; they stay null until a node adopts orgs. The tests `app/tests/component/db/agent-authority-tails.int.test.ts` (node-template) generate the migration from the factory on an empty database, append these tails and assert the guard objects, so the factory and the tails cannot drift apart unseen.
 
 # payer_bindings migration template
 

@@ -23,6 +23,7 @@ import {
   backendUnavailableBody,
   handleWorkItemCreate,
   type WorkItemsBusyReason,
+  routeAttribution,
 } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
@@ -35,7 +36,6 @@ import {
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { routeAttribution } from "@/bootstrap/write-attribution";
 import {
   EVENT_NAMES,
   logEvent,

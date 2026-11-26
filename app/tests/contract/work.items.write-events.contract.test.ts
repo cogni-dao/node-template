@@ -11,7 +11,11 @@
  * @internal
  */
 
-import { WORK_ITEM_READ_EVENTS, WORK_ITEM_WRITE_EVENTS } from "@cogni/work-items";
+import {
+  WORK_ITEM_ATTRIBUTION_EVENTS,
+  WORK_ITEM_READ_EVENTS,
+  WORK_ITEM_WRITE_EVENTS,
+} from "@cogni/work-items";
 import { describe, expect, it } from "vitest";
 
 import { EVENT_NAMES } from "@/shared/observability";
@@ -31,5 +35,11 @@ describe("work-item write events", () => {
       getSuccess: EVENT_NAMES.WORK_ITEMS_GET_SUCCESS,
       getRefused: EVENT_NAMES.WORK_ITEMS_GET_REFUSED,
     }).toEqual(WORK_ITEM_READ_EVENTS);
+  });
+
+  it("the registry names equal the package's attribution events", () => {
+    expect({ runMissing: EVENT_NAMES.WORK_ITEMS_ATTRIBUTION_RUN_MISSING }).toEqual(
+      WORK_ITEM_ATTRIBUTION_EVENTS
+    );
   });
 });
