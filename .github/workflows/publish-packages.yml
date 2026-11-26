@@ -55,6 +55,7 @@ on:
       - "langgraph-graphs-v*"
       - "money-plane-v*"
       - "agent-grants-v*"
+      - "extension-kit-v*"
       - "substrate-health-v*"
       - "sandbox-v*"
       - "node-declarations-v*"
@@ -109,6 +110,7 @@ env:
      {"name":"@cogni-dao/money-plane","dir":"packages/money-plane","tagPrefix":"money-plane-v"},
      {"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"},
      {"name":"@cogni-dao/agent-grants","dir":"packages/agent-grants","tagPrefix":"agent-grants-v"},
+     {"name":"@cogni-dao/extension-kit","dir":"packages/extension-kit","tagPrefix":"extension-kit-v"},
      {"name":"@cogni-dao/substrate-health","dir":"packages/substrate-health","tagPrefix":"substrate-health-v"},
      {"name":"@cogni-dao/sandbox","dir":"packages/sandbox","tagPrefix":"sandbox-v"},
      {"name":"@cogni-dao/node-declarations","dir":"packages/node-declarations","tagPrefix":"node-declarations-v"},

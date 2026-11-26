@@ -77,7 +77,7 @@ type AuthRequiredOptions = {
   /**
    * SAME_DOOR: this route twins a guarded tool. Before the handler runs, the caller passes the same `authorize()` check as
    * the tool guard: a bearer caller needs a live role row for the tool's scope (403 `policy_denied`, 503 `authz_unavailable`);
-   * a signed-in human passes the subject rules. Declared once in `SAME_DOOR_ROUTES` (`@cogni/agent-grants`).
+   * a signed-in human passes the subject rules. Declared once as route twins (`composeAgentRoutes`, `@cogni/agent-grants`).
    */
   sameDoor?: string;
   /**

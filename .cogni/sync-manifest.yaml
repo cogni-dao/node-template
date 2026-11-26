@@ -32,6 +32,9 @@ node_local:
   - "app/src/styles/branding/**"
   - "app/src/app/branding/**"
   - "public/branding/**"
+  # task.0205: a node's own tools, route twins and route-only scopes. The SHAPE of the declaration is template-owned
+  # (app/src/bootstrap/ai/node-extensions-host.ts); this file holds only the node's declarations, so a sync never clobbers them.
+  - "app/src/node-extensions.ts"
   # Node identity + persona.
   - ".cogni/repo-spec.yaml"
   # story.5137: each node declares its own workloads (host, size); never fork-synced.

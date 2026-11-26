@@ -55,6 +55,11 @@
       "import": "./dist/http.js",
       "default": "./dist/http.js"
     },
+    "./same-door-parity": {
+      "types": "./dist/same-door-parity.d.ts",
+      "import": "./dist/same-door-parity.js",
+      "default": "./dist/same-door-parity.js"
+    },
     "./internal-principals": {
       "types": "./dist/internal-principals.d.ts",
       "import": "./dist/internal-principals.js",
