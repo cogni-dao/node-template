@@ -96,6 +96,14 @@ const materialTargets = [
 ] as const;
 const isMaterialTarget = (id: string): id is (typeof materialTargets)[number] =>
 	(materialTargets as readonly string[]).includes(id);
+/** The text inside the first ``` fence, by linear scan (a regex here backtracks cubically). */
+const fenced = (raw: string) => {
+	const open = raw.indexOf("```");
+	const close = open < 0 ? -1 : raw.indexOf("```", open + 3);
+	if (close < 0) return undefined;
+	const body = raw.slice(open + 3, close).trim();
+	return body.startsWith("json") ? body.slice(4).trim() : body;
+};
 const size = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
 const obj = (v: unknown): Record<string, unknown> | undefined =>
 	v && typeof v === "object" && !Array.isArray(v)
@@ -263,7 +271,7 @@ export class ResearchReceipts {
 		} catch {
 			// Diagnose the JSON inside a fence too, so one repair turn names every problem. The
 			// fenced answer itself is never accepted.
-			const inner = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/)?.[1];
+			const inner = fenced(raw);
 			if (inner === undefined || inner.trim() === raw.trim()) return [bare];
 			const problems = this.check(inner);
 			return [bare, ...problems.filter((problem) => problem !== bare)];

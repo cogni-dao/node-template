@@ -1450,6 +1450,14 @@ describe("critic and evidence failures", () => {
 		expect(r.reasons.has("evidence_limit")).toBe(false);
 		expect(r.evidenceBytes).toBeLessThan(64 * 1024);
 	});
+	it("checks an unclosed fence over long whitespace in linear time", () => {
+		const r = new ResearchReceipts("https://node.example");
+		const started = Date.now();
+		expect(r.check(`\`\`\`json${" ".repeat(20000)}`)).toEqual([
+			"the answer is not one bare JSON object (no markdown fences or prose)",
+		]);
+		expect(Date.now() - started).toBeLessThan(1000);
+	});
 	it("charges retained passages, not snippets or metadata, to the evidence budget", () => {
 		const r = new ResearchReceipts("https://node.example");
 		for (let i = 0; i < 4; i++)
