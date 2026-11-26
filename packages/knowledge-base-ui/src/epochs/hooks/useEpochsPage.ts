@@ -6,6 +6,7 @@
 import { EpochContributorSummaryPageSchema } from "@cogni/attribution-ledger/contracts";
 import type { ContributorSummaryPage } from "@cogni/attribution-ledger/http";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useRef } from "react";
 import { type EpochsClient, useEpochContext, withEpochQuery } from "../context";
 import {
   type ApiIngestionReceipt,
@@ -102,8 +103,13 @@ export function useEpochsPage() {
         }
       ),
   });
+  // Retain presentation across every native query branch, including key-change errors.
+  // This value never supplies membership authority; use the native result below.
+  const lastVisible = useRef(query.data);
+  if (query.data) lastVisible.current = query.data;
   return {
     ...query,
+    data: query.data ?? lastVisible.current,
     membershipReady:
       query.isSuccess &&
       query.fetchStatus === "idle" &&
@@ -190,8 +196,13 @@ export function useEpochView(
         membershipReadId: readId,
       })),
   });
+  // Retain presentation across every native query branch, including key-change errors.
+  // This value never supplies membership authority; use the native result below.
+  const lastVisible = useRef(query.data);
+  if (query.data) lastVisible.current = query.data;
   return {
     ...query,
+    data: query.data ?? lastVisible.current,
     membershipReady:
       query.isSuccess &&
       query.fetchStatus === "idle" &&

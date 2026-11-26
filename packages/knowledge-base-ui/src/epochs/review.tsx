@@ -62,6 +62,8 @@ import {
   Input,
   type Phase,
   PhaseList,
+  Table,
+  TableBody,
   TableCell,
   TableRow,
 } from "./ui/index";
@@ -143,6 +145,7 @@ export function ReviewView({
     data?.selection?.kind === "finalize" ? data.selection.epoch.id : null,
   );
   const openReview = useOpenEpochReview();
+  const [published, setPublished] = useState(false);
   const [publishedExplorerUrl, setPublishedExplorerUrl] = useState<
     string | null
   >(null);
@@ -226,24 +229,24 @@ export function ReviewView({
           phases={workflowPhases(
             selection,
             lifecycleUnavailable,
-            publishedExplorerUrl !== null,
+            published,
           )}
         />
       </section>
 
-      {publishedExplorerUrl ? (
+      {published ? (
         <Alert>
           <AlertTitle>Latest settlement published</AlertTitle>
           <AlertDescription>
             The transaction is confirmed.{" "}
-            <a
+            {publishedExplorerUrl && <a
               href={publishedExplorerUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary underline-offset-4 hover:underline"
             >
               View transaction
-            </a>
+            </a>}
           </AlertDescription>
         </Alert>
       ) : !selection ? (
@@ -332,7 +335,7 @@ export function ReviewView({
                 <ExecuteDistributionPanel
                   epochId={selection.epoch.id}
                   operatorSetupUrl={operatorSetupUrl}
-                  onConfirmed={setPublishedExplorerUrl}
+                  onConfirmed={(url) => { setPublished(true); setPublishedExplorerUrl(url); }}
                 />
               ) : null}
             </div>
@@ -376,7 +379,7 @@ function ReviewEpochSection({
 }): ReactElement {
   const { state, sign, reset } = useSignEpoch(epoch.id);
   const { overrides } = session;
-  const { queryKeyPrefix } = useEpochContext();
+  const { queryKeyPrefix, state: navigation } = useEpochContext();
   const loadingDetails = useIsFetching({
     queryKey: [
       ...queryKeyPrefix,
@@ -394,6 +397,7 @@ function ReviewEpochSection({
         claimantKey: string;
         receipt: IngestionReceipt;
         offset: number;
+        contributorOffset: number;
         readId: string | undefined;
       }
     >()
@@ -428,13 +432,14 @@ function ReviewEpochSection({
             claimantKey: contributor.claimantKey,
             receipt,
             offset,
+            contributorOffset: navigation.contributorPages?.[epoch.id] ?? 0,
             readId: epoch.membershipReadId,
           });
         }
         return next;
       });
     },
-    [epoch.membershipReadId]
+    [epoch.membershipReadId, epoch.id, navigation.contributorPages]
   );
 
   // Recompute contributor sums with overrides applied
@@ -448,6 +453,16 @@ function ReviewEpochSection({
     void sign().finally(session.endSigning);
   }, [sign, session]);
 
+  // Recovery presentation belongs above rows. An involuntary membership generation
+  // can remove the old claimant or reset its receipt page. Neither retires an edit.
+  // Deliberate contributor navigation still follows its existing disclosure behavior.
+  const recoveryDrafts = new Map([...draftContext].filter(([id, context]) =>
+    session.drafts[id]?.editing &&
+    context.contributorOffset === (navigation.contributorPages?.[epoch.id] ?? 0) &&
+    (!epoch.contributors.some(item => item.claimantKey === context.claimantKey) ||
+      (context.readId !== epoch.membershipReadId && context.offset > 0))
+  ));
+
   const renderExpandedRows = useCallback(
     (
       contributor: EpochContributor,
@@ -458,11 +473,8 @@ function ReviewEpochSection({
       const ownsEditor = (id: string) => {
         const context = draftContext.get(id);
         return (
-          !context ||
-          context.claimantKey === contributor.claimantKey ||
-          !epoch.contributors.some(
-            (item) => item.claimantKey === context.claimantKey
-          )
+          !recoveryDrafts.has(id) &&
+          (!context || context.claimantKey === contributor.claimantKey)
         );
       };
       const receipts = contributor.receipts.filter(
@@ -478,6 +490,7 @@ function ReviewEpochSection({
             session.marker?.submission.subjectRef === id);
         if (
           retainEditor &&
+          !recoveryDrafts.has(id) &&
           context.claimantKey === contributor.claimantKey &&
           // Clamp only an obsolete generation's page, never intentional navigation.
           (context.readId === epoch.membershipReadId
@@ -505,6 +518,7 @@ function ReviewEpochSection({
                   claimantKey: contributor.claimantKey,
                   receipt,
                   offset: receiptOffset,
+                  contributorOffset: navigation.contributorPages?.[epoch.id] ?? 0,
                   readId: epoch.membershipReadId,
                 })
               );
@@ -527,6 +541,8 @@ function ReviewEpochSection({
     },
     [
       draftContext,
+      recoveryDrafts,
+      navigation.contributorPages,
       epoch.contributors,
       epoch.membershipReadId,
       membershipReady,
@@ -596,6 +612,28 @@ function ReviewEpochSection({
           renderExpandedRows={renderExpandedRows}
           onMembership={onMembership}
         />
+      )}
+
+      {recoveryDrafts.size > 0 && (
+        <section aria-label="Retained weight adjustments">
+          <p>Current contribution membership needs verification. Your changes are kept here.</p>
+          <Table><TableBody>
+            {[...recoveryDrafts].map(([id, context]) => (
+              <ReviewReceiptRow
+                key={id}
+                receipt={{ ...context.receipt, artifactUrl: null }}
+                override={overrides.overridesByRef.get(id) ?? null}
+                draft={session.drafts[id] ?? null}
+                onStart={() => undefined}
+                onChange={patch => session.changeDraft(id, patch)}
+                onCancel={() => session.cancelDraft(id)}
+                onSave={async () => undefined}
+                onRemove={async () => undefined}
+                isSaving
+              />
+            ))}
+          </TableBody></Table>
+        </section>
       )}
 
       <div className="bg-card flex flex-wrap items-center gap-3 rounded-lg border p-4">

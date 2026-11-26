@@ -12,17 +12,16 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import type { EpochDto } from "@/features/governance/lib/compose-epoch";
 import {
   partitionEpochs,
   useEpochsPage,
   useEpochView,
   useSettlementLifecycle,
 } from "@/features/governance/hooks/useEpochsPage";
+import type { EpochDto } from "@/features/governance/lib/compose-epoch";
 
 import { epochTestProvider } from "./epoch-test-provider";
 
@@ -221,7 +220,18 @@ describe("epoch page reads", () => {
       current: null,
       pastEpochs: [],
       historyTotal: 0,
+      membershipReadId: expect.any(String),
     });
+    expect(result.current.list.membershipReady).toBe(true);
+    const firstReadId = result.current.list.data?.membershipReadId;
+    expect(firstReadId).toMatch(/^[\da-f]{8}-[\da-f-]{27}$/);
+    await act(async () => {
+      await result.current.list.refetch();
+    });
+    expect(result.current.list.membershipReady).toBe(true);
+    await waitFor(() =>
+      expect(result.current.list.data?.membershipReadId).not.toBe(firstReadId)
+    );
     expect(result.current.lifecycle.data).toEqual({
       publicationEvidence: "unknown",
       liveRevision: null,

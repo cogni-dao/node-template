@@ -86,15 +86,17 @@ export function ExecuteDistributionPanel({
   /** Canonical operator-owned one-time setup surface for this node. */
   operatorSetupUrl: string;
   /** Optional workspace-level terminal feedback that survives lifecycle advancement. */
-  onConfirmed?: (explorerUrl: string) => void;
+  onConfirmed?: (explorerUrl: string | null) => void;
 }) {
   const { payload, notReady, isLoading, error } =
     useExecuteDistribution(epochId);
   const [confirmedExplorerUrl, setConfirmedExplorerUrl] = useState<
     string | null
   >(null);
+  const [confirmed, setConfirmed] = useState(false);
   const handleConfirmed = useCallback(
-    (explorerUrl: string) => {
+    (explorerUrl: string | null) => {
+      setConfirmed(true);
       setConfirmedExplorerUrl(explorerUrl);
       onConfirmed?.(explorerUrl);
     },
@@ -111,12 +113,14 @@ export function ExecuteDistributionPanel({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {confirmedExplorerUrl ? (
+        {confirmed ? (
           <Alert>
             <AlertTitle>Latest settlement published</AlertTitle>
             <AlertDescription>
               The transaction is confirmed.{" "}
-              <TxLink url={confirmedExplorerUrl}>View transaction</TxLink>
+              {confirmedExplorerUrl && (
+                <TxLink url={confirmedExplorerUrl}>View transaction</TxLink>
+              )}
             </AlertDescription>
           </Alert>
         ) : isLoading ? (
@@ -218,7 +222,7 @@ function PublishBody({
 }: {
   payload: ExecuteDistributionPayload;
   operatorSetupUrl: string;
-  onConfirmed: (explorerUrl: string) => void;
+  onConfirmed: (explorerUrl: string | null) => void;
 }) {
   const { client } = useEpochContext();
   const {
@@ -362,7 +366,7 @@ function PublishStep({
   mintDelta: bigint;
   address: `0x${string}`;
   chainName: string;
-  onConfirmed: (explorerUrl: string) => void;
+  onConfirmed: (explorerUrl: string | null) => void;
 }) {
   const { client, queryKeyPrefix, state, isCurrentScope } = useEpochContext();
   const {
@@ -404,7 +408,7 @@ function PublishStep({
     : null;
 
   useEffect(() => {
-    if (!isConfirmed || !explorerUrl || refetchedConfirmation.current) return;
+    if (!isConfirmed || !txHash || refetchedConfirmation.current) return;
     refetchedConfirmation.current = true;
     onConfirmed(explorerUrl);
     void (async () => {
@@ -425,6 +429,7 @@ function PublishStep({
           exact: true,
         });
       } catch {
+        if (!isCurrentScope()) return;
         await queryClient.invalidateQueries({
           queryKey: finishWorkspaceKey(
             queryKeyPrefix,
@@ -436,6 +441,7 @@ function PublishStep({
     })().catch(() => undefined);
   }, [
     explorerUrl,
+    txHash,
     isConfirmed,
     onConfirmed,
     payload.epochId,

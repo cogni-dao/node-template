@@ -149,6 +149,7 @@ function fixture(initialNavigation?: EpochNavigationState) {
     published: false,
     pendingPublish: false,
     confirmedPublish: false,
+    nullExplorer: false,
     failRootRefetch: false,
     error: null as Error | null,
     overrides: [] as {
@@ -249,7 +250,7 @@ function fixture(initialNavigation?: EpochNavigationState) {
       <button type="button">Connect fixture wallet</button>
     ),
     getChainName: () => "Base",
-    getTransactionExplorerUrl: () => "https://example.com/tx",
+    getTransactionExplorerUrl: () => state.nullExplorer ? null : "https://example.com/tx",
   } satisfies EpochWallet;
   const client: EpochsClient = {
     dataScope: "fixture-scope",
@@ -1588,6 +1589,246 @@ describe("public epochs capability", () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each([
+    false,
+    true,
+  ])("r7 keeps the 70-to-69 moved draft and known acceptance visible (accepted=%s)", async (accepted) => {
+    const f = fixture();
+    f.state.events = [
+      ...Array.from({ length: 69 }, (_, i) => ({
+        ...event(`remaining-${i}`, "external"),
+        platformLogin: "Pending",
+        selection: { userId: null, included: true, weightOverrideMilli: null },
+      })),
+      {
+        ...event("moving", "external"),
+        platformLogin: "Pending",
+        selection: { userId: null, included: true, weightOverrideMilli: null },
+      },
+      { ...event("linked"), platformLogin: "Linked" },
+    ];
+    await readyReview(f);
+    fireEvent.click(
+      within(await screen.findByRole("row", { name: /Pending/ })).getByRole(
+        "button",
+        { name: "Expand details" }
+      )
+    );
+    await screen.findByRole("link", { name: "Contribution remaining-0" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "More contributions" })
+    );
+    const moving = await screen.findByRole("link", {
+      name: "Contribution moving",
+    });
+    fireEvent.click(
+      within(containingRow(moving)).getByRole("button", {
+        name: "Adjust weight",
+      })
+    );
+    fireEvent.change(screen.getByLabelText("Override weight (units)"), {
+      target: { value: "000" },
+    });
+    fireEvent.change(screen.getByLabelText("Reason (optional)"), {
+      target: { value: "exact moved draft" },
+    });
+    if (accepted) {
+      f.state.failList = true;
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText("Saved. Could not verify current values.");
+      expect(screen.getByLabelText("Override weight (units)")).toHaveValue(
+        "000"
+      );
+      expect(screen.getByLabelText("Reason (optional)")).toHaveValue(
+        "exact moved draft"
+      );
+      expect(f.requests.filter((r) => r.method === "PATCH")).toHaveLength(1);
+      f.state.failList = false;
+      f.state.failOverrideMethod = "GET";
+    }
+    f.state.events = f.state.events.map((item) =>
+      item.receiptId === "moving"
+        ? {
+            ...item,
+            platformLogin: "Linked",
+            selection: {
+              userId: "a",
+              included: true,
+              weightOverrideMilli: null,
+            },
+          }
+        : item
+    );
+    await act(async () => {
+      await f.queryClient.refetchQueries({
+        predicate: (q) => q.queryKey.includes("finish-epoch"),
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Override weight (units)")).toHaveValue(
+        "000"
+      )
+    );
+    expect(screen.getByLabelText("Reason (optional)")).toHaveValue(
+      "exact moved draft"
+    );
+    expect(
+      screen.queryByRole("link", { name: "Contribution moving" })
+    ).not.toBeInTheDocument();
+    const request = f.client.request;
+    let refuseDestination = true;
+    vi.spyOn(f.client, "request").mockImplementation((url, init) => refuseDestination && url.includes("claimantKey=user%3Aa")
+      ? Promise.resolve(new Response('{}', { status: accepted ? 403 : 503 })) : request(url, init));
+    fireEvent.click(
+      within(screen.getByRole("row", { name: /Linked/ })).getByRole("button", {
+        name: "Expand details",
+      })
+    );
+    await screen.findByRole("button", { name: "Retry contributions" });
+    expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(1);
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("000");
+    expect(screen.getByLabelText("Reason (optional)")).toHaveValue("exact moved draft");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    if (accepted) expect(screen.getByText("Saved. Could not verify current values.")).toBeInTheDocument();
+    refuseDestination = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry contributions" }));
+    await screen.findByRole("link", { name: "Contribution linked" });
+    await waitFor(() =>
+      expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(
+        1
+      )
+    );
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("000");
+    // Once U's membership is verified, collapsing I cannot hide U's editor.
+    fireEvent.click(
+      within(screen.getByRole("row", { name: /Pending/ })).getByRole("button", {
+        name: "Collapse details",
+      })
+    );
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("000");
+    if (accepted) {
+      expect(
+        screen.getByText("Saved. Could not verify current values.")
+      ).toBeInTheDocument();
+      expect(f.requests.filter((r) => r.method === "PATCH")).toHaveLength(1);
+      f.state.failOverrideMethod = null;
+      fireEvent.click(screen.getByRole("button", { name: "Retry refresh" }));
+    } else fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(
+        f.state.overrides.find((o) => o.subjectRef === "moving")?.overrideUnits
+      ).toBe("0")
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Override weight (units)")
+      ).not.toBeInTheDocument()
+    );
+    fireEvent.click(
+      within(
+        containingRow(
+          await screen.findByRole("link", { name: "Contribution moving" })
+        )
+      ).getByRole("button", { name: "Adjust weight" })
+    );
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("0");
+    expect(screen.getByLabelText("Reason (optional)")).toHaveValue(
+      "exact moved draft"
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel weight adjustment" })
+    );
+    expect(
+      screen.queryByLabelText("Override weight (units)")
+    ).not.toBeInTheDocument();
+  });
+
+
+  it.each([false, true])("r7 retains expanded shells when replacement query fails (history key=%s)", async (historyKey) => {
+    const f = fixture({ historyOffset: 0, selectedEpochId: null, expandedEpochIds: historyKey ? [] : ["14"] });
+    const request = f.client.request;
+    let fail = false;
+    vi.spyOn(f.client, "request").mockImplementation(async (url, init) => {
+      if (fail && (historyKey ? url.includes("view=overview") && url.includes("offset=200") : url.includes("view=summary")))
+        return new Response('{}', { status: 503 });
+      const response = await request(url, init);
+      // A sparse history window with a >200 total exercises key replacement without dense DOM cost.
+      if (historyKey && url.includes("view=overview")) return new Response(JSON.stringify({ ...await response.json(), total: 201 }));
+      return response;
+    });
+    const view = render(<CurrentEpochView />, { wrapper: f.wrapper });
+    const count = historyKey ? 1 : 2;
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Expand details" })).toHaveLength(2));
+    const expand = screen.getAllByRole("button", { name: "Expand details" });
+    for (const button of historyKey ? expand.slice(0, 1) : expand) fireEvent.click(button);
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "Contribution r1" })).toHaveLength(count));
+    fail = true;
+    if (historyKey) fireEvent.click(screen.getByRole("button", { name: "More epochs" }));
+    else fireEvent.click(screen.getByRole("button", { name: "Sync contributions" }));
+    await screen.findAllByText("The service could not confirm current values. Retry refresh.");
+    expect(screen.getAllByRole("button", { name: "Collapse details" })).toHaveLength(historyKey ? 1 : 3);
+    expect(screen.queryByRole("link", { name: "Contribution r1" })).not.toBeInTheDocument();
+    fail = false;
+    for (const button of screen.getAllByRole("button", { name: historyKey ? "Retry epochs" : "Retry epoch contributions" })) fireEvent.click(button);
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "Contribution r1" })).toHaveLength(count));
+    expect(screen.getAllByRole("button", { name: "Collapse details" })).toHaveLength(historyKey ? 1 : 3);
+    view.unmount();
+  });
+
+  it.each([[403, false], [503, false], [403, true], [503, true]] as const)("r7 keeps an orphaned exact draft visible through destination HTTP %s (accepted=%s)", async (status, accepted) => {
+    const f = fixture();
+    f.state.events = [{ ...event("moving", "external"), platformLogin: "Pending", selection: { userId: null, included: true, weightOverrideMilli: null } }, { ...event("linked"), platformLogin: "Linked" }];
+    const view = await readyReview(f);
+    fireEvent.click(within(screen.getByRole("row", { name: /Pending/ })).getByRole("button", { name: "Expand details" }));
+    fireEvent.click(within(containingRow(await screen.findByRole("link", { name: "Contribution moving" }))).getByRole("button", { name: "Adjust weight" }));
+    fireEvent.change(screen.getByLabelText("Override weight (units)"), { target: { value: "000" } });
+    fireEvent.change(screen.getByLabelText("Reason (optional)"), { target: { value: "  orphan exact reason  " } });
+    if (accepted) {
+      f.state.failList = true;
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText("Saved. Could not verify current values.");
+      f.state.failList = false;
+      f.state.failOverrideMethod = "GET";
+    }
+    const request = f.client.request;
+    let refused = true;
+    vi.spyOn(f.client, "request").mockImplementation((url, init) => refused && url.includes("claimantKey=") ? Promise.resolve(new Response('{}', { status })) : request(url, init));
+    f.state.events = f.state.events.map(item => item.receiptId === "moving" ? { ...item, platformLogin: "Linked", selection: { userId: "a", included: true, weightOverrideMilli: null } } : item);
+    await act(async () => { await f.queryClient.refetchQueries({ predicate: q => q.queryKey.includes("finish-epoch") }); });
+    expect(screen.queryByRole("row", { name: /Pending/ })).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(1);
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("000");
+    expect(screen.getByLabelText("Reason (optional)")).toHaveValue("  orphan exact reason  ");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: "Contribution moving" })).not.toBeInTheDocument();
+    // The destination remains collapsed until explicitly opened; no eager detail read.
+    expect(screen.getByRole("button", { name: "Expand details" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand details" }));
+    await screen.findByRole("button", { name: "Retry contributions" });
+    expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(f.requests.filter(r => r.method === "PATCH" || r.method === "DELETE")).toHaveLength(accepted ? 1 : 0);
+    refused = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry contributions" }));
+    await screen.findByRole("link", { name: "Contribution linked" });
+    await waitFor(() => accepted
+      ? expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+      : expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+    expect(screen.getAllByLabelText("Override weight (units)")).toHaveLength(1);
+    expect(screen.getByLabelText("Override weight (units)")).toHaveValue("000");
+    expect(screen.getByLabelText("Reason (optional)")).toHaveValue("  orphan exact reason  ");
+    expect(f.requests.filter(r => r.method === "PATCH" || r.method === "DELETE")).toHaveLength(accepted ? 1 : 0);
+    if (accepted) {
+      expect(screen.getByText("Saved. Could not verify current values.")).toBeInTheDocument();
+      f.state.failOverrideMethod = null;
+      fireEvent.click(screen.getByRole("button", { name: "Retry refresh" }));
+      await waitFor(() => expect(screen.queryByLabelText("Override weight (units)")).not.toBeInTheDocument());
+      expect(f.requests.filter(r => r.method === "PATCH")).toHaveLength(1);
+    }
+    view.unmount();
+  });
+
   it("r6 keeps current and historical contributor shells through actual list failure via Sync", async () => {
     const f = fixture({
       historyOffset: 0,
@@ -1750,9 +1991,11 @@ describe("public epochs capability", () => {
   });
 
   it.each([
-    false,
-    true,
-  ])("r6 confirmed fake receipt refreshes only owning keys (root refuses=%s)", async (rootRefuses) => {
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])("r6 confirmed fake receipt refreshes only owning keys (root refuses=%s, null explorer=%s)", async (rootRefuses, nullExplorer) => {
     const f = fixture();
     f.state.kind = "publish";
     const other = fixture();
@@ -1772,6 +2015,7 @@ describe("public epochs capability", () => {
     const before = f.requests.length;
     const otherBefore = other.requests.length;
     f.state.failRootRefetch = rootRefuses;
+    f.state.nullExplorer = nullExplorer;
     f.state.confirmedPublish = true;
     view.rerender(
       <QueryClientProvider client={f.queryClient}>
@@ -1792,6 +2036,8 @@ describe("public epochs capability", () => {
           .some((r) => r.url.startsWith("/fixture/epochs"))
       ).toBe(true);
     });
+    expect(screen.getByText("Latest settlement published")).toBeInTheDocument();
+    if (nullExplorer) expect(screen.queryByRole("link", { name: "View transaction" })).not.toBeInTheDocument();
     expect(other.requests).toHaveLength(otherBefore);
     expect(f.writeContract).not.toHaveBeenCalled();
   });
