@@ -23,6 +23,7 @@
     "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*",
     "@cogni/ai-core": "workspace:*",
     "@cogni/ai-tools": "workspace:@cogni-dao/ai-tools@*",
+    "@cogni/extension-kit": "workspace:@cogni-dao/extension-kit@*",
     "@cogni/aragon-osx": "workspace:*",
     "@cogni/attribution-collect": "workspace:*",
     "@cogni/attribution-ledger": "workspace:@cogni-dao/attribution@*",

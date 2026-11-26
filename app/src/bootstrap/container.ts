@@ -25,7 +25,8 @@ import type {
 	RepoCapability,
 	WebSearchCapability,
 } from "@cogni/ai-tools";
-import { CORE_TOOL_BUNDLE, withoutRemoteNodeArgument } from "@cogni/ai-tools";
+import { type CatalogBoundTool, withoutRemoteNodeArgument } from "@cogni/ai-tools";
+import { addOnly } from "@cogni/extension-kit";
 import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
 	createDefaultRegistries,
@@ -157,17 +158,19 @@ import {
 	type AgentToolAuthority,
 	createAgentToolAuthority,
 } from "@/bootstrap/agent-authority";
+import { NODE_LOCAL_TOOL_BINDINGS } from "@/bootstrap/ai/secret-probe";
 import {
-	NODE_LOCAL_TOOL_BINDINGS,
-	NODE_LOCAL_TOOL_BUNDLE,
-} from "@/bootstrap/ai/secret-probe";
-import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
+	createToolBindings,
+	type ToolBindingDeps,
+} from "@/bootstrap/ai/tool-bindings";
 import { getCurrentTraceId } from "@/bootstrap/otel";
 import { buildOrgIdentity } from "@/bootstrap/org-identity";
 import { createServiceAuth, type ServiceAuth } from "@/bootstrap/service-auth";
 import { createServiceLinks, type ServiceLinks } from "@/bootstrap/service-links";
 import { loadServiceLinksConfig } from "@/bootstrap/service-links-config";
+import { composeToolBundle } from "@/bootstrap/ai/tool-bundle";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
+import { nodeExtensions } from "@/node-extensions";
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import {
 	createGoalMetrics,
@@ -312,6 +315,8 @@ export interface Container {
 	repoCapability: RepoCapability;
 	/** Tool source with real implementations for AI tool execution */
 	toolSource: ToolSourcePort;
+	/** The one composed tool bundle (core + node-local + node-extensions): what the tool source, the graph executor and the permission catalog read. */
+	toolBundle: readonly CatalogBoundTool[];
 	/** External-agent knowledge contribution service — undefined when DOLTGRES_URL is unset */
 	knowledgeContributionService: ContributionService | undefined;
 	/** GOAL_CHANGE_IS_NODE_ADMIN / P0P1_IS_NODE_ADMIN: the one admin check (`agentAuthority.adminCheck`) as a NodeAdminAuthority; it decides on the user id alone. */
@@ -1126,7 +1131,7 @@ function createContainer(): Container {
 	);
 
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
-	const toolBindings = createToolBindings({
+	const toolBindingDeps: ToolBindingDeps = {
 		nodePublicOrigin: env.APP_BASE_URL,
 		remoteKnowledge: serviceLinks.remoteKnowledge,
 		knowledgeCapability,
@@ -1143,7 +1148,8 @@ function createContainer(): Container {
 			accountsForUser: (userId: UserId) =>
 				new UserDrizzleAccountService(db, userId, financialLedger),
 		}),
-	});
+	};
+	const toolBindings = createToolBindings(toolBindingDeps);
 	const goalProgress = createGoalProgressReader({
 		// knowledgeStorePort uses doltClient, not the reserved knowledgeWriter.
 		pooledGoalReads: true,
@@ -1157,14 +1163,24 @@ function createContainer(): Container {
 		goalProgress,
 	});
 	// The knowledge tools advertise their `node` argument only when this deployment lists a link target (.cogni/service-links.yaml).
+	// ONE_COMPOSED_BUNDLE: core + node-local + the node's declared tools. The executor and the permission catalog read `toolBundle` too.
+	const { bundle: toolBundle, extensionBindings } = composeToolBundle(
+		nodeExtensions,
+		toolBindingDeps,
+	);
+	// NODE_ADDS_ONLY: bindings merge without a spread; a repeated tool id throws, naming both sources.
+	const allBindings = addOnly(
+		{ what: "tool binding", code: "TOOL_BINDING_DUPLICATE" },
+		{ source: "core", entries: toolBindings },
+		{ source: "core metrics", entries: metricTools.bindings },
+		{ source: "node-template", entries: NODE_LOCAL_TOOL_BINDINGS },
+		{ source: "node extensions", entries: extensionBindings },
+	);
 	const toolSource = createBoundToolSource(
-		[
-			...(serviceLinks.targets.length > 0
-				? CORE_TOOL_BUNDLE
-				: withoutRemoteNodeArgument(CORE_TOOL_BUNDLE)),
-			...NODE_LOCAL_TOOL_BUNDLE,
-		],
-		{ ...toolBindings, ...metricTools.bindings, ...NODE_LOCAL_TOOL_BINDINGS },
+		serviceLinks.targets.length > 0
+			? toolBundle
+			: withoutRemoteNodeArgument(toolBundle),
+		allBindings,
 	);
 
 	// Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
@@ -1304,7 +1320,8 @@ function createContainer(): Container {
 		...(orgIdentity ? { orgIdentity } : {}),
 		nodeAdmin: adminRoster,
 		log,
-		toolBundle: [...CORE_TOOL_BUNDLE],
+		toolBundle,
+		routes: nodeExtensions.routes,
 		// The owner join in an account decision needs the person's account to exist; it is created on their first decision.
 		ensureBillingAccount: async (userId) =>
 			(
@@ -1346,6 +1363,7 @@ function createContainer(): Container {
 		webSearchCapability,
 		repoCapability,
 		toolSource,
+		toolBundle,
 		knowledgeContributionService,
 		nodeAdmin: createAdminCheckNodeAdminAuthority(() => agentAuthority.adminCheck),
 		agentAuthority,

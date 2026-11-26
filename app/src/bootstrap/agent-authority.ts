@@ -15,6 +15,7 @@
  * @internal
  */
 
+import type { AgentRoutes } from "@cogni/agent-grants";
 import {
   type AgentAuthoritySql,
   type AgentToolAuthority,
@@ -37,6 +38,8 @@ export function createAgentToolAuthority(deps: {
   nodeAdmin: NodeAdminAuthority;
   log: Logger;
   toolBundle: readonly CatalogBoundTool[];
+  /** The node's add-only route twins and route-only scopes (`nodeExtensions.routes`). */
+  routes?: AgentRoutes | undefined;
   ensureBillingAccount?: (userId: string) => Promise<string>;
   owners?: OrgOwners;
   /** This node's id: the audience of an org's connect and the `sub` of the statement this node signs. */
@@ -53,6 +56,7 @@ export function createAgentToolAuthority(deps: {
     nodeAdmin: deps.nodeAdmin,
     log: deps.log,
     tools: deps.toolBundle.map((tool) => ({ id: tool.contract.name, requires: tool.contract.requires })),
+    routes: deps.routes,
     graphs: Object.values(LANGGRAPH_CATALOG),
     systemUserIds: [COGNI_SYSTEM_PRINCIPAL_USER_ID],
     ensureBillingAccount: deps.ensureBillingAccount,

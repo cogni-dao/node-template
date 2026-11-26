@@ -85,7 +85,8 @@ import {
   type ServiceAssertionSigner,
   type VerifiedServiceAssertion,
 } from "./service-auth";
-import { authorizeCaller, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "./same-door";
+import { addOnly, type Contribution } from "./add-only";
+import { type AgentRoutes, authorizeCaller, composeAgentRoutes, type ComposedRoutes } from "./same-door";
 import { buildAskView, buildNodeAiView } from "./node-ai";
 import { agentNameKey } from "./names";
 import { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
@@ -189,15 +190,29 @@ export function buildRequiresById(records: readonly RequiresRecord[]): Record<st
   return byId;
 }
 
+/** Two declarations of one scope are the same when every field matches. */
+function sameDeclaration(a: ToolRequires, b: ToolRequires): boolean {
+  return a.scope === b.scope && a.kind === b.kind && a.subject === b.subject && a.label === b.label && a.description === b.description;
+}
+
 /**
  * The one derivation of a node's permission catalog from its declarations. The role routes (`declaredScopes`), the ask door (`askableScopes`) and agent
  * discovery (`permissions`) all read it. DECLARED_ONCE_SHOWN_EVERYWHERE: a scope with no label and description is not shown. ASKABLE_IS_REACHABLE: an
- * outside agent can ask only for a scope a route twin uses.
+ * outside agent can ask only for a scope a route twin uses. `routes` (@beta) is a node's add-only route twins and route-only capabilities (`composeAgentRoutes`).
+ * SCOPE_DECLARED_ONCE: a scope declared again with a different kind, subject, label or description throws; a repeat that matches field for field is the same declaration.
  */
-export function buildPermissionCatalog(requiresById: Readonly<Record<string, ToolRequires>>): PermissionCatalog {
-  const requires: Record<string, ToolRequires> = {};
-  for (const r of Object.values(requiresById)) requires[r.scope] = r;
-  for (const cap of Object.values(ROUTE_ONLY_CAPABILITIES)) requires[cap.requires.scope] = cap.requires;
+export function buildPermissionCatalog(requiresById: Readonly<Record<string, ToolRequires>>, routes?: AgentRoutes): PermissionCatalog {
+  return catalogOf(requiresById, composeAgentRoutes(routes));
+}
+
+function catalogOf(requiresById: Readonly<Record<string, ToolRequires>>, composed: ComposedRoutes): PermissionCatalog {
+  // SCOPE_DECLARED_ONCE: one declaration per scope. A repeat that matches field for field (two tools sharing a scope) is the same declaration.
+  const bySource = (source: string, r: ToolRequires): Contribution<ToolRequires> => ({ source, entries: { [r.scope]: r } });
+  const requires = addOnly<ToolRequires>(
+    { what: "scope", code: "SCOPE_DECLARED_TWICE", same: sameDeclaration },
+    ...Object.entries(requiresById).map(([id, r]) => bySource(id, r)),
+    ...Object.entries(composed.routeOnlyCapabilities).map(([id, cap]) => bySource(id, cap.requires))
+  );
 
   const declarations: Record<string, PermissionDeclaration> = {};
   const scopeKinds: Record<string, ScopeKind> = {};
@@ -208,8 +223,8 @@ export function buildPermissionCatalog(requiresById: Readonly<Record<string, Too
   const declaredScopes = Object.keys(declarations).sort();
   const askableScopes = [
     ...new Set([
-      ...Object.values(SAME_DOOR_ROUTES).map((r) => r.scope),
-      ...Object.values(ROUTE_ONLY_CAPABILITIES).map((c) => c.requires.scope),
+      ...Object.values(composed.sameDoorRoutes).map((r) => r.scope),
+      ...Object.values(composed.routeOnlyCapabilities).map((c) => c.requires.scope),
     ]),
   ].sort();
   const permissions = askableScopes.flatMap((scope) => {
@@ -374,6 +389,8 @@ export interface AgentToolAuthorityDeps {
   readonly log: HostLog;
   /** The node's tool contracts as `{ id, requires }` records. */
   readonly tools: readonly RequiresRecord[];
+  /** A node's add-only route twins and route-only capabilities (`AgentRoutes`). A collision with the package baseline throws at construction. */
+  readonly routes?: AgentRoutes | undefined;
   /** The node's graph catalog entries (`principal`, `toolIds`), for the table of which AI may use which scope. */
   readonly graphs: Iterable<{ readonly principal?: string | undefined; readonly toolIds: readonly string[] }>;
   /** The system principal ids `principalClass` calls `system`. */
@@ -413,7 +430,8 @@ export interface AgentToolAuthorityDeps {
 
 export function createAgentToolAuthority(deps: AgentToolAuthorityDeps): AgentToolAuthority {
   const requiresById = buildRequiresById(deps.tools);
-  const { declarations, scopeKinds, declaredScopes, askableScopes, permissions } = buildPermissionCatalog(requiresById);
+  const routes = composeAgentRoutes(deps.routes);
+  const { declarations, scopeKinds, declaredScopes, askableScopes, permissions } = catalogOf(requiresById, routes);
   const graphs = [...deps.graphs];
   const scopesOf = (plane: "account" | "node") => scopesByPrincipalOf(graphs, requiresById, plane);
   const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
@@ -630,7 +648,7 @@ export function createAgentToolAuthority(deps: AgentToolAuthorityDeps): AgentToo
       };
     },
     async authorizeRoute({ toolId, routeId, userId, via, accountId }) {
-      const requires = requiresById[toolId] ?? ROUTE_ONLY_CAPABILITIES[toolId]?.requires;
+      const requires = requiresById[toolId] ?? routes.routeOnlyCapabilities[toolId]?.requires;
       const decision: AuthzDecision = !requires
         ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
         : await snapshotOwners([accountId])

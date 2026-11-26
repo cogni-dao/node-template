@@ -17,6 +17,11 @@ vi.mock("@/shared/env", () => ({
   serverEnv: () => ({ APP_BUILD_SHA: "test-sha" }),
 }));
 
+// The route reads the authority's catalog from the container; this test is about the action schemas, so the catalog is empty.
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({ agentAuthority: { permissions: [] } }),
+}));
+
 vi.mock("@/shared/config/repoSpec.server", () => ({
   getNodeBrandColor: () => "#000000",
   getNodeBrandIcon: () => "circle",
