@@ -11,12 +11,18 @@
  * @public
  */
 
+import {
+  EPOCH_PRESENTATION_EVENTS,
+  handleEpochContributorSummary,
+  parseEpochPage,
+} from "@cogni/attribution-ledger/http";
 import { epochUserProjectionsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { toUserProjectionDto } from "@/app/api/v1/public/attribution/_lib/attribution-dto";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { getNodeId } from "@/shared/config";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +34,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     routeId: "ledger.epoch-user-projections",
     auth: { mode: "required", getSessionUser },
   },
-  async (_ctx, _request, _sessionUser, context) => {
+  async (ctx, request, _sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
     let epochId: bigint;
@@ -39,6 +45,30 @@ export const GET = wrapRouteHandlerWithLogging<{
     }
 
     const store = getContainer().attributionStore;
+    const url = new URL(request.url);
+    if (url.searchParams.get("view") === "summary") {
+      const pagination = parseEpochPage(
+        url.searchParams,
+        EPOCH_PRESENTATION_EVENTS.summary,
+        { nodeId: getNodeId(), epochId: epochId.toString() }
+      );
+      if (!pagination.ok) {
+        ctx.log.info(pagination.result.event, pagination.result.event.event);
+        return NextResponse.json(pagination.result.body, {
+          status: pagination.result.status,
+        });
+      }
+      const page = pagination.page;
+      const result = await handleEpochContributorSummary(
+        store,
+        getNodeId(),
+        epochId,
+        page
+      );
+      ctx.log.info(result.event, result.event.event);
+      return NextResponse.json(result.body, { status: result.status });
+    }
+
     const epoch = await store.getEpoch(epochId);
     if (!epoch) {
       return NextResponse.json({ error: "Epoch not found" }, { status: 404 });

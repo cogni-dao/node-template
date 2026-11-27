@@ -11,6 +11,7 @@
  * @internal
  */
 
+import { SETTLEMENT_LIFECYCLE_READ_EVENT } from "@cogni/attribution-ledger/http";
 import { AGENT_HOST_EVENTS } from "@cogni/agent-grants/host";
 import { SANDBOX_PUSH_TOKEN_EVENT } from "@cogni/sandbox";
 import { describe, expect, it } from "vitest";
@@ -27,6 +28,12 @@ describe("package event names", () => {
       roleDenied: EVENT_NAMES.AGENT_ROLE_DENIED,
       rolesUnavailable: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE,
     }).toEqual(AGENT_HOST_EVENTS);
+  });
+
+  it("the registry name equals the lifecycle terminal event", () => {
+    expect(EVENT_NAMES.ATTRIBUTION_SETTLEMENT_LIFECYCLE_READ).toBe(
+      SETTLEMENT_LIFECYCLE_READ_EVENT
+    );
   });
 
   it("the registry name equals the sandbox push-token event", () => {

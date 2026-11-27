@@ -23,7 +23,8 @@ const LATEST_ROOT =
 const ZERO_ROOT =
   "0x0000000000000000000000000000000000000000000000000000000000000000";
 
-const { store, readLiveRoot, routeOptions } = vi.hoisted(() => ({
+const { store, readLiveRoot, routeOptions, logInfo } = vi.hoisted(() => ({
+  logInfo: vi.fn(),
   store: {
     listEpochs: vi.fn(),
     listClaimantLiabilities: vi.fn(),
@@ -33,6 +34,11 @@ const { store, readLiveRoot, routeOptions } = vi.hoisted(() => ({
   readLiveRoot: vi.fn(),
   routeOptions: { value: null as unknown },
 }));
+
+vi.mock("@/shared/observability/server", async () => {
+  const { logEvent } = await import("@cogni/node-shared");
+  return { logEvent };
+});
 
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({ attributionStore: store }),
@@ -53,10 +59,17 @@ vi.mock("@/shared/config", () => ({
 
 vi.mock("@/bootstrap/http", () => ({
   wrapRouteHandlerWithLogging:
-    (options: unknown, handler: () => Promise<Response>) =>
+    (options: unknown, handler: (ctx: unknown) => Promise<Response>) =>
     async () => {
       routeOptions.value = options;
-      return handler();
+      return handler({
+        reqId: "request-1",
+        routeId: "ledger.settlement-lifecycle",
+        log: {
+          info: (fields: object, message: string) =>
+            logInfo({ nodeId: NODE_ID, ...fields }, message),
+        },
+      });
     },
 }));
 
@@ -65,6 +78,8 @@ vi.mock("@/app/_lib/auth/session", () => ({
 }));
 
 import { GET } from "@/app/api/v1/attribution/settlement-lifecycle/route";
+import { readSettlementLifecycle } from "@/app/api/v1/attribution/_lib/settlement-lifecycle";
+import { EVENT_NAMES } from "@/shared/observability";
 
 function epoch(id: bigint) {
   return {
@@ -153,6 +168,47 @@ describe("GET attribution settlement lifecycle", () => {
     store.getLatestSettlementRevision.mockResolvedValue(r2);
     store.getSettlementRevisionByMerkleRoot.mockResolvedValue(r1);
     readLiveRoot.mockResolvedValue(LIVE_ROOT);
+  });
+
+  it.each(["matched", "unknown"] as const)(
+    "keeps %s output and logs one safe terminal event",
+    async (evidence) => {
+      if (evidence === "unknown") readLiveRoot.mockResolvedValue(null);
+      const baseline = await readSettlementLifecycle({
+        store: store as never,
+        nodeId: NODE_ID,
+        scopeId: "default",
+        chainId: 8453,
+        distributorAddress: "0x3333333333333333333333333333333333333333",
+        readLiveRoot,
+      });
+      const response = await callRoute();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(
+        settlementLifecycleOperation.output.parse(baseline)
+      );
+      expect(logInfo).toHaveBeenCalledTimes(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        {
+          event: EVENT_NAMES.ATTRIBUTION_SETTLEMENT_LIFECYCLE_READ,
+          nodeId: NODE_ID,
+          reqId: "request-1",
+          routeId: "ledger.settlement-lifecycle",
+          status: 200,
+          outcome: "ok",
+          publicationEvidence: evidence,
+          count: 2,
+        },
+        EVENT_NAMES.ATTRIBUTION_SETTLEMENT_LIFECYCLE_READ
+      );
+    }
+  );
+
+  it("propagates unexpected store failures without a success event", async () => {
+    const failure = new Error("sensitive store failure");
+    store.listEpochs.mockRejectedValue(failure);
+    await expect(callRoute()).rejects.toBe(failure);
+    expect(logInfo).not.toHaveBeenCalled();
   });
 
   it("is authenticated and returns live/latest revision-sequence coverage", async () => {

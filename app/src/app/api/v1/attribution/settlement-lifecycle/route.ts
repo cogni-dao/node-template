@@ -11,10 +11,9 @@
  * @public
  */
 
-import { settlementLifecycleOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { readSettlementLifecycle } from "@/app/api/v1/attribution/_lib/settlement-lifecycle";
+import { handleSettlementLifecycle } from "@/app/api/v1/attribution/_lib/settlement-lifecycle";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { readLiveDistributionMerkleRoot } from "@/bootstrap/settlement-runtime";
@@ -23,6 +22,7 @@ import {
   getNodeTokenomicsConfig,
   getScopeId,
 } from "@/shared/config";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,9 +32,9 @@ export const GET = wrapRouteHandlerWithLogging(
     routeId: "ledger.settlement-lifecycle",
     auth: { mode: "required", getSessionUser },
   },
-  async () => {
+  async (ctx) => {
     const tokenomics = getNodeTokenomicsConfig();
-    const output = await readSettlementLifecycle({
+    const result = await handleSettlementLifecycle({
       store: getContainer().attributionStore,
       nodeId: getNodeId(),
       scopeId: getScopeId(),
@@ -43,6 +43,12 @@ export const GET = wrapRouteHandlerWithLogging(
       readLiveRoot: readLiveDistributionMerkleRoot,
     });
 
-    return NextResponse.json(settlementLifecycleOperation.output.parse(output));
+    logEvent(ctx.log, EVENT_NAMES.ATTRIBUTION_SETTLEMENT_LIFECYCLE_READ, {
+      ...result.event,
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      status: result.status,
+    });
+    return NextResponse.json(result.body, { status: result.status });
   }
 );

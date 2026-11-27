@@ -11,6 +11,8 @@
  * @public
  */
 
+import { randomUUID } from "node:crypto";
+
 import { buildDaoTokenCumulativeDistribution } from "@cogni/aragon-osx";
 import {
   EpochNotFoundError,
@@ -1495,6 +1497,865 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       const result = await adapter.getEpoch(scopeTestEpochId);
       expect(result).not.toBeNull();
       expect(result?.scopeId).toBe(TEST_SCOPE_ID);
+    });
+  });
+
+  describe("transitionEpochForWindow scope authority", () => {
+    const nodeId = "00000000-0000-4000-8000-000000000717";
+    const otherNode = "00000000-0000-4000-8000-000000000718";
+    const foreign = new DrizzleAttributionAdapter(db, OTHER_SCOPE_ID);
+    let ownId: bigint;
+    let foreignId: bigint;
+    const receiptId = "scope-transition-foreign-receipt";
+
+    beforeAll(async () => {
+      const own = await adapter.createEpoch({
+        nodeId,
+        scopeId: TEST_SCOPE_ID,
+        ...epochWindow(600),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      const outside = await foreign.createEpoch({
+        nodeId,
+        scopeId: OTHER_SCOPE_ID,
+        ...epochWindow(601),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      ownId = own.id;
+      foreignId = outside.id;
+      await foreign.insertIngestionReceipts([
+        makeIngestionReceipt({ receiptId, nodeId }),
+      ]);
+      await foreign.insertSelectionDoNothing([
+        makeSelectionAuto({ receiptId, nodeId, epochId: foreignId }),
+      ]);
+      await foreign.upsertDraftClaimants({
+        nodeId,
+        epochId: foreignId,
+        receiptId,
+        resolverRef: "cogni.default-author.v0",
+        algoRef: "default-author-v0",
+        inputsHash: "scope-hash",
+        claimantKeys: ["user:scope-test"],
+        createdBy: "system",
+      });
+    });
+
+    const transition = (staleId: bigint) => ({
+      nodeId,
+      scopeId: TEST_SCOPE_ID,
+      ...epochWindow(602),
+      weightConfig: TEST_WEIGHT_CONFIG,
+      closeParams: {
+        epochId: staleId,
+        approvers: [],
+        approverSetHash: "scope-approvers",
+        allocationAlgoRef: "weight-sum-v0",
+        weightConfigHash: "scope-weights",
+        artifactsHash: "scope-artifacts",
+        evaluations: [
+          makeEvaluation({ nodeId, epochId: staleId, status: "locked" }),
+        ],
+      },
+    });
+    const assertUnchanged = async () => {
+      const [
+        own,
+        outside,
+        ownEvaluations,
+        foreignEvaluations,
+        foreignClaimants,
+      ] = await Promise.all([
+        adapter.getEpoch(ownId),
+        foreign.getEpoch(foreignId),
+        adapter.getEvaluationsForEpoch(ownId),
+        foreign.getEvaluationsForEpoch(foreignId),
+        db.execute(
+          sql`SELECT status FROM epoch_receipt_claimants WHERE epoch_id = ${foreignId} AND receipt_id = ${receiptId}`
+        ),
+      ]);
+      expect(own?.status).toBe("open");
+      expect(outside?.status).toBe("open");
+      expect(ownEvaluations).toHaveLength(0);
+      expect(foreignEvaluations).toHaveLength(0);
+      expect(Array.from(foreignClaimants, (row) => row.status)).toEqual([
+        "draft",
+      ]);
+      expect((await adapter.listEpochs(nodeId)).map((e) => e.id)).toEqual([
+        ownId,
+      ]);
+      expect((await foreign.listEpochs(nodeId)).map((e) => e.id)).toEqual([
+        foreignId,
+      ]);
+    };
+
+    it("rejects a foreign stale epoch before evaluation and claimant writes", async () => {
+      await expect(
+        adapter.transitionEpochForWindow(transition(foreignId))
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+    });
+
+    it.each([
+      false,
+      true,
+    ])("rejects foreign target scope before writes or existing-window return (existing=%s)", async (existing) => {
+      const params = transition(ownId);
+      await expect(
+        adapter.transitionEpochForWindow({
+          ...params,
+          scopeId: OTHER_SCOPE_ID,
+          ...(existing ? epochWindow(601) : epochWindow(603)),
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+    });
+
+    it.each([
+      "node",
+      "epoch",
+    ] as const)("rejects a foreign evaluation %s without partial writes", async (mismatch) => {
+      const params = transition(ownId);
+      const invalid = makeEvaluation({
+        nodeId: mismatch === "node" ? otherNode : nodeId,
+        epochId: mismatch === "epoch" ? foreignId : ownId,
+        evaluationRef: "other",
+        status: "locked",
+      });
+      await expect(
+        adapter.transitionEpochForWindow({
+          ...params,
+          closeParams: {
+            ...params.closeParams,
+            evaluations: [...params.closeParams.evaluations, invalid],
+          },
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+    });
+
+    it("rejects missing stale epochs and mismatched nodes without effects", async () => {
+      await expect(
+        adapter.transitionEpochForWindow(transition(999999999n))
+      ).rejects.toThrow(EpochNotFoundError);
+      const params = transition(ownId);
+      await expect(
+        adapter.transitionEpochForWindow({
+          ...params,
+          nodeId: otherNode,
+          closeParams: {
+            ...params.closeParams,
+            evaluations: [
+              makeEvaluation({
+                nodeId: otherNode,
+                epochId: ownId,
+                status: "locked",
+              }),
+            ],
+          },
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+    });
+
+    it("rejects foreign close evaluations and claimant writes without effects", async () => {
+      const params = transition(ownId).closeParams;
+      await expect(
+        adapter.closeIngestionWithEvaluations({
+          ...params,
+          evaluations: [
+            makeEvaluation({ nodeId, epochId: foreignId, status: "locked" }),
+          ],
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await expect(
+        adapter.upsertDraftClaimants({
+          nodeId,
+          epochId: foreignId,
+          receiptId,
+          resolverRef: "cogni.default-author.v0",
+          algoRef: "default-author-v0",
+          inputsHash: "hostile-change",
+          claimantKeys: ["user:hostile"],
+          createdBy: "system",
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await assertUnchanged();
+      const rows = await db.execute(
+        sql`SELECT inputs_hash FROM epoch_receipt_claimants WHERE epoch_id = ${foreignId} AND receipt_id = ${receiptId}`
+      );
+      expect(Array.from(rows, (row) => row.inputs_hash)).toEqual([
+        "scope-hash",
+      ]);
+    });
+
+    it("rejects foreign allocations before deleting existing own allocations", async () => {
+      const own = {
+        nodeId,
+        epochId: ownId,
+        claimantKey: "user:scope",
+        claimant: { kind: "user" as const, userId: "scope" },
+        finalUnits: 5n,
+        receiptIds: [],
+      };
+      await adapter.replaceFinalClaimantAllocations(ownId, [own]);
+      await expect(
+        adapter.replaceFinalClaimantAllocations(ownId, [
+          own,
+          { ...own, epochId: foreignId, claimantKey: "user:foreign" },
+        ])
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(
+        (await adapter.getFinalClaimantAllocationsForEpoch(ownId)).map(
+          (a) => a.claimantKey
+        )
+      ).toEqual([own.claimantKey]);
+      expect(
+        await foreign.getFinalClaimantAllocationsForEpoch(foreignId)
+      ).toHaveLength(0);
+      await assertUnchanged();
+    });
+
+    it("permits an authorized retry after the stale epoch is closed", async () => {
+      const params = transition(ownId);
+      const first = await adapter.transitionEpochForWindow(params);
+      expect(first.isNew).toBe(true);
+      expect((await adapter.getEpoch(ownId))?.status).toBe("review");
+      const retry = await adapter.transitionEpochForWindow(params);
+      expect(retry.isNew).toBe(false);
+      expect(retry.epoch.id).toBe(first.epoch.id);
+      expect(retry.closedStaleEpochId).toBe(ownId);
+      const override = {
+        nodeId,
+        epochId: ownId,
+        subjectRef: "scope-own",
+        overrideUnits: 1n,
+      };
+      await expect(
+        adapter.batchUpsertReviewSubjectOverrides([
+          override,
+          { ...override, epochId: foreignId, subjectRef: "scope-foreign" },
+        ])
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(
+        await adapter.getReviewSubjectOverridesForEpoch(ownId)
+      ).toHaveLength(0);
+      expect(
+        await foreign.getReviewSubjectOverridesForEpoch(foreignId)
+      ).toHaveLength(0);
+      const ownAllocation = {
+        nodeId,
+        epochId: ownId,
+        claimantKey: "user:scope",
+        claimant: { kind: "user" as const, userId: "scope" },
+        finalUnits: 5n,
+        receiptIds: [],
+      };
+      await expect(
+        adapter.finalizeEpochAtomic({
+          epochId: ownId,
+          poolTotal: 0n,
+          finalClaimantAllocations: [
+            ownAllocation,
+            {
+              ...ownAllocation,
+              epochId: foreignId,
+              claimantKey: "user:foreign",
+            },
+          ],
+          claimantLiabilities: [],
+          statement: {
+            nodeId,
+            finalAllocationSetHash: "scope-hash",
+            poolTotalCredits: 0n,
+            statementLines: [],
+          },
+          signature: {
+            nodeId,
+            signerWallet: "0xscope",
+            signature: "0xscope",
+            signedAt: new Date(),
+          },
+          expectedFinalAllocationSetHash: "scope-hash",
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      expect((await adapter.getEpoch(ownId))?.status).toBe("review");
+      expect(await adapter.getStatementForEpoch(ownId)).toBeNull();
+      expect(
+        (await adapter.getFinalClaimantAllocationsForEpoch(ownId)).map(
+          (a) => a.claimantKey
+        )
+      ).toEqual([ownAllocation.claimantKey]);
+      expect(
+        await foreign.getFinalClaimantAllocationsForEpoch(foreignId)
+      ).toHaveLength(0);
+      await adapter.finalizeEpoch(ownId, 0n);
+      const finalizedRetry = await adapter.transitionEpochForWindow(params);
+      expect(finalizedRetry.isNew).toBe(false);
+      expect(finalizedRetry.epoch.id).toBe(first.epoch.id);
+      expect(await adapter.getEvaluationsForEpoch(ownId)).toHaveLength(1);
+      await assertForeignUnchanged();
+    });
+
+    const assertForeignUnchanged = async () => {
+      expect((await foreign.getEpoch(foreignId))?.status).toBe("open");
+      expect(await foreign.getEvaluationsForEpoch(foreignId)).toHaveLength(0);
+      const rows = await db.execute(
+        sql`SELECT status FROM epoch_receipt_claimants WHERE epoch_id = ${foreignId} AND receipt_id = ${receiptId}`
+      );
+      expect(Array.from(rows, (row) => row.status)).toEqual(["draft"]);
+    };
+  });
+
+  describe("public child authority and lifecycle regressions", () => {
+    const foreign = new DrizzleAttributionAdapter(db, OTHER_SCOPE_ID);
+    const wrongNode = "00000000-0000-4000-8000-000000000919";
+    let windowIndex = 800;
+    const create = (nodeId: string = randomUUID(), scopeId = TEST_SCOPE_ID) =>
+      adapter.createEpoch({
+        nodeId,
+        scopeId,
+        ...epochWindow(windowIndex++),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+    const review = async (
+      nodeId: string = randomUUID(),
+      scopeId = TEST_SCOPE_ID
+    ) => {
+      const epoch = await create(nodeId, scopeId);
+      await (scopeId === TEST_SCOPE_ID ? adapter : foreign).closeIngestion(
+        epoch.id,
+        [],
+        "authority-approvers",
+        "weight-sum-v0",
+        "authority-weights"
+      );
+      return epoch;
+    };
+    const statement = (epochId: bigint, nodeId: string) => ({
+      epochId,
+      nodeId,
+      finalAllocationSetHash: "authority-hash",
+      poolTotalCredits: 0n,
+      statementLines: [],
+    });
+    const signature = (statementId: string, nodeId: string) => ({
+      statementId,
+      nodeId,
+      signerWallet: "0xauthority",
+      signature: "0xsignature",
+      signedAt: new Date(),
+    });
+    const atomic = (epochId: bigint, nodeId: string) => ({
+      epochId,
+      poolTotal: 0n,
+      finalClaimantAllocations: [],
+      claimantLiabilities: [],
+      statement: statement(epochId, nodeId),
+      signature: signature("unused", nodeId),
+      expectedFinalAllocationSetHash: "authority-hash",
+    });
+    // Observe every affected table, including timestamps and frozen hashes, in one read.
+    const snapshot = async (ids: readonly bigint[]) => {
+      const idList = sql.join(
+        ids.map((id) => sql`${id}`),
+        sql`, `
+      );
+      const rows = await db.execute(sql`
+        SELECT * FROM (
+          SELECT 'epochs' AS kind, to_jsonb(t) AS data FROM epochs t WHERE id IN (${idList})
+          UNION ALL SELECT 'evaluations', to_jsonb(t) FROM epoch_evaluations t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'claimants', to_jsonb(t) FROM epoch_receipt_claimants t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'selection', to_jsonb(t) FROM epoch_selection t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'projections', to_jsonb(t) FROM epoch_user_projections t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'pool', to_jsonb(t) FROM epoch_pool_components t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'statements', to_jsonb(t) FROM epoch_statements t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'signatures', to_jsonb(t) FROM epoch_statement_signatures t
+            WHERE statement_id IN (SELECT id FROM epoch_statements WHERE epoch_id IN (${idList}))
+          UNION ALL SELECT 'overrides', to_jsonb(t) FROM epoch_review_subject_overrides t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'allocations', to_jsonb(t) FROM epoch_final_claimant_allocations t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'liabilities', to_jsonb(t) FROM claimant_liabilities t WHERE source_epoch_id IN (${idList})
+          UNION ALL SELECT 'manifests', to_jsonb(t) FROM epoch_distribution_manifests t WHERE epoch_id IN (${idList})
+          UNION ALL SELECT 'leaves', to_jsonb(t) FROM epoch_distribution_leaves t WHERE epoch_id IN (${idList})
+        ) facts ORDER BY kind, data::text
+      `);
+      return Array.from(rows, (row) => ({ kind: row.kind, data: row.data }));
+    };
+
+    it("resolves signature reads/writes through statement scope and rejects wrong-node retries", async () => {
+      const own = await review();
+      const outside = await review(own.nodeId, OTHER_SCOPE_ID);
+      const ownStatement = await adapter.insertEpochStatement(
+        statement(own.id, own.nodeId)
+      );
+      const foreignStatement = await foreign.insertEpochStatement(
+        statement(outside.id, outside.nodeId)
+      );
+      await foreign.insertStatementSignature(
+        signature(foreignStatement.id, outside.nodeId)
+      );
+      await adapter.insertStatementSignature(
+        signature(ownStatement.id, own.nodeId)
+      );
+      const before = await snapshot([own.id, outside.id]);
+      await expect(
+        adapter.getSignaturesForStatement(foreignStatement.id)
+      ).rejects.toThrow(EpochNotFoundError);
+      await expect(
+        adapter.insertStatementSignature({
+          ...signature(foreignStatement.id, own.nodeId),
+          signerWallet: "0xnew",
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await expect(
+        adapter.insertStatementSignature(signature(ownStatement.id, wrongNode))
+      ).rejects.toThrow(EpochNotFoundError);
+      const missing = randomUUID();
+      await expect(adapter.getSignaturesForStatement(missing)).rejects.toThrow(
+        EpochNotFoundError
+      );
+      await expect(
+        adapter.insertStatementSignature(signature(missing, own.nodeId))
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(await snapshot([own.id, outside.id])).toEqual(before);
+      await adapter.insertStatementSignature(
+        signature(ownStatement.id, own.nodeId)
+      );
+      expect(
+        await adapter.getSignaturesForStatement(ownStatement.id)
+      ).toHaveLength(1);
+      expect(
+        await foreign.getSignaturesForStatement(foreignStatement.id)
+      ).toHaveLength(1);
+    });
+
+    it.each([
+      "standalone",
+      "atomic",
+    ] as const)("%s statement rejects foreign/missing lineage and permits same-scope cross-epoch lineage", async (writer) => {
+      const own = await review();
+      const outside = await review(own.nodeId, OTHER_SCOPE_ID);
+      const otherNode = await review(wrongNode);
+      const foreignStatement = await foreign.insertEpochStatement(
+        statement(outside.id, outside.nodeId)
+      );
+      const wrongNodeStatement = await adapter.insertEpochStatement(
+        statement(otherNode.id, otherNode.nodeId)
+      );
+      const before = await snapshot([own.id, outside.id, otherNode.id]);
+      const write = (predecessor: string) =>
+        writer === "standalone"
+          ? adapter.insertEpochStatement({
+              ...statement(own.id, own.nodeId),
+              supersedesStatementId: predecessor,
+            })
+          : adapter.finalizeEpochAtomic({
+              ...atomic(own.id, own.nodeId),
+              statement: {
+                ...statement(own.id, own.nodeId),
+                supersedesStatementId: predecessor,
+              },
+            });
+      for (const id of [
+        foreignStatement.id,
+        wrongNodeStatement.id,
+        randomUUID(),
+      ]) {
+        await expect(write(id)).rejects.toThrow(EpochNotFoundError);
+        expect(await snapshot([own.id, outside.id, otherNode.id])).toEqual(
+          before
+        );
+      }
+      const earlier = await review(own.nodeId);
+      const predecessor = await adapter.insertEpochStatement(
+        statement(earlier.id, own.nodeId)
+      );
+      await write(predecessor.id);
+      expect(
+        (await adapter.getStatementForEpoch(own.id))?.supersedesStatementId
+      ).toBe(predecessor.id);
+      if (writer === "atomic") {
+        const frozen = await snapshot([own.id]);
+        await expect(write(foreignStatement.id)).rejects.toThrow(
+          EpochNotFoundError
+        );
+        expect(await snapshot([own.id])).toEqual(frozen);
+      }
+    });
+
+    it.each([
+      "evaluation",
+      "selection",
+      "selection-auto",
+      "projection",
+      "projection-upsert",
+      "pool",
+      "statement",
+    ] as const)("%s checks all node envelopes before effects and conflict returns", async (writer) => {
+      const own = await create();
+      const receiptId = `authority-${writer}`;
+      await adapter.insertIngestionReceipts([
+        makeIngestionReceipt({ nodeId: own.nodeId, receiptId }),
+      ]);
+      const write = (nodeId: string, withValidPrefix: boolean) => {
+        const selection = makeSelection({ nodeId, epochId: own.id, receiptId });
+        const autoSelection = makeSelectionAuto({
+          nodeId,
+          epochId: own.id,
+          receiptId,
+        });
+        const projection = makeUserProjection({
+          nodeId,
+          epochId: own.id,
+          userId: actor.user.id,
+        });
+        switch (writer) {
+          case "evaluation":
+            return adapter.upsertDraftEvaluation(
+              makeEvaluation({ nodeId, epochId: own.id })
+            );
+          case "selection":
+            return adapter.upsertSelection(
+              withValidPrefix
+                ? [{ ...selection, nodeId: own.nodeId }, selection]
+                : [selection]
+            );
+          case "selection-auto":
+            return adapter.insertSelectionDoNothing(
+              withValidPrefix
+                ? [{ ...autoSelection, nodeId: own.nodeId }, autoSelection]
+                : [autoSelection]
+            );
+          case "projection":
+            return adapter.insertUserProjections(
+              withValidPrefix
+                ? [{ ...projection, nodeId: own.nodeId }, projection]
+                : [projection]
+            );
+          case "projection-upsert":
+            return adapter.upsertUserProjections(
+              withValidPrefix
+                ? [{ ...projection, nodeId: own.nodeId }, projection]
+                : [projection]
+            );
+          case "pool":
+            return adapter.insertPoolComponent(
+              makePoolComponent({ nodeId, epochId: own.id })
+            );
+          case "statement":
+            return adapter.insertEpochStatement(statement(own.id, nodeId));
+        }
+      };
+      const before = await snapshot([own.id]);
+      await expect(write(wrongNode, true)).rejects.toThrow(EpochNotFoundError);
+      expect(await snapshot([own.id])).toEqual(before);
+      await write(own.nodeId, false);
+      const persisted = await snapshot([own.id]);
+      await expect(write(wrongNode, false)).rejects.toThrow(EpochNotFoundError);
+      expect(await snapshot([own.id])).toEqual(persisted);
+      await adapter.closeIngestion(
+        own.id,
+        [],
+        "cleanup",
+        "weight-sum-v0",
+        "cleanup"
+      );
+    });
+
+    it("epoch receipt reads reject a node that contradicts their scoped parent", async () => {
+      const own = await create();
+      const receiptId = "authority-read";
+      await adapter.insertIngestionReceipts([
+        makeIngestionReceipt({
+          receiptId,
+          nodeId: own.nodeId,
+          eventTime: own.periodStart,
+        }),
+      ]);
+      await adapter.insertSelectionDoNothing([
+        makeSelectionAuto({ receiptId, nodeId: own.nodeId, epochId: own.id }),
+      ]);
+      await expect(
+        adapter.getReceiptsForEpoch(wrongNode, own.id)
+      ).rejects.toThrow(EpochNotFoundError);
+      await expect(
+        adapter.getEpochActivityPage(wrongNode, own.id, own, {
+          limit: 50,
+          offset: 0,
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      await expect(
+        adapter.getSelectionCandidates(wrongNode, own.id)
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(
+        (await adapter.getReceiptsForEpoch(own.nodeId, own.id)).map(
+          (row) => row.receiptId
+        )
+      ).toEqual([receiptId]);
+      expect(
+        (
+          await adapter.getEpochActivityPage(own.nodeId, own.id, own, {
+            limit: 50,
+            offset: 0,
+          })
+        ).total
+      ).toBe(1);
+      expect(
+        (await adapter.getSelectionCandidates(own.nodeId, own.id)).map(
+          (row) => row.receipt.receiptId
+        )
+      ).toEqual([receiptId]);
+      await adapter.closeIngestion(
+        own.id,
+        [],
+        "cleanup",
+        "weight-sum-v0",
+        "cleanup"
+      );
+    });
+
+    it.each([
+      "statement",
+      "signature",
+    ] as const)("atomic zero-liability finalize and finalized repair reject the wrong %s node before effects", async (field) => {
+      const own = await review();
+      const params = atomic(own.id, own.nodeId);
+      const invalid = {
+        ...params,
+        [field]: { ...params[field], nodeId: wrongNode },
+      };
+      const before = await snapshot([own.id]);
+      await expect(adapter.finalizeEpochAtomic(invalid)).rejects.toThrow(
+        EpochNotFoundError
+      );
+      expect(await snapshot([own.id])).toEqual(before);
+      const first = await adapter.finalizeEpochAtomic(params);
+      expect(first.epoch.status).toBe("finalized");
+      const frozen = await snapshot([own.id]);
+      await expect(
+        adapter.finalizeEpochAtomic({
+          ...invalid,
+          signature: { ...invalid.signature, signerWallet: "0xrepair" },
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(await snapshot([own.id])).toEqual(frozen);
+      const repair = await adapter.finalizeEpochAtomic({
+        ...params,
+        signature: { ...params.signature, signerWallet: "0xrepair" },
+      });
+      expect(repair.statement.id).toBe(first.statement.id);
+      expect(
+        await adapter.getSignaturesForStatement(first.statement.id)
+      ).toHaveLength(2);
+    });
+
+    it.each([
+      "node",
+      "scope",
+      "foreign-epoch",
+    ] as const)("manifest rejects %s mismatch before header or leaf replacement and permits valid repair", async (field) => {
+      const own = await review();
+      const outside = await review(own.nodeId, OTHER_SCOPE_ID);
+      const manifest = {
+        nodeId: own.nodeId,
+        scopeId: TEST_SCOPE_ID,
+        epochId: own.id,
+        distributionId: `authority-${field}`,
+        statementHash: "statement-hash",
+        merkleRoot: `0x${"12".repeat(32)}`,
+        chainId: 8453,
+        tokenAddress: `0x${"34".repeat(20)}`,
+        distributionAmount: 1n,
+        totalAllocated: 1n,
+        leaves: [
+          {
+            index: 0,
+            claimantKey: "user:authority",
+            account: `0x${"56".repeat(20)}`,
+            amount: 1n,
+            leafHash: `0x${"78".repeat(32)}`,
+            proof: [],
+          },
+        ],
+      };
+      const mismatch =
+        field === "node"
+          ? { nodeId: wrongNode }
+          : field === "scope"
+            ? { scopeId: OTHER_SCOPE_ID }
+            : { epochId: outside.id };
+      const before = await snapshot([own.id, outside.id]);
+      await expect(
+        adapter.upsertDistributionManifest({ ...manifest, ...mismatch })
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(await snapshot([own.id, outside.id])).toEqual(before);
+      const first = await adapter.upsertDistributionManifest(manifest);
+      const persisted = await snapshot([own.id, outside.id]);
+      await expect(
+        adapter.upsertDistributionManifest({
+          ...manifest,
+          ...mismatch,
+          leaves: [],
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(await snapshot([own.id, outside.id])).toEqual(persisted);
+      const repair = await adapter.upsertDistributionManifest({
+        ...manifest,
+        leaves: [],
+      });
+      expect(repair.id).toBe(first.id);
+      expect(await adapter.getDistributionLeavesForEpoch(own.id)).toHaveLength(
+        0
+      );
+    });
+
+    it("preserves mixed review-epoch array order and rejects a wrong single-override node", async () => {
+      const first = await review();
+      const second = await review(first.nodeId);
+      const inputs = [
+        {
+          nodeId: first.nodeId,
+          epochId: second.id,
+          subjectRef: "second",
+          overrideUnits: 2n,
+        },
+        {
+          nodeId: first.nodeId,
+          epochId: first.id,
+          subjectRef: "first",
+          overrideUnits: 1n,
+        },
+      ];
+      const result = await adapter.batchUpsertReviewSubjectOverrides(inputs);
+      expect(result.map((row) => [row.epochId, row.overrideUnits])).toEqual([
+        [second.id, 2n],
+        [first.id, 1n],
+      ]);
+      const before = await snapshot([first.id, second.id]);
+      await expect(
+        adapter.upsertReviewSubjectOverride({
+          ...inputs[0],
+          nodeId: wrongNode,
+          epochId: second.id,
+          subjectRef: "second",
+        })
+      ).rejects.toThrow(EpochNotFoundError);
+      expect(await snapshot([first.id, second.id])).toEqual(before);
+      const retried = await adapter.batchUpsertReviewSubjectOverrides(inputs);
+      expect(retried.map((row) => row.id)).toEqual(result.map((row) => row.id));
+    });
+
+    it.each([
+      "foreign",
+      "missing",
+      "wrong-node",
+      "open",
+      "finalized",
+    ] as const)("mixed batch rejects %s in either order without partial upserts", async (invalidKind) => {
+      const own = await review();
+      const invalidParent =
+        invalidKind === "foreign"
+          ? await review(own.nodeId, OTHER_SCOPE_ID)
+          : invalidKind === "open"
+            ? await create(own.nodeId)
+            : await review(own.nodeId);
+      if (invalidKind === "finalized")
+        await adapter.finalizeEpoch(invalidParent.id, 0n);
+      const valid = {
+        nodeId: own.nodeId,
+        epochId: own.id,
+        subjectRef: "existing",
+        overrideUnits: 1n,
+      };
+      await adapter.upsertReviewSubjectOverride(valid);
+      const invalid = {
+        ...valid,
+        epochId: invalidKind === "missing" ? 999999999n : invalidParent.id,
+        nodeId: invalidKind === "wrong-node" ? wrongNode : own.nodeId,
+        subjectRef: "invalid",
+      };
+      const before = await snapshot([own.id, invalidParent.id]);
+      for (const inputs of [
+        [{ ...valid, overrideUnits: 9n }, invalid],
+        [invalid, { ...valid, overrideUnits: 9n }],
+      ]) {
+        await expect(
+          adapter.batchUpsertReviewSubjectOverrides(inputs)
+        ).rejects.toThrow(
+          invalidKind === "open" || invalidKind === "finalized"
+            ? EpochNotInReviewError
+            : EpochNotFoundError
+        );
+        expect(await snapshot([own.id, invalidParent.id])).toEqual(before);
+      }
+      if (invalidKind === "open")
+        await adapter.closeIngestion(
+          invalidParent.id,
+          [],
+          "cleanup",
+          "weight-sum-v0",
+          "cleanup"
+        );
+    });
+
+    it.each([
+      "review",
+      "finalized",
+    ] as const)("transition from %s rejects an absent target without appending frozen history, but allows an existing target retry", async (status) => {
+      const own = await review();
+      if (status === "finalized") await adapter.finalizeEpoch(own.id, 0n);
+      const targetWindow = epochWindow(windowIndex++);
+      const params = {
+        nodeId: own.nodeId,
+        scopeId: TEST_SCOPE_ID,
+        ...targetWindow,
+        weightConfig: TEST_WEIGHT_CONFIG,
+        closeParams: {
+          epochId: own.id,
+          approvers: [],
+          approverSetHash: "new",
+          allocationAlgoRef: "weight-sum-v0",
+          weightConfigHash: "new",
+          artifactsHash: "new",
+          evaluations: [
+            makeEvaluation({
+              nodeId: own.nodeId,
+              epochId: own.id,
+              status: "locked",
+            }),
+          ],
+        },
+      };
+      const before = await snapshot([own.id]);
+      await expect(adapter.transitionEpochForWindow(params)).rejects.toThrow(
+        EpochNotOpenError
+      );
+      expect(await snapshot([own.id])).toEqual(before);
+      expect(
+        await adapter.getEpochByWindow(
+          own.nodeId,
+          TEST_SCOPE_ID,
+          targetWindow.periodStart,
+          targetWindow.periodEnd
+        )
+      ).toBeNull();
+      const target = await adapter.createEpoch({
+        nodeId: own.nodeId,
+        scopeId: TEST_SCOPE_ID,
+        ...targetWindow,
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      const retry = await adapter.transitionEpochForWindow(params);
+      expect(retry.isNew).toBe(false);
+      expect(retry.epoch.id).toBe(target.id);
+      expect(await snapshot([own.id])).toEqual(before);
+      await adapter.closeIngestion(
+        target.id,
+        [],
+        "cleanup",
+        "weight-sum-v0",
+        "cleanup"
+      );
     });
   });
 

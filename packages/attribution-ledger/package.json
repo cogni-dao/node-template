@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/attribution",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -24,6 +24,301 @@
       "types": "./dist/allocation.d.ts",
       "import": "./dist/allocation.js",
       "default": "./dist/allocation.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js",
+      "default": "./dist/schema.js"
+    },
+    "./adapters/postgres": {
+      "types": "./dist/adapters/postgres.d.ts",
+      "import": "./dist/adapters/postgres.js",
+      "default": "./dist/adapters/postgres.js"
+    },
+    "./http": {
+      "types": "./dist/http/index.d.ts",
+      "import": "./dist/http/index.js",
+      "default": "./dist/http/index.js"
+    },
+    "./distribution": {
+      "types": "./dist/distribution/index.d.ts",
+      "import": "./dist/distribution/index.js",
+      "default": "./dist/distribution/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "import": "./dist/contracts/index.js",
+      "default": "./dist/contracts/index.js"
+    },
+    "./collect": {
+      "types": "./dist/collect/index.d.ts",
+      "import": "./dist/collect/index.js",
+      "default": "./dist/collect/index.js"
+    },
+    "./collect/contract": {
+      "types": "./dist/collect/contract.d.ts",
+      "import": "./dist/collect/contract.js",
+      "default": "./dist/collect/contract.js"
+    },
+    "./collect/sources": {
+      "types": "./dist/collect/sources/index.d.ts",
+      "import": "./dist/collect/sources/index.js",
+      "default": "./dist/collect/sources/index.js"
+    },
+    "./pipeline": {
+      "types": "./dist/pipeline/index.d.ts",
+      "import": "./dist/pipeline/index.js",
+      "default": "./dist/pipeline/index.js"
+    },
+    "./pipeline/contracts": {
+      "types": "./dist/pipeline/contracts/index.d.ts",
+      "import": "./dist/pipeline/contracts/index.js",
+      "default": "./dist/pipeline/contracts/index.js"
+    },
+    "./collect/run-collect-pass": {
+      "types": "./dist/collect/run-collect-pass.d.ts",
+      "import": "./dist/collect/run-collect-pass.js",
+      "default": "./dist/collect/run-collect-pass.js"
+    },
+    "./collect/index": {
+      "types": "./dist/collect/index.d.ts",
+      "import": "./dist/collect/index.js",
+      "default": "./dist/collect/index.js"
+    },
+    "./collect/activities/ledger": {
+      "types": "./dist/collect/activities/ledger.d.ts",
+      "import": "./dist/collect/activities/ledger.js",
+      "default": "./dist/collect/activities/ledger.js"
+    },
+    "./collect/activities/enrichment": {
+      "types": "./dist/collect/activities/enrichment.d.ts",
+      "import": "./dist/collect/activities/enrichment.js",
+      "default": "./dist/collect/activities/enrichment.js"
+    },
+    "./pipeline/contracts/validation": {
+      "types": "./dist/pipeline/contracts/validation.d.ts",
+      "import": "./dist/pipeline/contracts/validation.js",
+      "default": "./dist/pipeline/contracts/validation.js"
+    },
+    "./pipeline/contracts/allocator": {
+      "types": "./dist/pipeline/contracts/allocator.d.ts",
+      "import": "./dist/pipeline/contracts/allocator.js",
+      "default": "./dist/pipeline/contracts/allocator.js"
+    },
+    "./pipeline/contracts/selection": {
+      "types": "./dist/pipeline/contracts/selection.d.ts",
+      "import": "./dist/pipeline/contracts/selection.js",
+      "default": "./dist/pipeline/contracts/selection.js"
+    },
+    "./pipeline/contracts/ordering": {
+      "types": "./dist/pipeline/contracts/ordering.d.ts",
+      "import": "./dist/pipeline/contracts/ordering.js",
+      "default": "./dist/pipeline/contracts/ordering.js"
+    },
+    "./pipeline/contracts/enricher": {
+      "types": "./dist/pipeline/contracts/enricher.d.ts",
+      "import": "./dist/pipeline/contracts/enricher.js",
+      "default": "./dist/pipeline/contracts/enricher.js"
+    },
+    "./pipeline/contracts/profile": {
+      "types": "./dist/pipeline/contracts/profile.d.ts",
+      "import": "./dist/pipeline/contracts/profile.js",
+      "default": "./dist/pipeline/contracts/profile.js"
+    },
+    "./pipeline/contracts/index": {
+      "types": "./dist/pipeline/contracts/index.d.ts",
+      "import": "./dist/pipeline/contracts/index.js",
+      "default": "./dist/pipeline/contracts/index.js"
+    },
+    "./pipeline/registry": {
+      "types": "./dist/pipeline/registry.d.ts",
+      "import": "./dist/pipeline/registry.js",
+      "default": "./dist/pipeline/registry.js"
+    },
+    "./pipeline/index": {
+      "types": "./dist/pipeline/index.d.ts",
+      "import": "./dist/pipeline/index.js",
+      "default": "./dist/pipeline/index.js"
+    },
+    "./pipeline/settlement/governance-target-guard": {
+      "types": "./dist/pipeline/settlement/governance-target-guard.d.ts",
+      "import": "./dist/pipeline/settlement/governance-target-guard.js",
+      "default": "./dist/pipeline/settlement/governance-target-guard.js"
+    },
+    "./pipeline/settlement/run-reconcile-settlements": {
+      "types": "./dist/pipeline/settlement/run-reconcile-settlements.d.ts",
+      "import": "./dist/pipeline/settlement/run-reconcile-settlements.js",
+      "default": "./dist/pipeline/settlement/run-reconcile-settlements.js"
+    },
+    "./pipeline/profiles/cogni-v0.0": {
+      "types": "./dist/pipeline/profiles/cogni-v0.0.d.ts",
+      "import": "./dist/pipeline/profiles/cogni-v0.0.js",
+      "default": "./dist/pipeline/profiles/cogni-v0.0.js"
+    },
+    "./pipeline/finalize/run-finalize-epoch": {
+      "types": "./dist/pipeline/finalize/run-finalize-epoch.d.ts",
+      "import": "./dist/pipeline/finalize/run-finalize-epoch.js",
+      "default": "./dist/pipeline/finalize/run-finalize-epoch.js"
+    },
+    "./pipeline/plugins/echo/adapter": {
+      "types": "./dist/pipeline/plugins/echo/adapter.d.ts",
+      "import": "./dist/pipeline/plugins/echo/adapter.js",
+      "default": "./dist/pipeline/plugins/echo/adapter.js"
+    },
+    "./pipeline/plugins/echo/descriptor": {
+      "types": "./dist/pipeline/plugins/echo/descriptor.d.ts",
+      "import": "./dist/pipeline/plugins/echo/descriptor.js",
+      "default": "./dist/pipeline/plugins/echo/descriptor.js"
+    },
+    "./pipeline/plugins/include-all-selection/descriptor": {
+      "types": "./dist/pipeline/plugins/include-all-selection/descriptor.d.ts",
+      "import": "./dist/pipeline/plugins/include-all-selection/descriptor.js",
+      "default": "./dist/pipeline/plugins/include-all-selection/descriptor.js"
+    },
+    "./pipeline/plugins/main-merge-selection/descriptor": {
+      "types": "./dist/pipeline/plugins/main-merge-selection/descriptor.d.ts",
+      "import": "./dist/pipeline/plugins/main-merge-selection/descriptor.js",
+      "default": "./dist/pipeline/plugins/main-merge-selection/descriptor.js"
+    },
+    "./pipeline/plugins/weight-sum/descriptor": {
+      "types": "./dist/pipeline/plugins/weight-sum/descriptor.d.ts",
+      "import": "./dist/pipeline/plugins/weight-sum/descriptor.js",
+      "default": "./dist/pipeline/plugins/weight-sum/descriptor.js"
+    },
+    "./pipeline/plugins/promotion-selection/descriptor": {
+      "types": "./dist/pipeline/plugins/promotion-selection/descriptor.d.ts",
+      "import": "./dist/pipeline/plugins/promotion-selection/descriptor.js",
+      "default": "./dist/pipeline/plugins/promotion-selection/descriptor.js"
+    },
+    "./collect/sources/model": {
+      "types": "./dist/collect/sources/model.d.ts",
+      "import": "./dist/collect/sources/model.js",
+      "default": "./dist/collect/sources/model.js"
+    },
+    "./collect/sources/port": {
+      "types": "./dist/collect/sources/port.d.ts",
+      "import": "./dist/collect/sources/port.js",
+      "default": "./dist/collect/sources/port.js"
+    },
+    "./distribution/token-distribution": {
+      "types": "./dist/distribution/token-distribution.d.ts",
+      "import": "./dist/distribution/token-distribution.js",
+      "default": "./dist/distribution/token-distribution.js"
+    },
+    "./distribution/wallet-resolver": {
+      "types": "./dist/distribution/wallet-resolver.d.ts",
+      "import": "./dist/distribution/wallet-resolver.js",
+      "default": "./dist/distribution/wallet-resolver.js"
+    },
+    "./distribution/epoch-distribution-service": {
+      "types": "./dist/distribution/epoch-distribution-service.d.ts",
+      "import": "./dist/distribution/epoch-distribution-service.js",
+      "default": "./dist/distribution/epoch-distribution-service.js"
+    },
+    "./distribution/token-settlement": {
+      "types": "./dist/distribution/token-settlement.d.ts",
+      "import": "./dist/distribution/token-settlement.js",
+      "default": "./dist/distribution/token-settlement.js"
+    },
+    "./distribution/types": {
+      "types": "./dist/distribution/types.d.ts",
+      "import": "./dist/distribution/types.js",
+      "default": "./dist/distribution/types.js"
+    },
+    "./contracts/attribution.epoch-statement.v1.contract": {
+      "types": "./dist/contracts/attribution.epoch-statement.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.epoch-statement.v1.contract.js",
+      "default": "./dist/contracts/attribution.epoch-statement.v1.contract.js"
+    },
+    "./contracts/attribution.collect-trigger.v1.contract": {
+      "types": "./dist/contracts/attribution.collect-trigger.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.collect-trigger.v1.contract.js",
+      "default": "./dist/contracts/attribution.collect-trigger.v1.contract.js"
+    },
+    "./contracts/attribution.epoch-activity.v1.contract": {
+      "types": "./dist/contracts/attribution.epoch-activity.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.epoch-activity.v1.contract.js",
+      "default": "./dist/contracts/attribution.epoch-activity.v1.contract.js"
+    },
+    "./contracts/attribution.settlement-lifecycle.v1.contract": {
+      "types": "./dist/contracts/attribution.settlement-lifecycle.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.settlement-lifecycle.v1.contract.js",
+      "default": "./dist/contracts/attribution.settlement-lifecycle.v1.contract.js"
+    },
+    "./contracts/attribution.latest-distribution.v1.contract": {
+      "types": "./dist/contracts/attribution.latest-distribution.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.latest-distribution.v1.contract.js",
+      "default": "./dist/contracts/attribution.latest-distribution.v1.contract.js"
+    },
+    "./contracts/attribution.receipts.internal.v1.contract": {
+      "types": "./dist/contracts/attribution.receipts.internal.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.receipts.internal.v1.contract.js",
+      "default": "./dist/contracts/attribution.receipts.internal.v1.contract.js"
+    },
+    "./contracts/attribution.sign-data.v2.contract": {
+      "types": "./dist/contracts/attribution.sign-data.v2.contract.d.ts",
+      "import": "./dist/contracts/attribution.sign-data.v2.contract.js",
+      "default": "./dist/contracts/attribution.sign-data.v2.contract.js"
+    },
+    "./contracts/attribution.list-epochs.v1.contract": {
+      "types": "./dist/contracts/attribution.list-epochs.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.list-epochs.v1.contract.js",
+      "default": "./dist/contracts/attribution.list-epochs.v1.contract.js"
+    },
+    "./contracts/attribution.sign-data.v1.contract": {
+      "types": "./dist/contracts/attribution.sign-data.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.sign-data.v1.contract.js",
+      "default": "./dist/contracts/attribution.sign-data.v1.contract.js"
+    },
+    "./contracts/attribution.review-subject-overrides.v1.contract": {
+      "types": "./dist/contracts/attribution.review-subject-overrides.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.review-subject-overrides.v1.contract.js",
+      "default": "./dist/contracts/attribution.review-subject-overrides.v1.contract.js"
+    },
+    "./contracts/attribution.epoch-user-projections.v1.contract": {
+      "types": "./dist/contracts/attribution.epoch-user-projections.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.epoch-user-projections.v1.contract.js",
+      "default": "./dist/contracts/attribution.epoch-user-projections.v1.contract.js"
+    },
+    "./contracts/attribution.review-epoch.v1.contract": {
+      "types": "./dist/contracts/attribution.review-epoch.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.review-epoch.v1.contract.js",
+      "default": "./dist/contracts/attribution.review-epoch.v1.contract.js"
+    },
+    "./contracts/attribution.epoch-distribution.v1.contract": {
+      "types": "./dist/contracts/attribution.epoch-distribution.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.epoch-distribution.v1.contract.js",
+      "default": "./dist/contracts/attribution.epoch-distribution.v1.contract.js"
+    },
+    "./contracts/attribution.epoch-claimants.v1.contract": {
+      "types": "./dist/contracts/attribution.epoch-claimants.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.epoch-claimants.v1.contract.js",
+      "default": "./dist/contracts/attribution.epoch-claimants.v1.contract.js"
+    },
+    "./contracts/attribution.finalize-epoch.v1.contract": {
+      "types": "./dist/contracts/attribution.finalize-epoch.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.finalize-epoch.v1.contract.js",
+      "default": "./dist/contracts/attribution.finalize-epoch.v1.contract.js"
+    },
+    "./contracts/attribution.record-pool-component.v1.contract": {
+      "types": "./dist/contracts/attribution.record-pool-component.v1.contract.d.ts",
+      "import": "./dist/contracts/attribution.record-pool-component.v1.contract.js",
+      "default": "./dist/contracts/attribution.record-pool-component.v1.contract.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation.d.ts",
+      "import": "./dist/presentation.js",
+      "default": "./dist/presentation.js"
+    },
+    "./fixtures": {
+      "types": "./dist/fixtures.d.ts",
+      "import": "./dist/fixtures.js",
+      "default": "./dist/fixtures.js"
+    },
+    "./distribution/publish-permission": {
+      "types": "./dist/distribution/publish-permission.d.ts",
+      "import": "./dist/distribution/publish-permission.js",
+      "default": "./dist/distribution/publish-permission.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -40,6 +335,26 @@
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^5",
-    "vitest": "^4.0.9"
+    "vitest": "^4.0.9",
+    "drizzle-orm": "^0.44.7",
+    "pino": "^9",
+    "@types/node": "^22"
+  },
+  "dependencies": {
+    "@openzeppelin/merkle-tree": "^1.0.8",
+    "viem": "^2.21.0",
+    "zod": "^4.1.12"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "^0.44.7",
+    "pino": "^9 || ^10"
+  },
+  "peerDependenciesMeta": {
+    "drizzle-orm": {
+      "optional": true
+    },
+    "pino": {
+      "optional": true
+    }
   }
 }
