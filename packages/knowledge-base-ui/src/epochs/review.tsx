@@ -243,7 +243,7 @@ export function ReviewView({
               href={publishedExplorerUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-primary underline-offset-4 hover:underline"
+              className="inline-flex min-h-6 min-w-6 items-center text-primary underline-offset-4 hover:underline"
             >
               View transaction
             </a>}
@@ -851,7 +851,7 @@ function ReviewReceiptRow({
                   href={receipt.artifactUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="group text-foreground/80 hover:text-foreground flex min-w-0 items-center gap-1 text-xs"
+                  className="group flex min-h-6 min-w-6 items-center gap-1 text-foreground/80 text-xs hover:text-foreground"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <span className="truncate">{title}</span>
