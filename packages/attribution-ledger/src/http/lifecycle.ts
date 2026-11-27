@@ -19,7 +19,10 @@ import {
   deriveSettlementLifecycle,
   type SettlementRevisionRecord,
 } from "../index";
-import type { SettlementLifecycleOutput } from "../contracts/index";
+import {
+  settlementLifecycleOperation,
+  type SettlementLifecycleOutput,
+} from "../contracts/attribution.settlement-lifecycle.v1.contract";
 
 const ZERO_ROOT =
   "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -128,5 +131,28 @@ function toRevisionSummary(revision: SettlementRevisionRecord | null) {
     sequence: revision.sequence.toString(),
     merkleRoot: revision.merkleRoot,
     cumulativeTotal: revision.cumulativeTotal.toString(),
+  };
+}
+
+/** Stable terminal event for the lifecycle read; hosts bind request context. */
+export const SETTLEMENT_LIFECYCLE_READ_EVENT =
+  "attribution.settlement_lifecycle.read" as const;
+
+/** Validate the public wire response and return only coarse observability fields. */
+export async function handleSettlementLifecycle(
+  deps: ReadSettlementLifecycleDeps
+) {
+  const body = settlementLifecycleOperation.output.parse(
+    await readSettlementLifecycle(deps)
+  );
+  return {
+    status: 200,
+    body,
+    event: {
+      event: SETTLEMENT_LIFECYCLE_READ_EVENT,
+      outcome: "ok" as const,
+      publicationEvidence: body.publicationEvidence,
+      count: body.epochs.length,
+    },
   };
 }
