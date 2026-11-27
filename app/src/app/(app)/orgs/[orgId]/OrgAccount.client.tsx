@@ -5,7 +5,7 @@
  * Module: `@app/(app)/orgs/[orgId]/OrgAccount.client`
  * Purpose: Client mount of the package's `OrgAccountPage` with this org's session-only routes and this node's money format.
  * Scope: Binding only; it decides nothing about who may act (the routes do).
- * Invariants: HUMAN_ROUTES_SESSION_ONLY. No Fund link: billing's top-up cannot fund another account yet (story.0080), so the package renders none.
+ * Invariants: HUMAN_ROUTES_SESSION_ONLY. The Fund link opens /credits for this org's account and names the org id, so the credits page reads the name from the single org view.
  * Side-effects: IO (the page's fetches)
  * Links: src/app/api/v1/orgs/[orgId]/route.ts
  * @internal
@@ -25,7 +25,7 @@ export function OrgAccount({ orgId }: { orgId: string }): ReactElement {
       orgEndpoint={base}
       spendEndpoint={`${base}/spend`}
       formatBalance={(credits) => `$${creditsToUsd(credits).toFixed(2)}`}
-      fundHref={(billingAccountId: string) => `/credits?billingAccountId=${encodeURIComponent(billingAccountId)}`}
+      fundHref={(billingAccountId: string) => `/credits?billingAccountId=${encodeURIComponent(billingAccountId)}&orgId=${encodeURIComponent(orgId)}`}
     />
   );
 }

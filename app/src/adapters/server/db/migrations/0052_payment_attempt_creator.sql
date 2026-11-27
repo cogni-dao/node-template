@@ -1,0 +1,1 @@
+ALTER TABLE "payment_attempts" ADD COLUMN "created_by_user_id" text;

@@ -178,6 +178,7 @@ describe("RLS Adapter Wiring Gate", () => {
         amountRaw: 5_000_000n,
         amountUsdCents: 500,
         expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        createdByUserId: tenantA.userId,
       });
 
       expect(attempt.id).toBeDefined();

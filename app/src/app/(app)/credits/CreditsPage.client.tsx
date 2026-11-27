@@ -14,10 +14,10 @@
 "use client";
 
 import { isValidAmountInput, parseDollarsToCents } from "@cogni/node-shared";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Card,
@@ -41,32 +41,38 @@ function formatDollars(credits: number): string {
   });
 }
 
-/** The org account's name for the funding header, from the person's own org list; null until known. */
-function useOrgName(billingAccountId: string | undefined): string | null {
-  const [name, setName] = useState<string | null>(null);
-  useEffect(() => {
-    if (!billingAccountId) return;
-    let alive = true;
-    void fetch("/api/v1/orgs", { credentials: "same-origin", cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: { orgs?: { billingAccountId: string; name: string }[] } | null) => {
-        const org = body?.orgs?.find((o) => o.billingAccountId === billingAccountId);
-        if (alive) setName(org?.name ?? null);
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [billingAccountId]);
-  return name;
+/** The org account's name for the funding header, from the single org view the Fund link names (`orgId`); null until known or when the view is not this account. */
+function useOrgName(
+  orgId: string | undefined,
+  billingAccountId: string | undefined,
+): string | null {
+  const query = useQuery({
+    queryKey: ["org-name", orgId],
+    enabled: Boolean(orgId && billingAccountId),
+    staleTime: 60_000,
+    queryFn: async (): Promise<{ name: string; billingAccountId?: string }> => {
+      const res = await fetch(`/api/v1/orgs/${encodeURIComponent(orgId ?? "")}`, {
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(`org view ${res.status}`);
+      const body = (await res.json()) as {
+        org: { name: string; billingAccountId?: string };
+      };
+      return body.org;
+    },
+  });
+  return query.data && query.data.billingAccountId === billingAccountId
+    ? query.data.name
+    : null;
 }
 
 export function CreditsPageClient(): ReactElement {
   const [amountInput, setAmountInput] = useState<string>("");
   const queryClient = useQueryClient();
   // Fund an org account (story.0080): the org page's Fund link names it; the server decides (org:admin only).
-  const billingAccountId = useSearchParams().get("billingAccountId") ?? undefined;
-  const orgName = useOrgName(billingAccountId);
+  const params = useSearchParams();
+  const billingAccountId = params.get("billingAccountId") ?? undefined;
+  const orgName = useOrgName(params.get("orgId") ?? undefined, billingAccountId);
 
   const summaryQuery = useCreditsSummary({ limit: 1, billingAccountId });
 

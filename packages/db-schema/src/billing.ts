@@ -246,6 +246,8 @@ export const paymentAttempts = pgTable(
     amountUsdCents: integer("amount_usd_cents").notNull(),
     status: text("status").notNull(),
     errorCode: text("error_code"),
+    // The person who created the attempt; an org top-up's org.funded actor (null for attempts created before this column).
+    createdByUserId: text("created_by_user_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     lastVerifyAttemptAt: timestamp("last_verify_attempt_at", {

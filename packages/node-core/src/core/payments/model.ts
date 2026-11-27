@@ -42,6 +42,8 @@ export interface PaymentAttempt {
   amountRaw: bigint;
   /** USD amount in cents */
   amountUsdCents: number;
+  /** User who created the attempt (null for attempts created before it was recorded); an org top-up's actor */
+  createdByUserId: string | null;
   /** Current status */
   status: PaymentAttemptStatus;
   /** Transaction hash (null until submitted) */

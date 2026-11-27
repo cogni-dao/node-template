@@ -36,6 +36,10 @@ export async function resolvePaymentAccount(
 }> {
 	let scope = sessionUser.id;
 	if (billingAccountId) {
+		// Org funding is a person's act: a bearer agent (API key) never funds or reads an org's payments.
+		if (sessionUser.via !== "session") {
+			throw new OrgAccountError("not_allowed", "not allowed to fund this account");
+		}
 		const funding = await container.agentAuthority.resolveFundingAccount({
 			userId: sessionUser.id,
 			billingAccountId,
@@ -76,15 +80,19 @@ export async function resolvePaymentAccount(
 	}
 }
 
-/** After an org account is credited, append `org.funded` to the org's history (identity's EVERY_ACT_LOGGED). */
+/**
+ * After an org account is credited, append `org.funded` to the org's history (identity's EVERY_ACT_LOGGED).
+ * The actor is the person who created the attempt, never whoever's poll triggered verification;
+ * `fallbackActorUserId` (the caller) covers only an attempt created before its creator was recorded.
+ */
 export function orgFundedLogger(
 	container: Container,
-	actorUserId: string,
+	fallbackActorUserId: string,
 ): NonNullable<PostCreditFundingDeps["onCredited"]> {
 	return (credited) =>
 		container.agentAuthority.logOrgFunded({
 			orgBillingAccountId: credited.billingAccountId,
-			actorUserId,
+			actorUserId: credited.createdByUserId ?? fallbackActorUserId,
 			amountCredits: Number(usdCentsToCredits(credited.amountUsdCents)),
 			paymentRef: credited.paymentRef,
 		});

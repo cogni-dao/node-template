@@ -68,11 +68,16 @@ export interface PostCreditFundingDeps {
 	treasurySettlement: TreasurySettlementPort | undefined;
 	financialLedger: FinancialLedgerPort | undefined;
 	log: Logger;
-	/** Runs after the credit commits (an org account's `org.funded` history row). At least once; the callee dedupes on `paymentRef`. Never fails the payment. */
+	/**
+	 * Runs after the credit commits (an org account's `org.funded` history row), and again on every later status read of the CREDITED attempt.
+	 * The callee dedupes on `paymentRef`, so a hook that failed once is repaired by the next read. A failure is logged and never fails the payment.
+	 */
 	onCredited?: (credited: {
 		billingAccountId: string;
 		amountUsdCents: number;
 		paymentRef: string;
+		/** The person who created the attempt (null for an attempt created before it was recorded). */
+		createdByUserId: string | null;
 	}) => Promise<unknown>;
 }
 

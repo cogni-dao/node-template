@@ -95,6 +95,8 @@ export interface CreatePaymentAttemptParams {
   amountRaw: bigint;
   amountUsdCents: number;
   expiresAt: Date;
+  /** The user creating the attempt (the actor of an org top-up's history row). */
+  createdByUserId: string;
 }
 
 /**

@@ -80,12 +80,11 @@ export async function createPaymentIntentFacade(
 	const container = getContainer();
 	const { clock } = container;
 
-	const { rlsUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
+	const { rlsUserId, billingAccount } = await resolvePaymentAccount(
 		container,
 		params.sessionUser,
 		params.billingAccountId,
 	);
-	const accountService = container.accountsForUser(rlsUserId);
 	const userRepo = container.paymentAttemptsForUser(rlsUserId);
 
 	// Enrich context with business identifiers
@@ -106,6 +105,7 @@ export async function createPaymentIntentFacade(
 		billingAccountId: billingAccount.id,
 		fromAddress,
 		amountUsdCents: params.amountUsdCents,
+		createdByUserId: params.sessionUser.id,
 	});
 
 	// Log domain event

@@ -36,6 +36,7 @@ Thin app-layer wrappers that resolve dependencies, bind request context, map DTO
 ## Public Surface
 
 - **Read outputs:** `read-envelopes.server.ts` binds shared serializers to canonical HTTP output validation (`toHttpWorkItem`, `toHttpKnowledgeRow`); it owns no auth or backend selection.
+- **Org funding:** `payments/funding-account.server.ts` is the one place a payment route names the account it credits. `resolvePaymentAccount` returns the caller's own account, or, for a `billingAccountId`, asks identity (`resolveFundingAccount`, org:admin only) and writes under the org user's scope; a bearer caller (`via !== "session"`) with a `billingAccountId` is refused `not_allowed`. `orgFundedLogger` appends `org.funded` after an org credit, naming the attempt's creator as actor. No role logic lives here.
 - **Exports:** Feature facade functions for use-case coordination, including operator-attested identity nonce creation and redemption
 - **Files considered API:** \*_/_.server.ts
 

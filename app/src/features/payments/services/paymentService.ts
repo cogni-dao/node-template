@@ -52,6 +52,7 @@ export interface CreateIntentInput {
 	billingAccountId: string;
 	fromAddress: string; // SIWE wallet address (checksummed via getAddress())
 	amountUsdCents: number;
+	createdByUserId: string; // the person creating the attempt (an org top-up's history actor)
 }
 
 export interface CreateIntentResult {
@@ -144,6 +145,7 @@ export async function createIntent(
 		amountRaw,
 		amountUsdCents: input.amountUsdCents,
 		expiresAt,
+		createdByUserId: input.createdByUserId,
 	});
 
 	if (!attempt.expiresAt) {
@@ -306,6 +308,16 @@ export async function getStatus(
 		throw new PaymentNotFoundError(input.attemptId, input.billingAccountId);
 	}
 
+	// Already CREDITED: the credit is done; re-run the idempotent hook so a history row a failed hook missed is written by a later read.
+	if (attempt.status === "CREDITED" && attempt.txHash) {
+		await notifyCredited(
+			attempt,
+			`${attempt.chainId}:${attempt.txHash}`,
+			log,
+			postCreditFundingDeps,
+		);
+	}
+
 	if (attempt.status === "CREATED_INTENT" && isIntentExpired(attempt, now)) {
 		if (isValidTransition(attempt.status, "FAILED")) {
 			attempt = await serviceRepo.updateStatus(
@@ -373,6 +385,37 @@ export async function getStatus(
 // ============================================================================
 // Verify and Settle (Private)
 // ============================================================================
+
+/**
+ * Runs the post-credit `onCredited` hook (an org account's `org.funded` history row).
+ * The callee dedupes on paymentRef, so it may run again on a later status read of the CREDITED attempt.
+ * A failure is logged with the paymentRef and never fails the payment.
+ */
+async function notifyCredited(
+	attempt: PaymentAttempt,
+	paymentRef: string,
+	log: Logger,
+	postCreditFundingDeps?: PostCreditFundingDeps,
+): Promise<void> {
+	if (!postCreditFundingDeps?.onCredited) return;
+	try {
+		await postCreditFundingDeps.onCredited({
+			billingAccountId: attempt.billingAccountId,
+			amountUsdCents: attempt.amountUsdCents,
+			paymentRef,
+			createdByUserId: attempt.createdByUserId,
+		});
+	} catch (error) {
+		log.error(
+			{
+				attemptId: attempt.id,
+				paymentRef,
+				error: error instanceof Error ? error.message : error,
+			},
+			"onCredited failed for payment attempt",
+		);
+	}
+}
 
 /**
  * Verifies on-chain transaction and settles payment if valid
@@ -476,24 +519,8 @@ async function verifyAndSettle(
 				},
 			});
 
-			// At least once after the credit commits (the callee dedupes on paymentRef); a failure is logged, never fails the payment.
-			if (postCreditFundingDeps?.onCredited) {
-				try {
-					await postCreditFundingDeps.onCredited({
-						billingAccountId: attempt.billingAccountId,
-						amountUsdCents: attempt.amountUsdCents,
-						paymentRef: clientPaymentId,
-					});
-				} catch (error) {
-					log.error(
-						{
-							attemptId: attempt.id,
-							error: error instanceof Error ? error.message : error,
-						},
-						"onCredited failed for payment attempt",
-					);
-				}
-			}
+			// After the credit commits; a failure is logged with its paymentRef, never fails the payment. The next status read of the CREDITED attempt runs it again.
+			await notifyCredited(attempt, clientPaymentId, log, postCreditFundingDeps);
 
 			if (isValidTransition(attempt.status, "CREDITED")) {
 				attempt = await serviceRepo.updateStatus(
