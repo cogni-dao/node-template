@@ -244,11 +244,14 @@ export function runGrantConformance(h: GrantConformanceHarness): void {
       await expect(grantRole(store, { principalUserId: ids.agent as string, scope: NODE_SCOPE, me: person(ids.alice as string, {}), declaredScopes, scopeKinds })).rejects.toMatchObject({ code: "not_pending" });
     });
 
-    it("v0 limit: one open row per AI and scope, so a second account cannot be added while the first is live", async () => {
+    it("one open row per AI, scope and account: a second account is its own row, and a repeat on the same account is a no-op", async () => {
       const { store, ids, accounts } = await h.setup(spec);
-      expect((await grantInternalOnAccount(store, { me: person(ids.alice as string), principalUserId: ids["node-ai"] as string, scope: SCOPE, declaredScopes, scopeKinds })).created).toBe(true);
-      expect((await grantInternalOnAccount(store, { me: person(ids.bob as string), principalUserId: ids["node-ai"] as string, scope: SCOPE, declaredScopes, scopeKinds })).created).toBe(false);
-      expect(await store.hasLiveAccountGrant(ids["node-ai"] as string, SCOPE, accounts.bob as string)).toBe(false);
+      const grant = (who: string) => grantInternalOnAccount(store, { me: person(ids[who] as string), principalUserId: ids["node-ai"] as string, scope: SCOPE, declaredScopes, scopeKinds });
+      expect((await grant("alice")).created).toBe(true);
+      expect((await grant("alice")).created).toBe(false);
+      expect((await grant("bob")).created).toBe(true);
+      expect(await store.hasLiveAccountGrant(ids["node-ai"] as string, SCOPE, accounts.alice as string)).toBe(true);
+      expect(await store.hasLiveAccountGrant(ids["node-ai"] as string, SCOPE, accounts.bob as string)).toBe(true);
     });
 
     it("an account row is invisible to the node plane, and a node row to the account plane", async () => {

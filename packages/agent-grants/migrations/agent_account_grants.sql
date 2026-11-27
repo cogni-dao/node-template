@@ -2,7 +2,7 @@
 -- The column, CHECK, index and select-policy part is NOT here: `defineAgentAuthoritySchema` owns it (`resource`, `account_id`, `expires_at`, `link_*`, the five CHECKs,
 -- the unique `link_hash` index and `agent_roles_account_self_read`), and the node's own `db:generate` writes it. Append this file after that generated SQL.
 -- DURABLE: an account row has no end date (it lasts until Off, like a node row); `expires_at` stays nullable and a row that carries an end keeps the expired state.
--- Keep `agent_roles_live_unique` (principal, scope) and the old ON CONFLICT targets: a pod on the previous release keeps working. The contract migration (task.5484) replaces it.
+-- Release B of two (task.0181): the factory emits only `agent_roles_live_account_unique` (principal, scope, `coalesce(account_id, '')`); the old (principal, scope) index is gone and the writers say a bare `ON CONFLICT DO NOTHING`.
 -- Functions and grants are outside Drizzle's DDL scope.
 -- The one select policy above shows an app-role connection only the account rows that name it as the principal; the policy alone grants nothing, so the
 -- table privilege is stated too. CURRENT_USER is the app role BY CONSTRUCTION: scripts/db/migrate.mjs connects with DATABASE_URL, the very URL the app's

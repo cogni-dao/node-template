@@ -36,6 +36,17 @@ export type SqlTag = (
 ) => PromiseLike<ReadonlyArray<Record<string, unknown>>>;
 
 const str = (value: unknown): string | null => (typeof value === "string" ? value : null);
+/**
+ * Approving an ask onto an account where the same AI already holds a live row for that scope hits `agent_roles_live_account_unique`. That is "nothing to approve" (the ask stays
+ * pending, the caller answers `false`), never a 503. Any other error is still an error.
+ */
+const liveRowAlreadyExists = (error: unknown): null => {
+  const e = error as { code?: unknown; constraint_name?: unknown; constraint?: unknown };
+  if (e?.code === "23505" && (e.constraint_name === "agent_roles_live_account_unique" || e.constraint === "agent_roles_live_account_unique")) return null;
+  throw error;
+};
+
+
 /** An ISO timestamp, whether the driver hands back a Date or its text form. */
 const iso = (value: unknown): string => {
   const date = value instanceof Date ? value : typeof value === "string" ? new Date(value) : null;
@@ -265,7 +276,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const inserted = await sql`
         INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by, resource, link_hash, link_expires_at)
         VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId}, ${resource}, ${link.hash}, ${linkEnds})
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING id`;
       if (inserted.length > 0) return "created";
       // A concurrent ask took the open slot between our read and our insert. Whatever we answer, the link we hand back must be stored: rotate it
@@ -312,7 +323,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         SELECT ${principalUserId}, ${scope}, ${approvedBy}, now(), 'node'
         WHERE EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = ${principalUserId} AND ap.kind = 'internal')
           AND ${principalUserId} <> ${approvedBy}
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING id`;
       return rows.length > 0;
     },
@@ -366,8 +377,8 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           AND r.approved_by IS NULL AND r.revoked_at IS NULL
           AND r.link_consumed_at IS NULL AND r.link_expires_at > now()
           AND b.owner_user_id = ${approvedBy} AND r.principal_user_id <> ${approvedBy}
-        RETURNING r.id`;
-      return rows.length > 0;
+        RETURNING r.id`.then((result) => result, liveRowAlreadyExists);
+      return rows !== null && rows.length > 0;
     },
     async denyAccountByLink({ linkHash, deniedBy }) {
       const rows = await sql`
@@ -391,7 +402,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         WHERE b.owner_user_id = ${approvedBy}
           AND ${principalUserId} <> ${approvedBy}
           AND EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = ${principalUserId} AND ap.kind = 'internal')
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING id`;
       return rows.length > 0;
     },
@@ -426,8 +437,8 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           AND r.link_consumed_at IS NULL AND r.link_expires_at > now()
           AND b.id = ${accountId} AND r.principal_user_id <> ${approvedBy}
           AND EXISTS (SELECT 1 FROM agent_principals p WHERE p.user_id = b.owner_user_id AND p.kind = 'org')
-        RETURNING r.id`;
-      return rows.length > 0;
+        RETURNING r.id`.then((result) => result, liveRowAlreadyExists);
+      return rows !== null && rows.length > 0;
     },
     async denyAccountByLinkOnOrg({ linkHash, deniedBy, accountId }) {
       const rows = await sql`
