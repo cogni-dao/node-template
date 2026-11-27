@@ -47,6 +47,7 @@ Published attribution runtime shared by node apps and workers. Contains model ty
   - `AttributionEpoch`, `IngestionReceipt`, `EpochUserProjection`, `FinalClaimantAllocationRecord`, `IngestionCursor`, `AttributionPoolComponent`, `AttributionStatement`, `AttributionStatementSignature`, `AttributionEvaluation`, `ReviewSubjectOverrideRecord`, `ClaimantLiabilityLifecycleRecord` — Read-side record types
   - `InsertReceiptParams`, `InsertUserProjectionParams`, `InsertFinalClaimantAllocationParams`, `InsertPoolComponentParams`, `InsertStatementParams`, `InsertSignatureParams`, `UpsertReviewSubjectOverrideParams`, `UpsertEvaluationParams`, `CloseIngestionWithEvaluationsParams` — Write-side param types
   - `PoolComponentInsertResult` — Return type for idempotent `insertPoolComponent` (`{ component, created }`)
+  - `parseEpochPage()` — validates shared HTTP pagination and returns safe refusal metadata
   - `computeEpochWindowV1()` — Pure, deterministic epoch window computation (Monday-aligned UTC). Safe in Temporal workflow code.
   - `EpochWindow`, `EpochWindowParams` — Types for epoch window computation
   - `computeStatementItems()` — Legacy user-only statement helper retained for compatibility

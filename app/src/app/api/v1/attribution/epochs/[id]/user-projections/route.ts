@@ -11,16 +11,18 @@
  * @public
  */
 
-import { handleEpochContributorSummary } from "@cogni/attribution-ledger/http";
-import { PaginationQuerySchema } from "@cogni/attribution-ledger/contracts";
-import { getNodeId } from "@/shared/config";
-
+import {
+  EPOCH_PRESENTATION_EVENTS,
+  handleEpochContributorSummary,
+  parseEpochPage,
+} from "@cogni/attribution-ledger/http";
 import { epochUserProjectionsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { toUserProjectionDto } from "@/app/api/v1/public/attribution/_lib/attribution-dto";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { getNodeId } from "@/shared/config";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -45,10 +47,18 @@ export const GET = wrapRouteHandlerWithLogging<{
     const store = getContainer().attributionStore;
     const url = new URL(request.url);
     if (url.searchParams.get("view") === "summary") {
-      const page = PaginationQuerySchema.parse({
-        limit: url.searchParams.get("limit") ?? undefined,
-        offset: url.searchParams.get("offset") ?? undefined,
-      });
+      const pagination = parseEpochPage(
+        url.searchParams,
+        EPOCH_PRESENTATION_EVENTS.summary,
+        { nodeId: getNodeId(), epochId: epochId.toString() }
+      );
+      if (!pagination.ok) {
+        ctx.log.info(pagination.result.event, pagination.result.event.event);
+        return NextResponse.json(pagination.result.body, {
+          status: pagination.result.status,
+        });
+      }
+      const page = pagination.page;
       const result = await handleEpochContributorSummary(
         store,
         getNodeId(),

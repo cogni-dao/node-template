@@ -11,12 +11,15 @@
  * @public
  */
 
-import { handleEpochContributorReceipts } from "@cogni/attribution-ledger/http";
-
 import {
   buildEpochActivityView,
   persistSelectionUpdates,
 } from "@cogni/attribution-ledger";
+import {
+  EPOCH_PRESENTATION_EVENTS,
+  handleEpochContributorReceipts,
+  parseEpochPage,
+} from "@cogni/attribution-ledger/http";
 import { epochActivityOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -46,10 +49,18 @@ export const GET = wrapRouteHandlerWithLogging<{
     }
 
     const url = new URL(request.url);
-    const { limit, offset } = epochActivityOperation.input.parse({
-      limit: url.searchParams.get("limit") ?? undefined,
-      offset: url.searchParams.get("offset") ?? undefined,
-    });
+    const pagination = parseEpochPage(
+      url.searchParams,
+      EPOCH_PRESENTATION_EVENTS.receipts,
+      { nodeId: getNodeId(), epochId: epochId.toString() }
+    );
+    if (!pagination.ok) {
+      ctx.log.info(pagination.result.event, pagination.result.event.event);
+      return NextResponse.json(pagination.result.body, {
+        status: pagination.result.status,
+      });
+    }
+    const { limit, offset } = pagination.page;
 
     const store = getContainer().attributionStore;
     const claimantKey = url.searchParams.get("claimantKey");

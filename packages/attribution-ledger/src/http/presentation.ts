@@ -7,12 +7,13 @@ import {
   toIngestionReceiptDto,
   toSelectionDto,
 } from "../read/index";
-import {
-  type AttributionRuntimeStore,
-  type ContributorSummaryPage,
+import type {
+  AttributionRuntimeStore,
+  ContributorSummaryPage,
 } from "../read/presentation";
 import type { ReadPage } from "../store";
 import { readFinalizedEpochClaimants } from "./claimants";
+
 const capPage = (page: ReadPage): ReadPage => ({
   limit: Math.min(EPOCH_PAGE_MAX_LIMIT, Math.max(1, Math.floor(page.limit))),
   offset: Math.max(0, Math.floor(page.offset)),
@@ -162,10 +163,10 @@ export async function readEpochContributorReceipts(
   };
 }
 export type {
+  AttributionRuntimeStore,
   ContributorSummary,
   ContributorSummaryPage,
   EpochPresentationStore,
-  AttributionRuntimeStore,
 } from "../read/presentation";
 
 /** Stable terminal events travel with the operation. Hosts add request identity and duration. */
@@ -174,11 +175,39 @@ export const EPOCH_PRESENTATION_EVENTS = {
   summary: "attribution.contributor_summary.read",
   receipts: "attribution.contributor_receipts.read",
 } as const;
+
+import { PaginationQuerySchema } from "../contracts/attribution.list-epochs.v1.contract";
 import {
   ContributorActivityOutputSchema,
   EpochContributorSummaryPageSchema,
   EpochOverviewSchema,
 } from "../contracts/presentation";
+/** Parse client pagination without classifying output or store errors. */
+export function parseEpochPage(
+  params: URLSearchParams,
+  event: (typeof EPOCH_PRESENTATION_EVENTS)[keyof typeof EPOCH_PRESENTATION_EVENTS],
+  ids: { nodeId: string; epochId?: string }
+) {
+  const parsed = PaginationQuerySchema.safeParse({
+    limit: params.get("limit") ?? undefined,
+    offset: params.get("offset") ?? undefined,
+  });
+  if (parsed.success) return { ok: true as const, page: parsed.data };
+  return {
+    ok: false as const,
+    result: {
+      status: 400,
+      body: { error: "Invalid pagination", code: "INVALID_PAGINATION" },
+      event: {
+        event,
+        ...ids,
+        outcome: "refused",
+        errorCode: "INVALID_PAGINATION",
+        count: 0,
+      },
+    },
+  };
+}
 function terminal<T>(
   event: string,
   body: T | null,
