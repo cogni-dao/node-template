@@ -66,8 +66,8 @@ function mcpSpecsToLangChainTools(
       new DynamicStructuredTool({
         name: spec.name,
         description: spec.description,
-        // Passthrough schema — MCP tools validate internally via BoundToolRuntime
-        schema: z.record(z.unknown()),
+        // Preserve the advertised schema; execution still delegates to toolRunner.
+        schema: spec.inputSchema,
         func: async (args: Record<string, unknown>): Promise<string> => {
           const result = await toolExecFn(spec.name, args, undefined);
           if (!result.ok) {
