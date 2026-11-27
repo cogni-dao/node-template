@@ -34,7 +34,8 @@ Feature layer for USDC payment attempts with backend verification. Handles payme
   - `createIntent(userRepo, clock, input)` - Create payment intent with on-chain transfer params (user repo only)
   - `submitTxHash(userRepo, serviceRepo, accountService, verifier, clock, log, input)` - Submit txHash for verification (dual repos)
   - `getStatus(userRepo, serviceRepo, accountService, verifier, clock, log, input)` - Poll status with throttled verification (dual repos)
-  - `confirmCreditsPayment(accountService, serviceAccountService, input)` - Credit settlement with system tenant revenue share bonus; idempotent on clientPaymentId
+  - `PostCreditFundingDeps.onCredited({ billingAccountId, amountUsdCents, paymentRef, createdByUserId })` - optional hook after the credit commits and again on every later `getStatus` of the CREDITED attempt; the callee dedupes on `paymentRef`, a failure is logged with `paymentRef` and never fails the payment. The app facade uses it for an org account's `org.funded` history row, with the attempt's creator (`payment_attempts.created_by_user_id`) as actor
+  - `confirmCreditsPayment(accountService, serviceAccountService, input)` - Credit settlement; idempotent on clientPaymentId. `revenueShare` is an input (the caller reads it from repo-spec `payments_in`); a top-up mints no system bonus unless repo-spec sets one (default 0)
   - `getCreditsSummary(accountService, input)` - Fetch balance and recent ledger entries
 - **Exports (hooks/):**
   - `usePaymentFlow(options)` - React hook orchestrating USDC payment flow with wagmi + backend; uses attemptId guard to cancel stale async on reset; returns PaymentFlowState
@@ -68,11 +69,12 @@ import { confirmCreditsPayment } from "@/features/payments/services/creditsConfi
 import { getCreditsSummary } from "@/features/payments/services/creditsSummary";
 
 // Called by app facades with resolved billing account
-const result = await confirmCreditsPayment(accountService, {
+const result = await confirmCreditsPayment(accountService, serviceAccountService, {
   billingAccountId: "...",
   defaultVirtualKeyId: "...",
   amountUsdCents: 1000,
   clientPaymentId: "uuid",
+  revenueShare: 0, // from repo-spec payments_in; 0 mints no system bonus
   metadata: { provider: "depay", txHash: "..." },
 });
 ```

@@ -54,6 +54,7 @@ function mapRow(row: PaymentAttemptRow): PaymentAttempt {
     amountUsdCents: row.amountUsdCents,
     status: row.status as PaymentAttemptStatus,
     errorCode: (row.errorCode as PaymentErrorCode) ?? null,
+    createdByUserId: row.createdByUserId,
     expiresAt: row.expiresAt,
     submittedAt: row.submittedAt,
     lastVerifyAttemptAt: row.lastVerifyAttemptAt,
@@ -103,6 +104,7 @@ export class UserDrizzlePaymentAttemptRepository
           amountRaw: params.amountRaw,
           amountUsdCents: params.amountUsdCents,
           status: "CREATED_INTENT",
+          createdByUserId: params.createdByUserId,
           expiresAt: params.expiresAt,
         })
         .returning();

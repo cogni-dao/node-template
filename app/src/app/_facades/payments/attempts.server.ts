@@ -5,14 +5,13 @@
  * Module: `@app/_facades/payments/attempts.server`
  * Purpose: App-layer wiring for payment attempts. Resolves dependencies (including post-credit funding deps), delegates to feature services, and maps port types to contract DTOs.
  * Scope: Server-only facade. Handles billing account resolution from session user, builds PostCreditFundingDeps from container, maps Date to ISO string for contract compliance; does not perform direct persistence or HTTP handling.
- * Invariants: Billing account from session only; state transition events include chainId and errorCode; post-credit funding deps threaded to service layer (not invoked in facade).
+ * Invariants: Billing account from the session, or an org account identity's resolveFundingAccount admits (org:admin only); state transition events include chainId and errorCode; post-credit funding deps threaded to service layer (not invoked in facade).
  * Side-effects: IO (via PaymentAttemptUserRepository, PaymentAttemptServiceRepository, AccountService, ServiceAccountService, OnChainVerifier, PostCreditFundingDeps ports).
  * Notes: Facades own DTO mapping. Emits payments.verified on CREDITED transitions. buildPostCreditFundingDeps() constructs settlement deps (treasury + ledger) from container when at least one downstream port is available. Provider top-up was retired (OpenRouter 410'd programmatic crypto top-up).
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/payments-design.md, src/contracts/AGENTS.md
  * @public
  */
 
-import { toUserId } from "@cogni/ids";
 import type {
 	PaymentIntentOutput,
 	PaymentStatusOutput,
@@ -22,16 +21,13 @@ import type { SessionUser } from "@cogni/node-shared";
 import { getAddress } from "viem";
 import { type Container, getContainer } from "@/bootstrap/container";
 import type { PostCreditFundingDeps } from "@/features/payments/application/confirmCreditsPurchase";
-import {
-	AuthUserNotFoundError,
-	WalletRequiredError,
-} from "@/features/payments/errors";
+import { WalletRequiredError } from "@/features/payments/errors";
 import {
 	createIntent,
 	getStatus,
 	submitTxHash,
 } from "@/features/payments/services/paymentService";
-import { getOrCreateBillingAccountForUser } from "@/lib/auth/mapping";
+import { orgFundedLogger, resolvePaymentAccount } from "./funding-account.server";
 import type {
 	PaymentsIntentCreatedEvent,
 	PaymentsStateTransitionEvent,
@@ -47,9 +43,10 @@ import type {
 function buildPostCreditFundingDeps(
 	container: Container,
 	log: PostCreditFundingDeps["log"],
+	onCredited?: PostCreditFundingDeps["onCredited"],
 ): PostCreditFundingDeps | undefined {
-	// Only build deps when at least one downstream port is available
-	if (!container.treasurySettlement && !container.financialLedger) {
+	// Only build deps when at least one downstream port (or an org-funding log) is present
+	if (!container.treasurySettlement && !container.financialLedger && !onCredited) {
 		return undefined;
 	}
 
@@ -57,6 +54,7 @@ function buildPostCreditFundingDeps(
 		treasurySettlement: container.treasurySettlement,
 		financialLedger: container.financialLedger,
 		log,
+		...(onCredited ? { onCredited } : {}),
 	};
 }
 
@@ -73,43 +71,21 @@ export async function createPaymentIntentFacade(
 	params: {
 		sessionUser: SessionUser;
 		amountUsdCents: number;
+		/** An org account to fund instead of the caller's own; identity decides (org:admin only). */
+		billingAccountId?: string | undefined;
 	},
 	ctx: RequestContext,
 ): Promise<PaymentIntentOutput> {
 	const start = performance.now();
 	const container = getContainer();
-	const accountService = container.accountsForUser(
-		toUserId(params.sessionUser.id),
-	);
-	const userRepo = container.paymentAttemptsForUser(
-		toUserId(params.sessionUser.id),
-	);
 	const { clock } = container;
 
-	let billingAccount: Awaited<
-		ReturnType<typeof getOrCreateBillingAccountForUser>
-	>;
-	try {
-		billingAccount = await getOrCreateBillingAccountForUser(accountService, {
-			userId: params.sessionUser.id,
-			...(params.sessionUser.walletAddress
-				? { walletAddress: params.sessionUser.walletAddress }
-				: {}),
-		});
-	} catch (error) {
-		// Check for FK constraint violation (user not found in DB)
-		// Drizzle wraps Postgres errors - constraint name is in cause.message
-		if (
-			error &&
-			typeof error === "object" &&
-			"cause" in error &&
-			error.cause instanceof Error &&
-			error.cause.message.includes("billing_accounts_owner_user_id_users_id_fk")
-		) {
-			throw new AuthUserNotFoundError(params.sessionUser.id);
-		}
-		throw error;
-	}
+	const { rlsUserId, billingAccount } = await resolvePaymentAccount(
+		container,
+		params.sessionUser,
+		params.billingAccountId,
+	);
+	const userRepo = container.paymentAttemptsForUser(rlsUserId);
 
 	// Enrich context with business identifiers
 	const enrichedCtx: RequestContext = {
@@ -129,6 +105,7 @@ export async function createPaymentIntentFacade(
 		billingAccountId: billingAccount.id,
 		fromAddress,
 		amountUsdCents: params.amountUsdCents,
+		createdByUserId: params.sessionUser.id,
 	});
 
 	// Log domain event
@@ -168,47 +145,25 @@ export async function submitPaymentTxHashFacade(
 		sessionUser: SessionUser;
 		attemptId: string;
 		txHash: string;
+		billingAccountId?: string | undefined;
 	},
 	ctx: RequestContext,
 ): Promise<PaymentSubmitOutput> {
 	const start = performance.now();
 	const container = getContainer();
-	const accountService = container.accountsForUser(
-		toUserId(params.sessionUser.id),
-	);
-	const userRepo = container.paymentAttemptsForUser(
-		toUserId(params.sessionUser.id),
-	);
 	const {
 		paymentAttemptServiceRepository: serviceRepo,
 		onChainVerifier,
 		clock,
 	} = container;
 
-	let billingAccount: Awaited<
-		ReturnType<typeof getOrCreateBillingAccountForUser>
-	>;
-	try {
-		billingAccount = await getOrCreateBillingAccountForUser(accountService, {
-			userId: params.sessionUser.id,
-			...(params.sessionUser.walletAddress
-				? { walletAddress: params.sessionUser.walletAddress }
-				: {}),
-		});
-	} catch (error) {
-		// Check for FK constraint violation (user not found in DB)
-		// Drizzle wraps Postgres errors - constraint name is in cause.message
-		if (
-			error &&
-			typeof error === "object" &&
-			"cause" in error &&
-			error.cause instanceof Error &&
-			error.cause.message.includes("billing_accounts_owner_user_id_users_id_fk")
-		) {
-			throw new AuthUserNotFoundError(params.sessionUser.id);
-		}
-		throw error;
-	}
+	const { rlsUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
+		container,
+		params.sessionUser,
+		params.billingAccountId,
+	);
+	const accountService = container.accountsForUser(rlsUserId);
+	const userRepo = container.paymentAttemptsForUser(rlsUserId);
 
 	// Enrich context with business identifiers
 	const enrichedCtx: RequestContext = {
@@ -233,7 +188,11 @@ export async function submitPaymentTxHashFacade(
 			defaultVirtualKeyId: billingAccount.defaultVirtualKeyId,
 			txHash: params.txHash,
 		},
-		buildPostCreditFundingDeps(container, enrichedCtx.log),
+		buildPostCreditFundingDeps(
+			container,
+			enrichedCtx.log,
+			orgFunding ? orgFundedLogger(container, params.sessionUser.id) : undefined,
+		),
 	);
 
 	// Log domain event (state transition)
@@ -288,47 +247,25 @@ export async function getPaymentStatusFacade(
 	params: {
 		sessionUser: SessionUser;
 		attemptId: string;
+		billingAccountId?: string | undefined;
 	},
 	ctx: RequestContext,
 ): Promise<PaymentStatusOutput> {
 	const start = performance.now();
 	const container = getContainer();
-	const accountService = container.accountsForUser(
-		toUserId(params.sessionUser.id),
-	);
-	const userRepo = container.paymentAttemptsForUser(
-		toUserId(params.sessionUser.id),
-	);
 	const {
 		paymentAttemptServiceRepository: serviceRepo,
 		onChainVerifier,
 		clock,
 	} = container;
 
-	let billingAccount: Awaited<
-		ReturnType<typeof getOrCreateBillingAccountForUser>
-	>;
-	try {
-		billingAccount = await getOrCreateBillingAccountForUser(accountService, {
-			userId: params.sessionUser.id,
-			...(params.sessionUser.walletAddress
-				? { walletAddress: params.sessionUser.walletAddress }
-				: {}),
-		});
-	} catch (error) {
-		// Check for FK constraint violation (user not found in DB)
-		// Drizzle wraps Postgres errors - constraint name is in cause.message
-		if (
-			error &&
-			typeof error === "object" &&
-			"cause" in error &&
-			error.cause instanceof Error &&
-			error.cause.message.includes("billing_accounts_owner_user_id_users_id_fk")
-		) {
-			throw new AuthUserNotFoundError(params.sessionUser.id);
-		}
-		throw error;
-	}
+	const { rlsUserId, billingAccount, orgFunding } = await resolvePaymentAccount(
+		container,
+		params.sessionUser,
+		params.billingAccountId,
+	);
+	const accountService = container.accountsForUser(rlsUserId);
+	const userRepo = container.paymentAttemptsForUser(rlsUserId);
 
 	// Enrich context with business identifiers
 	const enrichedCtx: RequestContext = {
@@ -352,7 +289,11 @@ export async function getPaymentStatusFacade(
 			billingAccountId: billingAccount.id,
 			defaultVirtualKeyId: billingAccount.defaultVirtualKeyId,
 		},
-		buildPostCreditFundingDeps(container, enrichedCtx.log),
+		buildPostCreditFundingDeps(
+			container,
+			enrichedCtx.log,
+			orgFunding ? orgFundedLogger(container, params.sessionUser.id) : undefined,
+		),
 	);
 
 	// Log domain event (read operation)

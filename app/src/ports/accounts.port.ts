@@ -148,7 +148,7 @@ export type ChargeReceiptParams = {
   ingressRequestId?: string;
   /** Credits debited from user balance */
   chargedCredits: bigint;
-  /** Observational USD cost from LiteLLM (header or usage.cost) - null if unavailable */
+  /** Observational USD cost from LiteLLM (stream usage.cost or the callback's response_cost) - null if unavailable */
   responseCostUsd: number | null;
   /** LiteLLM call ID for forensic correlation (x-litellm-call-id header) */
   litellmCallId: string | null;

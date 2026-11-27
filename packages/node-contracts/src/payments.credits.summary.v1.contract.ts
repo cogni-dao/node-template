@@ -31,6 +31,8 @@ export const creditsSummaryOperation = {
     "Returns billing account balance and recent credit ledger entries for the authenticated account.",
   input: z.object({
     limit: z.number().int().positive().max(100).optional(),
+    /** An org account to read instead of the caller's own; identity decides (org:admin only). */
+    billingAccountId: z.string().min(1).max(128).optional(),
   }),
   output: z.object({
     billingAccountId: z.string(),

@@ -89,9 +89,13 @@ export const paymentsClient = {
    * @returns Current status (PENDING_VERIFICATION | CONFIRMED | FAILED), txHash, amountUsdCents, optional errorCode
    */
   getStatus: async (
-    attemptId: string
+    attemptId: string,
+    billingAccountId?: string
   ): Promise<ApiResult<PaymentStatusOutput>> => {
-    const res = await fetch(`/api/v1/payments/attempts/${attemptId}`);
+    const query = billingAccountId
+      ? `?billingAccountId=${encodeURIComponent(billingAccountId)}`
+      : "";
+    const res = await fetch(`/api/v1/payments/attempts/${attemptId}${query}`);
     return handleResponse<PaymentStatusOutput>(res);
   },
 };

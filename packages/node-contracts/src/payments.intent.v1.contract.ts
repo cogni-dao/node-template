@@ -7,7 +7,7 @@
  * Scope: Defines request/response schemas for POST /api/v1/payments/intents; does not perform persistence or authentication.
  * Invariants: amountUsdCents must be between MIN_PAYMENT_CENTS and MAX_PAYMENT_CENTS; all outputs include on-chain transfer parameters.
  * Side-effects: none
- * Notes: Billing account and from address derived from session server-side; not provided in input.
+ * Notes: From address derived from the session. The account is the caller's own unless `billingAccountId` names an org account the caller administers (identity decides).
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/payments-design.md
  * @public
  */
@@ -32,6 +32,8 @@ export const paymentIntentOperation = {
         MAX_PAYMENT_CENTS,
         `Maximum payment is $${MAX_PAYMENT_CENTS / 100} (${MAX_PAYMENT_CENTS} cents)`
       ),
+    /** An org account to fund instead of the caller's own; identity decides (org:admin only). */
+    billingAccountId: z.string().min(1).max(128).optional(),
   }),
   output: z.object({
     attemptId: z.string().uuid(),

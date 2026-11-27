@@ -39,6 +39,7 @@ export interface PaymentAttemptOptions {
   status?: PaymentAttemptStatus;
   txHash?: string | null;
   errorCode?: PaymentErrorCode | null;
+  createdByUserId?: string | null;
   expiresAt?: Date | null;
   submittedAt?: Date | null;
   lastVerifyAttemptAt?: Date | null;
@@ -95,6 +96,7 @@ export function createPaymentAttempt(
     status: options.status ?? "CREATED_INTENT",
     txHash: options.txHash ?? null,
     errorCode: options.errorCode ?? null,
+    createdByUserId: options.createdByUserId ?? null,
     expiresAt: options.expiresAt ?? null,
     submittedAt: options.submittedAt ?? null,
     lastVerifyAttemptAt: options.lastVerifyAttemptAt ?? null,

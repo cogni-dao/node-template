@@ -12,6 +12,7 @@
  * @public
  */
 
+import { fundingRefusalHttp } from "@cogni/agent-grants/http";
 import { paymentIntentOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { createPaymentIntentFacade } from "@/app/_facades/payments/attempts.server";
@@ -33,6 +34,13 @@ function handleRouteError(
   ctx: RequestContext,
   error: unknown
 ): NextResponse | null {
+  // Funding an org account (story.0080): identity's refusal keeps its own code and status.
+  const fundingRefusal = fundingRefusalHttp(error);
+  if (fundingRefusal) {
+    logRequestWarn(ctx.log, error, (fundingRefusal.body as { error: string }).error.toUpperCase());
+    return NextResponse.json(fundingRefusal.body, { status: fundingRefusal.status, headers: fundingRefusal.headers });
+  }
+
   // Zod validation errors
   if (error && typeof error === "object" && "issues" in error) {
     logRequestWarn(ctx.log, error, "VALIDATION_ERROR");

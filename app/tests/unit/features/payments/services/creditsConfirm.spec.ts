@@ -22,10 +22,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { confirmCreditsPayment } from "@/features/payments/services/creditsConfirm";
 import type { CreditLedgerEntry, ServiceAccountService } from "@/ports";
 
-vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({ SYSTEM_TENANT_REVENUE_SHARE: 0.75 }),
-}));
-
 function createMockServiceAccountService(): ServiceAccountService {
   return {
     getBillingAccountById: vi.fn(),
@@ -93,6 +89,7 @@ describe("features/payments/services/creditsConfirm", () => {
         defaultVirtualKeyId,
         amountUsdCents: 1_000,
         clientPaymentId: "payment-1",
+        revenueShare: 0,
         metadata: { txHash: "0xabc" },
       }
     );
@@ -154,6 +151,7 @@ describe("features/payments/services/creditsConfirm", () => {
         defaultVirtualKeyId,
         amountUsdCents: 500,
         clientPaymentId: "payment-duplicate",
+        revenueShare: 0,
       }
     );
 
@@ -177,6 +175,7 @@ describe("features/payments/services/creditsConfirm", () => {
         defaultVirtualKeyId,
         amountUsdCents: 0,
         clientPaymentId: "payment-invalid",
+        revenueShare: 0,
       })
     ).rejects.toThrow("amountUsdCents must be greater than zero");
   });
@@ -206,6 +205,7 @@ describe("features/payments/services/creditsConfirm", () => {
         defaultVirtualKeyId,
         amountUsdCents: 1_000,
         clientPaymentId: "payment-rev-share",
+        revenueShare: 0.75,
       });
 
       // User credit happens first
@@ -258,11 +258,42 @@ describe("features/payments/services/creditsConfirm", () => {
         defaultVirtualKeyId,
         amountUsdCents: 1_000,
         clientPaymentId: "payment-retry",
+        revenueShare: 0.75,
       });
 
       // User credit still happens
       expect(creditAccount).toHaveBeenCalledTimes(1);
       // System tenant credit skipped
+      expect(svcCreditAccount).not.toHaveBeenCalled();
+    });
+
+    it("mints no system bonus at the repo-spec default revenue share of 0", async () => {
+      const {
+        accountService,
+        serviceAccountService,
+        findByReference,
+        creditAccount,
+        svcFindByReference,
+        svcCreditAccount,
+      } = createMocks();
+
+      findByReference.mockResolvedValue(null);
+      creditAccount.mockResolvedValue({ newBalance: 20_000_000 });
+
+      const result = await confirmCreditsPayment(
+        accountService,
+        serviceAccountService,
+        {
+          billingAccountId,
+          defaultVirtualKeyId,
+          amountUsdCents: 200,
+          clientPaymentId: "payment-no-bonus",
+          revenueShare: 0,
+        }
+      );
+
+      expect(result.creditsApplied).toBe(20_000_000);
+      expect(svcFindByReference).not.toHaveBeenCalled();
       expect(svcCreditAccount).not.toHaveBeenCalled();
     });
   });

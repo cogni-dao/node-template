@@ -48,6 +48,8 @@ export const paymentSubmitOperation = {
         /^0x[a-fA-F0-9]{64}$/,
         "Invalid transaction hash format (must be 0x + 64 hex chars)"
       ),
+    /** An org account to fund instead of the caller's own; identity decides (org:admin only). */
+    billingAccountId: z.string().min(1).max(128).optional(),
   }),
   output: z.object({
     attemptId: z.string().uuid(),

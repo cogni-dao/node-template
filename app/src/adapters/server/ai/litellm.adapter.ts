@@ -4,7 +4,7 @@
 /**
  * Module: `@adapters/server/ai/litellm`
  * Purpose: LiteLLM service implementation for AI completion and streaming with cost extraction and runtime secret validation.
- * Scope: Implements LlmService port (completion + stream), extracts cost from headers, validates secrets at adapter boundary. Does not handle auth or rate-limiting.
+ * Scope: Implements LlmService port (completion + stream), extracts cost from the stream's final usage event, validates secrets at adapter boundary. Does not handle auth or rate-limiting.
  * Invariants:
  *   - Never logs prompts/keys/chunks; error response excerpts are redacted + bounded (<=2KB)
  *   - 30s timeout (completion), 15s connect timeout (stream)
@@ -123,18 +123,6 @@ function defer<T>() {
     };
   });
   return { promise, resolve, reject };
-}
-
-/**
- * Extract provider cost from LiteLLM response headers.
- * Quarantines null at the boundary and returns number | undefined.
- */
-function getProviderCostFromHeaders(response: Response): number | undefined {
-  const raw = response.headers.get("x-litellm-response-cost");
-  if (!raw || raw.trim().length === 0) return undefined;
-
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 /**
@@ -348,8 +336,9 @@ export class LiteLlmAdapter implements LlmService {
       throw new Error("LiteLLM response body is empty");
     }
 
-    // Capture cost and call ID from headers if available immediately (unlikely for stream)
-    const providerCostUsd = getProviderCostFromHeaders(response);
+    // STREAM_COST_IS_USAGE_COST: a stream's headers are sent before any token, so
+    // x-litellm-response-cost there is never the call's cost (it reads 0; bug.0067).
+    // Only the final usage event's usage.cost is read below.
     const litellmCallId = getLitellmCallIdFromHeaders(response);
 
     // Create a deferred promise for the final result (matches completionStream's `final`)
@@ -610,15 +599,10 @@ export class LiteLlmAdapter implements LlmService {
               result.toolCalls = assembledToolCalls;
             }
 
-            // Cost derivation priority (ACTIVITY_METRICS.md §3):
-            // 1. Header (providerCostUsd from x-litellm-response-cost)
-            // 2. Usage event (usageCost from stream usage.cost)
-            // 3. Neither → undefined (will log CRITICAL in completion.ts)
-            const derivedCost =
-              typeof providerCostUsd === "number" ? providerCostUsd : usageCost;
-
-            if (typeof derivedCost === "number") {
-              result.providerCostUsd = derivedCost;
+            // STREAM_COST_IS_USAGE_COST: usage.cost or undefined, so billing defers
+            // to the LiteLLM callback instead of recording a guessed cost.
+            if (typeof usageCost === "number") {
+              result.providerCostUsd = usageCost;
             }
 
             // USAGE_UNIT_IS_LITELLM_CALL_ID: header is the ONLY source.
@@ -641,7 +625,7 @@ export class LiteLlmAdapter implements LlmService {
                 provider: resolvedProvider,
                 tokensUsed: finalUsage?.totalTokens,
                 finishReason,
-                hasCost: typeof derivedCost === "number",
+                hasCost: typeof usageCost === "number",
                 hasCallId: !!result.litellmCallId,
                 contentLength: fullContent.length,
                 toolCallCount: assembledToolCalls?.length ?? 0,

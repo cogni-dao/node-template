@@ -126,6 +126,7 @@ export function registerPaymentAttemptRepositoryContract(
           amountRaw: 5_000_000n,
           amountUsdCents: 500,
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          createdByUserId: testUserId,
         };
 
         const attempt = await userRepo.create(params);
@@ -133,6 +134,8 @@ export function registerPaymentAttemptRepositoryContract(
         expect(attempt.id).toBeDefined();
         expect(attempt.status).toBe("CREATED_INTENT");
         expect(attempt.billingAccountId).toBe(params.billingAccountId);
+        // Defect guarded: the creator is lost, so an org top-up's history names whoever polled
+        expect(attempt.createdByUserId).toBe(testUserId);
         expect(attempt.fromAddress).toBe(params.fromAddress);
         expect(attempt.txHash).toBeNull();
       });
@@ -147,6 +150,7 @@ export function registerPaymentAttemptRepositoryContract(
           amountRaw: 5_000_000n,
           amountUsdCents: 500,
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          createdByUserId: testUserId,
         };
 
         const attempt = await userRepo.create(params);
@@ -176,6 +180,7 @@ export function registerPaymentAttemptRepositoryContract(
           amountRaw: 5_000_000n,
           amountUsdCents: 500,
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          createdByUserId: testUserId,
         };
 
         const attempt = await userRepo.create(params);
@@ -208,6 +213,7 @@ export function registerPaymentAttemptRepositoryContract(
           amountRaw: 5_000_000n,
           amountUsdCents: 500,
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          createdByUserId: testUserId,
         };
 
         const params2 = { ...params1 };
@@ -247,6 +253,7 @@ export function registerPaymentAttemptRepositoryContract(
           amountRaw: 5_000_000n,
           amountUsdCents: 500,
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          createdByUserId: testUserId,
         };
 
         const attempt = await userRepo.create(params);
@@ -286,6 +293,7 @@ export function registerPaymentAttemptRepositoryContract(
           amountRaw: 5_000_000n,
           amountUsdCents: 500,
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          createdByUserId: testUserId,
         };
 
         const attempt = await userRepo.create(params);
