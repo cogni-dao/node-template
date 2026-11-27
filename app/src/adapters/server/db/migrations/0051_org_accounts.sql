@@ -1,11 +1,11 @@
--- org accounts (task.0181, `@cogni-dao/agent-grants` 0.13.0): org_accounts, org_events (append only), org_wallet_holds, org_connections, org_service_principals and org_connect_jtis. The table part is
+-- org accounts (task.0181, `@cogni-dao/agent-grants` 0.14.0): org_accounts, org_events (append only), org_wallet_holds, org_connections, org_service_principals and org_connect_jtis. The table part is
 -- `defineAgentAuthoritySchema`'s, written by this node's db:generate; the hand-written part below is `packages/agent-grants/migrations/org_accounts.sql` byte for byte. payer_bindings moved
 -- into the factory with no change to its DDL (0046 stays as it is). The prototype's tables on candidate-a (org_invites, org_link_codes, org_links) are not touched.
 -- ORDER_IS_ENFORCED (task.0181): this feature adopts only after release B (0050) dropped the old (principal, scope) live index. If it still exists, stop here: the whole migration rolls back.
 DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'agent_roles_live_unique') THEN
-		RAISE EXCEPTION 'org accounts need grants release B first: agent_roles_live_unique still exists (deploy 0.12.0, then 0.13.0)';
+		RAISE EXCEPTION 'org accounts need grants release B first: agent_roles_live_unique still exists (deploy 0.13.0, then 0.14.0)';
 	END IF;
 END
 $$;--> statement-breakpoint
