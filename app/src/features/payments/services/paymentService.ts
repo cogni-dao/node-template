@@ -466,6 +466,8 @@ async function verifyAndSettle(
 				defaultVirtualKeyId,
 				amountUsdCents: attempt.amountUsdCents,
 				clientPaymentId,
+				// revenueShare is governance config from repo-spec (payments_in); default 0 mints no system bonus.
+				revenueShare: getPaymentConfig()?.revenueShare ?? 0,
 				metadata: {
 					paymentAttemptId: attempt.id,
 					txHash: attempt.txHash,

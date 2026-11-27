@@ -7,7 +7,7 @@
  * Scope: Feature-layer orchestration for payment confirmations and revenue share; does not expose HTTP handling or session resolution.
  * Invariants: Credits via usdCentsToCredits (integer math); idempotent on clientPaymentId; system tenant bonus sequential + idempotent.
  * Side-effects: IO (via AccountService and ServiceAccountService ports).
- * Notes: Billing account resolved at app layer. Reads SYSTEM_TENANT_REVENUE_SHARE from env (llmPricingPolicy pattern).
+ * Notes: Billing account resolved at app layer. revenueShare is governance config from repo-spec (payments_in), passed in by the caller.
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/payments-design.md, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/system-tenant.md, src/core/billing/pricing.ts
  * @public
  */
@@ -22,13 +22,14 @@ import {
   WIDGET_PAYMENT_REASON,
 } from "@cogni/node-shared";
 import type { AccountService, ServiceAccountService } from "@/ports";
-import { serverEnv } from "@/shared/env";
 
 export interface CreditsConfirmInput {
   billingAccountId: string;
   defaultVirtualKeyId: string;
   amountUsdCents: number;
   clientPaymentId: string;
+  /** Fraction of purchased credits minted to the system tenant; repo-spec `payments_in.credits_topup.revenue_share` (default 0). */
+  revenueShare: number;
   metadata?: Record<string, unknown> | undefined;
 }
 
@@ -86,7 +87,7 @@ export async function confirmCreditsPayment(
   // If crash between steps: retry skips user credit (idempotent), applies system tenant credit.
   const bonusCredits = calculateRevenueShareBonus(
     creditsAsBigInt,
-    serverEnv().SYSTEM_TENANT_REVENUE_SHARE
+    input.revenueShare
   );
 
   if (bonusCredits > 0n) {
