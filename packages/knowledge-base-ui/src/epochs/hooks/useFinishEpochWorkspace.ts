@@ -100,8 +100,8 @@ export function useFinishEpochWorkspace(): UseQueryResult<
   const { client, state, queryKeyPrefix } = useEpochContext();
   const contributorPages = state.contributorPages ?? {};
   const queryClient = useQueryClient();
-  const membership = useEpochMembership();
   const queryKey = finishWorkspaceKey(queryKeyPrefix, contributorPages);
+  const membership = useEpochMembership(queryKey);
   const query = useQuery({
     behavior: membership.behavior,
     queryKey,

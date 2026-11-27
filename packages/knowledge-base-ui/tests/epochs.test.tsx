@@ -941,6 +941,98 @@ describe("public epochs capability", () => {
     expect(f.getNavigation().historyOffset).toBe(0);
   }, 20_000);
 
+  it("r14 returns to fresh cached history pages without refusing contributor membership", async () => {
+    const f = fixture();
+    // Production retains inactive pages; the default fixture's gcTime: 0 hides this defect.
+    f.queryClient.setDefaultOptions({
+      queries: { retry: false, gcTime: 300_000 },
+    });
+    f.state.history = denseHistory();
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    await contributorRow("Alpha");
+    const listReads = () =>
+      f.requests.filter((r) => r.url.includes("view=overview")).length;
+    const originalPage = f.queryClient.getQueryCache().findAll({
+      predicate: (q) => q.queryKey.includes("list") && q.queryKey.at(-1) === 0,
+    })[0];
+    for (let cycle = 0; cycle < 2; cycle++) {
+      fireEvent.click(screen.getByRole("button", { name: "More epochs" }));
+      await screen.findByText("1200");
+      fireEvent.click(screen.getByRole("button", { name: "Previous epochs" }));
+      await screen.findByText("14");
+      await waitFor(() =>
+        expect(screen.queryAllByText(/Could not verify current/)).toHaveLength(
+          0
+        )
+      );
+      expect(f.getNavigation().historyOffset).toBe(0);
+      expect(listReads()).toBe(2);
+      expect(
+        f.queryClient.getQueryCache().findAll({
+          predicate: (q) =>
+            q.queryKey.includes("list") && q.queryKey.at(-1) === 0,
+        })[0]
+      ).toBe(originalPage);
+      const row = await contributorRow("Alpha");
+      const expand = within(row).getByRole("button", {
+        name: "Expand details",
+      });
+      expect(expand).toBeEnabled();
+      fireEvent.click(expand);
+      await screen.findByRole("link", { name: "Contribution r1" });
+      expect(
+        screen.getAllByRole("link", { name: "Contribution r1" })
+      ).toHaveLength(1);
+      fireEvent.click(
+        within(row).getByRole("button", { name: "Collapse details" })
+      );
+    }
+  }, 20_000);
+
+  it("r14 returns to fresh cached contributor pages with usable single membership", async () => {
+    const f = fixture();
+    f.queryClient.setDefaultOptions({
+      queries: { retry: false, gcTime: 300_000 },
+    });
+    f.state.events = denseContributors();
+    render(<CurrentEpochView />, { wrapper: f.wrapper });
+    await contributorRow("Alpha");
+    const summaryReads = () =>
+      f.requests.filter((r) => r.url.includes("view=summary")).length;
+    for (let cycle = 0; cycle < 2; cycle++) {
+      fireEvent.click(
+        screen.getByRole("button", { name: "More contributors" })
+      );
+      await contributorRow("Late contributor");
+      fireEvent.click(
+        screen.getByRole("button", { name: "Previous contributors" })
+      );
+      const row = await contributorRow("Alpha");
+      await waitFor(() =>
+        expect(screen.queryAllByText(/Could not verify current/)).toHaveLength(
+          0
+        )
+      );
+      expect(summaryReads()).toBe(2);
+      expect(screen.getByText("201 contributors")).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: "More contributors" })
+      ).toBeEnabled();
+      const expand = within(row).getByRole("button", {
+        name: "Expand details",
+      });
+      expect(expand).toBeEnabled();
+      fireEvent.click(expand);
+      await screen.findByRole("link", { name: "Contribution dense-0" });
+      expect(
+        screen.getAllByRole("link", { name: "Contribution dense-0" })
+      ).toHaveLength(1);
+      fireEvent.click(
+        within(row).getByRole("button", { name: "Collapse details" })
+      );
+    }
+  }, 20_000);
+
   it("expands a contributor to bounded receipt pages and real receipt links", async () => {
     const f = fixture();
     f.state.events = Array.from({ length: 201 }, (_, i) => event(`r${i + 1}`));

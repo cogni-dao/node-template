@@ -69,10 +69,11 @@ export function partitionEpochs(epochs: readonly EpochDto[]): EpochListData {
 export function useEpochsPage() {
   const { client, state, queryKeyPrefix } = useEpochContext();
   // Cached list shells survive refusal; a completed list attempt admits fresh child reads.
-  const membership = useEpochMembership();
+  const queryKey = [...queryKeyPrefix, "epochs", "list", state.historyOffset];
+  const membership = useEpochMembership(queryKey);
   const query = useQuery({
     behavior: membership.behavior,
-    queryKey: [...queryKeyPrefix, "epochs", "list", state.historyOffset],
+    queryKey,
     staleTime: 60_000,
     retry: false,
     placeholderData: keepPreviousData,
@@ -173,18 +174,19 @@ export function useEpochView(
 ) {
   const { client, state, queryKeyPrefix } = useEpochContext();
   const offset = state.contributorPages?.[epoch.id] ?? 0;
-  const membership = useEpochMembership();
+  const queryKey = [
+    ...queryKeyPrefix,
+    "epochs",
+    "view",
+    epoch.id,
+    epoch.status,
+    offset,
+    options.parentReadId,
+  ];
+  const membership = useEpochMembership(queryKey);
   const query = useQuery({
     behavior: membership.behavior,
-    queryKey: [
-      ...queryKeyPrefix,
-      "epochs",
-      "view",
-      epoch.id,
-      epoch.status,
-      offset,
-      options.parentReadId,
-    ],
+    queryKey,
     staleTime: 60_000,
     retry: false,
     enabled: options.enabled ?? true,
