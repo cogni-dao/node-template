@@ -65,11 +65,36 @@ function confined(rootDir, file) {
 }
 
 test("reject repository equality and host dependency escape", () => {
-  assert.throws(() => assertIsolated(root, root), /overlaps repository/);
-  assert.throws(
-    () => confined(realpathSync(tmpdir()), path.join(root, "package.json")),
-    /escaped consumer/
+  const parent = realpathSync(
+    mkdtempSync(path.join(tmpdir(), "cogni-isolation-"))
   );
+  try {
+    const repository = path.join(parent, "checkout");
+    const consumer = path.join(parent, "consumer");
+    mkdirSync(repository);
+    mkdirSync(consumer);
+    const outside = path.join(repository, "outside.txt");
+    const insideFile = path.join(consumer, "inside.txt");
+    writeFileSync(outside, "outside");
+    writeFileSync(insideFile, "inside");
+    assertIsolated(realpathSync(repository), realpathSync(consumer));
+    assert.throws(
+      () => assertIsolated(repository, repository),
+      /overlaps repository/
+    );
+    assert.throws(
+      () => assertIsolated(parent, consumer),
+      /overlaps repository/
+    );
+    assert.throws(
+      () => assertIsolated(repository, parent),
+      /overlaps repository/
+    );
+    confined(consumer, insideFile);
+    assert.throws(() => confined(consumer, outside), /escaped consumer/);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
 });
 
 test(
