@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/langgraph-graphs",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -40,6 +40,7 @@
     "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/bundled/index.js')){console.error('ERROR: dist/bundled/index.js missing'); process.exit(1)}\"",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
+    "test:packed": "node scripts/check-packed-consumer.mjs",
     "test:watch": "vitest --config vitest.config.ts",
     "test:ci": "vitest run --config vitest.config.ts",
     "test:external": "vitest run --config vitest.external.config.ts"
@@ -58,12 +59,13 @@
     "zod": "^3.24.1"
   },
   "peerDependencies": {
-    "@cogni/ai-tools": ">=0.16.0",
-    "@cogni/agent-grants": ">=0.8.1"
+    "@cogni/ai-tools": ">=0.16.0 <1",
+    "@cogni/agent-grants": ">=0.8.1 <1"
   },
   "devDependencies": {
     "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*",
     "@cogni/ai-core": "workspace:*",
+    "@cogni/graph-execution-core": "workspace:*",
     "@cogni/ai-tools": "workspace:@cogni-dao/ai-tools@*",
     "@langchain/langgraph-api": "1.4.1",
     "@langchain/langgraph-cli": "1.4.1",

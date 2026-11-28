@@ -82,6 +82,10 @@ export const EVENT_NAMES = {
 	AGENT_TOOL_AUTHZ: "agent_tool.authz",
 	/** A run ended cleanly because a tool was denied or every write tool was withheld (DENIAL_IS_TERMINAL): principal, tool, code, reason, modelCalls, modelCallsAfterDenial. */
 	AGENT_RUN_DENIED: "agent_run.denied",
+	/** The shell was withheld from a run that continues (shell-caller-run-claim): runId, graphName, reason (unclaimed | not_audience). No ids of the caller. */
+	AGENT_CODING_SHELL_WITHHELD: "agent_coding.shell_withheld",
+	/** A coding run stopped before its first model call: runId, graphName, reason (identity_mismatch | policy_denied | authz_unavailable | sandbox_unavailable). */
+	AGENT_RUN_START_DENIED: "agent_run.start_denied",
 	/** A DAO admin granted / revoked an agent role (task.5456): principal, scope, approvedBy. */
 	AGENT_ROLE_GRANTED: "agent_role.granted",
 	AGENT_ROLE_REVOKED: "agent_role.revoked",

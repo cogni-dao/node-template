@@ -15,12 +15,15 @@
  * @public
  */
 
+import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
+import { createNodeCatalog } from "@cogni/langgraph-graphs/inproc";
 import {
   type AgentCatalogProvider,
   AggregatingAgentCatalog,
   LangGraphDevAgentCatalogProvider,
   LangGraphInProcAgentCatalogProvider,
 } from "@/adapters/server";
+import { NODE_LOCAL_CATALOG } from "@/bootstrap/ai/secret-probe";
 import type { AgentDescriptor } from "@/ports";
 import { serverEnv } from "@/shared/env";
 
@@ -43,7 +46,11 @@ export function createAgentCatalog(): {
   const env = serverEnv();
   const providers: AgentCatalogProvider[] = env.LANGGRAPH_DEV_URL
     ? [new LangGraphDevAgentCatalogProvider()]
-    : [new LangGraphInProcAgentCatalogProvider()];
+    : [
+        new LangGraphInProcAgentCatalogProvider(
+          createNodeCatalog(LANGGRAPH_CATALOG, { add: NODE_LOCAL_CATALOG }),
+        ),
+      ];
 
   return new AggregatingAgentCatalog(providers);
 }

@@ -93,6 +93,7 @@ export const NODE_LOCAL_CATALOG: LangGraphCatalog = {
   [SECRET_PROBE_GRAPH_NAME]: {
     displayName: "Secret probe",
     description: "Candidate-validation harness for secret tool arguments. Not advertised.",
+    listed: false,
     toolIds: [SECRET_PROBE_NAME],
     graphFactory: NODE_LANGGRAPH_CATALOG["work-prioritizer"].graphFactory,
     systemPrompt: PROBE_PROMPT,

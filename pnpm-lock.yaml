@@ -1061,6 +1061,9 @@ importers:
       '@cogni/ai-tools':
         specifier: workspace:@cogni-dao/ai-tools@*
         version: link:../ai-tools
+      '@cogni/graph-execution-core':
+        specifier: workspace:*
+        version: link:../graph-execution-core
       '@langchain/langgraph-api':
         specifier: 1.4.1
         version: 1.4.1(5y5nzr4l72uaelveonc3pghbvq)

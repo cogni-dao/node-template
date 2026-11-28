@@ -24,10 +24,8 @@ import type { ToolContract } from "@cogni/ai-tools";
 import type { BaseCheckpointSaver, BaseStore } from "@langchain/langgraph";
 // Import shared graph types from graphs/types.ts (single source of truth)
 import type {
+  CompiledAgentGraph,
   CreateReactAgentGraphOptions,
-  InvokableGraph,
-  MessageGraphInput,
-  MessageGraphOutput,
 } from "../graphs/types";
 import type {
   CompletionFn,
@@ -54,10 +52,7 @@ export type CreateGraphOptions = CreateReactAgentGraphOptions;
  * Alias to shared InvokableGraph with message-based I/O.
  * Extended output allows `structuredResponse` when responseFormat is used.
  */
-export type CompiledGraph = InvokableGraph<
-  MessageGraphInput,
-  MessageGraphOutput & { structuredResponse?: unknown }
->;
+export type CompiledGraph = CompiledAgentGraph;
 
 /**
  * Graph factory function signature.
@@ -72,6 +67,8 @@ export type CreateGraphFn = ((opts: CreateGraphOptions) => CompiledGraph) & {
   readonly createRunHooks?: (context: {
     program?: CreateGraphOptions["program"];
     origin?: string;
+    /** A caller is waiting on this run (chat), not a scheduled tick or a webhook. Hooks word their reports for it. */
+    interactive?: boolean;
   }) => {
     graphOptions?: Pick<CreateGraphOptions, "programState">;
     observeTool?: (
@@ -136,6 +133,8 @@ export interface InProcRunnerOptions<TTool = unknown> {
   readonly program?: CreateReactAgentGraphOptions["program"];
   readonly trustedActorId?: string;
   readonly trustedProgramId?: string;
+  /** A caller is waiting on this run. Passed to the program's run hooks so a step-budget report speaks to the user. */
+  readonly interactive?: boolean;
   readonly sourceContext?: CreateReactAgentGraphOptions["sourceContext"];
   /** Graph factory from catalog - creates compiled graph with LLM and tools */
   readonly createGraph: CreateGraphFn;

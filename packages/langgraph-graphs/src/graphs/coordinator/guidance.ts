@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 import {
+	SANDBOX_SHELL_NAME,
 	ScheduleManageInputSchema,
 	WORK_ITEM_QUERY_MAX_LIMIT,
 	WorkItemQueryInputSchema,
@@ -13,6 +14,7 @@ import { createMiddleware } from "langchain";
 import { z } from "zod";
 import { authorizedReadMessages } from "../cogni/authorized-read-messages";
 import { OPEN_STATUSES } from "../work-prioritizer/tools";
+import { ShellProgress } from "./shell-progress";
 
 export interface WorkflowGuidance {
 	readonly graphId: string;
@@ -74,6 +76,8 @@ export class CoordinatorReceipts {
 	readonly readGuidance = new Set<string>();
 	/** Successful schedule writes this run, for the step-budget report. */
 	readonly scheduleChanges: string[] = [];
+	/** What a chat coding run did in the sandbox, for the step-budget report. */
+	readonly shell = new ShellProgress();
 	observe(
 		name: string,
 		args: unknown,
@@ -92,6 +96,7 @@ export class CoordinatorReceipts {
 			if (result.ok && expected.schema.safeParse(result.value).success)
 				this.contextRead.add(name);
 		}
+		if (name === SANDBOX_SHELL_NAME) this.shell.observe(args, result);
 		if (name === "core__schedule_manage" && result.ok) {
 			const write = z
 				.object({ action: z.string(), scheduleId: z.string().optional() })

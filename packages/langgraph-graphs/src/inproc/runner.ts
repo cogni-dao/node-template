@@ -118,6 +118,13 @@ function extractAssistantContent(messages: BaseMessage[]): string {
 }
 
 /**
+ * The one runner step limit: a loop-safety backstop, not a work bound. Money is bounded by the caller's credits and
+ * context by the model window, so a long legitimate run (about 6 graph steps per model turn, 1000 is about 160 turns)
+ * is never what this stops. A run that reaches it ends with its program's step-limit report.
+ */
+export const RUN_STEP_LIMIT = 1000;
+
+/**
  * Create InProc graph runner.
  *
  * Generic runner that accepts a graph factory from the catalog.
@@ -187,6 +194,7 @@ export function createInProcGraphRunner<TTool = unknown>(
   const hooks = createGraph.createRunHooks?.({
     program: opts.program,
     origin: opts.sourceContext?.origin,
+    ...(opts.interactive !== undefined && { interactive: opts.interactive }),
   });
   const toolExecFn: ToolExecFn = async (name, args, toolCallId) => {
     const result = await executeTool(name, args, toolCallId);
@@ -371,11 +379,8 @@ export function createInProcGraphRunner<TTool = unknown>(
                   ...request.configurable,
                   thread_id: threadId,
                 },
-                // A BACKSTOP against an infinite graph, never the real work bound — each
-                // graph self-limits (e.g. cogni's MAX_INVESTIGATE_STEPS). Must exceed any
-                // graph's budget: a gather round is 2 node visits, so this clears 2×the
-                // largest step cap with margin. Raise it with the caps, never below them.
-                recursionLimit: 100,
+                // The one hard ceiling of a run (RUN_STEP_LIMIT): a loop and money stop, never the work bound.
+                recursionLimit: RUN_STEP_LIMIT,
               },
             ),
         );

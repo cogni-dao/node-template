@@ -6,7 +6,7 @@ import { isAiExecutionError } from "@cogni/ai-core";
 import { BaseLanguageModel } from "@langchain/core/language_models/base";
 import { SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { StructuredTool } from "@langchain/core/tools";
-import { Command, getConfig, StateSchema } from "@langchain/langgraph";
+import { Command, StateSchema } from "@langchain/langgraph";
 import {
 	type CompiledSubAgent,
 	CompositeBackend,
@@ -26,12 +26,10 @@ import {
 	toolCallLimitMiddleware,
 } from "langchain";
 import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
-import type { CreateReactAgentGraphOptions } from "../types";
+import type { CompiledAgentGraph, CreateReactAgentGraphOptions } from "../types";
 import {
 	composeCogniPrompt,
 	hostClockPrompt,
-	RUN_BUDGET_WRAP_UP_SHARE,
-	runBudgetPrompt,
 } from "./prompts";
 import { HubSkillBackend } from "./skill-backend";
 
@@ -59,20 +57,24 @@ export function cogniProfile(
 	};
 }
 
-/** Construct the shared core with a host-selected prompt and an explicit child registry. */
-export function createCogniProgram(
-	opts: CreateReactAgentGraphOptions & {
-		readonly children?: readonly {
-			readonly profile: AgentProfile;
-			readonly description: string;
-		}[];
-		readonly disableCheckpointer?: boolean;
-		readonly guardedTools?: readonly StructuredTool[];
-		readonly profile?: AgentProfile;
-		/** Program-owned native middleware; never inherited by isolated readers. */
-		readonly programMiddleware?: readonly AnyAgentMiddleware[];
-	},
-) {
+export interface CogniProgramOptions extends CreateReactAgentGraphOptions {
+	readonly children?: readonly {
+		readonly profile: AgentProfile;
+		readonly description: string;
+	}[];
+	readonly disableCheckpointer?: boolean;
+	readonly guardedTools?: readonly StructuredTool[];
+	readonly profile?: AgentProfile;
+	/** Program-owned native middleware; never inherited by isolated readers. */
+	readonly programMiddleware?: readonly AnyAgentMiddleware[];
+}
+
+/** Construct the shared core with a host-selected prompt and an explicit child registry. The declaration hides the deepagents types of `buildCogniProgram`. */
+export function createCogniProgram(opts: CogniProgramOptions): CompiledAgentGraph {
+	return buildCogniProgram(opts);
+}
+
+function buildCogniProgram(opts: CogniProgramOptions) {
 	if (opts.disableCheckpointer && opts.guardedTools?.length)
 		throw new Error("cogni_child_guarded_write_forbidden");
 	const model = opts.profile
@@ -130,14 +132,14 @@ export function createCogniProgram(
 			name: profile.id,
 			description: child.description,
 			mode: "isolated" as const,
-			runnable: createCogniProgram({
+			runnable: buildCogniProgram({
 				...opts,
 				profile,
 				children: [],
 				guardedTools: [],
 				programMiddleware: [],
 				disableCheckpointer: true,
-			}).withConfig({ recursionLimit: 30 }),
+			}),
 		};
 	});
 	const routes: Record<string, StoreBackend | HubSkillBackend> = {};
@@ -244,32 +246,6 @@ export function createCogniProgram(
 						}),
 					]
 				: []),
-			// Long runs end in a handoff, not a crash: past a share of the run's own step limit (the host's
-			// recursionLimit, the one owner of that bound), every model call is told to write what its evidence
-			// supports and hand off the rest. The harness adds no limit of its own.
-			createMiddleware({
-				name: "CogniRunBudget",
-				wrapModelCall: (request, handler) => {
-					let config: ReturnType<typeof getConfig> | undefined;
-					try {
-						config = getConfig();
-					} catch {
-						config = undefined;
-					}
-					const step = Number(config?.metadata?.langgraph_step);
-					const limit = config?.recursionLimit;
-					return typeof limit === "number" &&
-						Number.isFinite(step) &&
-						step >= limit * RUN_BUDGET_WRAP_UP_SHARE
-						? handler({
-								...request,
-								systemMessage: request.systemMessage.concat(
-									new SystemMessage({ content: runBudgetPrompt(step, limit) }),
-								),
-							})
-						: handler(request);
-				},
-			}),
 			...(!children.length
 				? [
 						createMiddleware({

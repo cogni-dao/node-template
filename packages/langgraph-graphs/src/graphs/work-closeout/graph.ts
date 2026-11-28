@@ -8,14 +8,14 @@
  */
 import { WORK_ITEM_UPDATE_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
-import type { CreateReactAgentGraphOptions } from "../types";
+import type { CompiledAgentGraph, CreateReactAgentGraphOptions } from "../types";
 import { createCloseoutGuard } from "./closeout-guard";
 import { WORK_CLOSEOUT_SYSTEM_PROMPT } from "./prompts";
 import { CloseoutReceipts } from "./receipts";
 
 export const WORK_CLOSEOUT_GRAPH_NAME = "work-closeout" as const;
 
-export function createWorkCloseoutGraph(opts: CreateReactAgentGraphOptions) {
+export function createWorkCloseoutGraph(opts: CreateReactAgentGraphOptions): CompiledAgentGraph {
   const receipts = opts.programState as CloseoutReceipts | undefined;
   const writer = opts.tools.find((tool) => tool.name === WORK_ITEM_UPDATE_NAME);
   const readAuthority = new Set(
