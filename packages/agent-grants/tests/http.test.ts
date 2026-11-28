@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/tests/http`
- * Purpose: The route cores answer every status the access routes promise, from the package entry alone (task.0175): bearer-only asks, bad input, a quiet no,
+ * Purpose: The route cores answer every status the access routes promise, from the package entry alone (task.0175): self-only asks, bad input, a quiet no,
  *   the admin refusal map, a non-disclosing preview and an outage that is reported once.
  * Scope: Fake authority objects. No framework, no database.
  * Side-effects: none
@@ -33,9 +33,15 @@ describe("access requests (AI plane)", () => {
   const authority = (fn: AgentAccessAuthority["requestAccess"]) => ({ requestAccess: fn });
   const base = { principalUserId: "agent-1", origin: "https://node.test" };
 
-  it("a session is 404, as if the route did not exist for it", async () => {
-    const res = await accessRequestCreateHttp(deps, { ...base, via: "session", body: { scope: "x" }, authority: authority(vi.fn()) });
-    expect(res).toMatchObject({ status: 404, body: { error: "not_found" }, headers: { "cache-control": "no-store" } });
+  it.each(["session", "bearer"] as const)("%s asks and lists only as the authenticated principal", async (via) => {
+    const ask = vi.fn().mockResolvedValue({ state: "pending", created: true });
+    const listOwnAccess = vi.fn().mockResolvedValue([]);
+    const created = await accessRequestCreateHttp(deps, { ...base, via, body: { scope: "s", principalUserId: "other" }, authority: authority(ask) });
+    expect(created.status).toBe(201);
+    expect(ask).toHaveBeenCalledWith({ principalUserId: "agent-1", scope: "s" });
+    const listed = await accessRequestListHttp(deps, { via, principalUserId: "agent-1", authority: { listOwnAccess } });
+    expect(listed).toMatchObject({ status: 200, body: { requests: [] }, headers: { "cache-control": "no-store" } });
+    expect(listOwnAccess).toHaveBeenCalledWith("agent-1");
   });
 
   it("a new ask is 201 with the link on this node's origin; a repeat is 200", async () => {

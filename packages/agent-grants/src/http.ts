@@ -13,7 +13,7 @@
  *   - FAIL_CLOSED_NON_DISCLOSING: a wrong-shape, used, expired or unknown link token is one 404 `not_found`; a person who owns no account is the same quiet `changed: false`.
  *   - STORE_OUTAGE_IS_503: a store failure is 503 `authz_unavailable`, reported once through `onUnavailable`, never 401 or 500.
  *   - NEVER_CACHED: every response carries `cache-control: no-store`.
- *   - AI_PLANE_IS_BEARER_ONLY: the access-request routes answer a session with 404 `not_found`, as if the route did not exist for it.
+ *   - SELF_REQUEST_ONLY: the authenticated principal is the only principal passed to ask and list, regardless of credential.
  * Side-effects: none beyond the injected calls
  * Links: ./host.ts, ./http-contracts.ts, https://node-template.cognidao.org/knowledge/ai-access-surface-design
  * @public
@@ -101,7 +101,6 @@ export async function accessRequestCreateHttp(
   deps: AgentHttpDeps,
   input: { via: "bearer" | "session"; principalUserId: string; body: unknown; origin: string; authority: Pick<AgentAccessAuthority, "requestAccess"> }
 ): Promise<AgentHttpResponse> {
-  if (input.via !== "bearer") return notFound();
   const parsed = parseInput(input.body, agentAccessRequestCreateOperation.input);
   if (!parsed.ok) return parsed.response;
   try {
@@ -131,7 +130,6 @@ export async function accessRequestListHttp(
   deps: AgentHttpDeps,
   input: { via: "bearer" | "session"; principalUserId: string; authority: Pick<AgentAccessAuthority, "listOwnAccess"> }
 ): Promise<AgentHttpResponse> {
-  if (input.via !== "bearer") return notFound();
   try {
     return respond(agentAccessRequestListOperation.output.parse({ requests: await input.authority.listOwnAccess(input.principalUserId) }));
   } catch (error) {

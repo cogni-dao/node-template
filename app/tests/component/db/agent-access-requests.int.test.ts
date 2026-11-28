@@ -5,7 +5,7 @@
  * Module: `@tests/component/db/agent-access-requests.int.test`
  * Purpose: REQUEST = OFF ROW (task.5466 first slice), against real Postgres through the real route handlers:
  *   an outside bearer asks for a scope (a pending row), the admin sees the ask and flips it ON, the bearer's door opens,
- *   the admin flips it OFF and the door closes. Also: the AI plane is bearer-only, the human plane is session-only,
+ *   the admin flips it OFF and the door closes. Also: sessions can ask with the canonical Origin, the human plane is session-only,
  *   a pending row opens no lock, asks are idempotent, scope-checked and capped, and a deny is seen by the agent.
  * Scope: Real `agent.access.requests` and `agent-access.roles` handlers, real wrapper, real `agent-authority`, real repo-spec
  *   admin. Only the NextAuth/bearer identity decode is replaced (`getSessionUser`).
@@ -26,9 +26,14 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn(async () => session.user),
 }));
 const holder = vi.hoisted(() => ({ container: null as unknown }));
+const canonicalBaseUrl = "https://node.example.test/base";
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => holder.container,
 }));
+vi.mock("@/shared/env/server-env", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/shared/env/server-env")>();
+  return { ...original, serverEnv: () => ({ ...original.serverEnv(), APP_BASE_URL: canonicalBaseUrl }) };
+});
 
 import { GET as askList, POST as askCreate } from "@/app/api/v1/agent/access-requests/route";
 import { DELETE as rolesDelete, GET as rolesGet, POST as rolesPost } from "@/app/api/v1/admin/ai-access/route";
@@ -62,8 +67,9 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     users.push(id);
     return id;
   };
-  const as = (id: string | null, via: "bearer" | "session") =>
-    (session.user = id ? { id, walletAddress: id === admin ? ADMIN_WALLET : null, displayName: null, avatarColor: null, via } : null);
+  const as = (id: string | null, via: "bearer" | "session") => {
+    session.user = id ? { id, walletAddress: id === admin ? ADMIN_WALLET : null, displayName: null, avatarColor: null, via } : null;
+  };
   const ask = (scope: unknown, headers: Record<string, string> = {}) =>
     askCreate(
       new NextRequest("http://localhost/api/v1/agent/access-requests", {
@@ -264,16 +270,35 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     }
   });
 
-  it("AI plane is bearer-only: a browser session gets 404 on POST and GET and nothing is written", async () => {
-    // Other component files share this database, so count only this test's own principals.
-    const own = () => service`SELECT count(*)::int AS n FROM agent_roles WHERE principal_user_id IN (${admin}, ${agent}) AND revoked_at IS NULL AND scope = ${SCOPE}`;
-    const before = (await own())[0]?.n;
-    as(admin, "session");
-    expect((await ask(SCOPE)).status).toBe(404);
-    expect((await mine()).status).toBe(404);
-    session.user = { id: agent, walletAddress: null, displayName: null, avatarColor: null }; // no `via` is not a verified bearer
-    expect((await ask(SCOPE)).status).toBe(404);
-    expect((await own())[0]?.n).toBe(before);
+  it("sessions ask and list only their own pending grants, with canonical Origin required for writes", async () => {
+    const requester = await mkUser("Session requester");
+    const stranger = await mkUser("Other session");
+    const origin = new URL(canonicalBaseUrl).origin;
+    as(requester, "session");
+    const invalidOrigins: Array<Record<string, string>> = [{}, { origin: "https://foreign.example" }, { origin: "not an origin" }];
+    for (const headers of invalidOrigins) {
+      const res = await ask(SCOPE, headers);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "invalid_origin" });
+      expect(await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${requester}`).toHaveLength(0);
+    }
+    const created = await ask(SCOPE, { origin });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toMatchObject({ scope: SCOPE, state: "pending", created: true });
+    expect((await service`SELECT requested_by, approved_by, granted_at FROM agent_roles WHERE principal_user_id = ${requester} AND scope = ${SCOPE}`)[0])
+      .toMatchObject({ requested_by: requester, approved_by: null, granted_at: null });
+    expect(await door(requester)).toMatchObject({ decision: "deny", reason: "no_role" });
+    const listed = await mine();
+    expect(listed.status).toBe(200);
+    expect((await listed.json()).requests).toEqual([expect.objectContaining({ scope: SCOPE, state: "pending" })]);
+    as(stranger, "session");
+    expect((await (await mine()).json()).requests).toEqual([]);
+    session.user = { id: stranger, walletAddress: null, displayName: null, avatarColor: null }; // no `via` is not a verified bearer
+    expect((await ask(SCOPE)).status).toBe(403);
+    expect(await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${stranger}`).toHaveLength(0);
+    as(requester, "session");
+    expect((await roles(rolesPost, { principalUserId: requester, scope: SCOPE })).status).toBe(403);
+    expect(await door(requester)).toMatchObject({ decision: "deny", reason: "no_role" });
   });
 
   it("one admin check for every credential: the asking agent's bearer (no admin wallet) is 403 authz_denied, and a non-admin cannot approve", async () => {
