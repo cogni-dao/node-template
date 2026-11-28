@@ -42,6 +42,7 @@ export default defineConfig({
     setupFiles: ["./tests/setup.ts"],
     globalSetup: ["./tests/component/setup/testcontainers-postgres.global.ts"],
     sequence: { concurrent: false },
+    fileParallelism: false,
   },
   resolve: {
     alias: {
