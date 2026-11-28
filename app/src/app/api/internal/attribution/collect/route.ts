@@ -25,7 +25,7 @@
 import {
   type AttributionIngestRunV1,
   runCollectPass,
-} from "@cogni/attribution-collect";
+} from "@cogni/attribution-ledger/collect";
 import { createValidatedAttributionStore } from "@cogni/attribution-ledger";
 import { CHAIN_ID, verifySchedulerBearer } from "@cogni/node-shared";
 import { NextResponse } from "next/server";

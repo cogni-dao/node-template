@@ -64,15 +64,26 @@ vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
         graphFactory: noopFactory,
       },
     },
-    createInProcGraphRunner: (options: (typeof captured.options)[number]) => {
-      captured.options.push(options);
-      return {
-        stream: (async function* () {
-          yield { type: "done" as const };
-        })(),
-        final: Promise.resolve({ ok: true as const }),
-      };
-    },
+  };
+});
+// The runner is the package provider's injected seam (`createRunner`); the app class does not expose it.
+vi.mock("@cogni/langgraph-graphs/inproc", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@cogni/langgraph-graphs/inproc")>();
+  return {
+    ...actual,
+    createLangGraphInProcProvider: (deps: Parameters<typeof actual.createLangGraphInProcProvider>[0]) =>
+      actual.createLangGraphInProcProvider({
+        ...deps,
+        createRunner: ((options: (typeof captured.options)[number]) => {
+          captured.options.push(options);
+          return {
+            stream: (async function* () {
+              yield { type: "done" as const };
+            })(),
+            final: Promise.resolve({ ok: true as const }),
+          };
+        }) as never,
+      }),
   };
 });
 vi.mock("@/bootstrap/otel", () => ({ getCurrentTraceId: () => "trace-1" }));

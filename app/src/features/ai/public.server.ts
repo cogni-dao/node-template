@@ -14,13 +14,12 @@
  * @public
  */
 
-// Tool runner (for bootstrap wiring) - canonical source is @cogni/ai-core
+// Tool runner types - canonical source is @cogni/ai-core. The runner itself lives in the shared in-process provider.
 export type {
   EmitAiEvent,
   ToolExecOptions,
   ToolRunner,
 } from "@cogni/ai-core";
-export { createToolRunner } from "@cogni/ai-core";
 // Activity validation (for app facade)
 export { validateActivityRange } from "./services/activity";
 // Shared assistant message assembler (AiEvent[] → UIMessage)

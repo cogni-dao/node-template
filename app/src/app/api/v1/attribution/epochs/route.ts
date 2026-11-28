@@ -12,6 +12,11 @@
  */
 
 import { listEpochsView } from "@cogni/attribution-ledger";
+import {
+  EPOCH_PRESENTATION_EVENTS,
+  handleEpochOverview,
+  parseEpochPage,
+} from "@cogni/attribution-ledger/http";
 import { listEpochsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -27,13 +32,30 @@ export const GET = wrapRouteHandlerWithLogging(
     routeId: "ledger.list-epochs",
     auth: { mode: "required", getSessionUser },
   },
-  async (_ctx, request) => {
+  async (ctx, request) => {
     const url = new URL(request.url);
-    const { limit, offset } = listEpochsOperation.input.parse({
-      limit: url.searchParams.get("limit") ?? undefined,
-      offset: url.searchParams.get("offset") ?? undefined,
-    });
+    const pagination = parseEpochPage(
+      url.searchParams,
+      EPOCH_PRESENTATION_EVENTS.overview,
+      { nodeId: getNodeId() }
+    );
+    if (!pagination.ok) {
+      ctx.log.info(pagination.result.event, pagination.result.event.event);
+      return NextResponse.json(pagination.result.body, {
+        status: pagination.result.status,
+      });
+    }
+    const { limit, offset } = pagination.page;
 
+    if (url.searchParams.get("view") === "overview") {
+      const result = await handleEpochOverview(
+        getContainer().attributionStore,
+        getNodeId(),
+        { limit, offset }
+      );
+      ctx.log.info(result.event, result.event.event);
+      return NextResponse.json(result.body, { status: result.status });
+    }
     const view = await listEpochsView(
       getContainer().attributionStore,
       getNodeId(),

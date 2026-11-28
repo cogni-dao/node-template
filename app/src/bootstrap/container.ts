@@ -36,7 +36,8 @@ import {
 	type FinalizeLogger,
 	type RunFinalizeEpochDeps,
 	runFinalizeEpoch,
-} from "@cogni/attribution-pipeline-plugins";
+} from "@cogni/attribution-ledger/pipeline";
+import type { EpochPresentationStore } from "@cogni/attribution-ledger/http";
 import {
 	DrizzleAttributionAdapter,
 	DrizzleClaimantWalletResolver,
@@ -341,7 +342,7 @@ export interface Container {
 	/** Governance status queries (system tenant scope) */
 	governanceStatus: GovernanceStatusPort;
 	/** Epoch ledger store — shared by app and scheduler-worker */
-	attributionStore: AttributionStore;
+	attributionStore: AttributionStore & EpochPresentationStore;
 	/** Work item queries — reads from markdown files via WorkItemQueryPort */
 	workItemQuery: WorkItemQueryPort;
 	/** Node-local Doltgres work-item query/create/patch/delete surface. */
@@ -1244,8 +1245,8 @@ function createContainer(): Container {
 					expectedAddress: operatorWalletConfig.address,
 					splitAddress: paymentConfig.receivingAddress,
 					treasuryAddress,
-					markupPpm: numberToPpm(env.USER_PRICE_MARKUP_FACTOR),
-					revenueSharePpm: numberToPpm(env.SYSTEM_TENANT_REVENUE_SHARE),
+					markupPpm: numberToPpm(paymentConfig.markupFactor),
+					revenueSharePpm: numberToPpm(paymentConfig.revenueShare),
 					maxTopUpUsd: env.OPERATOR_MAX_TOPUP_USD,
 					rpcUrl: env.EVM_RPC_URL,
 					...(stewardWalletConfig

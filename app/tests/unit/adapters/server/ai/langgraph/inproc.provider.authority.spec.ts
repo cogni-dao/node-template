@@ -70,7 +70,15 @@ vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
         graphFactory: noopFactory,
       },
     },
-    createInProcGraphRunner: (options: (typeof captured.options)[number]) => {
+  };
+});
+// The runner is the package provider's injected seam (`createRunner`); the app class does not expose it.
+vi.mock("@cogni/langgraph-graphs/inproc", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@cogni/langgraph-graphs/inproc")>();
+  return {
+    ...actual,
+    createLangGraphInProcProvider: (deps: Parameters<typeof actual.createLangGraphInProcProvider>[0]) =>
+      actual.createLangGraphInProcProvider({ ...deps, createRunner: ((options: (typeof captured.options)[number]) => {
       captured.options.push(options);
       if (captured.mode === "abort") {
         const signal = options.request.abortSignal;
@@ -95,7 +103,7 @@ vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
         })(),
         final: Promise.resolve({ ok: true as const }),
       };
-    },
+    }) as never }),
   };
 });
 
@@ -185,12 +193,13 @@ async function start(
     async () => ({ nodeId: "node", origin: "https://node.example" }),
     async () => ({}) as never,
     auth,
-  );
-  if (logged)
-    (provider as unknown as { log: unknown }).log = {
+    undefined,
+    undefined,
+    logged && {
       debug: () => {}, info: () => {}, error: () => {},
       warn: (fields: Record<string, unknown>) => logged.push(fields),
-    };
+    },
+  );
   const scope = {
     billing: { billingAccountId: "payer-1", virtualKeyId: "vk" },
     usageSource: "litellm" as const,
@@ -250,17 +259,19 @@ describe("a principal-store outage is authz_unavailable and is logged", () => {
       },
       guardDeps: authority({ principals: {}, roles: [] }).guardDeps,
     };
+    const logged: Array<Record<string, unknown>> = [];
     const provider = new LangGraphInProcProvider(
       adapter, source, undefined, bundle,
       async () => ({ nodeId: "node", origin: "https://node.example" }),
       async () => ({}) as never,
       down,
+      undefined,
+      undefined,
+      {
+        debug: () => {}, info: () => {}, warn: () => {},
+        error: (fields: Record<string, unknown>) => logged.push(fields),
+      },
     );
-    const logged: Array<Record<string, unknown>> = [];
-    (provider as unknown as { log: unknown }).log = {
-      debug: () => {}, info: () => {}, warn: () => {},
-      error: (fields: Record<string, unknown>) => logged.push(fields),
-    };
     const scope = { billing: { billingAccountId: "payer-1", virtualKeyId: "vk" }, usageSource: "litellm" as const, llmService: {} as never };
     const result = runInScope(scope, () =>
       provider.runGraph(
@@ -515,17 +526,19 @@ describe("DENIAL_IS_TERMINAL", () => {
       const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles });
       const auth: ProviderAgentAuthority = adminCheck ? { ...a, guardDeps: { ...a.guardDeps, adminCheck } } : a;
       const { source, bundle } = toolSource([]);
+      const logged: Array<Record<string, unknown>> = [];
       const provider = new LangGraphInProcProvider(
         adapter, source, undefined, bundle,
         async () => ({ nodeId: "node", origin: "https://node.example" }),
         async () => ({}) as never,
         auth,
+        undefined,
+        undefined,
+        {
+          debug: () => {}, info: () => {}, error: () => {},
+          warn: (fields: Record<string, unknown>) => logged.push(fields),
+        },
       );
-      const logged: Array<Record<string, unknown>> = [];
-      (provider as unknown as { log: unknown }).log = {
-        debug: () => {}, info: () => {}, error: () => {},
-        warn: (fields: Record<string, unknown>) => logged.push(fields),
-      };
       const scope = { billing: { billingAccountId: "payer-1", virtualKeyId: "vk" }, usageSource: "litellm" as const, llmService: {} as never, subjectUserId: subject };
       const result = runInScope(scope, () =>
         provider.runGraph(

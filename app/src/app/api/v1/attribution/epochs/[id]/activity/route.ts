@@ -15,6 +15,11 @@ import {
   buildEpochActivityView,
   persistSelectionUpdates,
 } from "@cogni/attribution-ledger";
+import {
+  EPOCH_PRESENTATION_EVENTS,
+  handleEpochContributorReceipts,
+  parseEpochPage,
+} from "@cogni/attribution-ledger/http";
 import { epochActivityOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -44,12 +49,38 @@ export const GET = wrapRouteHandlerWithLogging<{
     }
 
     const url = new URL(request.url);
-    const { limit, offset } = epochActivityOperation.input.parse({
-      limit: url.searchParams.get("limit") ?? undefined,
-      offset: url.searchParams.get("offset") ?? undefined,
-    });
+    const pagination = parseEpochPage(
+      url.searchParams,
+      EPOCH_PRESENTATION_EVENTS.receipts,
+      { nodeId: getNodeId(), epochId: epochId.toString() }
+    );
+    if (!pagination.ok) {
+      ctx.log.info(pagination.result.event, pagination.result.event.event);
+      return NextResponse.json(pagination.result.body, {
+        status: pagination.result.status,
+      });
+    }
+    const { limit, offset } = pagination.page;
 
     const store = getContainer().attributionStore;
+    const claimantKey = url.searchParams.get("claimantKey");
+    if (claimantKey !== null) {
+      if (claimantKey.length < 1 || claimantKey.length > 512)
+        return NextResponse.json(
+          { error: "Invalid claimant key" },
+          { status: 400 }
+        );
+      const result = await handleEpochContributorReceipts(
+        store,
+        getNodeId(),
+        epochId,
+        claimantKey,
+        { limit, offset }
+      );
+      ctx.log.info(result.event, result.event.event);
+      return NextResponse.json(result.body, { status: result.status });
+    }
+
     const result = await buildEpochActivityView(
       store,
       getNodeId(),
@@ -62,8 +93,8 @@ export const GET = wrapRouteHandlerWithLogging<{
     }
 
     if (result.pendingSelectionUpdates.length > 0) {
-      // Background: fill selection rows so later reads need no resolution.
-      void persistSelectionUpdates(store, result.pendingSelectionUpdates);
+      // Finish these bounded page updates before a subsequent summary reads membership.
+      await persistSelectionUpdates(store, result.pendingSelectionUpdates);
     }
     if (result.resolvedCount > 0) {
       logEvent(ctx.log, EVENT_NAMES.LEDGER_IDENTITY_RESOLVED_AT_READ, {

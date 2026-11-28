@@ -12,17 +12,18 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import type { EpochDto } from "@/features/governance/lib/compose-epoch";
 import {
   partitionEpochs,
   useEpochsPage,
   useEpochView,
   useSettlementLifecycle,
 } from "@/features/governance/hooks/useEpochsPage";
+import type { EpochDto } from "@/features/governance/lib/compose-epoch";
+
+import { epochTestProvider } from "./epoch-test-provider";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -46,12 +47,17 @@ function wrapperFor(): ({ children }: { children: ReactNode }) => ReactNode {
     defaultOptions: { queries: { retry: false } },
   });
   return ({ children }) =>
-    createElement(QueryClientProvider, { client: queryClient }, children);
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      epochTestProvider(children)
+    );
 }
 
 function mockApi(epochs: readonly EpochDto[], lifecycleOk = true) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    const epochId = url.match(/epochs\/(\d+)\//)?.[1];
     const ok = (body: unknown) =>
       ({ ok: true, json: async () => body }) as Response;
     if (url.includes("settlement-lifecycle")) {
@@ -70,13 +76,42 @@ function mockApi(epochs: readonly EpochDto[], lifecycleOk = true) {
           } as Response);
     }
     if (url.includes("/user-projections")) {
-      return ok({ userProjections: [] });
+      return ok({
+        epochId,
+        items: [],
+        total: 0,
+        totalUnits: "0",
+        totalPoints: "0",
+        totalReceiptCount: 0,
+        unresolvedCount: 0,
+        unresolvedActivities: [],
+        unresolvedActivityTotal: 0,
+        limit: 200,
+        offset: 0,
+      });
     }
-    if (url.includes("/activity")) return ok({ events: [] });
+    if (url.includes("/activity")) return ok({ epochId, events: [] });
     if (url.includes("/claimants")) {
-      return ok({ epochId: "x", poolTotalCredits: "0", items: [] });
+      return ok({
+        epochId,
+        items: [],
+        total: 0,
+        totalUnits: "0",
+        totalPoints: "0",
+        totalReceiptCount: 0,
+        unresolvedCount: 0,
+        unresolvedActivities: [],
+        unresolvedActivityTotal: 0,
+        limit: 200,
+        offset: 0,
+      });
     }
-    return ok({ epochs });
+    const current = epochs.find((epoch) => epoch.status === "open") ?? null;
+    return ok({
+      current,
+      epochs: epochs.filter((epoch) => epoch !== current),
+      total: epochs.length - (current ? 1 : 0),
+    });
   });
   global.fetch = fetchMock as unknown as typeof fetch;
   return fetchMock;
@@ -141,9 +176,9 @@ describe("epoch page reads", () => {
     expect(result.current.list.data?.pastEpochs).toHaveLength(14);
     expect(paths(fetchMock).sort()).toEqual(
       [
-        "/api/v1/attribution/epochs/15/activity?limit=200",
-        "/api/v1/attribution/epochs/15/user-projections",
-        "/api/v1/attribution/epochs?limit=200",
+        "/api/v1/attribution/epochs/15/activity?limit=200&offset=0",
+        "/api/v1/attribution/epochs/15/user-projections?view=summary&limit=200&offset=0",
+        "/api/v1/attribution/epochs?view=overview&limit=200&offset=0",
         "/api/v1/attribution/settlement-lifecycle",
       ].sort()
     );
@@ -164,8 +199,8 @@ describe("epoch page reads", () => {
     rerender({ open: true });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(paths(fetchMock).sort()).toEqual([
-      "/api/v1/attribution/epochs/1/activity?limit=200",
-      "/api/v1/attribution/epochs/1/claimants",
+      "/api/v1/attribution/epochs/1/activity?limit=200&offset=0",
+      "/api/v1/attribution/epochs/1/claimants?view=summary&limit=200&offset=0",
     ]);
     expect(result.current.data?.contributors).toEqual([]);
   });
@@ -181,7 +216,22 @@ describe("epoch page reads", () => {
     await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
     await waitFor(() => expect(result.current.lifecycle.isSuccess).toBe(true));
 
-    expect(result.current.list.data).toEqual({ current: null, pastEpochs: [] });
+    expect(result.current.list.data).toEqual({
+      current: null,
+      pastEpochs: [],
+      historyTotal: 0,
+      membershipReadId: expect.any(String),
+    });
+    expect(result.current.list.membershipReady).toBe(true);
+    const firstReadId = result.current.list.data?.membershipReadId;
+    expect(firstReadId).toMatch(/^[\da-f]{8}-[\da-f-]{27}$/);
+    await act(async () => {
+      await result.current.list.refetch();
+    });
+    expect(result.current.list.membershipReady).toBe(true);
+    await waitFor(() =>
+      expect(result.current.list.data?.membershipReadId).not.toBe(firstReadId)
+    );
     expect(result.current.lifecycle.data).toEqual({
       publicationEvidence: "unknown",
       liveRevision: null,

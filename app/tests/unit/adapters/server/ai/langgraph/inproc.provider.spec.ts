@@ -35,10 +35,22 @@ vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
     description: "plain harness graph without program or principal",
     toolIds: [],
     graphFactory: actual.NODE_LANGGRAPH_CATALOG.cogni.graphFactory,
-  } }, createInProcGraphRunner: (...args: Parameters<typeof actual.createInProcGraphRunner>) => {
-    runnerSpy(args[0]);
-    return actual.createInProcGraphRunner(...args);
-  } };
+  } } };
+});
+// The runner is the package provider's injected seam (`createRunner`); the app class does not expose it.
+vi.mock("@cogni/langgraph-graphs/inproc", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@cogni/langgraph-graphs/inproc")>();
+  return {
+    ...actual,
+    createLangGraphInProcProvider: (deps: Parameters<typeof actual.createLangGraphInProcProvider>[0]) =>
+      actual.createLangGraphInProcProvider({
+        ...deps,
+        createRunner: ((options: Parameters<typeof actual.createInProcGraphRunner>[0]) => {
+          runnerSpy(options);
+          return actual.createInProcGraphRunner(options);
+        }) as never,
+      }),
+  };
 });
 
 const TEST_SCOPE = {
