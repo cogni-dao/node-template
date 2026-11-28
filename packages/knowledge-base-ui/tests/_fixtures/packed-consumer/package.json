@@ -3,11 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.28.0/cogni-dao-metrics-0.28.0.tgz",
     "@cogni/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz",
     "@cogni/attribution-ledger": "https://github.com/cogni-dao/node-template/releases/download/attribution-v0.2.0/cogni-dao-attribution-0.2.0.tgz",
-    "@cogni/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.28.0/cogni-dao-knowledge-store-0.28.0.tgz",
-    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.28.0/cogni-dao-work-items-0.28.0.tgz",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -20,13 +17,18 @@
     "drizzle-orm": "^0.44.7",
     "esbuild": "^0.25",
     "lucide-react": "^0.552.0",
+    "postgres": "3.4.9",
     "radix-ui": "^1.4.3",
     "react": "^19",
     "react-dom": "^19",
     "react-force-graph-3d": "^1.29.1",
     "recharts": "^2.15.4",
+    "semver": "7.7.2",
     "tailwind-merge": "^3",
+    "type-fest": "5.4.1",
     "typescript": "^5",
-    "viem": "^2.21.0"
+    "viem": "^2.21.0",
+    "yaml": "2.8.3",
+    "zod": "4.6.7"
   }
 }
