@@ -31,6 +31,7 @@ import {
   DynamicStructuredTool,
   type StructuredToolInterface,
 } from "@langchain/core/tools";
+import type { convertToOpenAITool } from "@langchain/core/utils/function_calling";
 import {
   GraphRecursionError,
   InMemoryStore,
@@ -66,7 +67,7 @@ function mcpSpecsToLangChainTools(
       new DynamicStructuredTool({
         name: spec.name,
         description: spec.description,
-        // Passthrough schema — MCP tools validate internally via BoundToolRuntime
+        // Preserve the raw MCP wrapper's record parser; the host owns validation.
         schema: z.record(z.unknown()),
         func: async (args: Record<string, unknown>): Promise<string> => {
           const result = await toolExecFn(spec.name, args, undefined);
@@ -154,6 +155,30 @@ export function createInProcGraphRunner<TTool = unknown>(
     systemPrompt,
     persistence,
   } = opts;
+
+  // CogniCompletionAdapter converts bound tools to OpenAI definitions before this
+  // boundary. Advertise the original ToolSpec without changing runtime parsing,
+  // policy ordering, or receipts in the host's toolRunner.
+  type ModelTool = ReturnType<typeof convertToOpenAITool>;
+  const complete = completionFn as CompletionFn<ModelTool>;
+  const specsByName = new Map(mcpToolSpecs?.map((spec) => [spec.name, spec]));
+  const completeWithSchemas: CompletionFn<ModelTool> = (params) =>
+    complete({
+      ...params,
+      ...(params.tools
+        ? {
+            tools: params.tools.map((tool) => {
+              const spec = specsByName.get(tool.function.name);
+              return spec
+                ? {
+                    ...tool,
+                    function: { ...tool.function, parameters: spec.inputSchema },
+                  }
+                : tool;
+            }),
+          }
+        : {}),
+    });
 
   // Host-injected persistence or fresh per-run memory; no restart guarantee.
   const checkpointer = persistence?.checkpointer ?? new MemorySaver();
@@ -362,7 +387,9 @@ export function createInProcGraphRunner<TTool = unknown>(
         }
         return runWithCogniExecContext(
           {
-            completionFn: completionFn as CompletionFn<unknown>,
+            completionFn: (
+              specsByName.size ? completeWithSchemas : completionFn
+            ) as CompletionFn<unknown>,
             tokenSink,
             toolExecFn,
           },
