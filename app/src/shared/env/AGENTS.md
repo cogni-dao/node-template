@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-09-15
+- **Last reviewed:** 2026-11-22
 - **Status:** draft
 
 ## Purpose
@@ -97,6 +97,7 @@ Constructed:
 
 Optional:
 
+- NODE_TAVILY_API_KEY — optional node-owned Tavily credential for web search.
 - COGNI_LOCAL_INPROC (true/false) — local-only choice of billed in-process graph execution while the dev server runs.
 
 - LITELLM_MVP_API_KEY (MVP wallet link single key - TODO: remove when proper wallet→key registry exists)

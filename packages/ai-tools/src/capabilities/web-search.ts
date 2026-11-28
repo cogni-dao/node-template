@@ -45,6 +45,7 @@ export interface WebSearchResultItem {
   content: string;
   /** Relevance score (if available) */
   score?: number;
+  rawContentState: "not_requested" | "available" | "partial" | "unavailable";
   /** Raw page content (if requested) */
   rawContent?: string;
 }
@@ -55,6 +56,8 @@ export interface WebSearchResultItem {
 export interface WebSearchResult {
   /** The original query */
   query: string;
+  /** Whether the provider returned more results than admitted. */
+  partial: boolean;
   /** Search results */
   results: WebSearchResultItem[];
 }

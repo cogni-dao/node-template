@@ -42,3 +42,6 @@ export {
 	createWorkCloseoutGraph,
 	WORK_CLOSEOUT_GRAPH_NAME,
 } from "./work-closeout/graph";
+
+export { createMissionResearchGraph } from "./mission-research/graph";
+export { MISSION_RESEARCH_TOOL_IDS } from "./mission-research/tools";

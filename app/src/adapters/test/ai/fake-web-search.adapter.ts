@@ -42,6 +42,7 @@ export class FakeWebSearchAdapter implements WebSearchCapability {
       url: `https://example.com/result-${i + 1}`,
       content: `This is mock content for search result ${i + 1} matching query "${params.query}".`,
       score: 0.9 - i * 0.1,
+      rawContentState: params.includeRawContent ? "available" as const : "not_requested" as const,
       ...(params.includeRawContent && {
         rawContent: `<html><body>Full content for result ${i + 1}</body></html>`,
       }),
@@ -49,6 +50,7 @@ export class FakeWebSearchAdapter implements WebSearchCapability {
 
     return {
       query: params.query,
+      partial: false,
       results,
     };
   }

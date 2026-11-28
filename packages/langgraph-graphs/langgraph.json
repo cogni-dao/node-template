@@ -1,6 +1,7 @@
 {
 	"node_version": "22",
 	"graphs": {
-		"cogni": "./src/graphs/cogni/server.ts:cogni"
+		"cogni": "./src/graphs/cogni/server.ts:cogni",
+		"mission-research": "./src/graphs/mission-research/server.ts:missionResearch"
 	}
 }
